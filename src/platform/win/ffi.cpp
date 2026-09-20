@@ -36,14 +36,43 @@ QString lastErrorMessage(const char *what)
         .arg(QString::fromLatin1(what), winErrorMessage(GetLastError()));
 }
 
-QString hresultMessage(long code, const char *what)
+QString hresultText(long code)
 {
     const auto raw = static_cast<unsigned long>(code);
-    QString text = winErrorMessage(raw);
-    if (text.startsWith(QLatin1String("error "))) {
-        text = QStringLiteral("0x%1").arg(raw, 8, 16, QLatin1Char('0'));
+    const char *known = nullptr;
+    switch (raw) {
+    case 0x80004002UL:
+        known = "the interface is not implemented (E_NOINTERFACE)";
+        break;
+    case 0x80004005UL:
+        known = "unspecified failure (E_FAIL)";
+        break;
+    case 0x80070057UL:
+        known = "invalid argument (E_INVALIDARG)";
+        break;
+    case 0x80040154UL:
+        known = "the shell class is not registered (REGDB_E_CLASSNOTREG)";
+        break;
+    case 0x80040102UL:
+        known = "the interface is not registered (REGDB_E_IIDNOTREG)";
+        break;
+    case 0x80010106UL:
+        known = "wrong COM apartment model (RPC_E_CHANGED_MODE)";
+        break;
+    default:
+        break;
     }
-    return QStringLiteral("%1 failed: %2").arg(QString::fromLatin1(what), text);
+    if (known != nullptr) {
+        return QStringLiteral("%1 (HRESULT 0x%2)")
+            .arg(QString::fromLatin1(known))
+            .arg(raw, 8, 16, QLatin1Char('0'));
+    }
+    return QStringLiteral("HRESULT 0x%1").arg(raw, 8, 16, QLatin1Char('0'));
+}
+
+QString hresultMessage(long code, const char *what)
+{
+    return QStringLiteral("%1 failed: %2").arg(QString::fromLatin1(what), hresultText(code));
 }
 
 } // namespace flowkeyd::platform::win

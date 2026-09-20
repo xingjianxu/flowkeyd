@@ -113,6 +113,8 @@ add_library(flowkeyd_platform STATIC
     src/platform/win/clipboard.h
     src/platform/win/console.cpp
     src/platform/win/console.h
+    src/platform/win/desktop.cpp
+    src/platform/win/desktop.h
     src/platform/win/dwm.cpp
     src/platform/win/dwm.h
     src/platform/win/elevate.cpp
@@ -129,6 +131,8 @@ add_library(flowkeyd_platform STATIC
     src/platform/win/nt.h
     src/platform/win/process.cpp
     src/platform/win/process.h
+    src/platform/win/power.cpp
+    src/platform/win/power.h
     src/platform/win/single_instance.cpp
     src/platform/win/single_instance.h
     src/platform/win/window.cpp
@@ -259,6 +263,8 @@ flowkeyd_add_test(tst_audio LIBS flowkeyd_platform)
 flowkeyd_add_test(tst_interactive LIBS flowkeyd_platform)
 flowkeyd_add_test(tst_menu_model LIBS flowkeyd_models)
 flowkeyd_add_test(tst_help_model LIBS flowkeyd_models)
+flowkeyd_add_test(tst_desktop_table LIBS flowkeyd_platform)
+flowkeyd_add_test(tst_power_table LIBS flowkeyd_platform)
 
 # 冒烟测试要真的链接 Lua，才能证明 vendor/lua 编得进来。
 target_link_libraries(tst_smoke PRIVATE flowkeyd::lua)

@@ -589,7 +589,11 @@ QML 模块注册之后，两条 profile 都要重新全量构建一次**。
 | 3 Win32 基础设施 + 钩子 + 引擎接线 | **已完成** | `flowkeyd_platform` 静态库 + 钩子线程/动作线程；`tst_layout|input|command_line|instance` 全绿；手工冒烟见阶段 3 小节 |
 | 4 托盘 + 日志窗口 | **已完成** | 完整托盘菜单 + `core/log_tail`/`app/log_model` 尾随模型 + `LogWindow.qml` 真渲染；`tst_log_tail` 全绿；日志窗口渲染/尾随已截图验证 |
 | 5 窗口动作 + 剪贴板 + 音量/媒体 | **已完成** | `core/window_match`、`platform/win/dwm|window|clipboard|audio`、dispatcher 接线与 `{selection}`；`tst_window_match`/`tst_audio` 全绿；真实桌面后端由 `tst_interactive` 验证 |
-| 6–10 | 待做 | |
+| 6 弹窗 `menu` / `help` | **已完成** | `flowkeyd_models` + 两张 QML 卡片；`tst_menu_model`/`tst_help_model` 全绿；渲染/筛选/键盘选择由 `tmp/preview` 验证 |
+| 7 虚拟桌面 + 电源 | **已完成** | `platform/win/desktop|power` + dispatcher 接线；`tst_desktop_table`/`tst_power_table` 全绿；真实 COM 探测/切换与关屏由 `tst_interactive` 验证 |
+| 8 示例配置 + README | **已完成** | `flowkeyd.lua.example` 与 oskeyd 逐行对齐（除 UI/probe/simulate 那几处）；`README.md` 已写出；`--check` 37 hotkey / 3 remap |
+| 9 手工验收 | 待做 | 无 e2e 的替代：第 5 节清单跑两遍 |
+| 10 接管 | 待做 | 迁移真实配置、停 oskeyd、常驻 |
 
 ### 阶段 0：仓库与构建骨架
 
@@ -1038,6 +1042,60 @@ get/set/append/clear。**`animate` 的效果要靠肉眼**（没有屏幕采样�
 （睡眠/关机/重启/关屏都不许在测试里真的执行）；真实调用手工验证
 （关屏可以用，随后随便按一个键点亮）。
 
+**状态：已完成（2026-09）。**
+
+**已完成的内容**
+
+* `src/platform/win/desktop.{h,cpp}`：`CLSID_ImmersiveShell` →
+  `IServiceProvider::QueryService` → 未公开的 `IVirtualDesktopManagerInternal`。
+  `versionTable()` 是照抄 `../oskeyd/src/win/desktop.rs` 的七条版本表，
+  `apiFor(build, revision)` 是纯函数（“最后一个生效版本不高于当前系统”）；
+  三种 vtable 布局（`Plain` / `Monitor` / `MonitorShifted`）各写一套结构体，
+  未用到的槽只留 `void *` 占位。`windowsVersion()` 用运行时解析的
+  `ntdll!RtlGetVersion`（build）+ 注册表的 `UBR`（revision，`RegGetValueW`）；
+  每次调用都在一条一次性的 **STA** 线程上（`inSta`），并逐条检查 `HRESULT`。
+  还提供只读的 `probe()`（桌面数量/当前序号/系统版本/生效表项）。
+* `src/platform/win/power.{h,cpp}`：`powrprof!SetSuspendState`（睡眠/休眠）、
+  `user32!ExitWindowsEx`（关机/重启/注销，只带 `EWX_FORCEIFHUNG`）、
+  `LockWorkStation`、`WM_SYSCOMMAND`+`SC_MONITORPOWER` 广播（`SendMessageTimeoutW`
+  + `SMTO_ABORTIFHUNG` + `HWND_BROADCAST`）、`enableShutdownPrivilege()`
+  （`AdjustTokenPrivileges` 返回 TRUE 但一个特权都没加上时看 `GetLastError()`
+  是不是 `ERROR_NOT_ALL_ASSIGNED`）。**`powerOpTable()` 与
+  `requiresShutdownPrivilege()` 是纯逻辑**：`lock`/`sleep`/`hibernate`/`screen_off`
+  在 `enableShutdownPrivilege()` **之前** return，只有关机/重启/注销强制要特权。
+  直接静态链接 `powrprof`（AGENTS.md 第 2 节允许），不像 oskeyd 那样运行时解析。
+* `src/platform/win/ffi.{h,cpp}`：新增 `hresultText()`（与 oskeyd 的
+  `hresult_text` 同源的人话说明：`E_NOINTERFACE` 意味着版本表选错了 IID），
+  `hresultMessage()` 改用它。
+* `app/dispatcher.cpp`：`desktop` / `power` 两个分支接上真实后端；`power` 失败时
+  除日志外补一条托盘气泡（没提权时用户看不到控制台）。原先那句
+  `not implemented yet (later stage)` 的兜底警告保留在 `default:` 分支。
+* 测试：`tests/tst_desktop_table.cpp`（5 个用例：选表规则的全部边界、
+  24H2 的已知 IID、表按 build 升序、布局名稳定、系统版本可读）与
+  `tests/tst_power_table.cpp`（7 个用例：表的规范名与特权标志、别名、
+  `power:` 简写、非法取值报错）。两者都只碰纯逻辑，**不调用 `execute()`**。
+* `tests/tst_interactive.cpp` 新增两个 opt-in 用例：
+  `desktopBackendProbesAndSwitches`（只读探测 + 一次可逆的切换，切走再切回来）
+  与 `powerScreenOffBlanksTheDisplay`（多一道 `FLOWKEYD_ALLOW_SCREEN_OFF=1`
+  闸门；关屏后注入一个无害的 Shift 点亮屏幕）。
+
+**手工验证结论（2026-09，`FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1` + `FLOWKEYD_ALLOW_SCREEN_OFF=1`）**
+
+```
+QINFO  : desktopBackendProbesAndSwitches() desktop probe: count 4 current 2
+         os 26200.9457 api 26100 layout plain
+         manager {53f5ca0b-158f-4124-900c-057158060b27}
+PASS   : desktopBackendProbesAndSwitches()
+PASS   : powerScreenOffBlanksTheDisplay()
+Totals: 8 passed, 0 failed
+```
+
+* 本机（build 26200.9457）命中的是版本表的 26100 条目、`plain` 布局，
+  IID 与 MScholtes/VirtualDesktop 的 24H2 版本一致；`QueryService` 成功，
+  4 个桌面、当前在第 2 个。切到第 1 个再切回来成功。
+* `screen_off` 真的把全部显示器送进待机，随后注入的 Shift 把它点亮。
+* 睡眠/关机/重启/注销/锁定**没有**被自动化测试触碰（它们只有用户按下去才会执行）。
+
 ### 阶段 8：`flowkeyd.lua.example` + README
 
 **做什么**：把 oskeyd 的 `oskeyd.lua.example` 译成 `flowkeyd.lua.example`
@@ -1046,6 +1104,30 @@ get/set/append/clear。**`animate` 的效果要靠肉眼**（没有屏幕采样�
 `--check --config flowkeyd.lua.example` 必须通过。
 
 **验收**：手工通读示例配置，确认每条注释与实现一致；双构建 + 测试绿。
+
+**状态：已完成（2026-09）。**
+
+**已完成的内容**
+
+* `flowkeyd.lua.example` 在阶段 2 就已经写出；本阶段用
+  `git diff --no-index`（把 oskeyd 那份做品牌名替换、再删掉 `--simulate` 行）
+  逐行核对过：除了有意为之的四处（头部多一行 `--list-keys`、虚拟桌面那节
+  去掉 `--probe`、选单/帮助那节把“自绘 GDI 原生窗口”改成 QML/FluentWinUI3、
+  help 那节去掉 `--simulate` 提示），其余完全一致。
+* `README.md`（新增，约 700 行）从 oskeyd 的 README 翻译并改写：
+  品牌名、Lua 5.5.1、CMake preset 构建、去掉 `--simulate`/`--selftest`/`--probe`、
+  **日志窗口**改成“进程内 QML 窗口”、**选单/帮助**改成“QML + 跟随系统 palette”、
+  **验证那一节**改成“Qt Test + 手工冒烟清单”（并写明没有 e2e）、
+  工作原理图改成三线程 + Qt GUI 线程、已知限制与路线图按本项目重写。
+  文中所有 `--check`/`--list`/`--version` 的输出形状都用真实运行结果核对过。
+
+**实测结果（2026-09）**
+
+* `flowkeyd --version` → `flowkeyd 0.1.0` / `Lua 5.5.1`（版本号里带 Lua，出问题时
+  能一眼看出是哪一份 Lua）。
+* `flowkeyd --check --config flowkeyd.lua.example` →
+  `D:\prj\flowkeyd\flowkeyd.lua.example: OK (37 hotkey(s), 3 remap(s))`，零警告。
+* `flowkeyd --list` 的形状与 oskeyd 的 `print_bindings` 逐字形似。
 
 ### 阶段 9：手工验收（无 e2e 的替代）
 
@@ -1323,6 +1405,46 @@ hold/tap；挂起/重载/退出。
 * **`QWindow::setProperty("visible", …)` 是隐藏/显示一个 QML `Window` 的
   最省事办法**（与 `LogWindow` 一致）；窗口不会因此被销毁，所以可以复用。
 
+#### 阶段 7/8 真的踩到的（2026-09）
+
+* **PowerShell 函数里不要把参数命名成 `$args`。** `$args` 是自动变量（未绑定参数
+  的数组），`function Run-Cli($label, $args) { Start-Process -ArgumentList $args }`
+  里那个 `$args` 永远是空的，`Start-Process` 会报“ArgumentList 不能为 Null”。
+  换个名字（`$argList`）就好。同样，命令行上用 `|` 管道会被 agent 的 bash 抢走
+  （`Select-Object: command not found`），要写进 `.ps1` 文件跑。
+* **`Get-Content` 不带 `-Encoding UTF8` 会把无 BOM 的 UTF-8 文件数错行数。**
+  实测 `flowkeyd.lua.example`（493 行、LF、无 BOM）被 `(Get-Content x).Count`
+  数成 **386** 行，而 `Get-Content -Encoding UTF8` 与
+  `[System.IO.File]::ReadAllLines` 都是 493。PowerShell 5.1 默认按 ANSI/GBK
+  解码，多字节中文被误读（这是“无 BOM 的 `.ps1` 被按 GBK 解码”那个坑的另一个面）。
+  数行数、比对配置文本一律用 `-Encoding UTF8` 或
+  `[System.IO.File]::ReadAllLines`。
+* **核对“示例配置有没有漏东西”的好办法：把参考文件做品牌名替换后
+  `git diff --no-index`。** 把 `oskeyd.lua.example` 读成字符串、`-replace`
+  掉品牌名、删掉 `--simulate` 行、写成临时文件，再与 `flowkeyd.lua.example`
+  diff；本机实测两者只差有意为之的四处（见阶段 8）。注意 git 会自动处理
+  CRLF/LF，不要自己去对齐行尾。
+* **MinGW 的头文件里没有 `MONITOR_OFF`**（`SC_MONITORPOWER` 与
+  `SMTO_ABORTIFHUNG` 有，`MONITOR_OFF` 没有），要自己写 `constexpr LPARAM kMonitorOff = 2;`。
+  同理 `SetSuspendState` 虽然在 `powrprof.h` 里，但那个头会连带拉进
+  `powerbase.h`/`powersetting.h`；只用一个入口时手写声明更干净
+  （导入库照样静态链接）。
+* **`hresultMessage()` 以前用 `FormatMessageW` 解析 HRESULT，结果几乎总是
+  `error 0x…`。** 现在改成 `hresultText()`：`E_NOINTERFACE` 等几个常见值有
+  人话名字，剩下的才退回十六进制。这一条对虚拟桌面特别重要：
+  `E_NOINTERFACE` 意味着版本表选错了 IID，而不是随便一个内部错误。
+* **`RtlGetVersion` 可以从已加载的 `ntdll.dll` 用 `GetModuleHandleW` +
+  `GetProcAddress` 拿**（每个进程都有 ntdll），不用给 `flowkeyd_platform`
+  加一条 ntdll 链接依赖；`GetVersionEx` 会被应用清单骗，不能用。
+* **破坏性的后端（关屏）在 opt-in 的交互式单测里也要再加一道闸门。**
+  `tst_interactive` 的 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1` 是“会碰真实桌面”
+  的总闸；关屏会真的黑屏，所以单独用 `FLOWKEYD_ALLOW_SCREEN_OFF=1` 再问一次，
+  并在测试里注入一个无害的 Shift 把屏幕点亮。睡眠/关机/重启/注销/锁定
+  **永远不写进测试**。
+* **`QCOMPARE` 可以比较 `std::optional<enum class>`**（`operator==` 由 optional
+  提供），前提是模板参数里没有顶层逗号；`std::optional<std::pair<A,B>>` 这种
+  才需要先起一个 `using` 别名。
+
 ### 从 oskeyd 继承的领域坑（照抄那份的解法，不要重新发明）
 
 下面这些在 `../oskeyd/AGENTS.md` 第 6 节都有**完整的现象描述 + 修法**，
@@ -1413,6 +1535,20 @@ hold/tap；挂起/重载/退出。
 > 见阶段 6 的「手工验证结论」；**真实快捷键触发那一步留到阶段 9**。
 > 另外顺手给 `LogWindow.qml` 补了 `pragma ComponentBehavior: Bound`，
 > 现在 `qmllint` 对三个 QML 文件都是零警告。
+
+> **阶段 7/8 的实测结果（2026-09）**：`windows-debug` 与 `windows-release`
+> 两边都是 `build exit 0`、零警告，`ctest` **19 个测试目标**全绿
+> （新增 `tst_desktop_table` 5 个用例、`tst_power_table` 7 个用例）。
+> `flowkeyd --check --config flowkeyd.lua.example` 仍通过（37/3、零警告）；
+> `--version` 打印 `flowkeyd 0.1.0` + `Lua 5.5.1`；`--list` 的形状与 oskeyd 一致。
+> 交互式验证（`FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`，另加
+> `FLOWKEYD_ALLOW_SCREEN_OFF=1`）8 个用例全绿：虚拟桌面探测到
+> `count 4 / current 2 / os 26200.9457 / api 26100 / layout plain /
+> manager {53f5ca0b-158f-4124-900c-057158060b27}`，切走再切回成功；
+> `screen_off` 真的黑屏并被随后注入的 Shift 点亮。
+> `README.md` 与 `flowkeyd.lua.example` 已按 oskeyd 逐节核对。
+> **仍需人的手**：真实快捷键触发的 `desktop`/`power` 链路、托盘菜单里的
+> 电源条目，以及阶段 3/4/5/6 遗留的那批，全部留到阶段 9。
 
 > 提醒：Qt 的编译单元很多，`--preset` 的构建目录是分开的
 > （`build/windows-debug` / `build/windows-release`），所以

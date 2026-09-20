@@ -19,9 +19,11 @@
 #include "core/keys.h"
 #include "platform/win/audio.h"
 #include "platform/win/clipboard.h"
+#include "platform/win/desktop.h"
 #include "platform/win/dwm.h"
 #include "platform/win/ffi.h"
 #include "platform/win/input.h"
+#include "platform/win/power.h"
 #include "platform/win/process.h"
 #include "platform/win/window.h"
 
@@ -45,6 +47,8 @@ private slots:
     void volumeReadWriteAndRestore();
     void windowBackendLaunchesActivatesAndCloses();
     void copySelectionCopiesTheFocusedSelection();
+    void desktopBackendProbesAndSwitches();
+    void powerScreenOffBlanksTheDisplay();
 };
 
 void TestInteractive::clipboardRoundTrip()
@@ -237,6 +241,79 @@ void TestInteractive::copySelectionCopiesTheFocusedSelection()
              qPrintable(QStringLiteral("clipboard after copy_selection was %1").arg(copied)));
 
     (void)platform::win::window::applyTo(hwnd, core::WindowOp::Close, false, &detail, &error);
+}
+
+/// 虚拟桌面后端：只读探测 + 一次可逆的切换（切走再切回来）。
+///
+/// 切换桌面会短暂打断用户，但它是可逆且非破坏性的，所以放在这套 opt-in 的
+/// 交互式测试里（`FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`）。
+void TestInteractive::desktopBackendProbesAndSwitches()
+{
+    if (!interactiveEnabled()) {
+        QSKIP("set FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1 to run the interactive tests");
+    }
+    QString error;
+    platform::win::desktop::Snapshot snapshot;
+    QVERIFY2(platform::win::desktop::probe(&snapshot, &error), qPrintable(error));
+    QVERIFY(snapshot.count >= 1);
+    QVERIFY(snapshot.current >= 1);
+    QVERIFY(snapshot.current <= snapshot.count);
+    QVERIFY(snapshot.osBuild > 1000);
+    QVERIFY(!snapshot.layout.isEmpty());
+    QVERIFY(!snapshot.managerIid.isEmpty());
+    qInfo().noquote() << "desktop probe:" << "count" << snapshot.count << "current"
+                      << snapshot.current << "os"
+                      << QStringLiteral("%1.%2").arg(snapshot.osBuild).arg(snapshot.osRevision)
+                      << "api" << snapshot.apiBuild << "layout" << snapshot.layout << "manager"
+                      << snapshot.managerIid;
+
+    if (snapshot.count < 2) {
+        QSKIP("only one virtual desktop exists; nothing to switch to");
+    }
+
+    const std::uint32_t other = snapshot.current == 1 ? 2 : 1;
+    QString detail;
+    QVERIFY2(platform::win::desktop::switchTo(other, &detail, &error), qPrintable(error));
+    QVERIFY(!detail.isEmpty());
+
+    // shell 的切换是异步的，轮询等它落到目标桌面。
+    platform::win::desktop::Snapshot moved;
+    bool landed = false;
+    for (int i = 0; i < 60 && !landed; ++i) {
+        QVERIFY2(platform::win::desktop::probe(&moved, &error), qPrintable(error));
+        landed = moved.current == other;
+        if (!landed) {
+            QThread::msleep(50);
+        }
+    }
+    QCOMPARE(moved.current, other);
+
+    // 切回原来的桌面，别把用户留在别处。
+    QVERIFY2(platform::win::desktop::switchTo(snapshot.current, &detail, &error), qPrintable(error));
+}
+
+/// 关屏：会真的把屏幕黑掉，所以比其它交互式测试多一道闸门。
+///
+/// 屏幕是会话级的，一条 `WM_SYSCOMMAND`/`SC_MONITORPOWER` 广播就把全部显示器
+/// 送进待机；随后注入一个无害的 Shift 把它点亮（任何输入都会唤醒）。
+/// 睡眠 / 关机 / 重启 / 注销 / 锁定**绝不**在这里调用。
+void TestInteractive::powerScreenOffBlanksTheDisplay()
+{
+    if (!interactiveEnabled()) {
+        QSKIP("set FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1 to run the interactive tests");
+    }
+    if (qEnvironmentVariable("FLOWKEYD_ALLOW_SCREEN_OFF").isEmpty()) {
+        QSKIP("set FLOWKEYD_ALLOW_SCREEN_OFF=1 to blank the screen for a moment");
+    }
+    QString detail;
+    QString error;
+    QVERIFY2(platform::win::power::execute(core::PowerOp::ScreenOff, &detail, &error),
+             qPrintable(error));
+    QCOMPARE(detail, QStringLiteral("display(s) off"));
+    // 让屏幕真的黑一下，然后自己点亮。
+    QThread::msleep(800);
+    QVERIFY2(platform::win::tapKey(core::vk::LSHIFT, &error), qPrintable(error));
+    QThread::msleep(300);
 }
 
 QTEST_MAIN(TestInteractive)

@@ -7,9 +7,11 @@
 #include "core/window_match.h"
 #include "platform/win/audio.h"
 #include "platform/win/clipboard.h"
+#include "platform/win/desktop.h"
 #include "platform/win/hook.h"
 #include "platform/win/input.h"
 #include "platform/win/logging.h"
+#include "platform/win/power.h"
 #include "platform/win/process.h"
 #include "platform/win/window.h"
 
@@ -630,6 +632,32 @@ void executeAction(Runtime *runtime,
         win::logInfo(QStringLiteral("`%1` -> quit").arg(hotkey));
         runtime->requestShutdownFromAnyThread();
         break;
+    case core::Action::Kind::Desktop: {
+        QString detail;
+        QString error;
+        if (!win::desktop::switchTo(action.desktopSwitch, &detail, &error)) {
+            win::logError(QStringLiteral("`%1` desktop: %2").arg(hotkey, error));
+        } else {
+            win::logInfo(QStringLiteral("`%1` -> %2").arg(hotkey, detail));
+        }
+        break;
+    }
+    case core::Action::Kind::Power: {
+        QString detail;
+        QString error;
+        if (!win::power::execute(action.powerOp, &detail, &error)) {
+            win::logError(QStringLiteral("`%1` power: %2").arg(hotkey, error));
+            // 失败最常见的原因是没提权（托盘模式又看不见控制台日志），
+            // 所以补一条气泡提示，不能让用户对着一片安静发呆。
+            runtime->notifyFromAnyThread(
+                QStringLiteral("flowkeyd"),
+                QStringLiteral("power %1 failed: %2")
+                    .arg(core::powerOpName(action.powerOp), error));
+        } else {
+            win::logInfo(QStringLiteral("`%1` -> power %2").arg(hotkey, detail));
+        }
+        break;
+    }
     case core::Action::Kind::Menu:
         openMenuAction(runtime, dispatcher, config, hotkey, action);
         break;
@@ -637,9 +665,7 @@ void executeAction(Runtime *runtime,
         openHelpAction(runtime, config, hotkey, action);
         break;
     default:
-        // desktop / power 是后续阶段的后端，这里先明确说一声，
-        // 而不是静默地什么都不做。
-        win::logWarn(QStringLiteral("`%1`: action `%2` is not implemented yet (later stage)")
+        win::logWarn(QStringLiteral("`%1`: action `%2` is not implemented yet")
                          .arg(hotkey, action.summary()));
         break;
     }
