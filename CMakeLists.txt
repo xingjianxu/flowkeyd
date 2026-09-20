@@ -87,6 +87,22 @@ qt_add_resources(flowkeyd_lua "lua_prelude"
 )
 
 # ---------------------------------------------------------------------------
+# 弹窗模型层：`menu` / `help` 的纯逻辑（几何、筛选、滚动、命中测试）。
+# 与 core 一样只用 QtCore，所以能被 Qt Test 直接链接。
+# ---------------------------------------------------------------------------
+add_library(flowkeyd_models STATIC
+    src/app/help_model.cpp
+    src/app/help_model.h
+    src/app/menu_model.cpp
+    src/app/menu_model.h
+    src/app/popup_layout.cpp
+    src/app/popup_layout.h
+)
+target_include_directories(flowkeyd_models PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(flowkeyd_models PUBLIC Qt6::Core)
+flowkeyd_strict_warnings(flowkeyd_models)
+
+# ---------------------------------------------------------------------------
 # Win32 后端。不碰 Qt GUI（托盘/窗口在 app 层），因此单测也能直接链接。
 # 系统库写成 PUBLIC，静态库的使用者自己不用再列一遍。
 # ---------------------------------------------------------------------------
@@ -136,9 +152,15 @@ flowkeyd_strict_warnings(flowkeyd_platform)
 # ---------------------------------------------------------------------------
 set(FLOWKEYD_QML_FILES
     src/qml/LogWindow.qml
+    src/qml/MenuPopup.qml
+    src/qml/HelpPopup.qml
 )
 set_source_files_properties(src/qml/LogWindow.qml
     PROPERTIES QT_RESOURCE_ALIAS LogWindow.qml)
+set_source_files_properties(src/qml/MenuPopup.qml
+    PROPERTIES QT_RESOURCE_ALIAS MenuPopup.qml)
+set_source_files_properties(src/qml/HelpPopup.qml
+    PROPERTIES QT_RESOURCE_ALIAS HelpPopup.qml)
 
 qt_add_executable(flowkeyd
     WIN32
@@ -151,6 +173,8 @@ qt_add_executable(flowkeyd
     src/app/log_model.h
     src/app/log_window.cpp
     src/app/log_window.h
+    src/app/popup_host.cpp
+    src/app/popup_host.h
     src/app/runtime.cpp
     src/app/runtime.h
     src/platform/win/tray.cpp
@@ -167,6 +191,7 @@ target_link_libraries(flowkeyd
     PRIVATE
         flowkeyd_core
         flowkeyd_lua
+        flowkeyd_models
         flowkeyd_platform
         flowkeyd::lua
         Qt6::Core
@@ -232,6 +257,8 @@ flowkeyd_add_test(tst_log_tail)
 flowkeyd_add_test(tst_window_match)
 flowkeyd_add_test(tst_audio LIBS flowkeyd_platform)
 flowkeyd_add_test(tst_interactive LIBS flowkeyd_platform)
+flowkeyd_add_test(tst_menu_model LIBS flowkeyd_models)
+flowkeyd_add_test(tst_help_model LIBS flowkeyd_models)
 
 # 冒烟测试要真的链接 Lua，才能证明 vendor/lua 编得进来。
 target_link_libraries(tst_smoke PRIVATE flowkeyd::lua)

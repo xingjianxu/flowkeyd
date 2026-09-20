@@ -1,5 +1,6 @@
 #include "app/dispatcher.h"
 
+#include "app/popup_host.h"
 #include "app/runtime.h"
 #include "core/keys.h"
 #include "core/template.h"
@@ -47,6 +48,152 @@ QString truncateText(const QString &text, int limit)
         return text;
     }
     return text.left(limit) + QChar(0x2026);
+}
+
+/// 帮助窗口里那一行灰色小字：这个快捷键按下/松开时到底做什么。
+///
+/// 配置里的 `comment` 是给人看的一句话，而动作摘要是机器生成的；两者都列出来，
+/// 用户才能既认出快捷键、又知道它到底会干什么。
+std::optional<QString> bindingDetail(const core::Binding &binding)
+{
+    QStringList parts;
+    for (const core::Action &action : binding.press) {
+        parts.append(action.summary());
+    }
+    for (const core::Action &action : binding.release) {
+        parts.append(action.summary());
+    }
+    switch (binding.trigger) {
+    case core::TriggerMode::Repeat:
+        parts.append(QStringLiteral("repeat"));
+        break;
+    case core::TriggerMode::Release:
+        parts.append(QStringLiteral("on release"));
+        break;
+    case core::TriggerMode::Press:
+        break;
+    }
+    if (parts.isEmpty()) {
+        return std::nullopt;
+    }
+    return parts.join(QStringLiteral(" ; "));
+}
+
+/// 把重映射的目标渲染成 `Ctrl+C` 这样的可读形式（只看按下那半程，
+/// 因为松开那半程就是它的逆序）。
+QString describeRemapTarget(const core::CompiledRemap &remap)
+{
+    QStringList names;
+    for (const core::SendOp &op : remap.press) {
+        switch (op.kind) {
+        case core::SendOp::Kind::Key:
+            if (op.down) {
+                names.append(core::nameFromKey(op.vk));
+            }
+            break;
+        case core::SendOp::Kind::Text:
+            names.append(QString(QChar(op.text)));
+            break;
+        case core::SendOp::Kind::Sleep:
+            names.append(QStringLiteral("Sleep %1").arg(op.ms));
+            break;
+        }
+    }
+    if (names.isEmpty()) {
+        return QStringLiteral("—");
+    }
+    return names.join(QLatin1Char('+'));
+}
+
+/// 弹出 `menu` 动作的选单。
+///
+/// 选单窗口在 GUI 线程上，用户选中后才把那一项的动作回投给**工作线程**：
+/// 弹窗本身从不执行动作（与 oskeyd 的 `dispatch.rs::open_menu` 一致）。
+void openMenuAction(Runtime *runtime,
+                    Dispatcher *dispatcher,
+                    const std::shared_ptr<const core::Compiled> &config,
+                    const QString &hotkey,
+                    const core::Action &action)
+{
+    // 把每一项的动作展平。`--check` 已经做过同一件事，所以这里的失败只可能是
+    // 配置在「校验」与「使用」之间被改过（极少见），照旧报出来。
+    std::vector<std::vector<core::Action>> actions;
+    actions.reserve(action.items.size());
+    for (const core::MenuItemDef &item : action.items) {
+        std::vector<core::Action> list;
+        if (item.action) {
+            if (const auto error = item.action->flatten(&list); error.has_value()) {
+                win::logError(QStringLiteral("`%1` menu: %2").arg(hotkey, *error));
+                return;
+            }
+        }
+        actions.push_back(std::move(list));
+    }
+
+    MenuRequest request;
+    request.title = action.menuTitle;
+    request.items.reserve(action.items.size());
+    for (const core::MenuItemDef &item : action.items) {
+        request.items.push_back(MenuEntry{item.keyChar(), item.label.trimmed(), item.hint});
+    }
+    const int count = static_cast<int>(action.items.size());
+    request.onChoose = [dispatcher, config, hotkey, actions = std::move(actions)](int index) {
+        if (index < 0 || index >= static_cast<int>(actions.size())) {
+            return;
+        }
+        const std::vector<core::Action> &list = actions[static_cast<std::size_t>(index)];
+        // 没写 `action`（或写了 `none()`）的条目就是“关掉选单”。
+        if (list.empty()) {
+            return;
+        }
+        dispatcher->submitActions(config, hotkey, list);
+    };
+    runtime->showMenuFromAnyThread(std::move(request));
+    win::logInfo(QStringLiteral("`%1` -> menu %2 (%3 item(s))")
+                     .arg(hotkey)
+                     .arg(action.menuTitle.has_value() ? core::rustDebug(*action.menuTitle)
+                                                       : QStringLiteral("(untitled)"))
+                     .arg(count));
+}
+
+/// 弹出 `help` 动作的快捷键帮助窗口。
+///
+/// 列表直接从当前编译好的配置生成（绑定 + 重映射），所以这个动作不需要任何
+/// 参数；`onCopy` 也只写一次剪贴板，不执行任何动作。
+void openHelpAction(Runtime *runtime,
+                    const std::shared_ptr<const core::Compiled> &config,
+                    const QString &hotkey,
+                    const core::Action &action)
+{
+    HelpRequest request;
+    request.title = action.helpTitle;
+    request.items.reserve(config->bindings.size() + config->remaps.size());
+    for (const core::Binding &binding : config->bindings) {
+        HelpEntry entry;
+        for (const core::Chord &chord : binding.chords) {
+            entry.chords.append(chord.render());
+        }
+        entry.label = binding.comment.value_or(binding.name);
+        entry.detail = bindingDetail(binding);
+        request.items.push_back(std::move(entry));
+    }
+    for (const core::CompiledRemap &remap : config->remaps) {
+        HelpEntry entry;
+        entry.chords.append(remap.from.render());
+        entry.label = remap.name;
+        entry.detail = QStringLiteral("remap → %1").arg(describeRemapTarget(remap));
+        request.items.push_back(std::move(entry));
+    }
+    const int count = static_cast<int>(request.items.size());
+    request.onCopy = [](const QString &text) {
+        QString error;
+        if (!win::clipboard::setText(text, &error)) {
+            win::logWarn(QStringLiteral("could not copy %1 from the help window: %2")
+                             .arg(core::rustDebug(text), error));
+        }
+    };
+    runtime->showHelpFromAnyThread(std::move(request));
+    win::logInfo(QStringLiteral("`%1` -> help (%2 entry(s))").arg(hotkey).arg(count));
 }
 
 /// 一次触发的模板展开上下文：把剪贴板/选中文本的读取缓存起来。
@@ -293,7 +440,8 @@ void executeClipboardAction(ExpandContext &ctx,
 
 /// 执行一个动作。`ctx` 在单次触发期间共享，所以剪贴板只读一次。
 void executeAction(Runtime *runtime,
-                   const core::Compiled &config,
+                   Dispatcher *dispatcher,
+                   const std::shared_ptr<const core::Compiled> &config,
                    const QString &hotkey,
                    const core::Action &action,
                    ExpandContext &ctx)
@@ -313,7 +461,7 @@ void executeAction(Runtime *runtime,
             return;
         }
         const bool release =
-            action.releaseModifiers.value_or(config.settings.releaseModifiers);
+            action.releaseModifiers.value_or(config->settings.releaseModifiers);
         win::ModifierGuard guard =
             release ? win::ModifierGuard::release() : win::ModifierGuard::none();
         QString error;
@@ -339,7 +487,7 @@ void executeAction(Runtime *runtime,
             ops.append(core::SendOp::unicode(text.at(i).unicode()));
         }
         const bool release =
-            action.releaseModifiers.value_or(config.settings.releaseModifiers);
+            action.releaseModifiers.value_or(config->settings.releaseModifiers);
         win::ModifierGuard guard =
             release ? win::ModifierGuard::release() : win::ModifierGuard::none();
         QString error;
@@ -482,8 +630,14 @@ void executeAction(Runtime *runtime,
         win::logInfo(QStringLiteral("`%1` -> quit").arg(hotkey));
         runtime->requestShutdownFromAnyThread();
         break;
+    case core::Action::Kind::Menu:
+        openMenuAction(runtime, dispatcher, config, hotkey, action);
+        break;
+    case core::Action::Kind::Help:
+        openHelpAction(runtime, config, hotkey, action);
+        break;
     default:
-        // desktop / menu / help / power 是后续阶段的后端，这里先明确说一声，
+        // desktop / power 是后续阶段的后端，这里先明确说一声，
         // 而不是静默地什么都不做。
         win::logWarn(QStringLiteral("`%1`: action `%2` is not implemented yet (later stage)")
                          .arg(hotkey, action.summary()));
@@ -506,6 +660,18 @@ void Dispatcher::submit(std::shared_ptr<const core::Compiled> config, core::Trig
         Qt::QueuedConnection);
 }
 
+void Dispatcher::submitActions(std::shared_ptr<const core::Compiled> config,
+                               QString name,
+                               std::vector<core::Action> actions)
+{
+    QMetaObject::invokeMethod(
+        this,
+        [this, config = std::move(config), name = std::move(name), actions = std::move(actions)]() {
+            runActions(config, name, actions);
+        },
+        Qt::QueuedConnection);
+}
+
 void Dispatcher::execute(const std::shared_ptr<const core::Compiled> &config,
                          const core::Trigger &trigger)
 {
@@ -515,12 +681,19 @@ void Dispatcher::execute(const std::shared_ptr<const core::Compiled> &config,
     const core::Binding &binding = config->bindings[trigger.index];
     const std::vector<core::Action> &actions =
         trigger.phase == core::Phase::Press ? binding.press : binding.release;
-    if (actions.empty()) {
+    runActions(config, binding.name, actions);
+}
+
+void Dispatcher::runActions(const std::shared_ptr<const core::Compiled> &config,
+                            const QString &name,
+                            const std::vector<core::Action> &actions)
+{
+    if (!config || actions.empty()) {
         return;
     }
-    ExpandContext ctx(m_runtime, binding.name);
+    ExpandContext ctx(m_runtime, name);
     for (const core::Action &action : actions) {
-        executeAction(m_runtime, *config, binding.name, action, ctx);
+        executeAction(m_runtime, this, config, name, action, ctx);
     }
 }
 

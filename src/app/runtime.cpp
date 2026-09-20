@@ -9,6 +9,8 @@
 #include <QThread>
 #include <QVector>
 
+#include <utility>
+
 namespace flowkeyd::app {
 
 namespace win = flowkeyd::platform::win;
@@ -69,6 +71,11 @@ void Runtime::shutdown()
         return;
     }
     m_started = false;
+    // 先把弹窗关掉：`onChoose` 会回投到 `Dispatcher`，留着未完成的回调就是
+    // 在给“点了已销毁的对象”找机会（见 popup_host.h）。
+    if (m_popupHost != nullptr) {
+        m_popupHost->closeAll();
+    }
     if (m_hook) {
         // 先卸钩子，之后不会再有任何动作被排进队列。
         m_hook->stop();
@@ -139,6 +146,20 @@ void Runtime::reportSuspended(bool suspended)
     // 就会在正确的线程上跑。
     QMetaObject::invokeMethod(
         this, [this, suspended]() { emit suspendedChanged(suspended); }, Qt::QueuedConnection);
+}
+
+void Runtime::showMenuFromAnyThread(MenuRequest request)
+{
+    if (m_popupHost != nullptr) {
+        m_popupHost->requestMenu(std::move(request));
+    }
+}
+
+void Runtime::showHelpFromAnyThread(HelpRequest request)
+{
+    if (m_popupHost != nullptr) {
+        m_popupHost->requestHelp(std::move(request));
+    }
 }
 
 void Runtime::performShutdown()

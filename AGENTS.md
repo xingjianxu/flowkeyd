@@ -241,25 +241,31 @@ Qt 自己的库随便链**：
 | `src/app/dispatcher.h/.cpp`               | **动作工作线程**（`QThread`）：执行动作列表，含 `window` 的“先启动再激活”与默认开的 `toggle` 收起、`menu`/`help` 的窗口请求                                                                                                 |
 | `src/app/runtime.h/.cpp`                  | 引擎 + 钩子 + 分发 + 托盘 + 弹窗的总装，`ControlCmd`（suspend/reload/quit）通道                                                                                                                                             |
 | `src/app/log_model.h/.cpp`                | 日志窗口的模型：尾随日志文件（增量、半行、被截断的多字节 UTF-8）、最多 1000 行、按级别配色、子串过滤                                                                                                                        |
-| `src/app/menu_model.h/.cpp`               | `menu` 选单的纯逻辑：条目几何、高亮移动、单字符选中、Esc 语义、命中测试（**可单测**）                                                                                                                                       |
-| `src/app/help_model.h/.cpp`               | `help` 帮助的纯逻辑：筛选、滚动、`可见/总数` 计数、`Enter` 复制哪一行（**可单测**）                                                                                                                                         |
-| `src/app/popup_host.h/.cpp`               | 把上面的模型挂到 QML 窗口上；抢前台（`requestActivate` + Win32 前台锁绕行）；在 Qt GUI 线程上创建/复用窗口                                                                                                                  |
-| `src/qml/`                                | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`、`Style.qml`(可选)、`qmldir`                                                                                                                                              |
+| `src/app/menu_model.h/.cpp`               | `menu` 选单的**纯逻辑**（`QAbstractListModel`，只用 QtCore）：条目几何、高亮移动（到边界回绕）、单字符选中、`Esc`/`Enter` 语义、命中测试（**可单测**） |
+| `src/app/help_model.h/.cpp`               | `help` 帮助的**纯逻辑**（同上）：筛选（和弦/`comment`/`name`/动作摘要）、滚动钳位、`可见/总数` 计数、滚动条几何、`Enter` 复制哪一行、两级 `Esc`、滚轮（**可单测**） |
+| `src/app/popup_layout.h/.cpp`             | 两个弹窗共用的几何类型（`PopupRect`/`PopupPoint`）与纯函数 `centrePopup()`（先在工作区居中、再夹进屏幕；**可单测**） |
+| `src/app/popup_host.h/.cpp`               | 把上面的模型挂到 QML 窗口上；抢前台（`requestActivate` + `win::window::raiseWindow` 的前台锁绕行）；在 Qt GUI 线程上创建/复用窗口；用户选完把活儿回投工作线程（**GUI 线程亲和**） |
+| `src/qml/`                                | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`（三个文件都在开头写了 `pragma ComponentBehavior: Bound`）；配色一律用 `palette`，没有单独的 `Style.qml` |
 | `tests/`                                  | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_log_tail`、`tst_audio`、`tst_interactive`（需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`，否则 skip）、`tst_menu_model`、`tst_help_model`、`tst_power_table`、`tst_desktop_table`、`tst_layout` |
 
-### CMake 目标划分（阶段 2/3 之后）
+### CMake 目标划分（阶段 6 之后）
 
 | 目标               | 内容                                                              | 谁链接                    |
 | ------------------ | ----------------------------------------------------------------- | ------------------------- |
 | `flowkeyd_core`    | `src/core/*`（纯逻辑，只用 QtCore）                                | exe + 全部单测            |
 | `flowkeyd_lua`     | `src/lua/*` + 编成 qrc 的 `lua_prelude.lua`                        | exe + `tst_lua`           |
+| `flowkeyd_models`  | `src/app/{menu,help}_model.*` + `src/app/popup_layout.*`（纯逻辑，只用 QtCore） | exe + `tst_menu_model`/`tst_help_model` |
 | `flowkeyd_platform`| `src/platform/win/*`（不碰 Qt GUI的 Win32 后端）                    | exe + 平台层单测           |
 | `flowkeyd`         | `src/main.cpp`、`src/cli.*`、`src/app/*`、`src/platform/win/tray.*`、QML | ——                        |
 
+> `src/app/popup_host.*` 用 QML/QtQuick，所以**不进** `flowkeyd_models`，留在 exe 里；
+> 模型层只有 QtCore，这样 `tst_menu_model`/`tst_help_model` 能在没有桌面的情况下跑。
+
 `flowkeyd_add_test(name [LIBS …])` 负责把 Qt/MinGW 的 DLL 目录写进 test 的 `PATH`。
 
-**分层铁律**：`src/core/` 与 `src/lua/`（除 `lua_config.cpp` 里对 Lua C API 的
-调用之外）**不许出现 `<windows.h>`、不许出现 QML/QtWidgets、不许出现窗口句柄**。
+**分层铁律**：`src/core/`、`src/lua/`（除 `lua_config.cpp` 里对 Lua C API 的
+调用之外）与 `src/app/{menu,help}_model.*`、`src/app/popup_layout.*`
+**不许出现 `<windows.h>`、不许出现 QML/QtWidgets、不许出现窗口句柄**。
 这正是 `--check`/`--list` 能在没有桌面的情况下跑、以及单元测试能覆盖核心逻辑的原因。
 `src/platform/win/window.cpp` 里“候选窗口如何匹配”这种判断要拆成纯函数放进
 `core`（或单独的 `window_match.cpp`），让 `platform` 那层只剩枚举与 API 调用。
@@ -927,6 +933,8 @@ get/set/append/clear。**`animate` 的效果要靠肉眼**（没有屏幕采样�
 
 ### 阶段 6：弹窗 `menu` / `help`（FluentWinUI3）
 
+**状态：已完成（2026-09）。**
+
 **做什么**
 
 * `app/menu_model`（纯逻辑：条目几何、高亮移动、单字符 `key` 选中
@@ -950,6 +958,62 @@ get/set/append/clear。**`animate` 的效果要靠肉眼**（没有屏幕采样�
 **验收**：单测（两个模型的全部分支）；手工：键盘/鼠标都能选、
 `Esc` 只关窗不选、帮助窗口的筛选让窗口变矮、`Enter` 真的复制到剪贴板、
 在别的应用聚焦时按快捷键也能拿到键盘焦点。
+
+**已完成的内容**
+
+* 新静态库 **`flowkeyd_models`**：`src/app/menu_model.{h,cpp}`、
+  `src/app/help_model.{h,cpp}`、`src/app/popup_layout.{h,cpp}`。三者都只用 QtCore，
+  所以 `tst_menu_model`/`tst_help_model` 不需要桌面就能跑。
+* 两个模型都是 `QAbstractListModel`，角色直接给 QML 用：
+  `menu` 是 `label`/`hint`/`keyText`/`highlighted`/`hovered` + 四个 `QRect`；
+  `help` 是 `badges`/`label`/`detail`/`highlighted`/`hovered`/`line` + 三个 `QRect`。
+  **几何算术全部在模型里**，QML 只把模型算出来的矩形画出来。
+* 模型把「按键怎么解释」也包了：`handleKey(key, text)` 返回
+  `{ decision: none|choose|copy|cancel, index, handled }`；QML 的
+  `Keys.onPressed` 只负责“问模型要决定 → 执行决定”。字符来自 Qt 译好的
+  `QKeyEvent::text()`（等价于 oskeyd 的 `WM_CHAR`），所以
+  `VK_UNASSIGNED`(0xE8) 那条菜单遮断注入不会凭空变成筛选框里的一个字母。
+* `qml/MenuPopup.qml`、`qml/HelpPopup.qml`：无边框圆角卡片（
+  `Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint`，
+  `color: "transparent"`），配色一律走 `palette`（于是自动跟随系统浅色/深色）；
+  帮助窗口的筛选框**不是 `TextField`**，而是自己画的一行字 + 一根光标——
+  所有按键都走一个 `Keys.onPressed`，`↑`/`↓`/`Enter`/`Esc` 与输入不会互相抢键。
+* `app/popup_host.{h,cpp}`（GUI 线程亲和）：
+  `requestMenu`/`requestHelp` 可从任意线程调用（内部 `Qt::QueuedConnection`）；
+  窗口懒创建、复用；抢前台用 `win::window::raiseWindow`（不变量 17）；
+  用户选完把 `onChoose`/`onCopy` 回调交给调用方（`Dispatcher` 再投一次队列）。
+* `Runtime::setPopupHost()` + `showMenuFromAnyThread()`/`showHelpFromAnyThread()`；
+  `Runtime::shutdown()` **先 `closeAll()`** 再卸钩子/停工作线程，
+  免得留下会碰到已销毁 `Dispatcher` 的回调。
+* `Dispatcher::submitActions()`（线程安全）+ `openMenuAction`/`openHelpAction`：
+  选单项的动作在这里展平；`help` 的列表从当前 `Compiled` 生成
+  （`comment` 优先于 `name`，动作摘要用 `Action::summary()`，重映射渲染成
+  `remap → Ctrl+C`）。
+* 帮助窗口的标题带 `可见/总数`（`flowkeyd 快捷键 — 12/13 项`），
+  与 oskeyd 一样方便从外面断言筛选生效了；`help` 没写 `title` 时表头默认
+  是「快捷键」（oskeyd 的 `unwrap_or("快捷键")`）。
+* 测试：`tests/tst_menu_model.cpp`（13 个用例）、`tests/tst_help_model.cpp`
+  （17 个用例），合计 **17 个测试目标**全绿。
+
+**手工验证结论（2026-09）**
+
+用 `tmp/preview/`（一个**临时**的、不属于产品的 CMake 小程序：真实的
+`PopupHost` + 真实的 QML + 真实的两个模型）验证了下面这些，截图在
+`tmp/grab-0.png` / `tmp/grab-1.png`（`QScreen::grabWindow` 抓的，所以缩放正确）：
+
+* 选单：标题、五个条目（含无 `key`/无 `hint` 的那条）、按键徽标、
+  高亮行、底部提示全部正确；
+* 帮助窗口：表头 + `13 项`、筛选框占位文本、和弦徽标（`Ctrl` `Alt` `F12`）、
+  多和弦之间的圆点、两级字号、高亮行、滚动条、底部提示全部正确；
+* 键盘链路：给窗口发 `↓`/`↓`/`Enter` → 回调收到 `menu chose 2`；
+  给帮助窗口发 `f`/`1`/`2`/`Enter` → 回调收到 `help copy Ctrl+Alt+F12`，
+  而且窗口标题变成 `1/13 项`、卡片高度从 708 降到 180（**筛选后变矮，顶边不动**）；
+* 复用：再次 `requestMenu` 不新开窗口；`closeAll()` 之后两个窗口都不可见。
+
+**仍需人的手**（与阶段 3/4/5 那批一起留到阶段 9）：真实快捷键触发的
+「钩子吞键 → dispatcher → 弹窗」整条链路、弹窗抢到键盘焦点（在别的应用
+聚焦时按快捷键）、鼠标悬停/点击选择、`Enter` 真的写进剪贴板。
+自动化做不到的原因：钩子刻意忽略注入输入（不变量 2），脚本无法伪造物理按键。
 
 ### 阶段 7：虚拟桌面 + 电源
 
@@ -1207,6 +1271,58 @@ hold/tap；挂起/重载/退出。
   （`animate` 对哪些 op 有意义）就是这么从 `window.cpp`/`dispatcher.cpp` 里
   抽出来的；否则这两条只能在真实桌面上碰运气。
 
+#### 阶段 6 真的踩到的（2026-09）
+
+* **`Q_PROPERTY(QRect …)` 要求头文件里能看到完整的 `QRect`。**
+  moc 生成的 `qt_static_metacall` 会把 getter 的返回值赋给一个真的 `QRect`
+  （而不是 `QVariant`），所以只前置声明不够，必须 `#include <QRect>`，
+  否则报一屏 `invalid use of incomplete type 'class QRect'` 与
+  `Meta Types must be fully defined`。
+  另一个细节：`Q_PROPERTY(QRect x READ x)` 的 getter 必须**真的返回 `QRect`**，
+  所以 `PopupRect` 上加了一个隐式 `operator QRect()`（模型内部仍然用自己的
+  矩形类型，测试比较字段时不受影响）。
+* **QML 里访问外层组件的 id（尤其是 delegate 里）会报 `Unqualified access`。**
+  在文件开头加 `pragma ComponentBehavior: Bound` 就干净了（Qt 6.5+，本机 6.11）；
+  JS 数组模型（`model: someJsArray`）的 delegate 里要写成
+  `required property var modelData` 并用 `badgeItem.modelData` 这样的限定写法。
+  用 `qmllint -I C:\Qt\6.11.2\mingw_64\qml <file>.qml` 能提前把这类问题找出来
+  （**不要加 `--bare`**，那样连 QtQuick 都找不到）。
+* **`import QtQuick.Controls.FluentWinUI3` 里确实能用 `Label`**
+  （该样式模块的 qmldir 里没有 `Label.qml`，但基础模块的类型会一起导出；
+  用 qmllint 实测过，不会报 `Label was not found`）。
+* **本机 225% 缩放下 Qt 报出的 `availableGeometry()` 比 `geometry()` 还宽**
+  （工作区从 x=108 开始、宽 485，而屏幕只有 533 宽）。照 oskeyd 那样
+  “在工作区里居中”会把 500 逻辑像素宽的帮助卡片放到屏幕外面去，右边被切掉
+  一大块。修法：居中之后**再按屏幕 `geometry()` 夹一次**
+  （`app::centrePopup()`，纯函数、有单测）。
+* **本机主显示器是 1200x2464 物理、225% 缩放（533x1095 逻辑）。**
+  所有关于弹窗尺寸的判断都要按这个算：500 逻辑像素宽的帮助卡片其实
+  （刚刚好）放得下，但没多少余量。
+* **用 DPI 不感知的 PowerShell 进程去 `GetWindowRect` + `PrintWindow` 会拿到
+  错的结果**：坐标被虚拟化成逻辑像素（窗口是 675x617 物理，`GetWindowRect`
+  却报 300x274），于是 `PrintWindow` 把整张 675x617 的帧缓冲塞进 300x274 的
+  位图里——看起来像“布局全错、被切了一半”。正确做法是让 Qt 自己抓：
+  `QScreen::grabWindow(window->winId())`（返回的 `QPixmap` 带正确的 dpr），
+  或者先 `SetProcessDPIAware()` 再量。
+* **两个弹窗都是 `WindowStaysOnTopHint`，会互相遮住。** 想截某一个就要把它们
+  分开放（或先隐藏另一个）；`grabWindow` 抓的是屏幕那块区域，
+  被盖住的窗口抓出来是别的窗口的内容。
+* **没有物理按键就无法验证弹窗链路。** 钩子刻意忽略注入输入（不变量 2），
+  所以脚本没法伪造“用户按了 `Win+X`”。可行的做法是做一个**临时预览程序**
+  （`tmp/preview/`：自己的 `CMakeLists.txt` + `main.cpp`，`file(GLOB)` 拉进
+  `src/core`、`src/platform/win`、两个模型与 `popup_host.cpp`，再用
+  `qt_add_qml_module` 注册同样的 `Flowkeyd` 模块）：它直接调
+  `PopupHost::requestMenu/requestHelp`，用
+  `QCoreApplication::sendEvent(window, &QKeyEvent(...))` 模拟键盘，
+  再用 `QScreen::grabWindow` 截图。**这条路径能验证除“真实按键”之外的一切**，
+  包括 `Keys.onPressed` → `model.handleKey` → `host.menuChoose` 的回调。
+  （`tmp/` 在 `.gitignore` 里，重做一次大概十分钟。）
+* **`Keys.onPressed` 只在窗口是活动窗口时才会把事件交给有焦点的 item。**
+  预览程序里如果先弹帮助窗口再给选单窗口发按键，选单什么都不会做——
+  这不是 bug，真实使用里同一时刻只有一个弹窗拿到键盘。
+* **`QWindow::setProperty("visible", …)` 是隐藏/显示一个 QML `Window` 的
+  最省事办法**（与 `LogWindow` 一致）；窗口不会因此被销毁，所以可以复用。
+
 ### 从 oskeyd 继承的领域坑（照抄那份的解法，不要重新发明）
 
 下面这些在 `../oskeyd/AGENTS.md` 第 6 节都有**完整的现象描述 + 修法**，
@@ -1285,6 +1401,19 @@ hold/tap；挂起/重载/退出。
 > 需要真实按键的那部分（吞键/自动重复/重映射/`toggle`/`animate`/托盘点击）
 > 留到阶段 9，原因见阶段 4/5 的「手工验证结论」。
 
+> **阶段 6 的实测结果（2026-09）**：`windows-debug` 与 `windows-release`
+> 两边都是 `build exit 0`、零警告，`ctest` **17 个测试目标**全绿
+> （新增 `tst_menu_model` 13 个用例、`tst_help_model` 17 个用例）。
+> `flowkeyd --check --config flowkeyd.lua.example` 仍通过（37/3、零警告）；
+> 一次性配置 `tmp/smoke6.lua`（一个 `menu` + 一个 `help` + 一个 `none`）的
+> `--check`/`--list` 形状与 oskeyd 一致（`menu "冒烟选单" (3 item(s))`、`help`），
+> 守护进程用 `--no-elevate --allow-multi` 启停正常（日志里有
+> `keyboard hook removed`）。两个弹窗的渲染、筛选变矮、键盘选择、
+> 回调回投与窗口复用由 `tmp/preview/` 的临时预览程序截图/日志验证，
+> 见阶段 6 的「手工验证结论」；**真实快捷键触发那一步留到阶段 9**。
+> 另外顺手给 `LogWindow.qml` 补了 `pragma ComponentBehavior: Bound`，
+> 现在 `qmllint` 对三个 QML 文件都是零警告。
+
 > 提醒：Qt 的编译单元很多，`--preset` 的构建目录是分开的
 > （`build/windows-debug` / `build/windows-release`），所以
 > **debug 实例在运行不会锁住 release 产物**，反之亦然。
@@ -1324,8 +1453,8 @@ hold/tap；挂起/重载/退出。
 10. **`NumLock` 关闭时小键盘的导航键**（`8`/`2`/`4`/`6`/`0`/`.`/`Home`/`End`/
     `PgUp`/`PgDn`）与主键盘同名键的区分：做法可以照抄小键盘 Enter 的伪码表。
     注意这是**行为变化**：`keys = "Up"` 将不再匹配小键盘的 `8`。
-11. **弹窗跟随系统浅色/深色主题**（FluentWinUI3 本身跟随系统主题色，
-    但我们的卡片如果自定义了配色就要自己跟）与条目图标。
+11. **弹窗的条目图标**（配色已经跟随系统了：卡片全部走 `palette`；
+    剩下的是条目左侧的图标位）与更细的动画。
 12. **帮助窗口的模糊搜索、IME/中文输入、按 `comment` 分组**。
 13. **日志窗口的增强**：`--follow`/`--grep` 之类的参数、把 `INFO` 与 `DEBUG`
     分色渲染（现在只按级别上色）。
@@ -1348,9 +1477,13 @@ hold/tap；挂起/重载/退出。
 * **帮助窗口的新内容或新交互**：条目在 `app/dispatcher` 的 `open_help` 里从
   `Compiled` 的 `bindings`/`remaps` 生成（帮助列表与 `--list` 看的是同一批数据，
   所以 `help` 没有配置参数），交互与绘制在 `HelpModel` + `HelpPopup.qml`。
-* **新的 QML 弹窗（第三种）**：不要另起一套配色与字号，
-  用 `import QtQuick.Controls.FluentWinUI3` 的控件 + `Style.qml` 里的常量；
-  **避开 FluentWinUI3 不支持的那些控件**（见第 10 节）。
+* **新的 QML 弹窗（第三种）**：不要另起一套配色与字号：
+  `import QtQuick.Controls.FluentWinUI3`，颜色一律从 `palette`（`base`/`text`/
+  `placeholderText`/`highlight`/`highlightedText`/`alternateBase`/`mid`）取，
+  字号用 oskeyd 那套 `pointSize`（12.5 标题 / 11 正文 / 10.5 帮助正文 /
+  9 副标题与徽标 / 8.5 细节），几何交给一个 `flowkeyd_models` 里的纯逻辑模型
+  （有单测）；**避开 FluentWinUI3 不支持的那些控件**（见第 10 节）。
+  文件开头写 `pragma ComponentBehavior: Bound`，并用 `qmllint -I …` 确认零警告。
 * **新的电源操作**：`PowerOp` 加变体 → `platform/win/power` 里处理
   （需要特权的先调 `enable_shutdown_privilege()`；不需要的要放在它**之前** return）
   → `as_str` 与简写 → README 表格。**不给它加自动化测试**（破坏性）。

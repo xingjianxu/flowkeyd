@@ -10,6 +10,7 @@
 #include <QQuickStyle>
 
 #include "app/log_window.h"
+#include "app/popup_host.h"
 #include "app/runtime.h"
 #include "cli.h"
 #include "core/config.h"
@@ -308,7 +309,12 @@ int main(int argc, char *argv[])
     app::LogWindow logWindow(&engine, win::logFilePath());
     platform::win::Tray tray;
 
+    // `menu` / `help` 的窗口：必须在 GUI 线程上创建，所以放在这里，
+    // 由 Runtime 转发（动作跑在工作线程上）。
+    app::PopupHost popupHost(&engine);
+
     app::Runtime runtime;
+    runtime.setPopupHost(&popupHost);
     auto compiledPointer = std::make_shared<core::Compiled>(std::move(compiled));
     QString startError;
     if (!runtime.start(configPath, compiledPointer, &startError)) {

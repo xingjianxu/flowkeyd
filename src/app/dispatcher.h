@@ -2,14 +2,19 @@
 //
 // `run`/`open`/`wait` 都会阻塞几十毫秒到几秒，绝不能在钩子线程上做。
 // 钩子线程把「哪个快捷键的哪一半触发了」排到这里，这里再决定做什么。
+//
+// `menu` / `help` 这种要弹窗的动作也只在这里被**请求**：窗口由 GUI 线程上的
+// `app::PopupHost` 创建，用户选完之后再回到这个线程执行（见 `submitActions`）。
 #pragma once
 
 #include "core/config.h"
 #include "core/engine.h"
 
 #include <QObject>
+#include <QString>
 
 #include <memory>
+#include <vector>
 
 namespace flowkeyd::app {
 
@@ -29,8 +34,19 @@ public:
     /// 线程安全：把一个已触发的快捷键排入工作线程队列。
     void submit(std::shared_ptr<const core::Compiled> config, core::Trigger trigger);
 
+    /// 线程安全：执行一串已经展平的动作。
+    ///
+    /// `menu` 选单被选中时由 GUI 线程的弹窗回调调用；这里再投一次队列，
+    /// 所以窗口侧永不阻塞，动作也始终在工作线程上跑。
+    void submitActions(std::shared_ptr<const core::Compiled> config,
+                       QString name,
+                       std::vector<core::Action> actions);
+
 private:
     void execute(const std::shared_ptr<const core::Compiled> &config, const core::Trigger &trigger);
+    void runActions(const std::shared_ptr<const core::Compiled> &config,
+                    const QString &name,
+                    const std::vector<core::Action> &actions);
 
     Runtime *m_runtime = nullptr;
 };

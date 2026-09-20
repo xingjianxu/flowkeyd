@@ -4,6 +4,7 @@
 // 跨线程的方法都标了「线程安全」；Qt 对象（托盘、窗口）只在 GUI 线程上碰。
 #pragma once
 
+#include "app/popup_host.h"
 #include "core/config.h"
 
 #include <QObject>
@@ -45,6 +46,13 @@ public:
     platform::win::HookThread *hook() const { return m_hook.get(); }
     bool isSuspended() const;
 
+    /// 把弹窗宿主交给运行时（GUI 线程、启动时调一次）。
+    ///
+    /// 弹窗只能在 GUI 线程上创建，而动作在工作线程上执行，所以 `menu`/`help`
+    /// 必须经过这里中转；退出时 `shutdown()` 会先把弹窗关掉，
+    /// 免得留下会碰到已销毁 `Dispatcher` 的回调。
+    void setPopupHost(PopupHost *host) { m_popupHost = host; }
+
     // ---- 以下可从任意线程调用 ----
 
     /// 给钩子线程投一个控制命令。
@@ -57,6 +65,10 @@ public:
     void notifyFromAnyThread(const QString &title, const QString &body);
     /// 工作线程调用：把动作触发的挂起状态变化广播给 GUI 线程（托盘提示用）。
     void reportSuspended(bool suspended);
+    /// 工作线程调用：在 GUI 线程上弹出选单。
+    void showMenuFromAnyThread(MenuRequest request);
+    /// 工作线程调用：在 GUI 线程上弹出帮助窗口。
+    void showHelpFromAnyThread(HelpRequest request);
 
 signals:
     void notificationRequested(const QString &title, const QString &body);
@@ -70,6 +82,7 @@ private:
 
     QString m_configPath;
     std::unique_ptr<platform::win::HookThread> m_hook;
+    PopupHost *m_popupHost = nullptr;
     QThread *m_workerThread = nullptr;
     Dispatcher *m_dispatcher = nullptr;
     bool m_shuttingDown = false;
