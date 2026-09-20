@@ -17,8 +17,10 @@
 #include "lua/lua_config.h"
 #include "platform/win/console.h"
 #include "platform/win/elevate.h"
+#include "platform/win/hook.h"
 #include "platform/win/input.h"
 #include "platform/win/logging.h"
+#include "platform/win/process.h"
 #include "platform/win/single_instance.h"
 #include "platform/win/tray.h"
 
@@ -303,7 +305,7 @@ int main(int argc, char *argv[])
 
     QQmlApplicationEngine engine;
 
-    app::LogWindow logWindow(&engine);
+    app::LogWindow logWindow(&engine, win::logFilePath());
     platform::win::Tray tray;
 
     app::Runtime runtime;
@@ -315,7 +317,29 @@ int main(int argc, char *argv[])
     }
 
     QObject::connect(&tray, &platform::win::Tray::logWindowRequested, &logWindow, [&logWindow]() {
-        logWindow.toggle();
+        // 再点一次只是把它前置，不重复开、也不关掉（关窗口是窗口自己的叉）。
+        logWindow.show();
+    });
+    QObject::connect(&tray, &platform::win::Tray::suspendToggleRequested, &runtime,
+                     [&runtime, &tray]() {
+                         const bool target = !runtime.isSuspended();
+                         runtime.postControl(target ? win::ControlCmd::Suspend
+                                                    : win::ControlCmd::Resume);
+                         tray.setSuspended(target);
+                         win::logInfo(target ? QStringLiteral("hotkeys suspended from the tray menu")
+                                             : QStringLiteral("hotkeys resumed from the tray menu"));
+                     });
+    QObject::connect(&tray, &platform::win::Tray::reloadRequested, &runtime,
+                     &app::Runtime::reloadFromAnyThread);
+    QObject::connect(&tray, &platform::win::Tray::openConfigRequested, &runtime, [&runtime]() {
+        QString error;
+        if (!win::openTarget(QDir::toNativeSeparators(runtime.configPath()), std::nullopt,
+                             std::nullopt, core::ShowMode::Normal, &error)) {
+            win::logError(QStringLiteral("could not open %1: %2")
+                              .arg(runtime.configPath(), error));
+        } else {
+            win::logInfo(QStringLiteral("opened the configuration file from the tray menu"));
+        }
     });
     QObject::connect(&tray, &platform::win::Tray::quitRequested, &runtime,
                      &app::Runtime::requestShutdownFromAnyThread);

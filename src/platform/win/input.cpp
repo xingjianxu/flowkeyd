@@ -233,6 +233,28 @@ bool tapKey(core::Vk vk, QString *error)
     return sendInputs(inputs, error);
 }
 
+bool copySelection(std::uint64_t waitMs, QString *error)
+{
+    ModifierGuard guard = ModifierGuard::release();
+    const std::vector<core::SendOp> ops{
+        core::SendOp::keyDown(core::vk::LCONTROL),
+        core::SendOp::keyDown(static_cast<core::Vk>('C')),
+        core::SendOp::keyUp(static_cast<core::Vk>('C')),
+        core::SendOp::keyUp(core::vk::LCONTROL),
+    };
+    QString localError;
+    const bool ok = sendOps(ops, false, &localError);
+    guard.restore();
+    if (!ok) {
+        if (error != nullptr) {
+            *error = localError;
+        }
+        return false;
+    }
+    Sleep(static_cast<DWORD>(waitMs));
+    return true;
+}
+
 bool isKeyDown(core::Vk vk)
 {
     if (const auto state = nt::asyncKeyState(static_cast<int>(vk)); state.has_value()) {

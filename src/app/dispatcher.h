@@ -29,13 +29,8 @@ public:
     /// 线程安全：把一个已触发的快捷键排入工作线程队列。
     void submit(std::shared_ptr<const core::Compiled> config, core::Trigger trigger);
 
-signals:
-    /// 挂起状态改变（托盘提示用）。
-    void suspendedChanged(bool suspended);
-
 private:
     void execute(const std::shared_ptr<const core::Compiled> &config, const core::Trigger &trigger);
-    void executeAction(const core::Compiled &config, const QString &hotkey, const core::Action &action);
 
     Runtime *m_runtime = nullptr;
 };

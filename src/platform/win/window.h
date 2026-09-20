@@ -1,0 +1,53 @@
+// 窗口查找与窗口动作（`window` 动作的后端）。
+//
+// 目标要么是前台窗口（空查询），要么是第一个满足查询中每一项条件的可见顶层
+// 窗口：标题子串和/或拥有该窗口的可执行文件名。
+//
+// `EnumWindows` 按 Z 序遍历窗口，因此最先找到的就是最近使用过的匹配窗口。
+// 只有在没有已还原窗口匹配时才接受最小化的窗口，这样激活最小化窗口永远不会
+// 盖过可见窗口。
+//
+// 「候选窗口算不算匹配」这条判断在 `core/window_match`（纯逻辑、可单测）；
+// 这里只剩枚举、取进程名与调用 Win32。
+#pragma once
+
+#include "core/action.h"
+#include "platform/win/ffi.h"
+
+#include <QString>
+
+namespace flowkeyd::platform::win::window {
+
+/// 定位查询描述的窗口；没有任何匹配时返回 nullptr。
+/// 查询意为“前台窗口”而没有前台窗口时同样返回 nullptr。
+HWND find(const core::WindowQuery &query);
+
+/// 窗口的可见标题（取不到时返回 `"<untitled>"` / `"<invalid window>"`）。
+QString windowTitle(HWND hwnd);
+
+/// 这个窗口是否已经是“用户正在用的那个”：它是前台窗口，而且没有最小化。
+///
+/// `window` 动作的 `toggle`（默认开）靠它决定再按一次快捷键是唤起还是收起。
+bool isActive(HWND hwnd);
+
+/// 尽力“把这个窗口变成前台窗口”（前台锁的三级递进绕行，见实现）。
+bool raiseWindow(HWND hwnd);
+
+/// 对一个已经解析出来的句柄应用 `window` 动作。
+///
+/// `animate = false`（默认）时先让这个窗口的 DWM 过渡动画静下来，于是
+/// 最小化/最大化/还原不再播放缩放效果——只影响这个窗口这一次的调用。
+/// `close` 与 `toggle_topmost` 不产生过渡，所以不去动它们。
+bool applyTo(HWND hwnd,
+             core::WindowOp op,
+             bool animate,
+             QString *detail,
+             QString *error);
+
+/// “什么都没匹配到”的错误文本，与启动回退共享。
+QString missing(const core::WindowQuery &query);
+
+/// 前台窗口的标题与类名，供启动横幅与诊断使用。
+QString foregroundTitle();
+
+} // namespace flowkeyd::platform::win::window

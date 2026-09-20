@@ -1,13 +1,19 @@
 #include "app/log_window.h"
 
+#include "app/log_model.h"
+
 #include <QQmlComponent>
 #include <QQmlEngine>
 #include <QQuickWindow>
+#include <QVariant>
 
 namespace flowkeyd::app {
 
-LogWindow::LogWindow(QQmlEngine *engine, QObject *parent) : QObject(parent), m_engine(engine)
+LogWindow::LogWindow(QQmlEngine *engine, QString logPath, QObject *parent)
+    : QObject(parent), m_engine(engine)
 {
+    m_model = new LogModel(this);
+    m_model->setLogFile(logPath);
 }
 
 LogWindow::~LogWindow() = default;
@@ -30,6 +36,8 @@ void LogWindow::ensureWindow()
         delete object;
         return;
     }
+    // QML 侧声明了 `property var logModel`；把模型挂上去，ListView 直接吃它。
+    m_window->setProperty("logModel", QVariant::fromValue(static_cast<QObject *>(m_model)));
 }
 
 void LogWindow::show()
@@ -38,6 +46,8 @@ void LogWindow::show()
     if (m_window == nullptr) {
         return;
     }
+    // 打开时立刻读一次，不然要等最多 250 ms 才有内容。
+    m_model->refresh();
     m_window->setProperty("visible", true);
     m_window->raise();
     m_window->requestActivate();

@@ -56,6 +56,12 @@ bool sendOps(const QVector<core::SendOp> &ops, bool allowSleep, QString *error =
 /// 按下并松开一个按键。
 bool tapKey(core::Vk vk, QString *error = nullptr);
 
+/// 合成一次 Ctrl+C，使前台应用把选中内容放进剪贴板，然后等待 `waitMs`。
+///
+/// `{selection}` 模板用它。与 `send` 一样会先松开用户按住的修饰键
+/// （否则会变成 Ctrl+Alt+C），并在松开 Win/Alt 时做菜单遮断（不变量 10）。
+bool copySelection(std::uint64_t waitMs, QString *error = nullptr);
+
 /// 物理按键状态（优先走未公开的 `NtUserGetAsyncKeyState`）。
 bool isKeyDown(core::Vk vk);
 

@@ -42,4 +42,7 @@ QString winErrorMessage(unsigned long code);
 /// `"<what> failed: <message>"`，`code` 默认取 `GetLastError()`。
 QString lastErrorMessage(const char *what);
 
+/// 同上，但用于 `HRESULT`（解析不出文字时退回十六进制）。
+QString hresultMessage(long code, const char *what);
+
 } // namespace flowkeyd::platform::win

@@ -41,7 +41,6 @@ bool Runtime::start(const QString &configPath,
     m_workerThread->setObjectName(QStringLiteral("flowkeyd-actions"));
     m_dispatcher = new Dispatcher(this);
     m_dispatcher->moveToThread(m_workerThread);
-    connect(m_dispatcher, &Dispatcher::suspendedChanged, this, &Runtime::suspendedChanged);
     m_workerThread->start();
 
     const bool started = m_hook->start(
@@ -132,6 +131,14 @@ void Runtime::requestShutdownFromAnyThread()
 void Runtime::notifyFromAnyThread(const QString &title, const QString &body)
 {
     emit notificationRequested(title, body);
+}
+
+void Runtime::reportSuspended(bool suspended)
+{
+    // 这个方法是工作线程调用的；把 emit 挪到 GUI 线程，托盘那条直接连接
+    // 就会在正确的线程上跑。
+    QMetaObject::invokeMethod(
+        this, [this, suspended]() { emit suspendedChanged(suspended); }, Qt::QueuedConnection);
 }
 
 void Runtime::performShutdown()

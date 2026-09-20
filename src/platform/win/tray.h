@@ -1,5 +1,10 @@
-// 托盘图标（stage 4 会把右键菜单补全：查看日志 / 挂起·恢复 / 重载配置 /
-// 打开配置文件 / 退出）。stage 0 只需要「图标可见 + 左键打开日志窗口 + 退出」。
+// 托盘图标与气泡通知。
+//
+// 这是 `QSystemTrayIcon`（QtWidgets）而不是 QML：托盘菜单要直接触发
+// `ControlCmd`，走 C++ 更直接（见 AGENTS.md 第 10 节）。
+//
+// 菜单项与 oskeyd 一致：查看日志 / 挂起·恢复 / 重载配置 / 打开配置文件 / 退出，
+// 悬停提示显示挂起状态，气泡提示用于 `notify` 动作与错误报告。
 #pragma once
 
 #include <QObject>
@@ -25,8 +30,14 @@ public:
     void showMessage(const QString &title, const QString &body);
 
 signals:
-    /// 左键单击托盘图标。
+    /// 左键单击托盘图标，或菜单里的「查看日志」。
     void logWindowRequested();
+    /// 「挂起/恢复」被点击（当前状态由 `setSuspended` 维护）。
+    void suspendToggleRequested();
+    /// 「重载配置」被点击。
+    void reloadRequested();
+    /// 「打开配置文件」被点击。
+    void openConfigRequested();
     void quitRequested();
 
 private:
@@ -34,6 +45,8 @@ private:
     QMenu *m_menu = nullptr;
     QAction *m_logAction = nullptr;
     QAction *m_suspendAction = nullptr;
+    QAction *m_reloadAction = nullptr;
+    QAction *m_openConfigAction = nullptr;
     QAction *m_quitAction = nullptr;
 };
 

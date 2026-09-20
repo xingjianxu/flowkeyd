@@ -55,6 +55,8 @@ public:
     void requestShutdownFromAnyThread();
     /// 弹一个托盘气泡（投递到 GUI 线程）。
     void notifyFromAnyThread(const QString &title, const QString &body);
+    /// 工作线程调用：把动作触发的挂起状态变化广播给 GUI 线程（托盘提示用）。
+    void reportSuspended(bool suspended);
 
 signals:
     void notificationRequested(const QString &title, const QString &body);

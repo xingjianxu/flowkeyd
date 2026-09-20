@@ -36,4 +36,14 @@ QString lastErrorMessage(const char *what)
         .arg(QString::fromLatin1(what), winErrorMessage(GetLastError()));
 }
 
+QString hresultMessage(long code, const char *what)
+{
+    const auto raw = static_cast<unsigned long>(code);
+    QString text = winErrorMessage(raw);
+    if (text.startsWith(QLatin1String("error "))) {
+        text = QStringLiteral("0x%1").arg(raw, 8, 16, QLatin1Char('0'));
+    }
+    return QStringLiteral("%1 failed: %2").arg(QString::fromLatin1(what), text);
+}
+
 } // namespace flowkeyd::platform::win

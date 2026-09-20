@@ -56,8 +56,12 @@ add_library(flowkeyd_core STATIC
     src/core/engine.h
     src/core/keys.cpp
     src/core/keys.h
+    src/core/log_tail.cpp
+    src/core/log_tail.h
     src/core/template.cpp
     src/core/template.h
+    src/core/window_match.cpp
+    src/core/window_match.h
 )
 
 target_include_directories(flowkeyd_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
@@ -87,8 +91,14 @@ qt_add_resources(flowkeyd_lua "lua_prelude"
 # 系统库写成 PUBLIC，静态库的使用者自己不用再列一遍。
 # ---------------------------------------------------------------------------
 add_library(flowkeyd_platform STATIC
+    src/platform/win/audio.cpp
+    src/platform/win/audio.h
+    src/platform/win/clipboard.cpp
+    src/platform/win/clipboard.h
     src/platform/win/console.cpp
     src/platform/win/console.h
+    src/platform/win/dwm.cpp
+    src/platform/win/dwm.h
     src/platform/win/elevate.cpp
     src/platform/win/elevate.h
     src/platform/win/ffi.cpp
@@ -105,6 +115,8 @@ add_library(flowkeyd_platform STATIC
     src/platform/win/process.h
     src/platform/win/single_instance.cpp
     src/platform/win/single_instance.h
+    src/platform/win/window.cpp
+    src/platform/win/window.h
 )
 target_include_directories(flowkeyd_platform PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(flowkeyd_platform PUBLIC
@@ -135,6 +147,8 @@ qt_add_executable(flowkeyd
     src/cli.h
     src/app/dispatcher.cpp
     src/app/dispatcher.h
+    src/app/log_model.cpp
+    src/app/log_model.h
     src/app/log_window.cpp
     src/app/log_window.h
     src/app/runtime.cpp
@@ -214,6 +228,10 @@ flowkeyd_add_test(tst_layout LIBS flowkeyd_platform)
 flowkeyd_add_test(tst_input LIBS flowkeyd_platform)
 flowkeyd_add_test(tst_command_line LIBS flowkeyd_platform)
 flowkeyd_add_test(tst_instance LIBS flowkeyd_platform)
+flowkeyd_add_test(tst_log_tail)
+flowkeyd_add_test(tst_window_match)
+flowkeyd_add_test(tst_audio LIBS flowkeyd_platform)
+flowkeyd_add_test(tst_interactive LIBS flowkeyd_platform)
 
 # 冒烟测试要真的链接 Lua，才能证明 vendor/lua 编得进来。
 target_link_libraries(tst_smoke PRIVATE flowkeyd::lua)

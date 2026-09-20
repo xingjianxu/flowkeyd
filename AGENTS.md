@@ -218,6 +218,8 @@ Qt 自己的库随便链**：
 | `src/core/engine.h/.cpp`                  | 快捷键状态机：匹配、优先级、吞键、自动重复抑制、长按重复、挂起、重映射 hold/tap、Win/Alt 菜单遮断按键                                                                                                                       |
 | `src/core/template.h/.cpp`                | `{clipboard}`、`{selection}`、`{date}` 等占位符展开                                                                                                                                                                         |
 | `src/core/action.h/.cpp`                  | 声明式动作的表示 + 摘要文本（`--list` 与 `help()` 都用它）                                                                                                                                                                  |
+| `src/core/log_tail.h/.cpp`                | 日志文件的增量尾随（纯逻辑，可单测）：按字节读、末尾不完整的 UTF-8 序列不消费、半行留到下一轮、一次最多 1000 行                                                                                                            |
+| `src/core/window_match.h/.cpp`            | 窗口匹配与 `window` 动作决策的纯函数：标题/进程名子串、可执行文件名提取、`toggle` 边界、`animate` 是否有意义                                                                                                                |
 | `src/lua/lua_config.h/.cpp`               | **Lua 与 C++ 的唯一边界**：建 `lua_State`、注入 DSL、把脚本里的表转成 `core::Config`（逐条目、带上下文的错误）、UTF-8 BOM 剔除、`.toml` 明确拒绝                                                                            |
 | `src/lua/lua_prelude.lua`                 | 注入配置脚本的 DSL：`settings{}`/`hotkey{}`/`remap{}` + 动作构造器 + `flowkeyd` 表。**纯 Lua，改它不需要改 C++**（编进 qrc，见第 7 节）                                                                                     |
 | `src/platform/win/`                       | Win32 后端（每个文件都只做一件事，方便单独替换）                                                                                                                                                                            |
@@ -243,7 +245,7 @@ Qt 自己的库随便链**：
 | `src/app/help_model.h/.cpp`               | `help` 帮助的纯逻辑：筛选、滚动、`可见/总数` 计数、`Enter` 复制哪一行（**可单测**）                                                                                                                                         |
 | `src/app/popup_host.h/.cpp`               | 把上面的模型挂到 QML 窗口上；抢前台（`requestActivate` + Win32 前台锁绕行）；在 Qt GUI 线程上创建/复用窗口                                                                                                                  |
 | `src/qml/`                                | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`、`Style.qml`(可选)、`qmldir`                                                                                                                                              |
-| `tests/`                                  | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_log_tail`、`tst_menu_model`、`tst_help_model`、`tst_power_table`、`tst_desktop_table`、`tst_layout` |
+| `tests/`                                  | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_log_tail`、`tst_audio`、`tst_interactive`（需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`，否则 skip）、`tst_menu_model`、`tst_help_model`、`tst_power_table`、`tst_desktop_table`、`tst_layout` |
 
 ### CMake 目标划分（阶段 2/3 之后）
 
@@ -579,7 +581,9 @@ QML 模块注册之后，两条 profile 都要重新全量构建一次**。
 | 1 纯逻辑核心 | **已完成** | `src/core/*` + 6 个 Qt Test 目标全绿 |
 | 2 Lua 配置层 | **已完成** | `flowkeyd_lua` 静态库 + `--check`/`--list` 可用、`tst_lua` 25 项全绿、`flowkeyd.lua.example` 能过 `--check` |
 | 3 Win32 基础设施 + 钩子 + 引擎接线 | **已完成** | `flowkeyd_platform` 静态库 + 钩子线程/动作线程；`tst_layout|input|command_line|instance` 全绿；手工冒烟见阶段 3 小节 |
-| 4–10 | 待做 | |
+| 4 托盘 + 日志窗口 | **已完成** | 完整托盘菜单 + `core/log_tail`/`app/log_model` 尾随模型 + `LogWindow.qml` 真渲染；`tst_log_tail` 全绿；日志窗口渲染/尾随已截图验证 |
+| 5 窗口动作 + 剪贴板 + 音量/媒体 | **已完成** | `core/window_match`、`platform/win/dwm|window|clipboard|audio`、dispatcher 接线与 `{selection}`；`tst_window_match`/`tst_audio` 全绿；真实桌面后端由 `tst_interactive` 验证 |
+| 6–10 | 待做 | |
 
 ### 阶段 0：仓库与构建骨架
 
@@ -816,6 +820,45 @@ BOM、`\t` 陷阱、`.toml` 拒绝、错误信息格式；`--check --config flow
 字符、1000 行上限、过滤）；手工：托盘左键弹出、再点前置不重复开、
 关掉窗口进程还活着、挂起状态在提示里正确。
 
+**状态：已完成（2026-09）。**
+
+**已完成的内容**：
+
+* `src/platform/win/tray.{h,cpp}`：完整右键菜单（查看日志 / 挂起·恢复 /
+  重载配置 / 打开配置文件 / 退出），悬停提示跟着挂起状态走；新增信号
+  `suspendToggleRequested`/`reloadRequested`/`openConfigRequested`。
+* `src/core/log_tail.{h,cpp}`：`LogTailer`（增量尾随、半行、末尾不完整的
+  UTF-8 序列不消费、1000 行上限）与纯函数 `completeUtf8PrefixLen`。
+  **刻意放在 `core/`**（不是 `app/`）：它只用 QtCore，是纯逻辑，能直接被
+  Qt Test 覆盖。
+* `src/app/log_model.{h,cpp}`：`QAbstractListModel`，角色是 `line`/`level`
+  （**不叫 `text`**：会与 QML `Text.text` 撞名），250 ms 轮询、1000 行上限、
+  子串过滤（大小写无关）、`visibleCount`/`totalCount`、`appended` 信号。
+* `src/qml/LogWindow.qml`：`ListView` + 筛选 `TextField` + 按级别配色 +
+  新行自动滚到底（用户往上翻时不打扰）+ 标题里的行数。
+* `src/app/log_window.{h,cpp}`：拥有 `LogModel`，把日志路径交给它；
+  `ensureWindow()` 用 `setProperty("logModel", …)` 把模型挂给 QML。
+* `main.cpp`：托盘信号接上日志窗口（左键只前置不 toggle）、挂起/恢复、
+  重载、`ShellExecuteW` 打开配置文件、退出；并新增
+  `Runtime::reportSuspended()`（把动作触发的挂起状态投回 GUI 线程，取代了
+  原来 `Dispatcher::suspendedChanged` 那条连接）。
+* 测试：`tests/tst_log_tail.cpp`（9 个用例：UTF-8 前缀、增量、半行、
+  截断的多字节、1000 行上限、文件轮转、缺失文件不是错误）。
+
+**手工验证结论（2026-09，空配置 `tmp/smoke4.lua`、`--no-elevate`）**：
+
+* 守护进程启动/退出：`taskkill /PID`（不带 `/F`）能干净退出，日志里
+  `keyboard hook removed`。注意：**打开着日志窗口时 `taskkill`（不带 `/F`）
+  不会退出进程** —— WM_CLOSE 只被日志窗口吃掉（不变量 20），得走托盘
+  “退出”/`quit` 动作，或测试时用 `/F`。
+* 日志窗口：`--log-window` 启动后 QML **零警告**加载；用
+  `PrintWindow` 截取窗口本身验证：标题从 `flowkeyd 日志 — 8 行` 变成
+  `— 9 行`、筛选框可见、`DEBUG` 紫色/`INFO` 默认色、往日志文件追加一行后
+  **约 250 ms 内自动出现并滚到底**（截图见 `tmp/logwin-before.png` /
+  `tmp/logwin-after.png`，脚本 `tmp/logwin-shot.ps1`）。
+* 托盘菜单的左键/右键点击、挂起提示、重载、打开配置、退出仍需**人的手**，
+  留到阶段 9。
+
 ### 阶段 5：窗口动作 + 剪贴板 + 音量/媒体
 
 **做什么**
@@ -838,6 +881,49 @@ BOM、`\t` 陷阱、`.toml` 拒绝、错误信息格式；`--check --config flow
 的恢复语义、音量步进/钳位的纯计算）；手工：`window` 的
 启动→激活→收起→恢复、`volume` 对系统音量合成器可见、`clipboard` 的
 get/set/append/clear。**`animate` 的效果要靠肉眼**（没有屏幕采样脚本了）。
+
+**状态：已完成（2026-09）。**
+
+**已完成的内容**：
+
+* `src/core/window_match.{h,cpp}`（纯逻辑、可单测）：`executableBaseName`、
+  `windowTitleMatches`、`windowProcessMatches`（拿不到属主进程名时**不算匹配**）、
+  `windowMatchesQuery`，外加两个决策纯函数：`planWindowAction`（`toggle` 边界）
+  与 `windowOpHasTransition`（`animate` 对哪些 op 有意义）。
+* `src/platform/win/dwm.{h,cpp}`：运行时解析 `dwmapi!DwmSetWindowAttribute`，
+  按窗口设 `DWMWA_TRANSITIONS_FORCEDISABLED`；拿不到 dwmapi 只记 debug。
+* `src/platform/win/window.{h,cpp}`：`EnumWindows`（跳过不可见/有属主、
+  已还原优先于最小化、按 Z 序取第一个）、进程名缓存（pid → 小写 exe 名）、
+  `isActive`、前台锁三级绕行的 `raiseWindow`、`TransitionGuard`（RAII）、
+  `applyTo`（activate/minimize/maximize/restore/close/toggle_topmost）。
+* `src/platform/win/clipboard.{h,cpp}`：`CF_UNICODETEXT` 的 get/set/append/clear，
+  `OpenClipboard` 重试 10 次（另一个进程占着剪贴板是常态）。
+* `src/platform/win/audio.{h,cpp}`：Core Audio 手写 COM vtable（MTA），
+  `apply`/`getPercent`/`isMuted`，以及纯计算 `nextVolumeScalar`（步进/钳位）。
+* `input.copySelection`：合成 Ctrl+C（先 `ModifierGuard` 松修饰键，含菜单遮断），
+  等 150 ms 后由调用方读剪贴板；`{selection}` 就是它。
+* `app/dispatcher`：新增 `ExpandContext`（单次触发内缓存剪贴板/选中文本，
+  只在模板真的需要时才读）、`launchThenActivate`（启动 → 轮询窗口 → 激活，
+  默认等 3000 ms，**不套用 `toggle`**）、以及 `window`/`volume`/`media`/
+  `clipboard` 四个动作的分支（`desktop`/`menu`/`help`/`power` 仍写明“later stage”）。
+* 测试：`tests/tst_window_match.cpp`（7）、`tests/tst_audio.cpp`（5）、
+  `tests/tst_interactive.cpp`（需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`）。
+
+**手工验证结论（2026-09，`tst_interactive`，已显式开启交互测试）**：
+
+* `clipboardRoundTrip`：get/set/append/clear 往返通过，并尽量恢复原文本。
+* `volumeReadWriteAndRestore`：读→设 40/60%→读回一致；`set 0` 再 `down 10`
+  仍是 `0%`（钳位）；最后恢复原音量与静音状态。
+* `windowBackendLaunchesActivatesAndCloses`：`runCommand` 启动记事本（唯一标题）
+  → `find` 命中 → `activate` 后 `isActive` 为真 → `minimize` 后为假 →
+  `restore` → `close` 后窗口消失；并显式验证了 `dwm::available()` 与
+  `forceDisableTransitions(hwnd, true/false)` 的往返（`TransitionGuard` 的底层）。
+* `copySelectionCopiesTheFocusedSelection`：记事本里 `Ctrl+A` 全选后
+  `copySelection`，剪贴板里拿到 `SELECTME-12345`（这就是 `{selection}` 的核心）。
+* **仍需人的手**：快捷键触发的完整链路（钩子吞键 → dispatcher → 动作）、
+  默认开的 `toggle`（再按一次收起）、`animate = true/false` 的肉眼区别、
+  `volume`/`clipboard`/`media` 在真实前台应用上的效果，以及托盘菜单点击。
+  这些留到阶段 9 与阶段 3 那批一起做。
 
 ### 阶段 6：弹窗 `menu` / `help`（FluentWinUI3）
 
@@ -1080,6 +1166,47 @@ hold/tap；挂起/重载/退出。
 * **`core::Trigger` / `Phase` 在 `core/engine.h`，不在 `core/config.h`。**
   只 include `config.h` 时会报 `'Trigger' has not been declared`。
 
+#### 阶段 4/5 真的踩到的（2026-09）
+
+* **QML 的 model 角色名不能叫 `text`。** `Text` 本身就有 `text` 属性，
+  delegate 里写 `required property string text` 会与它撞名。`LogModel` 的角色
+  因此叫 `line`/`level`。同理，delegate 里不要用 `parent.text` 去拿模型值——
+  `parent` 是 `ListView` 的 contentItem，不是模型。
+* **无 BOM 的 `.ps1` 里的中文会把脚本弄坏（又踩一次）。** PowerShell 5.1 按 GBK
+  解码无 BOM 的 `.ps1`，UTF-8 的中文注释变成乱码，甚至让 `Start-Process` 拿到
+  错参数，表现为莫名其妙的 `exit=-1073741515`（`STATUS_DLL_NOT_FOUND`）——
+  一度以为是缺 DLL。规则：**`tmp/` 下的一次性脚本一律纯 ASCII**，
+  或者用 `[System.IO.File]::WriteAllText(..., UTF8Encoding($true))` 写带 BOM 的。
+* **手动跑 exe 时要自己把 Qt 与 MinGW 的 `bin` 加进 `PATH`。** `ctest` 由
+  `flowkeyd_add_test()` 的 `ENVIRONMENT_MODIFICATION` 加好了，但直接
+  `Start-Process .\flowkeyd.exe` 会报 `0xc0000135`。
+* **截一个被遮住的窗口不能用 `CopyFromScreen`。** 它截的是屏幕在该坐标处的
+  可见内容（窗口被终端遮住就截到终端）。要截窗口本身用
+  `PrintWindow(hwnd, hdc, PW_RENDERFULLCONTENT=2)`；`GetWindowRect` 给出的
+  尺寸是准的（`860x500` 的窗口带边框是 `873x536`）。
+* **`emit other->someSignal()` 在类外是编译不过的**（信号是 `protected`）。
+  动作触发的挂起状态变化改成 `Runtime::reportSuspended()`（公开方法，内部
+  `QMetaObject::invokeMethod(..., Qt::QueuedConnection)` 把 emit 挪回 GUI 线程），
+  同时删掉了 `Dispatcher::suspendedChanged`。
+* **`WIN32_LEAN_AND_MEAN` 不包含 `ole2.h`**，所以 `CoInitializeEx` /
+  `CoCreateInstance` / `CLSCTX_ALL` / `COINIT_MULTITHREADED` 在 `audio.cpp` 里
+  必须显式 `#include <objbase.h>`。MinGW 的 `GUID` 可以直接用聚合初始化
+  `{0xBCDE0395, 0xE52F, 0x467C, {…}}`（`Data1` 是 32 位 `unsigned long`）。
+* **`Window` 在 Qt 6.2+ 有 `palette` 属性**（`QQuickWindow::palette`），
+  所以 QML 里的默认前景色写 `root.palette.text` / `root.palette.placeholderText`
+  就能跟随系统主题，不用硬编码颜色。
+* **日志窗口打开着的时候，`taskkill /PID`（不带 `/F`）退不掉进程**：
+  WM_CLOSE 被日志窗口吃掉（它只隐藏、不退出，不变量 20），而钩子进程
+  没有别的可见窗口可关。测试脚本要么走托盘“退出”，要么直接 `/F`。
+* **需要真实桌面的验证要做成“默认 skip 的交互式单测”。**
+  `tests/tst_interactive.cpp` 靠 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1` 开启，
+  `ctest` 里只是 skip。这比写一个只跑一次的临时程序好：
+  它能反复验证剪贴板/音量/窗口后端，而且不会在 CI 里碰用户桌面。
+* **平台层的“决策”要抽成 `core` 的纯函数才好测**：
+  `planWindowAction()`（`toggle` 边界）与 `windowOpHasTransition()`
+  （`animate` 对哪些 op 有意义）就是这么从 `window.cpp`/`dispatcher.cpp` 里
+  抽出来的；否则这两条只能在真实桌面上碰运气。
+
 ### 从 oskeyd 继承的领域坑（照抄那份的解法，不要重新发明）
 
 下面这些在 `../oskeyd/AGENTS.md` 第 6 节都有**完整的现象描述 + 修法**，
@@ -1147,6 +1274,16 @@ hold/tap；挂起/重载/退出。
 > 常驻冒烟：一次性配置 + `--no-elevate` 启停正常，第二个同配置实例被拒，
 > `taskkill /PID`（不带 `/F`）后日志里有 `keyboard hook removed`。
 > 注入后端在本机实测选中 `win32u!NtUserSendInput`（已通过零输入调用校验）。
+
+> **阶段 4/5 的实测结果（2026-09）**：`windows-debug` 与 `windows-release`
+> 两边都是 `build exit 0`、零警告，`ctest` **15 个测试目标**全绿（含
+> `tst_log_tail` 9、`tst_window_match` 7、`tst_audio` 5；`tst_interactive` 默认
+> skip）。`flowkeyd --check --config flowkeyd.lua.example` 仍通过（37/3、零警告）。
+> 交互式验证（`FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`）额外 5 个用例全绿：
+> 剪贴板往返、音量读写/钳位/恢复、记事本窗口的 启动→激活→最小化→恢复→关闭、
+> 以及 `copySelection`。日志窗口用 `PrintWindow` 截图验证了渲染与尾随。
+> 需要真实按键的那部分（吞键/自动重复/重映射/`toggle`/`animate`/托盘点击）
+> 留到阶段 9，原因见阶段 4/5 的「手工验证结论」。
 
 > 提醒：Qt 的编译单元很多，`--preset` 的构建目录是分开的
 > （`build/windows-debug` / `build/windows-release`），所以
