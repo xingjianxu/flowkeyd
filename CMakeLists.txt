@@ -65,6 +65,61 @@ target_link_libraries(flowkeyd_core PUBLIC Qt6::Core)
 flowkeyd_strict_warnings(flowkeyd_core)
 
 # ---------------------------------------------------------------------------
+# Lua 配置层：Lua 与 C++ 的唯一边界（预置 DSL 编在 qrc 里）。
+# 与 core 一样不碰 Win32、不碰 Qt GUI，因此也能被单元测试直接链接。
+# ---------------------------------------------------------------------------
+add_library(flowkeyd_lua STATIC
+    src/lua/lua_config.cpp
+    src/lua/lua_config.h
+    src/lua/lua_include.h
+)
+target_include_directories(flowkeyd_lua PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(flowkeyd_lua PUBLIC flowkeyd_core flowkeyd::lua Qt6::Core)
+flowkeyd_strict_warnings(flowkeyd_lua)
+qt_add_resources(flowkeyd_lua "lua_prelude"
+    PREFIX "/lua"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/src/lua"
+    FILES src/lua/lua_prelude.lua
+)
+
+# ---------------------------------------------------------------------------
+# Win32 后端。不碰 Qt GUI（托盘/窗口在 app 层），因此单测也能直接链接。
+# 系统库写成 PUBLIC，静态库的使用者自己不用再列一遍。
+# ---------------------------------------------------------------------------
+add_library(flowkeyd_platform STATIC
+    src/platform/win/console.cpp
+    src/platform/win/console.h
+    src/platform/win/elevate.cpp
+    src/platform/win/elevate.h
+    src/platform/win/ffi.cpp
+    src/platform/win/ffi.h
+    src/platform/win/hook.cpp
+    src/platform/win/hook.h
+    src/platform/win/input.cpp
+    src/platform/win/input.h
+    src/platform/win/logging.cpp
+    src/platform/win/logging.h
+    src/platform/win/nt.cpp
+    src/platform/win/nt.h
+    src/platform/win/process.cpp
+    src/platform/win/process.h
+    src/platform/win/single_instance.cpp
+    src/platform/win/single_instance.h
+)
+target_include_directories(flowkeyd_platform PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(flowkeyd_platform PUBLIC
+    flowkeyd_core
+    Qt6::Core
+    user32
+    kernel32
+    shell32
+    ole32
+    advapi32
+    powrprof
+)
+flowkeyd_strict_warnings(flowkeyd_platform)
+
+# ---------------------------------------------------------------------------
 # 守护进程本体
 # ---------------------------------------------------------------------------
 set(FLOWKEYD_QML_FILES
@@ -78,10 +133,12 @@ qt_add_executable(flowkeyd
     src/main.cpp
     src/cli.cpp
     src/cli.h
+    src/app/dispatcher.cpp
+    src/app/dispatcher.h
     src/app/log_window.cpp
     src/app/log_window.h
-    src/platform/win/console.cpp
-    src/platform/win/console.h
+    src/app/runtime.cpp
+    src/app/runtime.h
     src/platform/win/tray.cpp
     src/platform/win/tray.h
 )
@@ -95,6 +152,8 @@ qt_add_qml_module(flowkeyd
 target_link_libraries(flowkeyd
     PRIVATE
         flowkeyd_core
+        flowkeyd_lua
+        flowkeyd_platform
         flowkeyd::lua
         Qt6::Core
         Qt6::Gui
@@ -102,13 +161,7 @@ target_link_libraries(flowkeyd
         Qt6::Quick
         Qt6::QuickControls2
         Qt6::Widgets
-        user32
-        kernel32
-        shell32
-        ole32
         ntdll
-        advapi32
-        powrprof
         uxtheme
 )
 
@@ -133,12 +186,13 @@ install(SCRIPT ${deploy_script})
 # 单元测试
 # ---------------------------------------------------------------------------
 function(flowkeyd_add_test name)
+    cmake_parse_arguments(ARG "" "" "LIBS" ${ARGN})
     qt_add_executable(${name} tests/${name}.cpp)
     set_target_properties(${name} PROPERTIES
         WIN32_EXECUTABLE FALSE
         MACOSX_BUNDLE FALSE
     )
-    target_link_libraries(${name} PRIVATE flowkeyd_core Qt6::Test)
+    target_link_libraries(${name} PRIVATE flowkeyd_core Qt6::Test ${ARG_LIBS})
     flowkeyd_strict_warnings(${name})
     add_test(NAME ${name} COMMAND ${CMAKE_COMMAND}
         -DTEST_EXE=$<TARGET_FILE:${name}>
@@ -155,6 +209,11 @@ flowkeyd_add_test(tst_send_script)
 flowkeyd_add_test(tst_config)
 flowkeyd_add_test(tst_engine)
 flowkeyd_add_test(tst_template)
+flowkeyd_add_test(tst_lua LIBS flowkeyd_lua)
+flowkeyd_add_test(tst_layout LIBS flowkeyd_platform)
+flowkeyd_add_test(tst_input LIBS flowkeyd_platform)
+flowkeyd_add_test(tst_command_line LIBS flowkeyd_platform)
+flowkeyd_add_test(tst_instance LIBS flowkeyd_platform)
 
 # 冒烟测试要真的链接 Lua，才能证明 vendor/lua 编得进来。
 target_link_libraries(tst_smoke PRIVATE flowkeyd::lua)

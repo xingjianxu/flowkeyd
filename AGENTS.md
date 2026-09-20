@@ -245,6 +245,17 @@ Qt 自己的库随便链**：
 | `src/qml/`                                | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`、`Style.qml`(可选)、`qmldir`                                                                                                                                              |
 | `tests/`                                  | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_log_tail`、`tst_menu_model`、`tst_help_model`、`tst_power_table`、`tst_desktop_table`、`tst_layout` |
 
+### CMake 目标划分（阶段 2/3 之后）
+
+| 目标               | 内容                                                              | 谁链接                    |
+| ------------------ | ----------------------------------------------------------------- | ------------------------- |
+| `flowkeyd_core`    | `src/core/*`（纯逻辑，只用 QtCore）                                | exe + 全部单测            |
+| `flowkeyd_lua`     | `src/lua/*` + 编成 qrc 的 `lua_prelude.lua`                        | exe + `tst_lua`           |
+| `flowkeyd_platform`| `src/platform/win/*`（不碰 Qt GUI的 Win32 后端）                    | exe + 平台层单测           |
+| `flowkeyd`         | `src/main.cpp`、`src/cli.*`、`src/app/*`、`src/platform/win/tray.*`、QML | ——                        |
+
+`flowkeyd_add_test(name [LIBS …])` 负责把 Qt/MinGW 的 DLL 目录写进 test 的 `PATH`。
+
 **分层铁律**：`src/core/` 与 `src/lua/`（除 `lua_config.cpp` 里对 Lua C API 的
 调用之外）**不许出现 `<windows.h>`、不许出现 QML/QtWidgets、不许出现窗口句柄**。
 这正是 `--check`/`--list` 能在没有桌面的情况下跑、以及单元测试能覆盖核心逻辑的原因。
@@ -408,9 +419,10 @@ QML 模块注册之后，两条 profile 都要重新全量构建一次**。
 
 **通信与同步**：
 
-* 钩子线程 → 工作线程：一个带 `std::mutex` + `std::condition_variable` 的任务队列
-  （或 `QMetaObject::invokeMethod(obj, ..., Qt::QueuedConnection)` 到工作线程的
-  一个 `QObject`；二选一，选定后写进本文件）。
+* 钩子线程 → 工作线程：**已定：`QMetaObject::invokeMethod(dispatcher, ...,
+  Qt::QueuedConnection)`**（`app::Dispatcher` 是 `QThread` 上的 `QObject`）。
+  选它是因为 `app/` 层本来就与 Qt 绑定，少一层自己写的同步；
+  钩子回调里那次调用只做入队，不会阻塞。
 * 工作线程 → GUI 线程：`Qt::QueuedConnection` 信号（`emit showMenu(...)` /
   `emit showHelp(...)` / `emit showLogWindow()`）。
 * GUI 线程 → 工作线程：用户在弹窗里选了某一项，回调里 `emit` 一个
@@ -565,8 +577,9 @@ QML 模块注册之后，两条 profile 都要重新全量构建一次**。
 | ---- | ---- | ---- |
 | 0 仓库与构建骨架 | **已完成** | 双 profile 绿、`ctest` 绿、托盘 + 日志窗口冒烟过 |
 | 1 纯逻辑核心 | **已完成** | `src/core/*` + 6 个 Qt Test 目标全绿 |
-| 2 Lua 配置层 | 待做 | `--check` / `--list` 现在会明确报「需要 Lua 层」并返回 2 |
-| 3–10 | 待做 | |
+| 2 Lua 配置层 | **已完成** | `flowkeyd_lua` 静态库 + `--check`/`--list` 可用、`tst_lua` 25 项全绿、`flowkeyd.lua.example` 能过 `--check` |
+| 3 Win32 基础设施 + 钩子 + 引擎接线 | **已完成** | `flowkeyd_platform` 静态库 + 钩子线程/动作线程；`tst_layout|input|command_line|instance` 全绿；手工冒烟见阶段 3 小节 |
+| 4–10 | 待做 | |
 
 ### 阶段 0：仓库与构建骨架
 
@@ -703,6 +716,26 @@ QML 模块注册之后，两条 profile 都要重新全量构建一次**。
 BOM、`\t` 陷阱、`.toml` 拒绝、错误信息格式；`--check --config flowkeyd.lua.example`
 通过（示例配置同时要写出来，中文注释、覆盖全特性）。
 
+**状态：已完成（2026-09）。**
+
+**已完成的内容**：
+
+* `src/lua/lua_prelude.lua`：DSL 预置环境（`settings{}` / `hotkey{}` / `remap{}` +
+  全部动作构造器 + `flowkeyd` 表），由 `qt_add_resources` 编进 `:/lua/lua_prelude.lua`。
+* `src/lua/lua_config.{h,cpp}`：Lua 与 C++ 的唯一边界。用 `luaL_loadbufferx`
+  以 `@<path>` 为 chunk 名求值（所以报错是 `config.lua:12: ...`），语法错加
+  `syntax error: ` 前缀；逐条目转换、未知字段用白名单报错；混合表递归检查。
+* CMake 里新静态库 **`flowkeyd_lua`**（`lua_config` + qrc），同时被 exe 与
+  `tst_lua` 链接。静态库里的 qrc 会被链接器丢掉，因此在 `lua_config.cpp` 里
+  显式调了一次 `Q_INIT_RESOURCE(lua_prelude)`。
+* `main.cpp`：`--check` 打印 `PATH: OK (N hotkey(s), M remap(s))`；
+  `--list` 的排版与 oskeyd 的 `print_bindings` 逐字形似（`tst_lua` 之外也可肉眼比对）。
+* `flowkeyd.lua.example`：由 oskeyd 的示例改写（品牌名 + UI 相关注释），
+  37 hotkey / 3 remap，`--check` 通过、零警告。
+* 测试：`tests/tst_lua.cpp`，25 个用例，覆盖 oskeyd `src/lua.rs` 的全部测试点
+  （两种写法一致、循环生成、构造器等价于手写表、错误信息带条目名/行号、
+  空动作列表、空表在 map 位置、重复 `settings` 只警告、BOM、`.toml` 拒绝）。
+
 ### 阶段 3：Win32 基础设施 + 钩子 + 引擎接线
 
 **做什么**
@@ -723,6 +756,48 @@ BOM、`\t` 陷阱、`.toml` 拒绝、错误信息格式；`--check --config flow
 **验收**：单测（发送脚本→注入序列、`ModifierGuard` 的顺序断言、
 `quote_arg`、`single_instance` 的名字散列、结构体布局）；**手工冒烟清单
 第 1–11 条**。双构建绿。
+
+**状态：已完成（2026-09）。**
+
+**已完成的内容**：
+
+* 新静态库 **`flowkeyd_platform`**（`src/platform/win/*`，不碰 Qt GUI），
+  被 exe 与单测共同链接；系统库（`user32`/`kernel32`/`shell32`/`ole32`/
+  `advapi32`/`powrprof`）写成它的 `PUBLIC` 依赖。
+* `ffi.{h,cpp}`：统一的 `windows.h` 入口 + `static_assert(sizeof(INPUT)==40)` 等，
+  `monotonicMs()`、`winErrorMessage()`。
+* `logging.{h,cpp}`：`HH:MM:SS LEVEL message`（与 oskeyd 同形），ANSI 颜色可选，
+  同时追加写到日志文件；英文、可断言。
+* `nt.{h,cpp}`：运行时解析 `win32u!NtUserSendInput` / `NtUserGetAsyncKeyState`，
+  零输入调用校验后才启用。本机实测 `auto` 会选中 `win32u!NtUserSendInput`。
+* `input.{h,cpp}`：`dwExtraInfo = 0x464C4F57`（`"FLOW"`）、两条注入后端、
+  `sendOps`（批量 64，钩子回调里 `allowSleep=false`）、`ModifierGuard` +
+  **纯函数** `modifierReleasePlan` / `modifierRestorePlan`（后者让“菜单遮断标记的
+  顺序”可以单测，不必真的注入）。
+* `single_instance` / `elevate` / `process`：互斥体名按配置路径 FNV-1a 散列；
+  `quoteArg` 按 `CommandLineToArgvW` 规则；降级只判 `ShellExecuteW` 返回值；
+  `run` 用 `CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW`（**不用**
+  `DETACHED_PROCESS`）、`open` 用 `ShellExecuteW`。
+* `hook.{h,cpp}`：独立钩子线程 + 自己的消息循环（`SetTimer(nullptr, …)`）、
+  `PostThreadMessage` 控制消息、`PeekMessage` 建队列后用 `std::promise` 回报就绪、
+  退出时先卸钩子再释放重映射按住的键。
+* `app/dispatcher.{h,cpp}`（工作 `QThread`，`QMetaObject::invokeMethod` 队列）
+  与 `app/runtime.{h,cpp}`（钩子 + 工作线程 + 配置生命周期）。
+* 阶段 3 的动作：`none`/`suspend`/`reload`/`quit`/`caps_lock`/`notify`/`run`/
+  `send`/`type`/`open`；其余动作会写一条 `not implemented yet (later stage)` 的
+  警告，不静默。
+* 测试：`tst_layout`（4）、`tst_input`（6）、`tst_command_line`（5）、
+  `tst_instance`（3）；合计 11 个测试目标全绿。
+
+**手工冒烟结论（2026-09，用 `tmp/smoke.lua`、`--no-elevate`）**：
+
+* 第 1 条：`--check` / `--list` 通过，`--check` 打印 `…: OK (4 hotkey(s), 1 remap(s))`。
+* 第 2 条：第二个同配置实例退出码 1，日志 `another flowkeyd instance already owns …`。
+* 第 10 条的一部分：`taskkill /PID <pid>`（**不带** `/F`）能让进程干净退出，
+  日志里能看到 `keyboard hook removed`。
+* 其余条目（真按键的吞键/自动重复/重映射/`send` 修饰键释放/`suspend`/`reload`/
+  `window`）需要**人的手**：钩子刻意忽略注入输入（不变量 2），所以脚本无法伪造
+  “物理按键”。这些条目在阶段 9 完整验收时补做；`window` 本身要等阶段 5。
 
 ### 阶段 4：托盘 + 日志窗口
 
@@ -967,6 +1042,44 @@ hold/tap；挂起/重载/退出。
 * **写测试用的假 `Evaluator` 不用真的 Lua**：`core::loadConfig()` 把求值回调当参数，
   所以 BOM 剥离、`.toml` 拦截、候选路径都能在阶段 1 单测（见 `tst_config`）。
 
+#### 阶段 2/3 真的踩到的（2026-09）
+
+* **带 `.qrc` 文件或 `qt_add_resources` 的静态库，资源初始化会被链接器丢掉。**
+  `qt_add_resources(target "name" …)` 会生成 `qrc_name.cpp`，但静态库的归档只在
+  “有人引用它导出的符号”时才会把那个 object 拉进来。保险做法是在被引用的源文件里
+  调一次 `Q_INIT_RESOURCE(name)`（它必须在**全局命名空间**里，放进
+  `namespace flowkeyd::lua` 会声明成 `flowkeyd::lua::qInitResources_…` 而链接失败）。
+  另一个坑：`qt_add_resources(target path/to/foo.qrc)` 这个“直接传 .qrc”的写法
+  在本机的 Qt 6.11 上**什么都没生成**（`build.ninja` 里没有 rcc 行）。
+  用 `qt_add_resources(target "name" PREFIX "/x" BASE <dir> FILES …)` 才可靠。
+* **`lua_next` 遍历中调 `lua_tolstring` 会把数字键就地转成字符串**，于是下一次
+  `lua_next` 收到一个“表里不存在”的键，触发
+  `PANIC: unprotected error in call to Lua API (invalid key to 'next')`
+  （不是返回错误码，是 abort）。规则：只对 `lua_type==LUA_TSTRING` 的键取字符串；
+  数字键用 `lua_tointeger`。
+* **嵌套遍历时，内层压栈会打乱外层的 `lua_next` 游标。** 在外层 `while
+  (lua_next(...))` 里调用一个“自己会压栈”（比如 `readTableList`）的函数之后，
+  不能再假设“栈顶就是 value”，否则 `lua_pop(L,1)` 弹错东西、下一轮 `lua_next`
+  又崩。写法：进循环前记 `loopBase = lua_gettop(L)`，每轮结束用
+  `lua_settop(L, loopBase + 1)` 把栈恢复到“key 在栈顶”。
+* **`lua_next` 的“复制表”惯用法里不能再多弹一次**：
+  `lua_pushvalue(-2); lua_insert(-2); lua_settable(dst);` 之后栈上正好剩下 key，
+  它就是下一轮要用的键。`settings{}` 多次给出的合并路径踩过这个。
+* **`sendOps` 要同时接受 `QVector<SendOp>`（`core` 的解析输出）与
+  `std::vector<SendOp>`（`core::Reaction::inject`）**，所以留了两个重载。
+  `core` 里两种容器混着用，别再以为“只有 QVector”。
+* **`-Werror` 下两个 Win32 小坑**：MinGW 的 `SendInput` 第二参是 `LPINPUT`
+  （非 const），要 `const_cast`；`GetProcAddress` 的 `FARPROC` → 具体函数指针
+  会被 `-Wcast-function-type` 报错，用 `std::memcpy` 绕开（比 `reinterpret_cast`
+  到 `void*` 更干净）。
+* **`HHOOK` 不是 `HANDLE`**：`UnhookWindowsHookEx` 只接受 `HHOOK`，成员写成
+  `HANDLE` 会报 `invalid conversion`。
+* **`QObject::moveToThread` 拒绝带 parent 的对象。** `app::Dispatcher` 因此
+  用 `new Dispatcher(this)`（第一参是 `Runtime*`，parent 仍是 `nullptr`）而不是
+  `new Dispatcher(this)` 传成 parent——仔细看签名，它没有第二个参数。
+* **`core::Trigger` / `Phase` 在 `core/engine.h`，不在 `core/config.h`。**
+  只 include `config.h` 时会报 `'Trigger' has not been declared`。
+
 ### 从 oskeyd 继承的领域坑（照抄那份的解法，不要重新发明）
 
 下面这些在 `../oskeyd/AGENTS.md` 第 6 节都有**完整的现象描述 + 修法**，
@@ -1025,7 +1138,15 @@ hold/tap；挂起/重载/退出。
 > 跑 `ctest` 时请用第 5 节的命令行（`ctest --test-dir build/windows-debug`）；
 > 每个测试实际是 `cmake/RunQTest.cmake` 包的一层，它会把 QtTest 的输出
 > `cat` 出来（原因见第 10 节）。
-> `--check` / `--list` 要等阶段 2，现阶段它们会打印一句英文错误并返回 2。
+> `--check` / `--list` 在阶段 2 之后就绪（现在打的是真实结果）。
+
+> **阶段 2/3 的实测结果（2026-09）**：`windows-debug` 与 `windows-release`
+> 两边都是 `build exit 0`、零警告，`ctest` **11 个测试目标**全绿
+> （`tst_lua` 25 个用例、`tst_layout|input|command_line|instance` 共 18 个用例）；
+> `flowkeyd --check --config flowkeyd.lua.example` 通过（37 hotkey / 3 remap、零警告）。
+> 常驻冒烟：一次性配置 + `--no-elevate` 启停正常，第二个同配置实例被拒，
+> `taskkill /PID`（不带 `/F`）后日志里有 `keyboard hook removed`。
+> 注入后端在本机实测选中 `win32u!NtUserSendInput`（已通过零输入调用校验）。
 
 > 提醒：Qt 的编译单元很多，`--preset` 的构建目录是分开的
 > （`build/windows-debug` / `build/windows-release`），所以
@@ -1203,6 +1324,8 @@ CLI 开关名字**完全不变**（`-c/--config`、`--no-elevate`、`--console`�
    `QMetaObject::invokeMethod(..., Qt::QueuedConnection)`？**
    前者与 Qt 解耦（`app/` 层更干净），后者少一层自己写的同步。
    倾向后者（Qt 项目里更自然），但要在第 6 节写定。
+   → **已按后者实现（阶段 3）**：`app::Dispatcher` 跑在 `QThread` 上，
+   钩子线程用 `QMetaObject::invokeMethod(..., Qt::QueuedConnection)` 投递。
 3. **日志窗口要不要保留 `--log-window` 这个开关？** 本文件按“保留，
    意思是启动时直接打开日志窗口”写；`--parent-pid` 则打算**接受但忽略**
    （为了 CLI 兼容）。如果用户觉得没必要，删掉更干净。

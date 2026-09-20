@@ -86,4 +86,25 @@ void writeStderr(const QString &text)
     write(GetStdHandle(STD_ERROR_HANDLE), text);
 }
 
+uint consoleIsOwned()
+{
+    DWORD processes[4] = {};
+    const DWORD count = GetConsoleProcessList(processes, 4);
+    // 只有本进程时才归我们所有，否则隐藏它会动到启动我们的 shell。
+    return count;
+}
+
+bool hideConsoleWindow()
+{
+    if (consoleIsOwned() > 1) {
+        return false;
+    }
+    HWND window = GetConsoleWindow();
+    if (window == nullptr) {
+        return false;
+    }
+    ShowWindow(window, SW_HIDE);
+    return true;
+}
+
 } // namespace flowkeyd::platform::win

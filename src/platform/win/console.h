@@ -21,4 +21,10 @@ void writeStdout(const QString &text);
 /// 同上，写标准错误。
 void writeStderr(const QString &text);
 
+/// 当前控制台窗口是否只属于本进程（从终端启动时不属于）。
+uint consoleIsOwned();
+
+/// 隐藏属于本进程的控制台窗口（托盘模式下这么做）。
+bool hideConsoleWindow();
+
 } // namespace flowkeyd::platform::win

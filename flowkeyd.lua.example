@@ -1,0 +1,493 @@
+-- flowkeyd 示例配置（Lua）
+--
+-- 把这个文件复制到默认位置，或直接照着改：
+--   %USERPROFILE%\.config\flowkeyd\config.lua
+-- 也可以显式指定：  flowkeyd --config C:\tools\flowkeyd.lua
+--
+-- 只校验不运行：  flowkeyd --check  --config flowkeyd.lua.example
+-- 列出解析结果：  flowkeyd --list   --config flowkeyd.lua.example
+-- 列出可用按键：  flowkeyd --list-keys
+--
+-- =============================================================================
+-- 这是一段**真正的 Lua 脚本**，不是「换了语法的 TOML」：可以算表达式、写循环、
+-- 调用标准库（`os.getenv`、`string.format`……）。它会被 flowkeyd 以你的权限执行，
+-- 所以别运行来路不明的配置。
+--
+-- 配置的两种写法，可以混用：
+--
+--   1) 命令式（本文件用的就是这种）：调用 hotkey{} / remap{} / settings{}
+--         for i = 1, 3 do hotkey{ keys = "Win+F" .. i, action = desktop(i) } end
+--
+--   2) 声明式：直接 return 一张表，字段里的条目排在脚本体注册的条目之后
+--         return {
+--           settings = { swallow = true },
+--           hotkeys  = { { keys = "Ctrl+Alt+T", action = run("wt.exe") } },
+--           remaps   = { { from = "CapsLock", to = "Esc" } },
+--         }
+--
+-- 动作可以是表、动作构造器（`run()` / `send()` / `volume()` …），或者简写字符串
+-- （"send:^{c}"、"open:https://…"、"desktop:2"、"reload"）。**不接受 Lua 函数**：
+-- 钩子回调与工作线程只执行已经校验过的声明式动作。
+--
+-- 两个 Lua 语言本身的坑：
+--
+--   * `repeat` 是 Lua 关键字，写不成 `hotkey{ repeat = true }`（语法错误）。
+--     配置里请用 `repeatable = true`，或者 `["repeat"] = true`。
+--   * 字符串里的反斜杠要转义，Windows 路径最省事的写法是长字符串：
+--         program = [[C:\tools\my app\app.exe]]
+--     写成 '单引号' 或 "双引号" 时反斜杠必须加倍：'C:\\tools\\app.exe'。
+
+-- =============================================================================
+-- 全局设置
+-- =============================================================================
+settings{
+  -- trace | debug | info | warn | error | off （--log-level 会覆盖这里）
+  log_level = "info",
+
+  -- 默认行为：快捷键是否把它匹配到的按键对前台应用隐藏。
+  -- 除非快捷键以 `~` 开头，否则 AutoHotkey 就是这么做的。
+  swallow = true,
+
+  -- false：按住 Alt 时 "Ctrl+H" 依然会触发（AutoHotkey 行为）。
+  -- true： 修饰键集合必须完全一致。
+  exact_modifiers = false,
+
+  -- 执行 `send`/`type` 动作前先松开用户按住的修饰键，
+  -- 这样 Ctrl+Alt+T -> send("^{c}") 真的会发出 Ctrl+C，而不是 Ctrl+Alt+C。
+  release_modifiers = true,
+
+  -- 长按重复的默认参数，供 `trigger = "repeat"` / `repeatable = true` 使用。
+  repeat_interval_ms = 50,
+  repeat_delay_ms = 400,
+
+  -- 引擎定时器的运行频率（用于驱动重复）。
+  tick_ms = 15,
+
+  -- 按键注入后端：
+  --   auto   —— 运行时探测通过时优先使用 win32u!NtUserSendInput
+  --   user32 —— 始终使用已公开的 user32!SendInput
+  --   ntuser —— 强制要求未公开的那条路径（失败时回退并给出警告）
+  input_backend = "auto",
+
+  -- 另一个实例已在使用同一配置文件时拒绝启动。
+  single_instance = true,
+
+  -- 守护进程模式启动时，若当前没有管理员权限就自动以管理员身份重启
+  -- （会弹 UAC；`--no-elevate` 或 false 可以关掉）。
+  -- 提权后的好处：动作可以驱动提权进程的窗口（否则会被 UIPI 拦下）。
+  elevate = true,
+}
+
+-- =============================================================================
+-- 快捷键
+-- =============================================================================
+-- keys       一个和弦，或一组和弦。
+--            "Ctrl+Alt+T"、"^!t"（AutoHotkey 语法：^ Ctrl、! Alt、+ Shift、
+--            # Win）、"~F4"（~ 表示放行原始按键）、"*F1"（* 表示即使额外
+--            按住了其它修饰键也触发）。
+--            `Numpad*` 指小键盘上的键，与主键盘的同名键是不同的键：
+--            `NumpadSub` 是小键盘的 `-`（主键盘那个是 `Minus`），
+--            `NumpadAdd` 是小键盘的 `+`（主键盘那个要 Shift，是 `Equal`），
+--            `NumpadEnter` 也不是主键盘的 `Enter`。完整名单见 `--list-keys`。
+-- trigger    何时触发。
+--              press   （默认）按下即触发，而且只触发一次；
+--                      被吞掉的 Win/Alt 和弦也是如此，不等修饰键抬起。
+--              release 抬起时才触发。
+--              repeat  按下即触发，之后按住期间重复。
+-- action     按下时运行。`press` 和 `on_press` 是它的别名。
+-- on_release 松开时运行。
+-- repeatable true，或 { interval_ms = 40, delay_ms = 300 }；等价于
+--            trigger = "repeat"。名字不叫 `repeat`，因为那是 Lua 关键字。
+-- swallow    为这个快捷键覆盖 settings.swallow。
+-- enabled    false 表示忽略这条（调试时很方便）。
+-- comment    自由文本，`--list` 会显示出来。
+--
+-- 动作列表在**工作线程**上自上而下执行，因此慢动作不会拖住键盘钩子。
+-- 列表写成 Lua 的数组即可：action = { send("^{c}"), notify("copied") }。
+
+hotkey{
+  name = "terminal",
+  comment = "Ctrl+Alt+T 在当前目录打开 Windows Terminal",
+  keys = "Ctrl+Alt+T",
+  action = run("wt.exe", { "-w", "0" }),
+}
+
+hotkey{
+  name = "explorer-here",
+  keys = "Ctrl+Alt+E",
+  action = run("explorer.exe", { "." }, { show = "normal" }),
+}
+
+hotkey{
+  name = "screenshot-region",
+  comment = "Win+Shift+S 是系统截图工具；这里演示如何串联多个动作",
+  keys = "Ctrl+Alt+S",
+  action = {
+    send("#+{S}"),
+    notify("Snipping", "Select the region to copy"),
+  },
+}
+
+-- 复制当前选中内容、转成大写、再粘贴回去。{selection} 会合成一次 Ctrl+C
+-- 并等待剪贴板。
+hotkey{
+  name = "uppercase-selection",
+  keys = "Ctrl+Alt+U",
+  action = {
+    clipboard("set", { text = "{selection}" }),
+    run("cmd.exe", { "/c", "echo not-a-real-example" }),
+    notify("Selection", "{clipboard}"),
+  },
+}
+
+-- 运行一条 shell 命令并等待它结束。
+hotkey{
+  name = "git-status",
+  keys = "Ctrl+Alt+G",
+  action = run("git status --short", { shell = true, wait = true }),
+}
+
+-- 打开一个常用位置（`[[...]]` 是 Lua 的长字符串：反斜杠不用转义）。
+hotkey{
+  name = "open-projects",
+  keys = "Ctrl+Alt+P",
+  action = open([[%USERPROFILE%\source]]),
+}
+
+-- 动作也可以用简写字符串。可用的前缀：run: send: type: open: notify:
+-- desktop: volume: media: clipboard: window: power:，以及裸关键字 reload / quit / none。
+hotkey{
+  name = "open-docs",
+  keys = "Ctrl+Alt+D",
+  action = "open:https://learn.microsoft.com/windows/win32/winmsg/lowlevelkeyboardproc",
+}
+
+-- 用 Unicode 注入输入字面字符串（与键盘布局无关）。
+hotkey{
+  name = "type-signature",
+  keys = "Ctrl+Alt+I",
+  action = type_text("Best regards,\n{USERPROFILE}"),
+}
+
+-- 吞掉 CapsLock，并在它此前意外开启时将其关闭，再发送 Ctrl+Space。
+hotkey{
+  name = "capslock-ctrl-space",
+  keys = "CapsLock",
+  action = {
+    caps_lock("off"),
+    send("^{Space}"),
+  },
+}
+
+-- 媒体与音量。`volume` 使用 Core Audio，因此它对默认输出设备的改动
+-- 与 Windows 音量合成器完全一致。
+hotkey{
+  name = "volume-up",
+  keys = "Ctrl+Alt+Up",
+  repeatable = { interval_ms = 60, delay_ms = 250 },
+  action = volume("up", { step = 2 }),
+}
+
+hotkey{
+  name = "volume-down",
+  keys = "Ctrl+Alt+Down",
+  trigger = "repeat",
+  action = volume("down", { step = 2 }),
+}
+
+hotkey{
+  name = "mute",
+  keys = "Ctrl+Alt+M",
+  action = volume("toggle"),
+}
+
+hotkey{
+  name = "volume-50",
+  keys = "Ctrl+Alt+0",
+  action = volume("set", { level = 50 }),
+}
+
+-- 小键盘上的 `-` / `+` / `Enter` 直接控制音量——不开修饰键、一只手就够，
+-- 而且它们与主键盘上的 `-` / `=` / `Enter` 是完全不同的键：
+-- `NumpadSub` / `NumpadAdd` 是 `VK_SUBTRACT` / `VK_ADD`（`+` 在小键盘上
+-- 不需要 Shift，所以它不可能是主键盘的 `Equal`），而小键盘的 Enter 与主键盘的
+-- Enter 共用 `VK_RETURN`，flowkeyd 靠 Windows 的扩展键标志区分它们。
+-- 这三个键的 `VK` 与 `NumLock` 无关（NumLock 只影响字符翻译），
+-- 所以 NumLock 开着或关着都一样能用。
+hotkey{
+  name = "numpad-volume-down",
+  comment = "小键盘 -：音量降低（按住连续降）",
+  keys = "NumpadSub",
+  repeatable = { interval_ms = 60, delay_ms = 250 },
+  action = volume("down", { step = 2 }),
+}
+
+hotkey{
+  name = "numpad-volume-up",
+  comment = "小键盘 +：音量提高（按住连续升）",
+  keys = "NumpadAdd",
+  repeatable = { interval_ms = 60, delay_ms = 250 },
+  action = volume("up", { step = 2 }),
+}
+
+hotkey{
+  name = "numpad-mute",
+  comment = "小键盘 Enter：静音开关",
+  keys = "NumpadEnter",
+  action = volume("toggle"),
+}
+
+hotkey{
+  name = "play-pause",
+  keys = "Ctrl+Alt+Space",
+  action = media("play_pause"),
+}
+
+hotkey{
+  name = "next-track",
+  keys = "Ctrl+Alt+Right",
+  action = media("next"),
+}
+
+-- 窗口管理。
+--
+-- 动画默认关：flowkeyd 触发的状态变化不播放 DWM 的过渡（最小化不再“缩”到任务栏、
+-- 还原也不再“长”出来）。用的是按窗口的 `DWMWA_TRANSITIONS_FORCEDISABLED`，
+-- 不会改系统里“最小化/最大化时播放动画”那个全局设置，也不影响别的程序。
+-- 想让某一条绑定保留动画就写 `animate = true`。
+hotkey{
+  name = "maximize",
+  keys = "Ctrl+Alt+F",
+  comment = "最大化（这一条保留系统动画，作为 animate = true 的例子）",
+  action = window("maximize", { animate = true }),
+}
+
+hotkey{
+  name = "always-on-top",
+  keys = "Ctrl+Alt+A",
+  action = window("toggle_topmost"),
+}
+
+hotkey{
+  name = "minimize",
+  keys = "Ctrl+Alt+W",
+  action = window("minimize"),
+}
+
+hotkey{
+  name = "focus-notepad",
+  comment = "激活第一个标题包含该文本的可见窗口（始终只往前抬，不收起）",
+  keys = "Ctrl+Alt+N",
+  action = window("activate", { target = "Notepad", toggle = false }),
+}
+
+-- 唤起一个应用，没在运行时先把它启动起来。
+--
+-- `process` 匹配的是可执行文件的*文件名*（大小写无关的子串），而不是窗口标题：
+-- 终端窗口的标题是里面那个 shell 打印出来的任意内容，所以 `wezterm` 也会匹配
+-- `wezterm-gui.exe` 的窗口，而 `wezterm.exe` 本身（一个没有窗口的启动器）
+-- 永远不会匹配。
+--
+-- `launch` 只在没有窗口匹配时执行。flowkeyd 随后最多等待 `wait_ms` 让新窗口出现，
+-- 然后激活它；于是这只需要一个快捷键，而不是“先启动、祈祷它起来了、再激活”。
+-- `{USERPROFILE}` 会从环境变量展开，因此路径不必写死。
+--
+-- `activate` 默认带 `toggle`：按下去时如果 WezTerm 已经在前台，就把它最小化，
+-- 于是这一个键在唤起与收起之间切换（和点任务栏按钮一样）。想让它永远只往前抬，
+-- 像上面的 `focus-notepad` 那样写 `toggle = false`。
+hotkey{
+  name = "focus-wezterm",
+  comment = "Win+S 唤起 WezTerm；没在运行时先启动它。",
+  keys = "Win+S",
+  action = window("activate", {
+    process = "wezterm",
+    launch = {
+      program = [[{USERPROFILE}\scoop\shims\wezterm.exe]],
+      args = { "start" },
+      wait_ms = 5000,
+    },
+  }),
+}
+
+-- 对于通过 `open`（ShellExecuteW）启动的应用也一样，它还会处理已注册的应用
+-- 与文件关联。
+hotkey{
+  name = "focus-vscode",
+  keys = "Ctrl+Alt+X",
+  action = window("activate", {
+    process = "Code",
+    launch = { program = "code", args = { "." }, wait_ms = 5000 },
+  }),
+}
+
+-- 虚拟桌面：按序号直达。
+--
+-- Windows 自己只有相邻切换（Ctrl+Win+Left/Right），按编号跳转要用 shell
+-- 未公开的 `IVirtualDesktopManagerInternal`（公开的 `IVirtualDesktopManager`
+-- 只能查询窗口在哪个桌面、以及把窗口移过去）。序号从 1 开始，也就是
+-- Task View 里从左到右的顺序。接口的 IID 随 Windows 版本变化。
+--
+-- 这里用循环一次生成三条绑定：桌面数比 3 多就改上面的范围。
+for i = 1, 3 do
+  hotkey{
+    name = "desktop-" .. i,
+    comment = "Win+F1..F3 直达第 1..3 个虚拟桌面",
+    keys = "Win+F" .. i,
+    action = desktop(i),
+  }
+end
+
+-- 剪贴板辅助。
+hotkey{
+  name = "copy-path",
+  keys = "Ctrl+Alt+C",
+  action = clipboard("set", { text = "{config_dir}" }),
+}
+
+hotkey{
+  name = "clipboard-info",
+  keys = "Ctrl+Alt+V",
+  action = clipboard("get"),
+}
+
+-- 把剪贴板内容作为命令行参数传出去。
+hotkey{
+  name = "search-clipboard",
+  keys = "Ctrl+Alt+B",
+  action = run("cmd.exe", { "/c", "start", "https://www.bing.com/search?q={clipboard}" }),
+}
+
+-- 对讲机风格：按下时做一件事，松开时做另一件事。
+hotkey{
+  name = "push-to-talk",
+  keys = "Ctrl+Alt+F9",
+  swallow = false,
+  action = send("^{c}"),
+  on_release = notify("Released", "Ctrl+Alt+F9 is up"),
+}
+
+-- 只在松开时执行：把动作留在 action 里、把 trigger 改成 release 就行，
+-- 这样不必用 on_release。
+hotkey{
+  name = "release-only",
+  comment = "抬起时才粘贴：按下期间可以先做别的",
+  keys = "Ctrl+Alt+F10",
+  trigger = "release",
+  action = send("^{v}"),
+}
+
+-- 完全没有动作的快捷键只会吞掉按键：下面这条会彻底禁用 Windows 键。
+-- 需要开始菜单就把它注释掉。
+-- hotkey{
+--   name = "block-windows-key",
+--   keys = { "LWin", "RWin" },
+--   action = none(),
+-- }
+
+-- 选单（`menu`）与电源（`power`）。
+--
+-- `menu` 弹出一张 FluentWinUI3 的无边框圆角卡片，按条目上的单字符键
+-- 直接选中它，↑/↓ + Enter 与鼠标也能选；Esc（或点到别的地方）只是把选单关掉。
+-- 窗口尺寸、内边距、圆角与字号都按所在显示器的 DPI 缩放。
+--
+-- 选中的动作照旧在动作线程上执行（选单窗口只负责选），因此条目里
+-- 可以放任何动作：`send`、`window`、`run`、`desktop`……
+--
+-- `power` 的取值：sleep（睡眠）/ hibernate（休眠）/ shutdown（关机）/ restart（重启）/
+-- logoff（注销）/ lock（锁定）/ screen_off（关掉全部显示器，但不睡眠）。
+-- 除了锁定与关屏，其余都会申请管理员权限（flowkeyd 默认就是提权运行的）；
+-- 失败时会写一行日志并弹一个气泡提示，不会静悄悄地什么都不做。
+--
+-- `screen_off` 走的是 Windows 自己那条“屏幕超时后关屏”的路径：系统、应用和
+-- 钩子都继续运行（不是睡眠），任意按键或鼠标动作都会把所有显示器重新点亮。
+--
+-- 下面把 Win+X 从系统的“快捷链接菜单”变成电源选单（S 睡眠、P 关机、R 重启、
+-- L 锁定、O 关屏，Esc 关闭），和使用者自己按托盘菜单/开始菜单里的电源是同一回事。
+-- 吞掉 Win+X 是预期的：和这里的 Win+S 取代系统搜索一样。
+hotkey{
+  name = "power-menu",
+  comment = "Win+X：电源选单（S 睡眠 / P 关机 / R 重启 / L 锁定 / O 关屏 / Esc 关闭）",
+  keys = "Win+X",
+  action = menu{
+    title = "电源",
+    items = {
+      { key = "s", label = "睡眠", hint = "Sleep", action = power("sleep") },
+      { key = "p", label = "关机", hint = "Shut down", action = power("shutdown") },
+      { key = "r", label = "重启", hint = "Restart", action = power("restart") },
+      { key = "l", label = "锁定", hint = "Lock", action = power("lock") },
+      { key = "o", label = "关闭屏幕", hint = "Screen off", action = power("screen_off") },
+      -- 不写 `action`（或写 `none()`）的条目就是“把选单关掉”，和 Esc 一样。
+      { label = "取消", hint = "Esc", action = none() },
+    },
+  },
+}
+
+-- 快捷键帮助：`help()` 弹出一张列出**当前配置里全部快捷键**的卡片，
+-- 风格与上面的电源选单完全一致（无边框圆角卡片、按键徽标、按 DPI 缩放）。
+--
+-- 列表由配置本身生成，所以这个动作不需要任何参数。窗口里：
+--   * 直接输入就筛选（和弦、`comment`/`name`、动作摘要都参与匹配）；
+--   * ↑/↓、PgUp/PgDn、Home/End 与鼠标滚轮滚动；
+--   * Enter（或点某一行）把那一行的按键复制到剪贴板；
+--   * Esc 先清筛选，筛选空了再按一次才关窗（点到别的地方也会收起）。
+-- 这份示例配置有几十条绑定，正好用它看看全貌；卡片顶部的标题可以换：
+-- `help("我的快捷键")`，简写 `action = "help"` 等价于 `help()`。
+--
+-- `Win+/` 会吞掉 Windows 自己那个“表情/输入法”面板快捷键，和上面的 Win+S /
+-- Win+X 是同一回事；不想吞就换一个键。
+hotkey{
+  name = "help",
+  comment = "Win+/：列出当前所有快捷键（可输入筛选、Enter 复制）",
+  keys = "Win+/",
+  action = help(),
+}
+
+-- 控制类快捷键。suspend 快捷键在挂起期间仍然可用。
+hotkey{
+  name = "suspend-toggle",
+  keys = "Ctrl+Alt+F12",
+  action = suspend("toggle"),
+}
+
+hotkey{
+  name = "reload",
+  keys = "Ctrl+Alt+F5",
+  action = reload(),
+}
+
+hotkey{
+  name = "quit",
+  keys = "Ctrl+Alt+F4",
+  action = quit(),
+}
+
+-- =============================================================================
+-- 重映射
+-- =============================================================================
+-- `from` 是按键或和弦，`to` 是按键名（类似 AutoHotkey 的 `CapsLock::Esc`）
+-- 或一个发送脚本。mode = "hold"（默认）在按住 `from` 期间一直按住目标；
+-- mode = "tap" 每次按下只触发一次目标。
+
+remap{
+  name = "capslock-to-escape",
+  from = "CapsLock",
+  to = "Esc",
+}
+
+-- 把右侧 Ctrl 也当成 Ctrl（这种用法只有 hold 模式才有意义）。
+remap{
+  name = "right-ctrl-as-ctrl",
+  from = "RCtrl",
+  to = "Ctrl",
+  mode = "hold",
+}
+
+-- 把一个死键变成有用的键。
+remap{
+  name = "menu-key-to-enter",
+  from = "Apps",
+  to = "Enter",
+}
+
+-- 重映射里的 {Sleep} 会被忽略（--check 会警告）：注入必须和物理按键流
+-- 保持同样的顺序，钩子回调不能停在那里等。
