@@ -21,8 +21,11 @@
 > **本仓库的工作约定**（由项目所有者设定，2026-09）：
 > 1. 每个任务结束后都要更新本文件，把新得到的经验和新出现的要求写进去，
 >    这样下一个 agent 不必重新发现一遍。
-> 2. 每个任务结束后**编译 debug 与 release 两个 profile 并跑单元测试**
->    （见第 5 节的命令行），**两者都绿才算完成**；纯文档任务同样适用。
+> 2. 每个任务结束后**编译 debug 与 release 两个 profile**（两条优化路径的警告
+>    都要挡住），但**单元测试只在 release 上跑**
+>    （`ctest --test-dir build/windows-release`，见第 5 节的命令行），
+>    `scripts/acceptance.ps1` 同理只用 release 的产物。
+>    **release 构建 + release 测试全绿才算完成**；纯文档任务同样适用。
 > 3. 目标平台是 **Windows**；可以使用未公开的 Win32 API。
 > 4. **代码注释、本文件、README 与示例配置一律用中文。**
 >    **日志与错误信息保持英文**（配置校验信息、`--check` 输出也一样）：
@@ -56,6 +59,11 @@
 >    `Win+X`、`Win+/`、`CapsLock`、`Alt+H/J/K/L`、`Alt+Space`、`LWin+Q`、
 >    `LWin+F1..F4`、小键盘 `-`/`+`/`Enter`、`Ctrl+Alt+F4/F5/F12`）——
 >    用户随时可能在用它们。`scripts/acceptance.ps1` 用的是一次性配置，符合这一条。
+> 10. **任何自动化测试都不得触发真实的系统电源动作。**
+>     `shutdown`/`restart`/`logoff`/`sleep`/`hibernate`/`lock`/`screen_off`
+>     一个都不许真的执行 —— 测试代码里不出现 `platform::win::power::execute()`
+>     （`tst_power_table` 只测纯逻辑表，不碰真实调用）。这些动作只有用户自己按
+>     快捷键、或点选单条目时才允许发生。细节见第 5 节与第 11 节。
 
 ---
 
@@ -138,7 +146,8 @@
    但必须在提交信息里给出理由（照抄 oskeyd 的规矩）。
    `QUICK_START_DEPS`：JSON、CLI 解析、字符串工具都自己写或用 Qt 自带的；
    不要引入 `sol2`、`nlohmann::json`、`CLI11`、`spdlog` 之类“顺手”的库。
-8. **构建：CMake Presets + Ninja，debug 与 release 双 profile 都必须绿。**
+8. **构建：CMake Presets + Ninja，debug 与 release 双 profile 都必须编译通过；
+   单元测试与验收脚本只跑 release**（见工作约定第 2 条）。
 
 ---
 
@@ -332,20 +341,23 @@ $C = 'C:\Qt\Tools\CMake_64\bin\cmake.exe'
 & $C --preset windows-debug
 & $C --preset windows-release
 
-# 每个任务都要跑这两条
+# 每个任务都要跑这两条（两条 profile 都必须编译通过）
 & $C --build --preset debug
 & $C --build --preset release
 
-# 单元测试
-& ctest --test-dir build/windows-debug --output-on-failure
-# 可选（release 也应当全绿）：
-# & ctest --test-dir build/windows-release --output-on-failure
+# 单元测试：只跑 release 那一份（见工作约定第 2 条）
+& ctest --test-dir build/windows-release --output-on-failure
 ```
 
 **debug 与 release 两个 profile 都必须编译通过，这是每个任务（包括纯文档任务）
-的硬性要求。** 只跑一个不算完成：release 走的是完全不同的优化与链接路径
-（`-O2` + LTO 若开启），只跑 debug 会漏掉只在一侧出现的警告。
-**单元测试（`ctest`）必须全绿、零警告。**
+的硬性要求。** 理由：release 走的是完全不同的优化与链接路径
+（`-O2` + LTO 若开启），只编译 debug 会漏掉只在一侧出现的警告；反过来，
+debug 构建也是发现未初始化变量、迭代器失效这类问题的便宜手段。
+
+**但测试只在 release 上跑**（项目所有者 2026-09 拍板）：`ctest --test-dir
+build/windows-release` 全绿就够了，不需要再跑 `build/windows-debug` 那一遍；
+`scripts/acceptance.ps1` 同理只跑 `-Exe build\windows-release\flowkeyd.exe`
+（脚本的 `-Exe` 默认值就是它）。**零警告、零失败。**
 
 因为 Qt 项目是编译型 + 链接型，**改动 `vendor/lua` 的构建参数、Win32 声明、
 QML 模块注册之后，两条 profile 都要重新全量构建一次**。
@@ -373,8 +385,8 @@ QML 模块注册之后，两条 profile 都要重新全量构建一次**。
 
 ```powershell
 # 68 项检查，约两分钟，会持续注入按键/抢焦点；按工作约定第 6 条先提醒用户
+# 只跑 release 那一份产物（见工作约定第 2 条，脚本默认 -Exe 就是它）
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance.ps1
-powershell.exe ... -Exe build\windows-release\flowkeyd.exe    # 另一条 profile
 powershell.exe ... -Phase config                              # 只看配置，不注入按键
 ```
 
@@ -392,7 +404,8 @@ powershell.exe ... -Phase config                              # 只看配置，�
 **不变量 2 没有被放宽**。
 
 脚本**不做**的：动画的屏幕采样、托盘菜单点击、自提权的 UAC 流程、
-“托盘图标真的消失了”的直接观察。这几项仍然只能靠人的手。
+“托盘图标真的消失了”的直接观察，以及**一切电源动作**（工作约定第 10 条：
+测试里不许真的关机/重启/注销/睡眠/休眠/锁定/关屏）。这几项仍然只能靠人的手。
 
 用一份只含被测绑定的**一次性配置**（快捷键一律避开用户真实配置里已有的和弦）：
 
@@ -1081,8 +1094,12 @@ get/set/append/clear。**`animate` 的效果要靠肉眼**（没有屏幕采样�
 
 **验收**：单测（版本表的选择是纯函数、电源 op 的字符串解析与简写、
 `screen_off` 不走权限路径）；**破坏性的电源动作绝不自动化测试**
-（睡眠/关机/重启/关屏都不许在测试里真的执行）；真实调用手工验证
+（睡眠/关机/重启/注销/锁定/关屏都不许在测试里真的执行）；真实调用手工验证
 （关屏可以用，随后随便按一个键点亮）。
+
+> **修订（2026-09）**：后来连“测试里可以关屏”这一点也收紧了 —— 电源动作
+> 一律不进自动化测试，`powerScreenOffBlanksTheDisplay` 已删除。
+> 见工作约定第 10 条。
 
 **状态：已完成（2026-09）。**
 
@@ -1120,8 +1137,12 @@ get/set/append/clear。**`animate` 的效果要靠肉眼**（没有屏幕采样�
   `desktopBackendProbesAndSwitches`（只读探测 + 一次可逆的切换，切走再切回来）
   与 `powerScreenOffBlanksTheDisplay`（多一道 `FLOWKEYD_ALLOW_SCREEN_OFF=1`
   闸门；关屏后注入一个无害的 Shift 点亮屏幕）。
+  → **2026-09 修订**：`powerScreenOffBlanksTheDisplay` 已**删除**（连同
+  `FLOWKEYD_ALLOW_SCREEN_OFF` 这道闸门）：电源动作一律不进测试，见工作约定
+  第 10 条。上面的实测输出只是当天的记录。
 
-**手工验证结论（2026-09，`FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1` + `FLOWKEYD_ALLOW_SCREEN_OFF=1`）**
+**手工验证结论（2026-09，`FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1` + `FLOWKEYD_ALLOW_SCREEN_OFF=1`；
+关屏那条用例后来已删除，见下）**
 
 ```
 QINFO  : desktopBackendProbesAndSwitches() desktop probe: count 4 current 2
@@ -1180,6 +1201,10 @@ Totals: 8 passed, 0 failed
 `-`/`=`/`Enter` **互不触发**（注入小键盘 Enter 必须带
 `KEYEVENTF_EXTENDEDKEY`，否则测的就是主键盘的 Enter）；重映射的
 hold/tap；挂起/重载/退出。
+
+> **修订（2026-09）**：DoD 现在只在 **release** 上跑 `ctest` 与
+> `acceptance.ps1`（工作约定第 2 条），下面的“debug 与 release 各一遍”
+> 只是当年的记录；另外测试里不再执行任何真实电源动作（第 10 条）。
 
 **状态：已完成（2026-09）。**
 
@@ -1555,6 +1580,8 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   `GetProcAddress` 拿**（每个进程都有 ntdll），不用给 `flowkeyd_platform`
   加一条 ntdll 链接依赖；`GetVersionEx` 会被应用清单骗，不能用。
 * **破坏性的后端（关屏）在 opt-in 的交互式单测里也要再加一道闸门。**
+  （**已作废，2026-09**：现在干脆**不让它进测试** —— 电源动作只能由用户
+  自己按，见工作约定第 10 条。下面是当年的做法，仅作记录。）
   `tst_interactive` 的 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1` 是“会碰真实桌面”
   的总闸；关屏会真的黑屏，所以单独用 `FLOWKEYD_ALLOW_SCREEN_OFF=1` 再问一次，
   并在测试里注入一个无害的 Shift 把屏幕点亮。睡眠/关机/重启/注销/锁定
@@ -1653,21 +1680,29 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 
 1. `cmake --build --preset debug` 与 `cmake --build --preset release` **都绿**
    （零新增警告；warning 当错误处理，直到项目所有者另有要求）。
-2. `ctest --preset debug --output-on-failure` **全绿**；
+   **两条 profile 都要构建，但只在 release 上跑测试**（见下一条）。
+2. `ctest --test-dir build/windows-release --output-on-failure` **全绿**
+   （不再跑 `build/windows-debug` 那一遍，见工作约定第 2 条）；
    新增/修改的逻辑都有对应测试（`core/`、`lua/`、模型层这些可测的部分）。
 3. 如果动了钩子/引擎/分发/窗口后端：跑 **`scripts\acceptance.ps1`**
-   （debug 与 release 各一遍，见第 5 节），把结论写进本文件。
+   （只跑 `-Exe build\windows-release\flowkeyd.exe` 那一份，见第 5 节），
+   把结论写进本文件。
    动到脚本覆盖不到的界面（托盘菜单、日志窗口、`animate`）时，仍然要人眼过一遍。
-4. `flowkeyd --check --config flowkeyd.lua.example` 通过
+4. **测试绝不执行真实的系统电源动作**：`shutdown`/`restart`/`logoff`/
+   `sleep`/`hibernate`/`lock`/`screen_off` 在任何测试里都不许真的跑；
+   `platform::win::power::execute()` 不出现测试代码里（`tst_power_table`
+   只测纯逻辑）。要确认这些动作能不能用，只能由用户自己按键试一次。
+5. `flowkeyd --check --config flowkeyd.lua.example` 通过
    （阶段 2 之后，只要示例配置存在就要能过）。
-5. 用户可见行为有变化时更新 `README.md`，有新经验时更新本文件。
-6. `git commit`：提交信息里说明**为什么**（尤其是引入新依赖时）。
-7. 仓库里不留垃圾：`tmp/`、`build/`、临时配置文件都在 `.gitignore` 里。
+6. 用户可见行为有变化时更新 `README.md`，有新经验时更新本文件。
+7. `git commit`：提交信息里说明**为什么**（尤其是引入新依赖时）。
+8. 仓库里不留垃圾：`tmp/`、`build/`、临时配置文件都在 `.gitignore` 里。
 
 > **阶段 0/1 的实测结果（2026-09-20）**：`windows-debug` 与 `windows-release`
 > 两个 profile 都是 `build exit 0`、零警告（`-Wall -Wextra -Werror`），
 > 6 个测试目标在两边都是 `100% tests passed`。
-> 跑 `ctest` 时请用第 5 节的命令行（`ctest --test-dir build/windows-debug`）；
+> 跑 `ctest` 时请用第 5 节的命令行（`ctest --test-dir build/windows-release`；
+> 当年两个 profile 都跑，现在只跑 release，见工作约定第 2 条）；
 > 每个测试实际是 `cmake/RunQTest.cmake` 包的一层，它会把 QtTest 的输出
 > `cat` 出来（原因见第 10 节）。
 > `--check` / `--list` 在阶段 2 之后就绪（现在打的是真实结果）。
@@ -1709,7 +1744,8 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > `flowkeyd --check --config flowkeyd.lua.example` 仍通过（37/3、零警告）；
 > `--version` 打印 `flowkeyd 0.1.0` + `Lua 5.5.1`；`--list` 的形状与 oskeyd 一致。
 > 交互式验证（`FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`，另加
-> `FLOWKEYD_ALLOW_SCREEN_OFF=1`）8 个用例全绿：虚拟桌面探测到
+> `FLOWKEYD_ALLOW_SCREEN_OFF=1`）8 个用例全绿（其中的
+> `powerScreenOffBlanksTheDisplay` 后来已删除：电源动作不再进测试）：虚拟桌面探测到
 > `count 4 / current 2 / os 26200.9457 / api 26100 / layout plain /
 > manager {53f5ca0b-158f-4124-900c-057158060b27}`，切走再切回成功；
 > `screen_off` 真的黑屏并被随后注入的 Shift 点亮。
@@ -1727,6 +1763,10 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > （`--check` → `OK (24 hotkey(s), 0 remap(s))`、零警告），非提权预演能装钩子
 > 也能被 `taskkill /PID`（不带 `/F`）干净停掉；oskeyd 本来就没在跑，
 > 提权常驻由用户自己一条 `Start-Process -Verb RunAs` 启动（README 里有）。
+
+> **2026-09 修订（DoD 收窄）**：从这里往后，`ctest` 与 `acceptance.ps1` 都只跑
+> `build/windows-release`（debug 仍然必须构建，只是不再跑测试）；任何测试都不
+> 再执行真实的电源动作。上面各阶段的“两边都……”只是当年的记录，不必照抄。
 
 > 提醒：Qt 的编译单元很多，`--preset` 的构建目录是分开的
 > （`build/windows-debug` / `build/windows-release`），所以
@@ -1805,7 +1845,8 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   文件开头写 `pragma ComponentBehavior: Bound`，并用 `qmllint -I …` 确认零警告。
 * **新的电源操作**：`PowerOp` 加变体 → `platform/win/power` 里处理
   （需要特权的先调 `enable_shutdown_privilege()`；不需要的要放在它**之前** return）
-  → `as_str` 与简写 → README 表格。**不给它加自动化测试**（破坏性）。
+  → `as_str` 与简写 → README 表格。**不给它加自动化测试**（破坏性；见工作
+  约定第 10 条：测试里一律不许真的执行电源动作）。
 * **改配置模式（新字段 / 新取值）**：`core/config` 加字段 →
   需要的话在 `lua_prelude.lua` 里加构造器 → `flowkeyd.lua.example` 里加一条
   （`--check` 会立刻告诉你它能不能过校验）→ README 表格。

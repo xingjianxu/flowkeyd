@@ -1,5 +1,5 @@
 ﻿param(
-    [string]$Exe = 'build\windows-debug\flowkeyd.exe',
+    [string]$Exe = 'build\windows-release\flowkeyd.exe',
     [string]$WorkDir = "$env:TEMP\flowkeyd-accept",
     [ValidateSet('config', 'all')]
     [string]$Phase = 'all'
@@ -34,7 +34,9 @@
 # 工作约定第 6 条先提醒用户再跑。
 #
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance.ps1
-#   powershell.exe ... -Exe build\windows-release\flowkeyd.exe
+#   （默认就是 release 产物；AGENTS.md 工作约定第 2 条：只跑 release）
+#
+# 绝不碰系统电源动作（AGENTS.md 工作约定第 10 条）。
 #
 # 退出码 0 表示全部检查通过。
 #
@@ -64,7 +66,7 @@ if (-not [System.IO.Path]::IsPathRooted($Exe)) {
     $Exe = Join-Path $here $Exe
 }
 if (-not (Test-Path $Exe)) {
-    Write-Error "找不到 flowkeyd 可执行文件：$Exe（先构建：cmake --build --preset debug）"
+    Write-Error "找不到 flowkeyd 可执行文件：$Exe（先构建：cmake --build --preset release）"
     exit 2
 }
 

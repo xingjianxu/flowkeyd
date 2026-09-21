@@ -74,8 +74,8 @@ $C = 'C:\Qt\Tools\CMake_64\bin\cmake.exe'
 & $C --build --preset debug
 & $C --build --preset release
 
-# 单元测试
-& ctest --test-dir build/windows-debug --output-on-failure
+# 单元测试：两个 profile 都要能编译通过，测试只跑 release 那一份
+& ctest --test-dir build/windows-release --output-on-failure
 ```
 
 产物分别在 `build/windows-debug/flowkeyd.exe` 与 `build/windows-release/flowkeyd.exe`。
@@ -728,16 +728,12 @@ remap{
 ```powershell
 $C = 'C:\Qt\Tools\CMake_64\bin\cmake.exe'
 & $C --build --preset debug
-& ctest --test-dir build/windows-debug --output-on-failure        # 19 个测试目标
 & $C --build --preset release
-& ctest --test-dir build/windows-release --output-on-failure
+& ctest --test-dir build/windows-release --output-on-failure     # 19 个测试目标
 
-# 真实桌面后端（剪贴板/音量/窗口/虚拟桌面/关屏）
+# 真实桌面后端（剪贴板 / 音量 / 窗口 / 虚拟桌面）
 $env:FLOWKEYD_ALLOW_INTERACTIVE_TESTS = '1'
-& build\windows-debug\tst_interactive.exe
-# 关屏那一条多一道闸门（会真的黑屏一下）
-$env:FLOWKEYD_ALLOW_SCREEN_OFF = '1'
-& build\windows-debug\tst_interactive.exe
+& build\windows-release\tst_interactive.exe
 ```
 
 * **单元测试**（Qt Test，19 个目标）覆盖按键/和弦解析、发送脚本解析、模板展开、
@@ -751,8 +747,9 @@ $env:FLOWKEYD_ALLOW_SCREEN_OFF = '1'
   机器的剪贴板/音量/前台窗口：剪贴板往返、音量读写与钳位并恢复原值、
   启动记事本→激活→最小化→恢复→关闭、`{selection}` 的 Ctrl+C 往返，
   以及虚拟桌面的只读探测 + 一次可逆的切换（切走再切回来）。
-  `FLOWKEYD_ALLOW_SCREEN_OFF=1` 时还会执行一次真正的关屏，随后注入一个无害的
-  Shift 把屏幕点亮。**睡眠/关机/重启/注销/锁定绝不会被自动化测试触碰。**
+  **电源动作一个都不会被自动化测试触碰**：关机/重启/注销/睡眠/休眠/锁定/关屏
+  都不进测试（`tst_power_table` 只测纯逻辑表，不碰真实调用），
+  只能由你自己按键或点选单验证。
 * **验收脚本**（`scripts\acceptance.ps1`）是“钩子真的吞了键”那类结论的**外部**
   证据：它用一个一次性配置起一个非提权的守护进程，从另一个上下文用 `SendInput`
   注入按键，再用一个获得焦点的 WinForms 窗口观察按键到底有没有到达前台
@@ -765,7 +762,6 @@ $env:FLOWKEYD_ALLOW_SCREEN_OFF = '1'
 
   ```powershell
   powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance.ps1
-  powershell.exe ... -Exe build\windows-release\flowkeyd.exe   # 另一条 profile
   powershell.exe ... -Phase config                              # 只看配置，不注入按键
   ```
 

@@ -1,12 +1,16 @@
-// 需要真实桌面的交互式测试：剪贴板、Core Audio、窗口后端。
+// 需要真实桌面的交互式测试：剪贴板、Core Audio、窗口后端、虚拟桌面。
 //
 // 它们会碰这台机器的真实剪贴板 / 音量 / 前台窗口，所以**默认跳过**，
 // 必须显式开启（与 oskeyd 的 `OSKEYD_ALLOW_INTERACTIVE_TESTS` 同一套约定）：
 //
 //   $env:FLOWKEYD_ALLOW_INTERACTIVE_TESTS = "1"
-//   .\build\windows-debug\tst_interactive.exe
+//   .\build\windows-release\tst_interactive.exe
 //
 // ctest 不会设置这个变量，因此 CI / 日常 `ctest` 里它们只是 skip。
+//
+// **电源动作一个都不许在这里执行**（AGENTS.md 工作约定第 10 条）：
+// 关机 / 重启 / 注销 / 睡眠 / 休眠 / 锁定 / 关屏都不进自动化测试，
+// 只能由用户自己按键或点选单来验证。
 #include <QtTest>
 
 #include <QCoreApplication>
@@ -23,7 +27,6 @@
 #include "platform/win/dwm.h"
 #include "platform/win/ffi.h"
 #include "platform/win/input.h"
-#include "platform/win/power.h"
 #include "platform/win/process.h"
 #include "platform/win/window.h"
 
@@ -48,7 +51,6 @@ private slots:
     void windowBackendLaunchesActivatesAndCloses();
     void copySelectionCopiesTheFocusedSelection();
     void desktopBackendProbesAndSwitches();
-    void powerScreenOffBlanksTheDisplay();
 };
 
 void TestInteractive::clipboardRoundTrip()
@@ -290,30 +292,6 @@ void TestInteractive::desktopBackendProbesAndSwitches()
 
     // 切回原来的桌面，别把用户留在别处。
     QVERIFY2(platform::win::desktop::switchTo(snapshot.current, &detail, &error), qPrintable(error));
-}
-
-/// 关屏：会真的把屏幕黑掉，所以比其它交互式测试多一道闸门。
-///
-/// 屏幕是会话级的，一条 `WM_SYSCOMMAND`/`SC_MONITORPOWER` 广播就把全部显示器
-/// 送进待机；随后注入一个无害的 Shift 把它点亮（任何输入都会唤醒）。
-/// 睡眠 / 关机 / 重启 / 注销 / 锁定**绝不**在这里调用。
-void TestInteractive::powerScreenOffBlanksTheDisplay()
-{
-    if (!interactiveEnabled()) {
-        QSKIP("set FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1 to run the interactive tests");
-    }
-    if (qEnvironmentVariable("FLOWKEYD_ALLOW_SCREEN_OFF").isEmpty()) {
-        QSKIP("set FLOWKEYD_ALLOW_SCREEN_OFF=1 to blank the screen for a moment");
-    }
-    QString detail;
-    QString error;
-    QVERIFY2(platform::win::power::execute(core::PowerOp::ScreenOff, &detail, &error),
-             qPrintable(error));
-    QCOMPARE(detail, QStringLiteral("display(s) off"));
-    // 让屏幕真的黑一下，然后自己点亮。
-    QThread::msleep(800);
-    QVERIFY2(platform::win::tapKey(core::vk::LSHIFT, &error), qPrintable(error));
-    QThread::msleep(300);
 }
 
 QTEST_MAIN(TestInteractive)
