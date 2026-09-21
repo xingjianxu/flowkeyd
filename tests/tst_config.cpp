@@ -26,6 +26,7 @@ private slots:
     void unknownActionShorthandIsReported();
     void emptyActionListIsReported();
     void badChordIsReportedWithContext();
+    void twoPlainKeysAreNotAChord();
     void disabledHotkeysAreDropped();
     void duplicateChordsWarn();
     void triggerReleaseMovesPressActions();
@@ -214,6 +215,23 @@ void TestConfig::badChordIsReportedWithContext()
     const QString text = error->toString();
     QVERIFY2(text.contains(QStringLiteral("weird")), qPrintable(text));
     QVERIFY2(text.contains(QStringLiteral("Nope")), qPrintable(text));
+}
+
+void TestConfig::twoPlainKeysAreNotAChord()
+{
+    // 用户真实的笔误：想让小键盘的 `-` 与 `+` 同时按住做静音。
+    // 和弦语法里只能有修饰键 + 一个按键，所以这必须在加载时就被拒绝，
+    // 而不是静默地“永不触发”。
+    Config config;
+    config.hotkeys.push_back(hotkeyNamed(QStringLiteral("numpad-mute"),
+                                         QStringLiteral("NumpadSub+NumpadAdd"),
+                                         specOne(noneAction())));
+    const auto error = compileConfig(config);
+    QVERIFY(error.has_value());
+    const QString text = error->toString();
+    QVERIFY2(text.contains(QStringLiteral("NumpadSub")), qPrintable(text));
+    QVERIFY2(text.contains(QStringLiteral("is not a modifier")), qPrintable(text));
+    QVERIFY2(text.contains(QStringLiteral("no usable keys")), qPrintable(text));
 }
 
 void TestConfig::disabledHotkeysAreDropped()

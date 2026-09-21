@@ -61,6 +61,11 @@ void TestCommandLine::environmentBlockIsSortedAndNullTerminated()
 {
     QMap<QString, QString> overrides;
     overrides.insert(QStringLiteral("FLOWKEYD_TEST_OVERRIDE"), QStringLiteral("1"));
+    // 这对名字在「折成小写」与「转成大写」两种不区分大小写的排序下会给出
+    // 相反的答案（第二个字符 `_`(0x5F) vs `A`），所以不论跑测试的机器上有什么
+    // 环境变量，这条断言都能钉住“按大写折叠再比码元”这个顺序。
+    overrides.insert(QStringLiteral("AAB"), QStringLiteral("1"));
+    overrides.insert(QStringLiteral("A_Z"), QStringLiteral("1"));
     const std::vector<wchar_t> block = platform::win::buildEnvironmentBlock(overrides);
     QVERIFY(block.size() >= 2);
     QVERIFY(block[block.size() - 1] == L'\0');
@@ -73,6 +78,8 @@ void TestCommandLine::environmentBlockIsSortedAndNullTerminated()
         cursor += wcslen(cursor) + 1;
     }
     QVERIFY(entries.contains(QStringLiteral("FLOWKEYD_TEST_OVERRIDE=1")));
+    QVERIFY(entries.contains(QStringLiteral("AAB=1")));
+    QVERIFY(entries.contains(QStringLiteral("A_Z=1")));
 
     // 环境块必须按名称不区分大小写排序。
     QStringList names;

@@ -6,6 +6,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QGuiApplication>
+#include <QMessageBox>
 #include <QQmlApplicationEngine>
 #include <QQuickStyle>
 
@@ -96,6 +97,26 @@ QString renderBindings(const core::Compiled &compiled)
     return out;
 }
 
+/// 守护进程模式下配置读不出来 / 校验不过时的收尾：把错误写进 stderr（终端里
+/// 看得见），再弹一个 Qt 标准消息框。双击启动时进程没有控制台，只有弹窗才能
+/// 让用户知道到底出了什么事。
+///
+/// **离线命令（`--check` / `--list`）不走这里**：它们照旧只打印、不弹窗、不提权
+/// （不变量 11）。
+int reportConfigFailure(int argc, char *argv[], const QString &message)
+{
+    win::writeStderr(toConsole(QStringLiteral("flowkeyd: %1\n").arg(message)));
+    QApplication application(argc, argv);
+    QMessageBox box(QMessageBox::Critical,
+                    QStringLiteral("flowkeyd 配置错误"),
+                    QStringLiteral("flowkeyd 无法启动：配置文件有错误。\n\n%1").arg(message),
+                    QMessageBox::Ok);
+    // 错误文本可以选中复制，便于用户拿去搜索或反馈。
+    box.setTextInteractionFlags(Qt::TextSelectableByMouse);
+    box.exec();
+    return 1;
+}
+
 } // namespace
 
 int main(int argc, char *argv[])
@@ -173,18 +194,16 @@ int main(int argc, char *argv[])
     const QString configPath = options.config.value_or(core::defaultConfigPath());
     if (usingDefault && !QFileInfo::exists(configPath)) {
         if (const auto legacy = core::staleTomlConfig(); legacy.has_value()) {
-            win::writeStderr(toConsole(QStringLiteral("flowkeyd: %1\n")
-                                           .arg(core::ConfigError::makeLegacyToml(
-                                                    *legacy, core::preferredConfigPath())
-                                                    .toString())));
-            return 1;
+            return reportConfigFailure(
+                argc,
+                argv,
+                core::ConfigError::makeLegacyToml(*legacy, core::preferredConfigPath()).toString());
         }
     }
     core::Compiled compiled;
     if (const auto error = core::loadConfig(lua::makeLuaEvaluator(), configPath, &compiled);
         error.has_value()) {
-        win::writeStderr(toConsole(QStringLiteral("flowkeyd: %1\n").arg(error->toString())));
-        return 1;
+        return reportConfigFailure(argc, argv, error->toString());
     }
 
     // 日志：配置文件配了级别，但命令行优先。

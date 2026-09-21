@@ -49,7 +49,7 @@
 >    开发期起 flowkeyd 一律用 `--no-elevate --allow-multi` + 一次性配置，
 >    并且**不要**占用用户真实配置里已经有的和弦（`Win+S`、`Win+1..3`、`Win+W`、
 >    `Win+X`、`Win+/`、`CapsLock`、`Alt+H/J/K/L`、`Alt+Space`、`LWin+Q`、
->    `LWin+F1..F4`、小键盘 `-`/`+`/`Enter`、`Ctrl+Alt+F4/F5/F12`）——
+>    `LWin+F1..F4`、小键盘 `-`/`+`/`*`、`Ctrl+Alt+F4/F5/F12`）——
 >    用户随时可能在用它们。`scripts/acceptance.ps1` 用的是一次性配置，符合这一条。
 > 10. **任何自动化测试都不得触发真实的系统电源动作。**
 >     `shutdown`/`restart`/`logoff`/`sleep`/`hibernate`/`lock`/`screen_off`
@@ -1315,7 +1315,7 @@ checks: 68, failures: 0
    逐条核对：`CapsLock`→Ctrl+Space、`Alt+H/J/K/L`、
    `Alt+Space`→F14、`LWin+Q`→F24、`LWin+F1..F4`→虚拟桌面 1..4、
    `Win+S`→WezTerm、`Win+1/2/3`→Chrome/VS Code/WPS、`Win+W`→微信、
-   `Win+X`→电源选单、`Win+/`→快捷键帮助、小键盘 `-`/`+`/`Enter`→音量、
+   `Win+X`→电源选单、`Win+/`→快捷键帮助、小键盘 `-`/`+`/`*`→音量、
    `Ctrl+Alt+F4/F5/F12`→quit/reload/suspend。
 2. 确认没有别的键盘钩子守护进程在抢事件（有的话按工作约定第 5 条
    `taskkill /PID <pid>` 不带 `/F` 干净停掉）。
@@ -1356,7 +1356,7 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 
 **验收（用户启动后逐条确认）**：`CapsLock`、`Alt+H/J/K/L`、`Alt+Space`、
 `LWin+Q`、`LWin+F1..F4`、`Win+S`、`Win+1/2/3`、`Win+W`、`Win+X`、`Win+/`、
-小键盘 `-`/`+`/`Enter`、`Ctrl+Alt+F4/F5/F12`。
+小键盘 `-`/`+`/`*`、`Ctrl+Alt+F4/F5/F12`。
 `Ctrl+Alt+F12`（挂起）与 `Ctrl+Alt+F4`（退出）是安全的自检项；
 **`Win+X` 选单里千万别按到睡眠/关机/重启**。
 
@@ -2023,6 +2023,34 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   正确的长期做法仍然是用户的托盘“退出” + 重新 `Start-Process -Verb RunAs`
   （见第 15 节第 6 条），改名只是“用户不在跟前”时的降级手段。
 
+#### 2026-09 修复：和弦不能是两个普通键 + 启动时的配置错误弹窗
+
+* **`keys = "NumpadSub+NumpadAdd"` 不是「两键同按」，而是语法错。** 和弦的结构是
+  `Modifiers + 一个按键`（`core::Chord`），最后一个 `+` 片段才是按键，前面的片段
+  必须是修饰键。`NumpadSub` 不是修饰键，于是 `--check` 报
+  `` `NumpadSub` in chord `NumpadSub+NumpadAdd` is not a modifier `` 与
+  `numpad-mute: no usable keys`，守护进程直接拒绝启动。
+  想做这种“组合”，只能用修饰键（`Ctrl+NumpadMult`）或换一个独立的键。
+  已加 `tst_keys::rejectsBadChords` 与 `tst_config::twoPlainKeysAreNotAChord` 盯住，
+  README 的和弦语法一节也写了这个限制。
+  用户本机真实配置因此把小键盘静音从 `NumpadSub+NumpadAdd` 改成 `NumpadMult`
+  （小键盘 `*`）。
+* **守护进程模式下配置出错必须弹窗。** 双击启动的 flowkeyd 没有控制台，
+  以前只把错误写进 `stderr`（拿重定向才看得到），用户看到的是“双击了没反应”。
+  现在 `main.cpp` 的 `reportConfigFailure()` 在 `loadConfig` 失败（含旧 `.toml`
+  拦截）时：先写 `stderr`，再建一个 `QApplication` + `QMessageBox`（标题
+  `flowkeyd 配置错误`，正文是可选中复制的英文错误），确认后 `return 1`。
+  **离线命令不算**：`--check` / `--list` 在那之前就 `return` 了，照旧只打印、
+  不弹窗、不提权（不变量 11）。
+* **`buildEnvironmentBlock` 的“不区分大小写排序”用错了折叠方向。** 它原来用
+  `QString::compare(..., Qt::CaseInsensitive)`（**折成小写**），而 Windows
+  （`RtlCompareUnicodeString(..., TRUE)`，以及系统自己给出的环境块）是**转成大写**
+  再比码元。两者在 `_`(0x5F) 与字母上顺序相反：本机有 `NU_VERSION=0.115.1`，
+  于是 `NU_VERSION` 与 `NUMBER_OF_PROCESSORS` 被排反了（系统自己的块里
+  `NUMBER_OF_PROCESSORS` 在前，`GetEnvironmentStringsW` 实测）——
+  `tst_command_line` 因此失败。改成 `entryName(...).toUpper()` 比较，
+  并给测试加了一对固定的 `AAB` / `A_Z` 覆盖项，不再依赖机器上碰巧有什么环境变量。
+
 ### 领域坑清单（动手前先看这一遍）
 
 下面这些每一条都值得在动钩子/引擎/窗口/电源之前先读一遍：
@@ -2285,6 +2313,22 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > 常驻实例需要用户从托盘退出后重新 `Start-Process -Verb RunAs` 一次
 > （它现在跑的是旧构建）。
 
+> **2026-09 修复（和弦限制 + 配置错误弹窗）的 DoD**：`windows-debug` 与
+> `windows-release` 两边都是 `build exit 0`、零编译警告（`windeployqt` 那句
+> `dxcompiler.dll` 警告是它自己的，不是编译器警告）；
+> `ctest --test-dir build/windows-release` **19 个测试目标全绿**
+> （`tst_keys` 新增 `NumpadMult` 与“两键不是和弦”的断言，
+> `tst_config` 新增 `twoPlainKeysAreNotAChord`，`tst_command_line` 加了一对
+> 固定的 `AAB` / `A_Z` 覆盖项并修好了环境块排序的大小写折叠方向）；
+> `flowkeyd --check --config flowkeyd.lua.example` → `OK (37 hotkey(s), 3 remap(s))`、
+> 零警告；用户真实配置（不带 `--config`）→ `OK (24 hotkey(s), 0 remap(s))`、
+> 零警告（静音已改为 `NumpadMult`）。配置错误弹窗用一次性坏配置实测：
+> 进程弹出一个标题为 `flowkeyd 配置错误` 的可见窗口（唯一窗口），
+> 关掉后退出码为 1。
+> **行为变化**：小键盘静音的绑定从（无效的）`NumpadSub+NumpadAdd` 改为
+> `NumpadMult`；守护进程启动时配置出错会弹 Qt 标准消息框（README 已同步，
+> 离线命令仍然是只打印）。本机没有常驻实例在跑，release 直接链接成功。
+
 > 提醒：Qt 的编译单元很多，`--preset` 的构建目录是分开的
 > （`build/windows-debug` / `build/windows-release`），所以
 > **debug 实例在运行不会锁住 release 产物**，反之亦然。
@@ -2465,7 +2509,7 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、
 | `Win+W`                | `window("activate", { process = "weixin", launch = … })`                          |
 | `Win+X`                | `menu{ title = "电源", items = { sleep/shutdown/restart/lock/screen_off/取消 } }` |
 | `Win+/`                | `help()`                                                                          |
-| 小键盘 `-`/`+`/`Enter` | `volume("down"/"up"/"toggle")`，前两个 `repeatable`                               |
+| 小键盘 `-`/`+`/`*` | `volume("down"/"up"/"toggle")`，前两个 `repeatable`（静音用 `NumpadMult`） |
 | `Ctrl+Alt+F12`         | `suspend("toggle")`                                                               |
 | `Ctrl+Alt+F5`          | `reload()`                                                                        |
 | `Ctrl+Alt+F4`          | `quit()`                                                                          |

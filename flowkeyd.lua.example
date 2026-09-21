@@ -214,6 +214,11 @@ hotkey{
 -- Enter 共用 `VK_RETURN`，flowkeyd 靠 Windows 的扩展键标志区分它们。
 -- 这三个键的 `VK` 与 `NumLock` 无关（NumLock 只影响字符翻译），
 -- 所以 NumLock 开着或关着都一样能用。
+--
+-- 一个和弦里只能有一个按键（其余片段必须是修饰键），所以
+-- `keys = "NumpadSub+NumpadAdd"` 这种「两个普通键一起按」是**不支持**的：
+-- `--check` 会报 `` `NumpadSub` in chord ... is not a modifier ``，静音请用
+-- 修饰键组合（如 `Ctrl+NumpadAdd`）或下面这样换一个独立的键。
 hotkey{
   name = "numpad-volume-down",
   comment = "小键盘 -：音量降低（按住连续降）",

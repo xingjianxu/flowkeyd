@@ -94,9 +94,13 @@ std::vector<wchar_t> buildEnvironmentBlock(const QMap<QString, QString> &overrid
                       entries.end());
         entries.push_back(QStringLiteral("%1=%2").arg(it.key(), it.value()));
     }
-    // Windows 要求环境块按名称不区分大小写排序。
+    // Windows 要求环境块按名称不区分大小写排序。这里的“不区分大小写”指
+    // Windows（`RtlCompareUnicodeString(..., TRUE)`）那种**先转成大写**再按
+    // 码元比较的排序，而**不是** `Qt::CaseInsensitive`（它折成小写）：
+    // `NU_VERSION` 与 `NUMBER_OF_PROCESSORS` 在两种折叠下顺序正好相反，
+    // 而 Windows 自己的环境块把 `NUMBER_OF_PROCESSORS` 排在前面。
     std::sort(entries.begin(), entries.end(), [](const QString &a, const QString &b) {
-        return entryName(a).compare(entryName(b), Qt::CaseInsensitive) < 0;
+        return entryName(a).toUpper() < entryName(b).toUpper();
     });
 
     std::vector<wchar_t> block;

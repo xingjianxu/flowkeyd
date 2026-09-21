@@ -102,6 +102,13 @@ void TestKeys::rejectsBadChords()
     QCOMPARE(parseChord(QStringLiteral("^"), &chord)->kind, KeyError::Kind::Syntax);
     // `-` 不是分隔符，因此这里是一个未知的按键名。
     QCOMPARE(parseChord(QStringLiteral("Ctrl-H"), &chord)->kind, KeyError::Kind::UnknownKey);
+    // 一个和弦只能有修饰键 + 一个按键：两个普通键凑一起（想让小键盘的
+    // `-` 与 `+` 同时按住）不是和弦，而是笔误，必须在加载时就被拒绝。
+    const auto twoKeys = parseChord(QStringLiteral("NumpadSub+NumpadAdd"), &chord);
+    QVERIFY(twoKeys.has_value());
+    QCOMPARE(twoKeys->kind, KeyError::Kind::Syntax);
+    QVERIFY2(twoKeys->message().contains(QStringLiteral("is not a modifier")),
+             qPrintable(twoKeys->message()));
 }
 
 void TestKeys::rendersChords()
@@ -154,6 +161,11 @@ void TestKeys::numpadArithmeticKeysDifferFromTheMainKeyboard()
     QCOMPARE(keyFromName(QStringLiteral("NumpadMinus")), std::optional<Vk>(vk::SUBTRACT));
     QCOMPARE(keyFromName(QStringLiteral("NumpadAdd")), std::optional<Vk>(vk::ADD));
     QCOMPARE(keyFromName(QStringLiteral("NumpadPlus")), std::optional<Vk>(vk::ADD));
+    // 小键盘的 `*`：与 `-` / `+` 一样是独立 VK，常用来做静音键（因为
+    // `NumpadSub+NumpadAdd` 那种「两键同按」的和弦语法上不存在）。
+    QCOMPARE(keyFromName(QStringLiteral("NumpadMult")), std::optional<Vk>(vk::MULTIPLY));
+    QVERIFY(vk::MULTIPLY != vk::ADD);
+    QVERIFY(!isExtended(vk::MULTIPLY));
     QCOMPARE(keyFromName(QStringLiteral("Minus")), std::optional<Vk>(vk::OEM_MINUS));
     QCOMPARE(keyFromName(QStringLiteral("Equal")), std::optional<Vk>(vk::OEM_PLUS));
     QVERIFY(vk::SUBTRACT != vk::OEM_MINUS);

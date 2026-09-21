@@ -192,6 +192,12 @@ D:\prj\flowkeyd\flowkeyd.lua.example: OK (37 hotkey(s), 3 remap(s))
 **离线命令**（`--check` / `--list` / `--list-keys` / `--help` / `--version`）
 永远不会弹 UAC，也绝不安装钩子——为一个只读的校验弹窗很没道理。
 
+守护进程模式（不带任何离线命令）下配置读不出来或校验不过时，flowkeyd 除了把
+错误写进 `stderr`，还会弹一个 Qt 标准消息框（标题 `flowkeyd 配置错误`，错误文本
+可选中复制），点确定后以退出码 1 退出。双击启动时进程没有控制台，只有弹窗能
+让你知道到底出了什么事。（例如一个和弦里写了两个普通键，
+`keys = "NumpadSub+NumpadAdd"`，就会在这里直接报出来的那条。）
+
 ## 配置
 
 一个逐项注释、覆盖全部特性的文件见 [`flowkeyd.lua.example`](flowkeyd.lua.example)
@@ -427,6 +433,11 @@ hotkey{
 
 只有修饰键的和弦也能用：`Ctrl+Shift` 会在 Ctrl 按着时、Shift 按下时触发，
 而通用的 `Shift`/`Ctrl`/`Alt` 名称会匹配键盘的任意一侧。
+
+一个和弦里**只能有一个按键**（其余片段必须是修饰键），所以「两个普通键一起按」
+是**不支持**的：`keys = "NumpadSub+NumpadAdd"` 会被拒绝，
+`--check` 报 `` `NumpadSub` in chord `NumpadSub+NumpadAdd` is not a modifier ``。
+要表达这种意图只能用修饰键组合（如 `Ctrl+NumpadMult`），或者换一个独立的键。
 
 `Numpad*` 是小键盘上的那些键，与主键盘上的同名键是**不同的键**：
 `NumpadSub`（`VK_SUBTRACT`）不会匹配主键盘的 `-`（那是 `Minus`，
