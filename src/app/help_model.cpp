@@ -1,7 +1,6 @@
 #include "app/help_model.h"
 
 #include <QChar>
-#include <QRect>
 
 #include <algorithm>
 #include <utility>
@@ -26,20 +25,13 @@ constexpr int kKeysWidth = 150;
 constexpr int kBadgeHeight = 19;
 constexpr int kBadgePad = 7;
 constexpr int kBadgeGap = 3;
-constexpr int kScrollbar = 5;
 constexpr int kCardRadius = 12;
-constexpr int kScrollThumbMinHeight = 24;
 constexpr int kMaxRows = 12;
 
-constexpr int itemsTop()
-{
-    return kPad + kHeaderHeight + kFilterGap + kFilterHeight + kListGap;
-}
-
-QRect toQmlRect(const PopupRect &rect)
-{
-    return QRect(rect.x, rect.y, rect.width, rect.height);
-}
+/// 列表区顶部：表头 + 间距 + 筛选框 + 间距。
+constexpr int kListTop = kPad + kHeaderHeight + kFilterGap + kFilterHeight + kListGap;
+/// 列表区底部：底部提示 + 它上面的空隙 + 卡片内边距。
+constexpr int kListBottom = kFooterGap + kFooterHeight + kPad;
 
 /// 一条条目参与筛选的文本（小写，只在装载时算一次）。
 QString haystack(const HelpEntry &item)
@@ -77,6 +69,8 @@ void HelpModel::setItems(std::optional<QString> title, std::vector<HelpEntry> it
     endResetModel();
     emit itemsChanged();
     emit stateChanged();
+    // 换了一批条目（同一个窗口复用），视图要回到第一条。
+    emit selectedChanged();
 }
 
 void HelpModel::setMaxRows(int rows)
@@ -88,7 +82,6 @@ void HelpModel::setMaxRows(int rows)
     beginResetModel();
     m_maxRows = next;
     relayout();
-    ensureVisible();
     endResetModel();
     emit stateChanged();
 }
@@ -155,6 +148,21 @@ int HelpModel::rowHeight() const
     return kRowHeight;
 }
 
+int HelpModel::rowSpacing() const
+{
+    return kRowGap;
+}
+
+int HelpModel::listTop() const
+{
+    return kListTop;
+}
+
+int HelpModel::listBottom() const
+{
+    return kListBottom;
+}
+
 int HelpModel::keysWidth() const
 {
     return kKeysWidth;
@@ -180,65 +188,12 @@ int HelpModel::rowInset() const
     return kInset;
 }
 
-int HelpModel::listTop() const
-{
-    return itemsTop();
-}
-
 std::optional<int> HelpModel::itemIndexForVisible(int line) const
 {
     if (line < 0 || line >= visibleCount()) {
         return std::nullopt;
     }
     return m_visible[static_cast<std::size_t>(line)];
-}
-
-PopupRect HelpModel::rowRect(int line) const
-{
-    return PopupRect{kPad + kInset,
-                     itemsTop() + line * (kRowHeight + kRowGap),
-                     kCardWidth - 2 * kPad - 2 * kInset,
-                     kRowHeight};
-}
-
-PopupRect HelpModel::keysRect(int line) const
-{
-    const PopupRect row = rowRect(line);
-    return PopupRect{row.x + kInset, row.y, kKeysWidth, kRowHeight};
-}
-
-PopupRect HelpModel::textRect(int line) const
-{
-    const PopupRect row = rowRect(line);
-    const int left = row.x + kInset + kKeysWidth + kInset;
-    return PopupRect{left, row.y, row.x + row.width - kInset - left, row.height};
-}
-
-bool HelpModel::hasScrollbar() const
-{
-    return visibleCount() > m_rows;
-}
-
-PopupRect HelpModel::scrollTrack() const
-{
-    return PopupRect{kCardWidth - kPad - kScrollbar,
-                     itemsTop(),
-                     kScrollbar,
-                     m_rows * (kRowHeight + kRowGap) - kRowGap};
-}
-
-PopupRect HelpModel::scrollThumb() const
-{
-    if (!hasScrollbar()) {
-        return PopupRect{};
-    }
-    const PopupRect track = scrollTrack();
-    const int span = track.height;
-    const int thumb =
-        std::max(span * m_rows / visibleCount(), kScrollThumbMinHeight);
-    const int maxScroll = std::max(visibleCount() - m_rows, 1);
-    const int offset = (span - thumb) * m_scroll / maxScroll;
-    return PopupRect{track.x, track.y + offset, track.width, thumb};
 }
 
 void HelpModel::setFilter(const QString &filter)
@@ -251,6 +206,8 @@ void HelpModel::setFilter(const QString &filter)
     refilter();
     endResetModel();
     emit stateChanged();
+    // 筛选之后列表短了：让视图把选中项（第 0 条）带回视野。
+    emit selectedChanged();
 }
 
 void HelpModel::clearFilter()
@@ -265,6 +222,7 @@ void HelpModel::reset()
     refilter();
     endResetModel();
     emit stateChanged();
+    emit selectedChanged();
 }
 
 QString HelpModel::copyText() const
@@ -320,17 +278,6 @@ QVariantList HelpModel::badgesForItem(std::size_t itemIndex) const
     return out;
 }
 
-int HelpModel::hitTest(int x, int y) const
-{
-    const int lines = std::min(m_rows, std::max(visibleCount() - m_scroll, 0));
-    for (int line = 0; line < lines; ++line) {
-        if (rowRect(line).contains(x, y)) {
-            return m_scroll + line;
-        }
-    }
-    return -1;
-}
-
 void HelpModel::setHover(int line)
 {
     const int next = line >= 0 && line < visibleCount() ? line : -1;
@@ -354,36 +301,41 @@ void HelpModel::moveSelection(int delta, bool clearHover)
     const int last = visibleCount() - 1;
     const int next = std::clamp(m_selected + delta, 0, last);
     if (clearHover) {
+        // 键盘接管高亮：把鼠标悬停交回去（滚轮已经不管滚动位置了，所以这条路
+        // 只剩键盘用得到）。
         m_hover = -1;
     }
+    const bool moved = next != m_selected;
     m_selected = next;
-    ensureVisible();
+    if (moved) {
+        emit selectedChanged();
+    }
     notifyRows();
 }
 
-void HelpModel::wheel(int angleDeltaY)
+int HelpModel::scrollTargetY(int line,
+                            int contentY,
+                            int topMargin,
+                            int bottomMargin,
+                            int viewportHeight) const
 {
-    // 一格滚轮（±120）跳过三行，和系统的列表控件一致（与 oskeyd 相同）。
-    //
-    // 与键盘不同：**不清掉悬停**。滚轮之后 `HelpPopup.qml` 会按光标位置重算
-    // 悬停的可见行下标（列表滚动了，同一个物理行对应另一条），于是高亮既不会
-    // 跳到选中项、也不会粘在旧的那一条上——两端都做对了就没有中间帧可闪。
-    const int lines = (angleDeltaY / 120) * 3;
-    if (lines != 0) {
-        moveSelection(lines, false);
+    if (line < 0 || line >= visibleCount()) {
+        return contentY;
     }
-}
-
-int HelpModel::clickRow(int x, int y)
-{
-    const int line = hitTest(x, y);
-    if (line < 0) {
-        return -1;
+    const int slot = kRowHeight + kRowGap;
+    const int top = line * slot;
+    // 视口坐标里，内容坐标 `c` 落在 `c - contentY`（`topMargin` 只决定
+    // `contentY` 的起始位置，不改变这个换算）。行区域是
+    // `[topMargin, viewportHeight - bottomMargin]`。
+    const int areaTop = topMargin;
+    const int areaBottom = viewportHeight - bottomMargin;
+    if (top - contentY < areaTop) {
+        return top - areaTop;
     }
-    m_selected = line;
-    m_hover = line;
-    notifyRows();
-    return line;
+    if (top + kRowHeight - contentY > areaBottom) {
+        return top + kRowHeight - areaBottom;
+    }
+    return contentY;
 }
 
 QVariantMap HelpModel::handleKey(int key, const QString &text)
@@ -459,8 +411,8 @@ int HelpModel::rowCount(const QModelIndex &parent) const
     if (parent.isValid()) {
         return 0;
     }
-    // 画出来的行数：既不超过卡片能放的行数，也不超过滚动后剩下的条目。
-    return std::min(m_rows, std::max(visibleCount() - m_scroll, 0));
+    // 全部筛选结果都交给 `ListView`（它自己决定画哪几条、滚到哪里）。
+    return visibleCount();
 }
 
 QVariant HelpModel::data(const QModelIndex &index, int role) const
@@ -469,7 +421,7 @@ QVariant HelpModel::data(const QModelIndex &index, int role) const
         return {};
     }
     const int line = index.row();
-    const std::optional<int> itemIndex = itemIndexForVisible(m_scroll + line);
+    const std::optional<int> itemIndex = itemIndexForVisible(line);
     if (!itemIndex.has_value()) {
         return {};
     }
@@ -482,17 +434,7 @@ QVariant HelpModel::data(const QModelIndex &index, int role) const
     case DetailRole:
         return item.detail.value_or(QString());
     case HighlightedRole:
-        return activeLine() == m_scroll + line;
-    case HoveredRole:
-        return m_hover == m_scroll + line;
-    case LineRole:
-        return line;
-    case RowRole:
-        return QVariant::fromValue(toQmlRect(rowRect(line)));
-    case KeysRole:
-        return QVariant::fromValue(toQmlRect(keysRect(line)));
-    case TextRectRole:
-        return QVariant::fromValue(toQmlRect(textRect(line)));
+        return activeLine() == line;
     default:
         break;
     }
@@ -506,11 +448,6 @@ QHash<int, QByteArray> HelpModel::roleNames() const
         {LabelRole, QByteArrayLiteral("label")},
         {DetailRole, QByteArrayLiteral("detail")},
         {HighlightedRole, QByteArrayLiteral("highlighted")},
-        {HoveredRole, QByteArrayLiteral("hovered")},
-        {LineRole, QByteArrayLiteral("line")},
-        {RowRole, QByteArrayLiteral("rowRect")},
-        {KeysRole, QByteArrayLiteral("keysRect")},
-        {TextRectRole, QByteArrayLiteral("textRect")},
     };
 }
 
@@ -524,7 +461,6 @@ void HelpModel::refilter()
         }
     }
     m_selected = 0;
-    m_scroll = 0;
     m_hover = -1;
     relayout();
 }
@@ -532,25 +468,16 @@ void HelpModel::refilter()
 void HelpModel::relayout()
 {
     m_rows = std::clamp(visibleCount(), 1, std::max(m_maxRows, 1));
-    m_cardHeight =
-        itemsTop() + m_rows * (kRowHeight + kRowGap) + kFooterGap + kFooterHeight + kPad;
+    // 与 `ListView` 的内容高度严格对齐：header(listTop) + 行数 * (行高 + 空隙)
+    // + footer(listBottom)。这样「内容放不下」就等价于「可见条数 > 能画的行数」，
+    // 自带的滚动条会自己出现/消失。
+    m_cardHeight = kListTop + m_rows * (kRowHeight + kRowGap) + kListBottom;
     const int inner = kCardWidth - 2 * kPad - 2 * kInset;
     m_titleRect = PopupRect{kPad + kInset, kPad, inner * 6 / 10, kHeaderHeight};
     m_countRect = PopupRect{kPad + kInset, kPad, inner, kHeaderHeight};
     m_filterRect = PopupRect{kPad + kInset, kPad + kHeaderHeight + kFilterGap, inner, kFilterHeight};
     m_footerRect =
         PopupRect{kPad + kInset, m_cardHeight - kPad - kFooterHeight, inner, kFooterHeight};
-}
-
-void HelpModel::ensureVisible()
-{
-    if (m_selected < m_scroll) {
-        m_scroll = m_selected;
-    } else if (m_selected >= m_scroll + m_rows) {
-        m_scroll = m_selected + 1 - m_rows;
-    }
-    const int maxScroll = std::max(visibleCount() - m_rows, 0);
-    m_scroll = std::clamp(m_scroll, 0, maxScroll);
 }
 
 void HelpModel::notifyRows()
@@ -567,7 +494,7 @@ int HelpModel::activeLine() const
         return -1;
     }
     const int line = m_hover >= 0 ? m_hover : m_selected;
-    return std::min(line, visibleCount() - 1);
+    return std::clamp(line, 0, visibleCount() - 1);
 }
 
 } // namespace flowkeyd::app

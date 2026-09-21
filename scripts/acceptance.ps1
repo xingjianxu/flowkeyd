@@ -264,6 +264,8 @@ public static class FlowInject {
 
     private const uint INPUT_MOUSE = 0;
     private const uint MOUSEEVENTF_WHEEL = 0x0800;
+    private const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
+    private const uint MOUSEEVENTF_LEFTUP = 0x0004;
 
     // 脚本自己 DPI 感知：不然 GetWindowRect 返回的是虚拟化过的逻辑像素，
     // 与 SetCursorPos 要的物理像素混在一起就会把光标放到别的地方
@@ -272,8 +274,10 @@ public static class FlowInject {
 
     public static void Cursor(int x, int y) { SetCursorPos(x, y); }
 
-    // 正数 = 向前滚（Windows 的 +120）。注意 flowkeyd/oskeyd 把它当成
-    // “往列表后面走”，与系统列表控件相反（1:1 复刻 oskeyd，见 AGENTS.md）。
+    // `mouseData` 的符号：负数 = 系统列表控件里「往下滚」。本机实测（一个
+    // WinForms `ListBox` 加 Qt 的 `ListView`）：+120 往上、-120 往下。
+    // oskeyd（以及旧的自绘实现）把 +120 当成「往列表后面走」，方向正好相反；
+    // flowkeyd 现在用的是 Qt 自带的 `ListView`，方向跟着系统走（见 AGENTS.md）。
     public static void Wheel(int delta) {
         INPUTMOUSE[] inputs = new INPUTMOUSE[1];
         inputs[0].type = INPUT_MOUSE;
@@ -282,6 +286,30 @@ public static class FlowInject {
         if (SendInput(1, inputs, Marshal.SizeOf(typeof(INPUTMOUSE))) != 1) {
             throw new Exception("SendInput(wheel) failed: " + Marshal.GetLastWin32Error());
         }
+    }
+
+    private static void SendMouse(uint flags) {
+        INPUTMOUSE[] inputs = new INPUTMOUSE[1];
+        inputs[0].type = INPUT_MOUSE;
+        inputs[0].mi.dwFlags = flags;
+        if (SendInput(1, inputs, Marshal.SizeOf(typeof(INPUTMOUSE))) != 1) {
+            throw new Exception("SendInput(mouse) failed: " + Marshal.GetLastWin32Error());
+        }
+    }
+
+    // 按住左键从 (x,y) 拖到 (x2,y2)：拖动滚动条的滑块用（中间的几步必须有，
+    // 一步到位不算拖动）。
+    public static void DragMouse(int x, int y, int x2, int y2) {
+        Cursor(x, y);
+        System.Threading.Thread.Sleep(120);
+        SendMouse(MOUSEEVENTF_LEFTDOWN);
+        System.Threading.Thread.Sleep(120);
+        for (int i = 1; i <= 8; i++) {
+            Cursor(x + (x2 - x) * i / 8, y + (y2 - y) * i / 8);
+            System.Threading.Thread.Sleep(40);
+        }
+        System.Threading.Thread.Sleep(120);
+        SendMouse(MOUSEEVENTF_LEFTUP);
     }
 
     // 属于 `pid` 的、标题以 `prefix` 开头的第一个可见顶层窗口的物理矩形。
@@ -801,13 +829,15 @@ try {
     Check '标题里的可见/总数是满的' ($null -ne $full -and $full.Total -eq 17)
 
     # --- 滚轮：高亮必须待在光标那一行上 --------------------------------------
-    # 回归的是「弹窗在滚轮下闪烁」：模型在滚轮里不再清掉鼠标悬停，QML 在滚完之后
-    # 按光标位置重算悬停行。判据是一个从外面能看到的推论：
-    #   * 光标压在第 1 行，滚一大截（选中项因此被顶到末尾）；
-    #   * Enter 复制的是**光标下那一行**（= 列表滚过之后那条），不是选中项；
-    #   * 把光标移到窗口底部（不属于任何行）再 Enter，这时复制的才是选中项。
-    # 两者必须不同——旧代码（滚轮清悬停）下它们会一样，这条就会挂。
-    # 卡片宽 500 逻辑像素、第一行中线在 itemsTop(88) + rowHeight/2，所以用
+    # 回归的是「弹窗在滚轮下闪烁」与「滚动条拖不动」：列表改成一个真正的
+    # `ListView` + Qt 自带的 `ScrollBar` 之后，滚轮与拖动都交给 Qt；模型只在
+    # 后面算「高亮应该落在哪一行」。判据都是从外面能看到的：
+    #   * 光标压在第 1 行时 Enter 复制的是**光标下那一行**（悬停生效）；
+    #   * 滚轮往下滚一大截，鼠标不动，Enter 复制的那一行要跟着变；
+    #   * 把光标移到底部提示上（不属于任何行）再 Enter，这时复制的才是键盘
+    #     选中项——滚轮只滚视图，不会把选中项一起拖走；
+    #   * 拖动滑块能让列表滚起来（自绘滑槽做不到的那件事）。
+    # 卡片宽 500 逻辑像素、第一行中线在 listTop(88) + rowHeight/2，所以用
     # 窗口宽度反推缩放（DPI 感知后矩形是物理像素）。
     $helpRect = [FlowInject]::WindowRect($daemon.Id, $HELP_TITLE)
     Check '能拿到帮助窗口的矩形' ($helpRect[2] -gt 0)
@@ -824,7 +854,47 @@ try {
         $rowUnderCursor = ClipGet
         Check '光标压在第 1 行时 Enter 复制的是它' (
             $null -ne $rowUnderCursor -and $rowUnderCursor -ne 'SENTINEL')
-        for ($i = 0; $i -lt 12; $i++) { [FlowInject]::Wheel(120) }
+
+        # --- 拖动滚动条 ----------------------------------------------------
+        # 滚动条是卡片右边 10 逻辑像素宽的那一条，滑块离卡片顶 2 像素、比卡片
+        # 矮不了多少，所以压在卡片顶下方 30 像素处必定落在滑块上。往下拖到远
+        # 远超过滑槽的地方（Qt 会把滑块夹在滑槽里）——列表必须滚到底。
+        $barX = $helpRect[0] + $helpRect[2] - [int](5 * $scale)
+        $barY = $helpRect[1] + [int](30 * $scale)
+        $barBottom = $helpRect[1] + $helpRect[3] - [int](30 * $scale)
+        [FlowInject]::DragMouse($barX, $barY, $barX, $barBottom + [int](400 * $scale))
+        Pump 600
+        Check '拖动滚动条之后弹窗还在' ($null -ne (HelpCounts))
+        [FlowInject]::Cursor($midX, $rowY)
+        Pump 400
+        ClipSet 'SENTINEL'
+        TapKey $VK_RETURN
+        Pump 600
+        $afterDrag = ClipGet
+        if ($afterDrag -eq $rowUnderCursor) { Diag "scrollbar: the row under the cursor did not move: [$afterDrag]" }
+        Check '拖动滚动条真的滚了列表（光标下那一行变了）' (
+            $null -ne $afterDrag -and $afterDrag -ne 'SENTINEL' -and $afterDrag -ne $rowUnderCursor)
+
+        # 重新打开一次：滚动位置、筛选与选中项都复位（下面的滚轮检查要从顶部开始）。
+        TapKey $VK_ESC
+        Pump 500
+        FocusCatcher
+        CtrlAlt $VK_F8
+        Check '重新打开帮助窗口（复位滚动位置）' (
+            WaitUntil { [FlowInject]::HasWindowTitled($daemon.Id, $HELP_TITLE) } 5000)
+        Check '重新打开的帮助窗口拿到了焦点' (
+            WaitUntil { [FlowInject]::ForegroundTitle() -like "$HELP_TITLE*" } 4000)
+
+        # --- 滚轮 ----------------------------------------------------------
+        [FlowInject]::Cursor($midX, $rowY)
+        Pump 400
+        ClipSet 'SENTINEL'
+        TapKey $VK_RETURN
+        Pump 600
+        $rowUnderCursor = ClipGet
+        Check '滚轮之前光标压在第 1 行' (
+            $null -ne $rowUnderCursor -and $rowUnderCursor -ne 'SENTINEL')
+        for ($i = 0; $i -lt 12; $i++) { [FlowInject]::Wheel(-120) }
         Pump 800
         Check '滚轮之后弹窗还在、计数不变' (
             ($null -ne (HelpCounts)) -and (HelpCounts).Visible -eq $full.Visible)
@@ -840,8 +910,8 @@ try {
         TapKey $VK_RETURN
         Pump 600
         $selection = ClipGet
-        if ($selection -eq $afterWheel) { Diag "wheel: hover did not survive the wheel: [$selection]" }
-        Check '滚轮不会把高亮交给选中项（光标移开后才是选中项）' (
+        if ($selection -eq $afterWheel) { Diag "wheel: the wheel dragged the selection along: [$selection]" }
+        Check '滚轮只滚视图、不拖走选中项（光标移开后复制的是选中项）' (
             $null -ne $selection -and $selection -ne 'SENTINEL' -and $selection -ne $afterWheel)
     }
     TapKey 0x46   # 'f'

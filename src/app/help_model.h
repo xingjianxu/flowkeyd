@@ -1,12 +1,17 @@
 // `help` 动作弹出的快捷键帮助窗口的**纯逻辑**模型。
 //
-// 与 `menu_model` 一样只依赖 QtCore：筛选、滚动钳位、`可见/总数` 计数、
-// `Enter` 复制哪一行、两级 `Esc` 都在这里，`tst_help_model` 直接覆盖它们。
+// 与 `menu_model` 一样只依赖 QtCore：筛选、`可见/总数` 计数、`Enter` 复制哪一行、
+// 两级 `Esc`、选中行与光标悬停行都在这里，`tst_help_model` 直接覆盖它们。
 //
 // 对应 oskeyd 的 `../oskeyd/src/win/help.rs` 里的 `Metrics` + `State`。
-// 唯一有意偏离的是**按键徽标的宽度**：oskeyd 用 `GetTextExtentPoint32W` 量文字
-// 再拼出每个小牌子，而 QML 里 `Text.implicitWidth` 就是这件事的正确答案，
-// 所以模型只给出「按键列」的矩形与徽标的内边距，牌子的宽度留给 QML。
+//
+// **有意偏离（2026-09，项目所有者拍板）：滚动不归模型管。**
+// 列表是一个真正的 QML `ListView` + Qt 自带的 `ScrollBar`，滚轮、拖动滑块、
+// 平滑滚动全部交给 Qt；模型只保留「键盘选中哪一行 / 光标悬停哪一行」以及
+// 卡片外框的几何。旧实现自己算滑槽/滑块几何、自己命中测试、自己滚轮步进，
+// 结果是滑块拖不动、滚轮下高亮闪（见 AGENTS.md 第 10 节）。因此这里**没有**
+// `scroll`/`hitTest`/`wheel`：行下标就是 `ListView` 的下标，命中交给
+// `ListView.indexAt()`，滚动位置由视图自己持有。
 #pragma once
 
 #include "app/popup_layout.h"
@@ -59,19 +64,21 @@ class HelpModel : public QAbstractListModel
     Q_PROPERTY(int totalCount READ totalCount NOTIFY itemsChanged)
     Q_PROPERTY(int visibleCount READ visibleCount NOTIFY stateChanged)
     Q_PROPERTY(int visibleRows READ visibleRows NOTIFY stateChanged)
-    Q_PROPERTY(int selected READ selected NOTIFY stateChanged)
+    Q_PROPERTY(int selected READ selected NOTIFY selectedChanged)
     Q_PROPERTY(int maxRows READ maxRows NOTIFY stateChanged)
-    Q_PROPERTY(bool hasScrollbar READ hasScrollbar NOTIFY stateChanged)
-    Q_PROPERTY(QRect scrollTrack READ scrollTrack NOTIFY stateChanged)
-    Q_PROPERTY(QRect scrollThumb READ scrollThumb NOTIFY stateChanged)
     Q_PROPERTY(QString footerText READ footerText CONSTANT)
     Q_PROPERTY(int rowHeight READ rowHeight CONSTANT)
+    /// 行与行之间的空隙；`ListView` 的 `spacing` 用它，行高本身不含它。
+    Q_PROPERTY(int rowSpacing READ rowSpacing CONSTANT)
+    /// 列表区顶部距卡片上边的距离（表头 + 筛选框占掉的那一块）。
+    Q_PROPERTY(int listTop READ listTop CONSTANT)
+    /// 列表区底部到卡片下边的距离（底部提示 + 内边距）。
+    Q_PROPERTY(int listBottom READ listBottom CONSTANT)
     Q_PROPERTY(int keysWidth READ keysWidth CONSTANT)
     Q_PROPERTY(int badgeHeight READ badgeHeight CONSTANT)
     Q_PROPERTY(int badgePad READ badgePad CONSTANT)
     Q_PROPERTY(int badgeGap READ badgeGap CONSTANT)
     Q_PROPERTY(int rowInset READ rowInset CONSTANT)
-    Q_PROPERTY(int listTop READ listTop NOTIFY stateChanged)
 
 public:
     enum Role {
@@ -79,11 +86,6 @@ public:
         LabelRole,
         DetailRole,
         HighlightedRole,
-        HoveredRole,
-        LineRole,
-        RowRole,
-        KeysRole,
-        TextRectRole,
     };
     Q_ENUM(Role)
 
@@ -115,39 +117,32 @@ public:
     bool hasMatches() const { return !m_visible.empty(); }
     int totalCount() const { return static_cast<int>(m_items.size()); }
     int visibleCount() const { return static_cast<int>(m_visible.size()); }
-    /// 当前画出来的行数（`min(可见条数, maxRows)`，至少 1）。
+    /// 卡片一次最多能画出来的行数（`min(可见条数, maxRows)`，至少 1）。
     int visibleRows() const { return m_rows; }
-    /// 键盘选中的**可见行**下标。
+    /// 键盘选中的行下标（**不是**滚动位置；滚动由 `ListView` 自己持有）。
     int selected() const { return m_selected; }
-    /// 列表顶部显示的第一条可见行下标。
-    int scroll() const { return m_scroll; }
+    /// 光标悬停的行下标（-1 = 光标不在任何行上）。
     std::optional<int> hover() const;
-    bool hasScrollbar() const;
-    PopupRect scrollTrack() const;
-    PopupRect scrollThumb() const;
     QString footerText() const;
     int rowHeight() const;
+    int rowSpacing() const;
+    int listTop() const;
+    int listBottom() const;
     int keysWidth() const;
     int badgeHeight() const;
     int badgePad() const;
     int badgeGap() const;
     int rowInset() const;
-    int listTop() const;
 
     /// 可见行下标对应的原始条目下标。
     const std::vector<int> &visibleIndices() const { return m_visible; }
     std::optional<int> itemIndexForVisible(int line) const;
 
-    /// 绘制/命中用的矩形（参数是**可见行**下标，不是原始条目下标）。
-    PopupRect rowRect(int line) const;
-    PopupRect keysRect(int line) const;
-    PopupRect textRect(int line) const;
-
     /// 换筛选串（`handleKey` 会自己调它；窗口复位时也用它）。
     void setFilter(const QString &filter);
     Q_INVOKABLE void clearFilter();
 
-    /// 已生效的那一条的按键文本（`Ctrl+A / Ctrl+B`）；没有选中时返回空串。
+    /// 已生效的那一行的按键文本（`Ctrl+A / Ctrl+B`）；没有选中时返回空串。
     Q_INVOKABLE QString copyText() const;
 
     /// 一行条目的按键文本（`copyText` 对任意可见行都用它）。
@@ -160,29 +155,31 @@ public:
     QVariantList badgesForVisible(int line) const;
     QVariantList badgesForItem(std::size_t itemIndex) const;
 
-    /// 客户区坐标下的命中测试（返回**可见行**/条目下标）；不在任何行上返回 -1。
-    ///
-    /// 返回的是**可见下标**（`scroll + 画出来的行号`），所以它可以直接喂给
-    /// `setHover` / `copyTextForVisible`；`rowRect` 要的则是画出来的行号。
-    Q_INVOKABLE int hitTest(int x, int y) const;
-    /// 鼠标悬停的可见行（-1 = 不在任何行上）。
+    /// 鼠标悬停的行下标（-1 = 不在任何行上）。QML 用 `ListView.indexAt()` 算出来。
     Q_INVOKABLE void setHover(int line);
     /// 上下移动选中项；到边界夹住（与选单的回绕不同，与 oskeyd 一致）。
     Q_INVOKABLE void moveSelection(int delta);
-    /// 鼠标滚轮：一格（±120）跳过三行，和系统的列表控件一致。
-    ///
-    /// 与键盘不同的是**不清掉鼠标悬停**：滚轮只是“把列表推上去”，高亮应该
-    /// 留在光标那一行。清掉悬停会让高亮先跳到选中项、再被紧随其后的鼠标
-    /// 微抖拉回来——两帧之间就是肉眼看到的闪烁（见 AGENTS.md 第 10 节）。
-    Q_INVOKABLE void wheel(int angleDeltaY);
 
-    /// 点击某一行：选中它并返回它的可见下标（-1 表示点到了空白处，什么也不做）。
-    Q_INVOKABLE int clickRow(int x, int y);
+    /// 键盘改过选中项之后，视图的 `contentY` 应该放在哪里。
+    ///
+    /// 为什么不由 `ListView.positionViewAtIndex(line, Contain)` 自己搞定：列表
+    /// 铺满整张卡片，视口上下各有表头/底部提示盖着，而 Qt 的 `Contain` 只保证
+    /// 「行落在**列表自己的矩形**里」——对最后几行它会把行留在底部提示底下
+    /// （实测 13 条时只挪 4 像素，行基本看不见）。所以这里按**行区域**
+    /// （`topMargin` 到 `viewportHeight - bottomMargin`）算一个目标值，滚动本身
+    /// 仍然完全交给 `ListView`（滚轮、拖滑块、惯性都不经过这里）。
+    ///
+    /// 参数是视图的几何；纯算术，`tst_help_model` 直接盯着它。
+    Q_INVOKABLE int scrollTargetY(int line,
+                                  int contentY,
+                                  int topMargin,
+                                  int bottomMargin,
+                                  int viewportHeight) const;
 
     /// 一次按键的处理结果：`{ decision: "none"|"copy"|"cancel", index, handled }`。
     Q_INVOKABLE QVariantMap handleKey(int key, const QString &text);
 
-    /// 再次打开时清空筛选、高亮与滚动。
+    /// 再次打开时清空筛选、高亮。
     void reset();
 
     int rowCount(const QModelIndex &parent = QModelIndex()) const override;
@@ -192,16 +189,17 @@ public:
 signals:
     void itemsChanged();
     void stateChanged();
+    /// 选中行变了（或者列表被换过/筛过，视图该把选中项带回视野）。
+    void selectedChanged();
 
 private:
-    /// `moveSelection` 的实体：`clearHover` 为假时保留鼠标悬停（滚轮用）。
+    /// `moveSelection` 的实体：`clearHover` 为假时保留鼠标悬停。
     void moveSelection(int delta, bool clearHover);
-    /// 重新算筛选结果、几何与计数，并把视图刷新一次。
+    /// 重新算筛选结果、几何与计数（不发信号，调用方负责把 reset 包起来）。
     void refilter();
     void relayout();
-    void ensureVisible();
     void notifyRows();
-    /// 当前高亮那条的**可见行**下标（鼠标悬停优先）；没有可见条目时返回 -1。
+    /// 当前高亮那条的行下标（鼠标悬停优先）；没有可见条目时返回 -1。
     int activeLine() const;
 
     std::optional<QString> m_title;
@@ -215,7 +213,6 @@ private:
     int m_maxRows = 12;
     int m_rows = 1;
     int m_selected = 0;
-    int m_scroll = 0;
     int m_hover = -1;
 
     int m_cardHeight = 0;

@@ -100,7 +100,7 @@
 | 日志窗口   | `oskeyd --log-window` **独立进程**，跑在命令行窗口里                   | **进程内的 QML 窗口**（FluentWinUI3），尾随同一个日志文件                                                     |
 | 选单/帮助  | 自绘 GDI 原生窗口，各自一条线程                                        | **QML 窗口**（FluentWinUI3），跑在 Qt GUI 线程上                                                              |
 | 示例配置   | `oskeyd.lua.example`                                                   | `flowkeyd.lua.example`                                                                                        |
-| 自动化测试 | `cargo test` + `--selftest`/`--probe`/`--simulate` + `scripts/e2e.ps1` | Qt Test 单元测试 + **`scripts/acceptance.ps1`**（77 项检查，注入按键 + 高亮/弹窗滚轮回归的外部验收；`--simulate`/`--selftest`/`--probe` 本期不做，见第 12 节） |
+| 自动化测试 | `cargo test` + `--selftest`/`--probe`/`--simulate` + `scripts/e2e.ps1` | Qt Test 单元测试 + **`scripts/acceptance.ps1`**（82 项检查，注入按键 + 高亮/弹窗滚轮/拖动滚动条回归的外部验收；`--simulate`/`--selftest`/`--probe` 本期不做，见第 12 节） |
 | 依赖管理   | `cargo`                                                                | CMake Presets + Ninja，`vendor/lua` 静态编进二进制                                                            |
 
 ---
@@ -137,7 +137,7 @@
    `--check` / `--list` / `--list-keys` 保留（它们是产品功能，也是手工验证的
    主要工具）。
    → **阶段 9 补充（2026-09）**：这三个开关仍然不做，但“手工冒烟清单”已经
-   自动化成了 **`scripts/acceptance.ps1`**（77 项检查），它靠一个
+   自动化成了 **`scripts/acceptance.ps1`**（82 项检查），它靠一个
    **只给测试用的后门** `FLOWKEYD_ACCEPT_INJECTED=1` 抬升“丢弃注入输入”
    那道过滤（照抄 oskeyd 的 `OSKEYD_ACCEPT_INJECTED`，见第 10 节）。
    这是对一个“当时无法验证”的条款的修订，不是推翻：不变量 2 本身没动，
@@ -148,6 +148,17 @@
    不要引入 `sol2`、`nlohmann::json`、`CLI11`、`spdlog` 之类“顺手”的库。
 8. **构建：CMake Presets + Ninja，debug 与 release 双 profile 都必须编译通过；
    单元测试与验收脚本只跑 release**（见工作约定第 2 条）。
+9. **帮助窗口的列表用 Qt 自带的 `ListView` + `ScrollBar`，不自绘。**
+   （2026-09，项目所有者拍板：“不能用 qt 自带的列表控件实现么？不要自己绘制”。）
+   之前那套自己在 `HelpModel` 里算滑槽/滑块几何、自己命中测试、自己按格滚轮的
+   做法，结果是**滑块拖不动**、**滚轮下高亮闪**（详见第 10 节）。现在：
+   * 滚动位置、滚轮、拖动滑块、惯性全归 `ListView`；模型只管筛选、选中项、
+     光标悬停行，以及 `scrollTargetY()`（键盘）要摆到哪个 `contentY`；
+   * **滚轮方向跟着系统/Qt**（本机实测 `mouseData=-120` 往下、`+120` 往上，
+     WinForms 的 `ListBox` 也一样）。oskeyd——以及自绘时期的 flowkeyd——把正数
+     当成“往列表后面走”，方向与系统列表控件相反；**这条有意不再复刻**，
+     `scripts/acceptance.ps1` 里帮助那一段因此改成 `Wheel(-120)`。
+   * 选单（`MenuPopup`）不滚动，仍然用 `Repeater` + 模型算好的几何，不动。
 
 ---
 
@@ -262,12 +273,12 @@ Qt 自己的库随便链**：
 | `src/app/runtime.h/.cpp`                  | 引擎 + 钩子 + 分发 + 托盘 + 弹窗的总装，`ControlCmd`（suspend/reload/quit）通道                                                                                                                                             |
 | `src/app/log_model.h/.cpp`                | 日志窗口的模型：尾随日志文件（增量、半行、被截断的多字节 UTF-8）、最多 1000 行、按级别配色、子串过滤                                                                                                                        |
 | `src/app/menu_model.h/.cpp`               | `menu` 选单的**纯逻辑**（`QAbstractListModel`，只用 QtCore）：条目几何、高亮移动（到边界回绕）、单字符选中、`Esc`/`Enter` 语义、命中测试（**可单测**） |
-| `src/app/help_model.h/.cpp`               | `help` 帮助的**纯逻辑**（同上）：筛选（和弦/`comment`/`name`/动作摘要）、滚动钳位、`可见/总数` 计数、滚动条几何、`Enter` 复制哪一行、两级 `Esc`、滚轮（**可单测**） |
+| `src/app/help_model.h/.cpp`               | `help` 帮助的**纯逻辑**（同上）：筛选（和弦/`comment`/`name`/动作摘要）、`可见/总数` 计数、键盘选中项与光标悬停行、`Enter` 复制哪一行、两级 `Esc`，以及「键盘改了选中项之后视图的 `contentY` 该放哪里」的纯算术 `scrollTargetY()`（**可单测**）。**列表的滚动本身不归它管**：那是一个真正的 QML `ListView` + Qt 自带的 `ScrollBar`（见第 2 节第 9 条） |
 | `src/app/popup_layout.h/.cpp`             | 两个弹窗共用的几何类型（`PopupRect`/`PopupPoint`）与纯函数 `centrePopup()`（先在工作区居中、再夹进屏幕；**可单测**） |
 | `src/app/popup_host.h/.cpp`               | 把上面的模型挂到 QML 窗口上；抢前台（`requestActivate` + `win::window::raiseWindow` 的前台锁绕行）；在 Qt GUI 线程上创建/复用窗口；用户选完把活儿回投工作线程（**GUI 线程亲和**） |
-| `src/qml/`                                | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`（三个文件都在开头写了 `pragma ComponentBehavior: Bound`）；配色一律用 `palette`，没有单独的 `Style.qml` |
+| `src/qml/`                                | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`（三个文件都在开头写了 `pragma ComponentBehavior: Bound`）；配色一律用 `palette`，没有单独的 `Style.qml`。`HelpPopup.qml` 的列表是真正的 `ListView` + Qt 自带 `ScrollBar`（铺满整张卡片 + `topMargin`/`bottomMargin` 让出表头/底部提示的位置 + 两块不透明底色遮住滚进来的行） |
 | `tests/`                                  | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_log_tail`、`tst_audio`、`tst_interactive`（需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`，否则 skip）、`tst_menu_model`、`tst_help_model`、`tst_power_table`、`tst_desktop_table`、`tst_layout` |
-| `scripts/acceptance.ps1`                  | 桌面行为的验收脚本（注入按键 + 焦点捕捉窗口的外部观察，77 项检查）；需交互式桌面，**不属于 `ctest`**，见第 5 节与阶段 9 |
+| `scripts/acceptance.ps1`                  | 桌面行为的验收脚本（注入按键 + 焦点捕捉窗口的外部观察，82 项检查：含弹窗滚轮回归与滚动条拖动）；需交互式桌面，**不属于 `ctest`**，见第 5 节与阶段 9 |
 
 ### CMake 目标划分（阶段 6 之后）
 
@@ -397,7 +408,7 @@ QML 模块注册之后，两条 profile 都要重新全量构建一次**。
 清单在下面（12 条），**从阶段 9 起有了自动化版本**：
 
 ```powershell
-# 77 项检查，约两分钟，会持续注入按键/抢焦点；按工作约定第 6 条先提醒用户
+# 82 项检查，约两分钟，会持续注入按键/抢焦点；按工作约定第 6 条先提醒用户
 # 只跑 release 那一份产物（见工作约定第 2 条，脚本默认 -Exe 就是它）
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance.ps1
 powershell.exe ... -Phase config                              # 只看配置，不注入按键
@@ -419,6 +430,10 @@ powershell.exe ... -Phase config                              # 只看配置，�
 脚本**不做**的：动画的屏幕采样、托盘菜单点击、自提权的 UAC 流程、
 “托盘图标真的消失了”的直接观察，以及**一切电源动作**（工作约定第 10 条：
 测试里不许真的关机/重启/注销/睡眠/休眠/锁定/关屏）。这几项仍然只能靠人的手。
+
+**桌面被锁住时（`LogonUI` 进程在跑）脚本必然挂**：`GetForegroundWindow()` 返回 0，
+`SendInput` 报 `5`（ACCESS_DENIED），表现为“捕捉窗口拿不到焦点”。这不是产品 bug，
+先去把机器解锁再跑。
 
 用一份只含被测绑定的**一次性配置**（快捷键一律避开用户真实配置里已有的和弦）：
 
@@ -650,7 +665,7 @@ powershell.exe ... -Phase config                              # 只看配置，�
 | 3 Win32 基础设施 + 钩子 + 引擎接线 | **已完成** | `flowkeyd_platform` 静态库 + 钩子线程/动作线程；`tst_layout|input|command_line|instance` 全绿；手工冒烟见阶段 3 小节 |
 | 4 托盘 + 日志窗口 | **已完成** | 完整托盘菜单 + `core/log_tail`/`app/log_model` 尾随模型 + `LogWindow.qml` 真渲染；`tst_log_tail` 全绿；日志窗口渲染/尾随已截图验证 |
 | 5 窗口动作 + 剪贴板 + 音量/媒体 | **已完成** | `core/window_match`、`platform/win/dwm|window|clipboard|audio`、dispatcher 接线与 `{selection}`；`tst_window_match`/`tst_audio` 全绿；真实桌面后端由 `tst_interactive` 验证 |
-| 6 弹窗 `menu` / `help` | **已完成** | `flowkeyd_models` + 两张 QML 卡片；`tst_menu_model`/`tst_help_model` 全绿；渲染/筛选/键盘选择由 `tmp/preview` 验证 |
+| 6 弹窗 `menu` / `help` | **已完成** | `flowkeyd_models` + 两张 QML 卡片；`tst_menu_model`/`tst_help_model` 全绿；渲染/筛选/键盘选择由 `tmp/preview` 验证；帮助窗口的列表后来（2026-09）改成了 Qt 自带的 `ListView` + `ScrollBar` |
 | 7 虚拟桌面 + 电源 | **已完成** | `platform/win/desktop|power` + dispatcher 接线；`tst_desktop_table`/`tst_power_table` 全绿；真实 COM 探测/切换与关屏由 `tst_interactive` 验证 |
 | 8 示例配置 + README | **已完成** | `flowkeyd.lua.example` 与 oskeyd 逐行对齐（除 UI/probe/simulate 那几处）；`README.md` 已写出；`--check` 37 hotkey / 3 remap |
 | 9 验收（无 e2e 的替代） | **已完成** | `scripts/acceptance.ps1`（77 项检查：68 项原样 + 9 项弹窗滚轮回归，需交互式桌面）+ `FLOWKEYD_ACCEPT_INJECTED` 测试后门；debug 跑 3 遍、release 跑 2 遍全绿 |
@@ -1035,8 +1050,14 @@ get/set/append/clear。**`animate` 的效果要靠肉眼**（没有屏幕采样�
   所以 `tst_menu_model`/`tst_help_model` 不需要桌面就能跑。
 * 两个模型都是 `QAbstractListModel`，角色直接给 QML 用：
   `menu` 是 `label`/`hint`/`keyText`/`highlighted`/`hovered` + 四个 `QRect`；
-  `help` 是 `badges`/`label`/`detail`/`highlighted`/`hovered`/`line` + 三个 `QRect`。
-  **几何算术全部在模型里**，QML 只把模型算出来的矩形画出来。
+  `help` 是 `badges`/`label`/`detail`/`highlighted`（行下标就是 `ListView` 的
+  下标，行几何由委托用锚点拼，不用模型给矩形）。
+  → **2026-09 修订**：帮助窗口改成 Qt 自带的 `ListView` + `ScrollBar` 之后，
+  滚动位置、命中、滚动条几何全归 Qt；`help` 那套 `rowRect`/`keysRect`/`textRect`/
+  `scrollTrack`/`scrollThumb`/`hitTest`/`clickRow`/`wheel` 都删了，只留下
+  `scrollTargetY()`（键盘选中项要摆到哪里）与悬停行（`setHover`，
+  由 QML 的 `HoverHandler` + `ListView.indexAt()` 算出来）。
+  选单不滚动，仍然是“几何全在模型里”。
 * 模型把「按键怎么解释」也包了：`handleKey(key, text)` 返回
   `{ decision: none|choose|copy|cancel, index, handled }`；QML 的
   `Keys.onPressed` 只负责“问模型要决定 → 执行决定”。字符来自 Qt 译好的
@@ -1234,8 +1255,10 @@ hold/tap；挂起/重载/退出。
   WinForms 捕捉窗口 + `SendInput` 注入 + 剪贴板/窗口/日志当外部证据。
   覆盖第 5 节清单的 1–12 条，另外还多做了：小键盘与主键盘互不触发（6 项）、
   重映射 hold/tap（不只是 CapsLock）、`menu`/`help` 弹窗的键盘选择与筛选、
-  以及“重新打开的选单也要重新拿到焦点”。**后续又加了 9 项弹窗滚轮回归，
-  现在是 77 项**（见第 10 节的“弹窗在滚轮下闪烁”）。
+  以及“重新打开的选单也要重新拿到焦点”。**后续又加了 9 项弹窗滚轮回归
+  （见第 10 节的“弹窗在滚轮下闪烁”），2026-09 再把帮助窗口的列表换成 Qt 自带的
+  `ListView` + `ScrollBar`时加了 5 项（拖动滑块 + 重新打开复位滚动位置），
+  现在是 82 项**。
 * 脚本的检查名用中文字面量（oskeyd 的 e2e 也是这个风格），所以文件必须以
   **带 BOM 的 UTF-8** 保存 —— PowerShell 5.1 会把无 BOM 的 `.ps1` 按 ANSI
   代码页解码。三个窗口标题故意用 `[char]` 码点拼出来，这样即使 BOM 丢了
@@ -1250,7 +1273,11 @@ checks: 68, failures: 0
 
 > **2026-09 补充**：修完“弹窗在滚轮下闪烁”之后又加了 9 项检查（选单/帮助各几条，
 > 包括“滚轮之后 Enter 复制的还是光标下那一行”这条能直接抓住旧代码的回归），
-> 现在是 **77 项**（`checks: 77, failures: 0`，已在 release 与 debug 上跑过）。
+> 检查数到了 77 项（`checks: 77, failures: 0`）。
+> **再后来（2026-09）帮助窗口的列表换成了 Qt 自带的 `ListView` + `ScrollBar`**：
+> 又加了 5 项（拖动滑块能让列表滚、重新打开会复位滚动位置），现在是 **82 项**，
+> 帮助那一段的滚轮注入也从 `Wheel(120)` 改成 `Wheel(-120)`（方向跟着系统）。
+> 结果见第 11 节的 DoD 记录。
 
 * `flowkeyd --check --config flowkeyd.lua.example` → 37/3、零警告（未变）。
 * 四条 Win 和弦变体全绿：常规 / 0 ms 轻按 / 一次、两次 Windows 键自动重复 ——
@@ -1707,6 +1734,11 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 
 #### 2026-09 修复：弹窗在滚轮下闪烁（`menu` / `help`）
 
+> **已被下一节取代（2026-09 晚些时候）**：帮助窗口的列表整体换成了 Qt 自带的
+> `ListView` + `ScrollBar`，下面这套“模型自己算滚动位置 + 自己清/留悬停”的做法
+> 已经被删掉。留着它，是因为“为什么要换”的判断依据在这里。选单（`MenuPopup`）
+> 仍然适用（它不滚动）。
+
 * **现象**：鼠标滚轮滚弹窗时高亮“闪一下”——上下箭头完全正常，只有滚轮会。
 * **根因**：滚轮走的是 `moveSelection()`，而它为了“键盘接管高亮”会把鼠标悬停
   清掉（`m_hover = -1`，与 oskeyd 的 `State::move_selection` 一致）。于是
@@ -1749,6 +1781,59 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   自己从托盘菜单点“退出”再重新 `Start-Process -Verb RunAs`**；
   debug 目录没被占用，验证可以先用 `build\windows-debug\flowkeyd.exe` 做，
   但 `ctest`/`acceptance.ps1` 的 DoD 仍然必须在 release 上跑完。
+
+#### 2026-09 重写：帮助窗口改用 Qt 自带的列表（`ListView` + `ScrollBar`）
+
+* **为什么换**：自绘的滑槽/滑块**拖不动**（它只是个 `Rectangle`，没有拖动逻辑），
+  而滚轮那条路要求模型自己算 `m_scroll`、自己维护输入/悬停的交互，两次都
+  撞出“高亮闪一下”。项目所有者一句话拍板：“不能用 qt 自带的列表控件实现么？
+  不要自己绘制”。换完之后：滑块能拖、滚轮是原生的、模型只剩筛选/选中/悬停。
+* **最终结构**（`HelpPopup.qml`）：一个 `ListView` **铺满整张卡片**，
+  `topMargin = listTop(88)`、`bottomMargin = listBottom(44)` 把表头与底部提示的
+  位置让出来；表头/底部提示各有一块**不透明底色**（`z: 1`）盖住列表，
+  否则行滚到边缘时会与标题/筛选框叠在一起（实测就是这样）。滚动条是
+  `ScrollBar.vertical: ScrollBar { policy: AsNeeded; z: 3 }`，命中宽度 10 逻辑像素、
+  从卡片顶到卡片底。
+* **`ListView.positionViewAtIndex(..., Contain)` 不能用来“把选中行带进视野”。**
+  它只保证行落在**列表自己的矩形**里，**不看** `topMargin`/`bottomMargin`：
+  实测 13 条 / 12 行时，让第 12 条可见只把 `contentY` 挪了 4 像素，行基本躲在
+  底部提示底下。`positionViewAtBeginning()` 更坑：它想去 `contentY = 0`，被 Qt 的
+  `qBound(min=-topMargin, val, max=maxExtent)` 夹到了**最大位置**（实测 -40 而
+  不是 -88，也就是“滚到底”）。→ 自己算了
+  `HelpModel::scrollTargetY(line, contentY, topMargin, bottomMargin, viewportHeight)`
+  （纯算术、有单测），QML 只把结果写回 `listView.contentY`；滚轮/拖动/惯性仍然
+  是 Qt 的。
+* **列表刚建好时 `contentY` 会被摆到一个“保持滚动比例”的位置**：实测 30 条时
+  是 `contentY = 90`（而不是顶部的 `-88`），而且这一下发生在我们收到
+  `selectedChanged`（→ 摆选中项）**之后**。修法：除了模型信号，再在 `ListView`
+  的 `onContentHeightChanged` / `onHeightChanged` 里调一次同一个幂等的
+  `followSelection()`——“行已经在行区域里”时它什么都不改，所以不会干扰用户
+  自己滚出来的位置。
+* **合成的 `QWheelEvent` 验证不了滚轮。**
+  `QCoreApplication::sendEvent(window, &wheelEvent)` 递进去之后
+  `event.isAccepted() == false`、列表一点都不动（`ScrollUpdate` 相位也一样）。
+  要验证滚轮只能 `SetCursorPos` + `SendInput(MOUSEEVENTF_WHEEL)`，而且**弹窗
+  必须是前台窗口**：`WM_MOUSEWHEEL` 送给**焦点**窗口，背景窗口收不到（现象：
+  滚轮/拖动全无效而悬停却正常，看上去像两套 bug，其实是同一个环境问题）。
+* **滚轮方向**：本机实测（一个 WinForms `ListBox` 当原生基线，加上 Qt 的
+  `ListView`）**两者一致**：`mouseData = -120` 往下、`+120` 往上。oskeyd 与自绘
+  时期的 flowkeyd 是反的（`zDelta > 0` → 选中项往列表后面走），
+  `scripts/acceptance.ps1` 里那句注释（“与系统列表控件相反”）就是当年记下来的。
+  改用 Qt 自带的列表之后就跟着系统走了，脚本里帮助那段改成 `Wheel(-120)`。
+* **滚动条那个 QML 类型的类名是 `ScrollBar_QMLTYPE_<n>`**，不是 `QQuickScrollBar`
+  （`ScrollBar.qml` 是个 QML 文件）。在 `tmp/preview` 那种“遍历 item 树找控件”
+  的工具里用 `contains("ScrollBar")` 匹配；它的 `x = 490 / w = 10 / h = 708`，
+  `position`/`size` 就是滑块的位置/大小。
+* **悬停与命中都靠 `ListView.indexAt()`**：`HoverHandler`（被动、不抢滚轮）
+  在卡片上追光标，`indexAt(x + contentX, y + contentY)` 算行下标，再
+  `setHover()` 给模型；`onContentYChanged` 里必须重算一次（列表滚了，同一个
+  物理行现在是另一条），否则高亮粘在旧行上。滚轮在表头/底部提示上也能滚，
+  靠的是 Qt 的“未被接住的指针事件继续递给指针下面其他 item”——那两块只是
+  普通的 `Rectangle`，不接滚轮，正好让下面的 `ListView` 接住。
+* **桌面被锁时（`LogonUI` 在跑）这些验证全都做不了**：`GetForegroundWindow()`
+  返回 0、`SendInput` 报 `5`（ACCESS_DENIED）、弹窗抢不到前台。
+  `scripts/acceptance.ps1` 会在“捕捉窗口拿到了键盘焦点（正对照）”那一条挂掉，
+  看上去像产品 bug，其实是环境。先看 `LogonUI` 在不在。
 
 ### 从 oskeyd 继承的领域坑（照抄那份的解法，不要重新发明）
 
@@ -1892,6 +1977,25 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > **注意**：为了链接 release 的 exe，请用户关掉了提权常驻实例；
 > 构建/验证完之后要用 `Start-Process -Verb RunAs` 重新拉起它（见阶段 10）。
 
+> **2026-09 重写（帮助窗口改用 Qt 自带的列表）的 DoD**：`windows-debug` 与
+> `windows-release` 两边都是 `build exit 0`、零警告；`ctest --test-dir
+> build/windows-release` **19 个测试目标全绿**（`tst_help_model` 里新增的
+> `scrollTargetKeepsTheRowInsideTheRowArea`）；
+> `flowkeyd --check --config flowkeyd.lua.example` → `OK (37 hotkey(s), 3 remap(s))`、
+> 零警告，用户真实配置（不带 `--config`）→ `OK (24 hotkey(s), 0 remap(s))`、零警告。
+> 弹窗那套（列表位置、拖动滑块、滚轮、滚轮在表头上、悬停跟随滚动）由
+> `tmp/preview` **在进程内**验证（`QWindowSystemInterface` + `QTest` 注入，
+> 不走操作系统）：
+> 静止 `contentY = -88`；拖滑块 `position 0 → 0.341`（`contentY 0 → 447.9`）；
+> 列表里滚轮往下滚 `contentY` 变大且悬停行从 11 跟到 13；光标在表头上滚轮照样
+> 能滚；光标离开行区域时悬停回到 `-1`。
+> **`acceptance.ps1` 这一次没跑成**：写这份记录时桌面是锁的（`LogonUI` 在跑，
+> `GetForegroundWindow()` 返回 0、`SendInput` 报 5），脚本会在“捕捉窗口拿到了
+> 键盘焦点（正对照）”那一条挂掉。解锁后请自己跑一遍：
+> `powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance.ps1`
+> （预期 **82 项**：原 77 + 拖动滑块 2 项 + 重新打开复位 2 项 + 滚轮前置 1 项；
+> 帮助那一段的滚轮注入已改成 `Wheel(-120)`）。
+
 > 提醒：Qt 的编译单元很多，`--preset` 的构建目录是分开的
 > （`build/windows-debug` / `build/windows-release`），所以
 > **debug 实例在运行不会锁住 release 产物**，反之亦然。
@@ -1959,13 +2063,18 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   **几何算术全部留在 `MenuModel`**（纯函数、有单测），别散到 QML 里。
 * **帮助窗口的新内容或新交互**：条目在 `app/dispatcher` 的 `open_help` 里从
   `Compiled` 的 `bindings`/`remaps` 生成（帮助列表与 `--list` 看的是同一批数据，
-  所以 `help` 没有配置参数），交互与绘制在 `HelpModel` + `HelpPopup.qml`。
+  所以 `help` 没有配置参数），纯逻辑（筛选、选中项、悬停行、`scrollTargetY`）
+  在 `HelpModel`，列表与滚动在 `HelpPopup.qml`（真正的 `ListView` +
+  `ScrollBar`）。**新加一行字段时不要再把行几何往模型里塞**：委托用锚点自己摆，
+  模型只出内容（见第 2 节第 9 条与第 10 节的重写笔记）。
 * **新的 QML 弹窗（第三种）**：不要另起一套配色与字号：
   `import QtQuick.Controls.FluentWinUI3`，颜色一律从 `palette`（`base`/`text`/
   `placeholderText`/`highlight`/`highlightedText`/`alternateBase`/`mid`）取，
   字号用 oskeyd 那套 `pointSize`（12.5 标题 / 11 正文 / 10.5 帮助正文 /
-  9 副标题与徽标 / 8.5 细节），几何交给一个 `flowkeyd_models` 里的纯逻辑模型
-  （有单测）；**避开 FluentWinUI3 不支持的那些控件**（见第 10 节）。
+  9 副标题与徽标 / 8.5 细节）；需要滚动的列表用真正的 `ListView` +
+  `ScrollBar`（不要自绘滑槽），固定表头/底部提示看 `HelpPopup.qml` 的
+  “`topMargin`/`bottomMargin` + 不透明底色”三件套；
+  **避开 FluentWinUI3 不支持的那些控件**（见第 10 节）。
   文件开头写 `pragma ComponentBehavior: Bound`，并用 `qmllint -I …` 确认零警告。
 * **新的电源操作**：`PowerOp` 加变体 → `platform/win/power` 里处理
   （需要特权的先调 `enable_shutdown_privilege()`；不需要的要放在它**之前** return）

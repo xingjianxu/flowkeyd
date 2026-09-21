@@ -1,6 +1,9 @@
-// `help` 帮助窗口模型的纯逻辑单测：筛选、滚动钳位、`可见/总数`、`Enter` 复制、
-// 两级 `Esc`、鼠标命中与滚轮。
+// `help` 帮助窗口模型的纯逻辑单测：筛选、`可见/总数`、`Enter` 复制、两级 `Esc`、
+// 选中行与光标悬停行。
 //
+// **滚动不在这一层**：列表是 QML 里的真 `ListView` + 自带 `ScrollBar`，所以这里
+// 只验证「卡片几何与 `ListView` 的内容高度能不能对齐」以及「选中项变了要通知视图」
+// 这类契约，不碰任何滚动位置（见 `app/help_model.h` 顶部的说明）。
 // 不碰 QML、不碰剪贴板：`onCopy` 的回调在 `app::PopupHost` 里，
 // 真实剪贴板由 `tst_interactive` / 手工冒烟覆盖。
 #include <QtTest>
@@ -35,7 +38,7 @@ std::vector<app::HelpEntry> sampleItems()
     };
 }
 
-/// `n` 条可滚动的条目（用来验证视口钳位与滚动条几何）。
+/// `n` 条条目（用来验证视口钳位）。
 std::vector<app::HelpEntry> manyItems(int n)
 {
     std::vector<app::HelpEntry> items;
@@ -89,23 +92,25 @@ class TestHelpModel : public QObject
 
 private slots:
     void layoutKeepsRowsInsideTheCard();
+    void contentHeightMatchesTheCardUnlessItOverflows();
     void filterMatchesChordsLabelsAndDetails();
     void filterTrimsWhitespaceAndIsCaseInsensitive();
     void countsAndCaptionFollowTheFilter();
     void enterCopiesTheActiveRow();
     void escapeClearsTheFilterFirstThenCancels();
     void backspaceRemovesOneCharacterAndRefilters();
-    void arrowKeysClampAndScroll();
-    void pageKeysHomeEndAndWheel();
-    void wheelKeepsTheHoverButKeyboardDropsIt();
-    void clickRowSelectsAndReportsTheVisibleIndex();
-    void scrollbarAppearsOnlyWhenTheContentOverflows();
+    void arrowKeysClampAtTheEnds();
+    void pageKeysHomeAndEnd();
+    void hoverWinsOverSelectionButKeyboardDropsIt();
+    void setHoverIgnoresLinesOutsideTheList();
+    void scrollTargetKeepsTheRowInsideTheRowArea();
+    void selectionChangedTellsTheViewToFollow();
     void maxRowsLimitsTheVisibleRows();
     void badgesSplitChordsAndInsertSeparators();
     void emptyResultShowsTheRightMessage();
     void rowsForAvailableHeightIsClamped();
     void controlCharactersAreNotFilterInput();
-    void rolesExposeTheGeometryForQml();
+    void rolesExposeWhatTheDelegateNeeds();
 };
 
 void TestHelpModel::layoutKeepsRowsInsideTheCard()
@@ -117,7 +122,7 @@ void TestHelpModel::layoutKeepsRowsInsideTheCard()
     QCOMPARE(model.visibleCount(), 3);
     QCOMPARE(model.visibleRows(), 3);
     QCOMPARE(model.cardWidth(), 500);
-    // 88(表头+筛选框) + 3*48 + 8 + 24(底部提示) + 12
+    // 88(表头+筛选框) + 3*48 + 44(底部提示+内边距)
     QCOMPARE(model.cardHeight(), 276);
 
     checkRect(model.titleRect(), 22, 12, 273, 30);
@@ -125,12 +130,37 @@ void TestHelpModel::layoutKeepsRowsInsideTheCard()
     checkRect(model.filterRect(), 22, 50, 456, 30);
     checkRect(model.footerRect(), 22, 240, 456, 24);
 
-    checkRect(model.rowRect(0), 22, 88, 456, 46);
-    checkRect(model.rowRect(2), 22, 184, 456, 46);
-    QVERIFY(model.rowRect(2).y + model.rowRect(2).height <= model.footerRect().y);
-    checkRect(model.keysRect(0), 32, 88, 150, 46);
-    checkRect(model.textRect(0), 192, 88, 276, 46);
+    // 列表区就是夹在表头与底部提示之间的那一段；行高 + 空隙由 QML 的
+    // `ListView` 直接用，所以这里要保证它们能拼出卡片高度。
+    QCOMPARE(model.listTop(), 88);
+    QCOMPARE(model.rowHeight(), 46);
+    QCOMPARE(model.rowSpacing(), 2);
+    QCOMPARE(model.cardHeight(), model.listTop() + 3 * (model.rowHeight() + model.rowSpacing())
+                                     + model.listBottom());
+    // 行不会盖住底部提示
+    QVERIFY(model.listTop() + 3 * (model.rowHeight() + model.rowSpacing())
+            <= model.footerRect().y);
     QVERIFY(model.footerText().contains(QStringLiteral("Esc")));
+}
+
+// `ListView` 的内容高度 = header(`listTop`) + 行数*(行高+空隙) + footer(`listBottom`)。
+// 只要卡片高度与它相等，Qt 自带的滚动条就恰好在「放不下」时出现。
+void TestHelpModel::contentHeightMatchesTheCardUnlessItOverflows()
+{
+    app::HelpModel model;
+    model.setItems(std::nullopt, sampleItems());
+    QCOMPARE(model.visibleCount(), model.visibleRows());
+    QCOMPARE(model.cardHeight(), 276);
+
+    model.setItems(std::nullopt, manyItems(5));
+    model.setMaxRows(2);
+    QCOMPARE(model.visibleCount(), 5);
+    QCOMPARE(model.visibleRows(), 2);
+    // 卡片只放得下 2 行：内容比卡片高 (5 - 2) * 48
+    QCOMPARE(model.cardHeight(), 88 + 2 * 48 + 44);
+    QCOMPARE(model.listTop() + model.visibleCount() * (model.rowHeight() + model.rowSpacing())
+                 + model.listBottom(),
+             model.cardHeight() + (5 - 2) * 48);
 }
 
 void TestHelpModel::filterMatchesChordsLabelsAndDetails()
@@ -249,7 +279,7 @@ void TestHelpModel::backspaceRemovesOneCharacterAndRefilters()
     QCOMPARE(model.visibleCount(), 3);
 }
 
-void TestHelpModel::arrowKeysClampAndScroll()
+void TestHelpModel::arrowKeysClampAtTheEnds()
 {
     app::HelpModel model;
     model.setItems(std::nullopt, manyItems(5));
@@ -257,38 +287,28 @@ void TestHelpModel::arrowKeysClampAndScroll()
 
     QCOMPARE(model.visibleRows(), 2);
     QCOMPARE(model.selected(), 0);
-    QCOMPARE(model.scroll(), 0);
 
     // 到边界是夹住（与选单的回绕不同）。
     model.moveSelection(-1);
     QCOMPARE(model.selected(), 0);
-    QCOMPARE(model.scroll(), 0);
 
     QCOMPARE(decisionOf(model.handleKey(Qt::Key_Down, QString())), QStringLiteral("none"));
     QCOMPARE(model.selected(), 1);
-    QCOMPARE(model.scroll(), 0);
     model.handleKey(Qt::Key_Down, QString());
     QCOMPARE(model.selected(), 2);
-    QCOMPARE(model.scroll(), 1);
 
-    // 一直往下：停在最后一条，视口跟着到底。
+    // 一直往下：停在最后一条。
     for (int i = 0; i < 10; ++i) {
         model.handleKey(Qt::Key_Down, QString());
     }
     QCOMPARE(model.selected(), 4);
-    QCOMPARE(model.scroll(), 3);
     QCOMPARE(model.visibleRows(), 2);
 
-    // 往上：选中项还在视口里就不动滚动位置，再往上才把它拉回视野。
     model.handleKey(Qt::Key_Up, QString());
     QCOMPARE(model.selected(), 3);
-    QCOMPARE(model.scroll(), 3);
-    model.handleKey(Qt::Key_Up, QString());
-    QCOMPARE(model.selected(), 2);
-    QCOMPARE(model.scroll(), 2);
 }
 
-void TestHelpModel::pageKeysHomeEndAndWheel()
+void TestHelpModel::pageKeysHomeAndEnd()
 {
     app::HelpModel model;
     model.setItems(std::nullopt, manyItems(10));
@@ -296,122 +316,129 @@ void TestHelpModel::pageKeysHomeEndAndWheel()
 
     model.handleKey(Qt::Key_PageDown, QString());
     QCOMPARE(model.selected(), 3);
-    QCOMPARE(model.scroll(), 1);
     model.handleKey(Qt::Key_PageUp, QString());
     QCOMPARE(model.selected(), 0);
-    QCOMPARE(model.scroll(), 0);
 
     model.handleKey(Qt::Key_End, QString());
     QCOMPARE(model.selected(), 9);
-    QCOMPARE(model.scroll(), 7);
     model.handleKey(Qt::Key_Home, QString());
     QCOMPARE(model.selected(), 0);
-    QCOMPARE(model.scroll(), 0);
 
-    // 滚轮：一格（±120）跳过三行，与 oskeyd 的 `WM_MOUSEWHEEL` 逐字一致。
-    model.wheel(120);
-    QCOMPARE(model.selected(), 3);
-    QCOMPARE(model.scroll(), 1);
-    model.wheel(-120);
-    QCOMPARE(model.selected(), 0);
-    QCOMPARE(model.scroll(), 0);
-    // 小于一格的增量什么也不做（与 oskeyd 相同）。
-    model.wheel(60);
-    QCOMPARE(model.selected(), 0);
-    // 内容放得下时滚不动。
+    // 内容放得下时也照样能选。
     app::HelpModel shortModel;
     shortModel.setItems(std::nullopt, sampleItems());
-    shortModel.wheel(-120);
+    shortModel.handleKey(Qt::Key_End, QString());
+    QCOMPARE(shortModel.selected(), 2);
+    shortModel.handleKey(Qt::Key_Home, QString());
     QCOMPARE(shortModel.selected(), 0);
-    QCOMPARE(shortModel.scroll(), 0);
 }
 
-// 滚轮与键盘在高亮上的区别：键盘要“接管”高亮（清掉悬停），滚轮不能。
-// 清掉悬停会让高亮先跳到选中项、再被鼠标微抖拉回光标那一行——两帧之间就是
-// 用户看到的闪烁（AGENTS.md 第 10 节）。
-void TestHelpModel::wheelKeepsTheHoverButKeyboardDropsIt()
+// 高亮的优先级：光标悬停优先于键盘选中；键盘动一下就把高亮从鼠标手里收回来。
+// （滚动位置归 `ListView` 管，所以这里不再测「滚轮不清悬停」那套旧逻辑。）
+void TestHelpModel::hoverWinsOverSelectionButKeyboardDropsIt()
 {
     app::HelpModel model;
     model.setItems(std::nullopt, manyItems(10));
     model.setMaxRows(3);
 
-    // 光标停在可见行 1 上（`hitTest` 返回的就是可见行下标）。
-    model.setHover(model.hitTest(100, 150));
-    QCOMPARE(model.hover(), 1);
+    model.setHover(1);
+    QCOMPARE(model.hover().value_or(-1), 1);
     QCOMPARE(model.copyText(), QStringLiteral("Ctrl+F1"));
 
-    // 滚轮：选中项动，悬停不动。
-    model.wheel(120);
+    model.moveSelection(3);
+    QCOMPARE(model.hover(), std::nullopt);
     QCOMPARE(model.selected(), 3);
-    QCOMPARE(model.hover(), 1);
-    QCOMPARE(model.scroll(), 1);
-    QCOMPARE(model.copyText(), QStringLiteral("Ctrl+F1"));
+    QCOMPARE(model.copyText(), QStringLiteral("Ctrl+F3"));
 
-    // QML 会在滚轮之后按光标位置重算悬停：列表滚了一行，同一个物理行现在是
-    // 可见下标 2，于是高亮还是留在光标底下（而不是粘着旧那条、也不是跳到选中项）。
-    model.setHover(model.hitTest(100, 150));
-    QCOMPARE(model.hover(), 2);
+    // 悬停回来又盖过选中项。
+    model.setHover(2);
     QCOMPARE(model.copyText(), QStringLiteral("Ctrl+F2"));
-
-    // 键盘的上下：仍然是把高亮从鼠标手里收回来。
-    model.moveSelection(1);
-    QCOMPARE(model.hover(), std::nullopt);
-    QCOMPARE(model.selected(), 4);
-    QCOMPARE(model.copyText(), QStringLiteral("Ctrl+F4"));
-    model.handleKey(Qt::Key_Up, QString());
-    QCOMPARE(model.hover(), std::nullopt);
+    // 光标离开列表 / 移到底部提示上：回到选中项。
+    model.setHover(-1);
     QCOMPARE(model.copyText(), QStringLiteral("Ctrl+F3"));
 }
 
-void TestHelpModel::clickRowSelectsAndReportsTheVisibleIndex()
+void TestHelpModel::setHoverIgnoresLinesOutsideTheList()
 {
     app::HelpModel model;
-    model.setItems(std::nullopt, manyItems(5));
-    model.setMaxRows(2);
+    model.setItems(std::nullopt, manyItems(3));
 
-    // 第二行（可见下标 1）在画出来的第一行位置上。
-    QCOMPARE(model.hitTest(100, 100), 0);
-    QCOMPARE(model.hitTest(100, 150), 1);
-    // 表头/筛选框/内边距都不是条目。
-    QCOMPARE(model.hitTest(100, 20), -1);
-    QCOMPARE(model.hitTest(100, 60), -1);
-    QCOMPARE(model.hitTest(5, 100), -1);
-
-    QCOMPARE(model.clickRow(100, 150), 1);
-    QCOMPARE(model.selected(), 1);
-    QCOMPARE(model.hover(), 1);
-    QCOMPARE(model.copyText(), QStringLiteral("Ctrl+F1"));
-
-    // 滚过一行之后，画出来的第一行是可见下标 1。
-    model.handleKey(Qt::Key_Down, QString());
-    QCOMPARE(model.selected(), 2);
-    QCOMPARE(model.scroll(), 1);
-    QCOMPARE(model.hitTest(100, 100), 1);
-    QCOMPARE(model.hitTest(100, 150), 2);
-
-    // 点到空白处什么也不做。
-    QCOMPARE(model.clickRow(100, 20), -1);
-    QCOMPARE(model.selected(), 2);
+    model.setHover(0);
+    QCOMPARE(model.hover().value_or(-1), 0);
+    // 越界的下标（`ListView.indexAt()` 返回 -1，或列表比视口短）不算悬停。
+    model.setHover(-1);
+    QCOMPARE(model.hover(), std::nullopt);
+    model.setHover(3);
+    QCOMPARE(model.hover(), std::nullopt);
+    model.setHover(99);
+    QCOMPARE(model.hover(), std::nullopt);
 }
 
-void TestHelpModel::scrollbarAppearsOnlyWhenTheContentOverflows()
+// `scrollTargetY` 是 QML 在键盘改过选中项之后用来摆 `contentY` 的：它必须把行
+// 保持在**行区域**（表头与底部提示之间），而不是列表自己的矩形里（`ListView`
+// 的 `Contain` 只看后者，会把最后一行留在底部提示底下）。
+void TestHelpModel::scrollTargetKeepsTheRowInsideTheRowArea()
 {
     app::HelpModel model;
-    model.setItems(std::nullopt, sampleItems());
-    QCOMPARE(model.hasScrollbar(), false);
-    QCOMPARE(model.scrollTrack().height, 3 * 48 - 2);
-    checkRect(model.scrollThumb(), 0, 0, 0, 0);
+    model.setItems(std::nullopt, manyItems(13));
+    model.setMaxRows(12);
 
-    model.setItems(std::nullopt, manyItems(5));
-    model.setMaxRows(2);
-    QCOMPARE(model.hasScrollbar(), true);
-    checkRect(model.scrollTrack(), 483, 88, 5, 94);
-    checkRect(model.scrollThumb(), 483, 88, 5, 37);
+    const int top = model.listTop();        // 88
+    const int bottom = model.listBottom();  // 44
+    const int viewport = model.cardHeight();
+    const int slot = model.rowHeight() + model.rowSpacing();
+    const int areaBottom = viewport - bottom;
 
-    // 滚到底：滑块贴着滑槽底部。
-    model.handleKey(Qt::Key_End, QString());
-    QCOMPARE(model.scroll(), 3);
-    checkRect(model.scrollThumb(), 483, 145, 5, 37);
+    // 第 0 条：顶部就是行区域顶部。
+    QCOMPARE(model.scrollTargetY(0, -top, top, bottom, viewport), -top);
+    // 第 0 条藏在表头底下 → 拉回来。
+    QCOMPARE(model.scrollTargetY(0, areaBottom - viewport, top, bottom, viewport), -top);
+    // 最后一条（12）：底部提示会盖住它，往上拉一行的高度。
+    const int last = model.scrollTargetY(12, -top, top, bottom, viewport);
+    QCOMPARE(12 * slot + model.rowHeight() - last, areaBottom);
+    QVERIFY(last >= -top);
+    // 中间的行已经完整可见时什么也不做。
+    QCOMPARE(model.scrollTargetY(6, -top, top, bottom, viewport), -top);
+
+    // 不管算出来多少，落在行区域里是硬条件。
+    for (int line = 0; line < model.visibleCount(); ++line) {
+        for (int contentY : {-top, last, 0}) {
+            const int target = model.scrollTargetY(line, contentY, top, bottom, viewport);
+            const int rowTop = line * slot - target;
+            QVERIFY(rowTop >= top);
+            QVERIFY(rowTop + model.rowHeight() <= areaBottom);
+        }
+    }
+
+    // 越界不崩，也不动。
+    QCOMPARE(model.scrollTargetY(-1, -top, top, bottom, viewport), -top);
+    QCOMPARE(model.scrollTargetY(99, -top, top, bottom, viewport), -top);
+}
+
+// QML 用 `selectedChanged` 把选中项带进视野（`scrollTargetY`）。筛选之后
+// 列表短了、选中项回到第 0 条，也必须通知一次，否则视图会停在旧位置上。
+void TestHelpModel::selectionChangedTellsTheViewToFollow()
+{
+    app::HelpModel model;
+    QSignalSpy spy(&model, &app::HelpModel::selectedChanged);
+
+    model.setItems(std::nullopt, manyItems(10));
+    QCOMPARE(spy.count(), 1);
+
+    model.moveSelection(1);
+    QCOMPARE(spy.count(), 2);
+    QCOMPARE(model.selected(), 1);
+    // 夹在边界上、数值没变时不发信号。
+    model.moveSelection(-5);
+    QCOMPARE(model.selected(), 0);
+    QCOMPARE(spy.count(), 3);
+    model.moveSelection(-1);
+    QCOMPARE(model.selected(), 0);
+    QCOMPARE(spy.count(), 3);
+
+    model.setFilter(QStringLiteral("F1"));
+    QVERIFY(spy.count() > 3);
+    QCOMPARE(model.selected(), 0);
 }
 
 void TestHelpModel::maxRowsLimitsTheVisibleRows()
@@ -419,12 +446,14 @@ void TestHelpModel::maxRowsLimitsTheVisibleRows()
     app::HelpModel model;
     model.setItems(std::nullopt, manyItems(5));
     QCOMPARE(model.visibleRows(), 5);
+    // 全部条目都在模型里，由 `ListView` 决定画面里放得下几条。
+    QCOMPARE(model.rowCount(), 5);
 
     model.setMaxRows(2);
     QCOMPARE(model.visibleRows(), 2);
     QCOMPARE(model.maxRows(), 2);
-    QCOMPARE(model.cardHeight(), 88 + 2 * 48 + 8 + 24 + 12);
-    QCOMPARE(model.rowCount(), 2);
+    QCOMPARE(model.cardHeight(), 88 + 2 * 48 + 44);
+    QCOMPARE(model.rowCount(), 5);
 
     // 一条都没有时也留一行的高度（否则卡片会缩成一条线）。
     model.setItems(std::nullopt, {});
@@ -507,7 +536,7 @@ void TestHelpModel::controlCharactersAreNotFilterInput()
     QCOMPARE(model.visibleIndices(), std::vector<int>{2});
 }
 
-void TestHelpModel::rolesExposeTheGeometryForQml()
+void TestHelpModel::rolesExposeWhatTheDelegateNeeds()
 {
     app::HelpModel model;
     model.setItems(QStringLiteral("快捷键"), sampleItems());
@@ -516,15 +545,12 @@ void TestHelpModel::rolesExposeTheGeometryForQml()
     const int labelRole = roleOf(model, "label");
     const int detailRole = roleOf(model, "detail");
     const int highlightedRole = roleOf(model, "highlighted");
-    const int rowRole = roleOf(model, "rowRect");
-    const int textRole = roleOf(model, "textRect");
     QVERIFY(badgesRole > 0);
     QVERIFY(labelRole > 0);
     QVERIFY(detailRole > 0);
     QVERIFY(highlightedRole > 0);
-    QVERIFY(rowRole > 0);
-    QVERIFY(textRole > 0);
 
+    // 行下标就是 `ListView` 的下标，几何由委托自己用锚点拼，模型不再给矩形。
     QCOMPARE(model.rowCount(), 3);
     QCOMPARE(model.data(model.index(0, 0), labelRole).toString(), QStringLiteral("睡眠"));
     QCOMPARE(model.data(model.index(0, 0), detailRole).toString(), QStringLiteral("power sleep"));
@@ -532,8 +558,11 @@ void TestHelpModel::rolesExposeTheGeometryForQml()
     QCOMPARE(model.data(model.index(0, 0), highlightedRole).toBool(), true);
     QCOMPARE(model.data(model.index(1, 0), highlightedRole).toBool(), false);
     QCOMPARE(model.data(model.index(0, 0), badgesRole).toList().size(), 3);
-    QCOMPARE(model.data(model.index(1, 0), rowRole).toRect(), QRect(22, 136, 456, 46));
-    QCOMPARE(model.data(model.index(1, 0), textRole).toRect(), QRect(192, 136, 276, 46));
+
+    // 悬停行高亮的是悬停那一条，不是选中那一条。
+    model.setHover(2);
+    QCOMPARE(model.data(model.index(0, 0), highlightedRole).toBool(), false);
+    QCOMPARE(model.data(model.index(2, 0), highlightedRole).toBool(), true);
 
     // 越界/无效下标不能崩。
     QCOMPARE(model.data(QModelIndex(), labelRole).isValid(), false);
