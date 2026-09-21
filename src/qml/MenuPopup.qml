@@ -30,6 +30,15 @@ Window {
     property var menuModel: null
     property var host: null
 
+    // 中文一律用微软雅黑：FluentWinUI3 默认的族是 `Segoe UI Variable`，它没有中文
+    // 字形，中文只能落到系统回退字体上（本机是宋体，还是衬线的），跟旁边的拉丁
+    // 字母/数字摆在一起很违和。
+    // YaHei 自带拉丁字形，所以整张卡片统一用一个族就够。
+    // 卡片里的每个文字控件都要显式写（`Window`/`Item` 没有 `font` 属性，
+    // QML 里也没法只声明一次就自动往下传）；与 `HelpPopup.qml` 的那个同名属性
+    // 保持一致。
+    readonly property string uiFontFamily: "Microsoft YaHei"
+
     // `MenuModel` 给出的一切尺寸都是逻辑像素，Qt 会按显示器 DPI 自己缩放。
     width: root.menuModel ? root.menuModel.cardWidth : 300
     height: root.menuModel ? root.menuModel.cardHeight : 120
@@ -110,6 +119,7 @@ Window {
             height: root.menuModel ? root.menuModel.titleRect.height : 0
             text: root.menuModel ? root.menuModel.title : ""
             color: root.palette.text
+            font.family: root.uiFontFamily
             font.pointSize: 12.5
             font.bold: true
             verticalAlignment: Text.AlignVCenter
@@ -184,6 +194,7 @@ Window {
                             anchors.centerIn: parent
                             text: rowItem.keyText
                             color: root.palette.text
+                            font.family: root.uiFontFamily
                             font.pointSize: 9
                         }
                     }
@@ -198,6 +209,7 @@ Window {
                         width: Math.max(parent.width * 4 / 10 - root.rowInset, 0)
                         text: rowItem.hint
                         color: root.palette.placeholderText
+                        font.family: root.uiFontFamily
                         font.pointSize: 9
                         horizontalAlignment: Text.AlignRight
                         elide: Text.ElideRight
@@ -212,6 +224,7 @@ Window {
                         anchors.verticalCenter: parent.verticalCenter
                         text: rowItem.label
                         color: root.palette.text
+                        font.family: root.uiFontFamily
                         font.pointSize: 11
                         elide: Text.ElideRight
                     }
@@ -227,6 +240,7 @@ Window {
             height: root.menuModel ? root.menuModel.footerRect.height : 0
             text: root.menuModel ? root.menuModel.footerText : ""
             color: root.palette.placeholderText
+            font.family: root.uiFontFamily
             font.pointSize: 8.5
             verticalAlignment: Text.AlignVCenter
             elide: Text.ElideRight

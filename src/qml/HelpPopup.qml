@@ -37,6 +37,15 @@ Window {
     property var helpModel: null
     property var host: null
 
+    // 中文一律用微软雅黑：FluentWinUI3 默认的族是 `Segoe UI Variable`，它没有中文
+    // 字形，中文只能落到系统回退字体上（本机是宋体，还是衬线的），跟旁边的拉丁
+    // 字母/数字摆在一起很违和。
+    // YaHei 自带拉丁字形，所以整张卡片统一用一个族就够。
+    // 卡片里的每个文字控件都要显式写（`Window`/`Item` 没有 `font` 属性，
+    // QML 里也没法只声明一次就自动往下传）；与 `MenuPopup.qml` 的那个同名属性
+    // 保持一致。
+    readonly property string uiFontFamily: "Microsoft YaHei"
+
     width: root.helpModel ? root.helpModel.cardWidth : 500
     height: root.helpModel ? root.helpModel.cardHeight : 220
 
@@ -170,6 +179,7 @@ Window {
             height: root.helpModel ? root.helpModel.titleRect.height : 0
             text: root.helpModel ? root.helpModel.title : ""
             color: root.palette.text
+            font.family: root.uiFontFamily
             font.pointSize: 12.5
             font.bold: true
             verticalAlignment: Text.AlignVCenter
@@ -184,6 +194,7 @@ Window {
             height: root.helpModel ? root.helpModel.countRect.height : 0
             text: root.helpModel ? root.helpModel.countText : ""
             color: root.palette.placeholderText
+            font.family: root.uiFontFamily
             font.pointSize: 8.5
             horizontalAlignment: Text.AlignRight
             verticalAlignment: Text.AlignVCenter
@@ -200,6 +211,7 @@ Window {
             y: root.helpModel ? root.helpModel.filterRect.y : 0
             width: root.helpModel ? root.helpModel.filterRect.width : 0
             height: root.helpModel ? root.helpModel.filterRect.height : 30
+            font.family: root.uiFontFamily
             font.pointSize: 10.5
             placeholderText: root.helpModel ? root.helpModel.filterPlaceholder : ""
             selectByMouse: true
@@ -335,6 +347,7 @@ Window {
                                         visible: !badgeItem.modelData.badge
                                         text: badgeItem.modelData.text
                                         color: root.palette.placeholderText
+                                        font.family: root.uiFontFamily
                                         font.pointSize: 8.5
                                         anchors.verticalCenter: parent.verticalCenter
                                     }
@@ -357,6 +370,7 @@ Window {
                                             anchors.centerIn: parent
                                             text: badgeItem.modelData.text
                                             color: root.palette.text
+                                            font.family: root.uiFontFamily
                                             font.pointSize: 9
                                         }
                                     }
@@ -384,6 +398,7 @@ Window {
                                                               : parent.height
                             text: rowItem.label
                             color: root.palette.text
+                            font.family: root.uiFontFamily
                             font.pointSize: 10.5
                             verticalAlignment: Text.AlignVCenter
                             elide: Text.ElideRight
@@ -396,6 +411,7 @@ Window {
                             height: parent.height - labelText.height
                             text: rowItem.detail
                             color: root.palette.placeholderText
+                            font.family: root.uiFontFamily
                             font.pointSize: 8.5
                             verticalAlignment: Text.AlignVCenter
                             elide: Text.ElideRight
@@ -415,6 +431,7 @@ Window {
             height: root.rowHeight
             text: root.helpModel ? root.helpModel.emptyMessage : ""
             color: root.palette.placeholderText
+            font.family: root.uiFontFamily
             font.pointSize: 10.5
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
@@ -429,6 +446,7 @@ Window {
             height: root.helpModel ? root.helpModel.footerRect.height : 0
             text: root.helpModel ? root.helpModel.footerText : ""
             color: root.palette.placeholderText
+            font.family: root.uiFontFamily
             font.pointSize: 8.5
             verticalAlignment: Text.AlignVCenter
             elide: Text.ElideRight

@@ -173,6 +173,11 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
      `ListView` + 标准 `ItemDelegate`，左键点一行 = 执行它，行几何与命中测试
      不再进模型（见第 10 节）。与帮助窗口的区别只有两处：**悬停仍然驱动高亮**
      （`Enter` 执行光标下那一条，这是菜单的语义），以及它一次只列一层、不筛选。
+   * **中文字体用微软雅黑**（项目所有者 2026-09 拍板）：两个弹窗里的每个会画字
+     的控件都写 `font.family: "Microsoft YaHei"`（`Window`/`Item` 没有 `font`
+     属性，不会自动往下传；QML 的 `font` 值类型也只有 `family`，没有族列表）。
+     默认族 `Segoe UI Variable` 没有中文字形，不管的话中文会回退到宋体
+     —— 见第 10 节。
 
 ---
 
@@ -285,7 +290,7 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `src/app/help_model.h/.cpp`               | `help` 帮助的**纯逻辑**（同上）：筛选（和弦/`comment`/`name`/动作摘要）、`可见/总数` 计数、键盘选中项（**高亮就是它**，鼠标悬停不改高亮）、`Enter`/双击该执行还是先武装（危险动作两次确认）、三级 `Esc`，以及鼠标点选用的 `setSelected()`（**可单测**）。**列表的滚动、行几何与鼠标命中都不归它管**：那是一个真正的 QML `ListView` + `ItemDelegate` + Qt 自带的 `ScrollBar`（见第 2 节第 9 条）。`handleKey()` 只接导航键与 `Enter`/`Esc`，字符/退格/`Home`/`End` 放行给标准 `TextField` |
 | `src/app/popup_layout.h/.cpp`             | 两个弹窗共用的几何类型（`PopupRect`/`PopupPoint`）与纯函数 `centrePopup()`（先在工作区居中、再夹进屏幕；**可单测**） |
 | `src/app/popup_host.h/.cpp`               | 把上面的模型挂到 QML 窗口上；抢前台（`requestActivate` + `win::window::raiseWindow` 的前台锁绕行）；在 Qt GUI 线程上创建/复用窗口；用户选完（或按 `Enter`/双击帮助里的一行）把活儿回投工作线程；`helpRun()` 负责把**可见行下标**换算成条目下标，并且**先把窗口藏起来再执行**（**GUI 线程亲和**） |
-| `src/qml/`                                | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`（三个文件都在开头写了 `pragma ComponentBehavior: Bound`）；配色一律用 `palette`，没有单独的 `Style.qml`。`HelpPopup.qml` 与 `MenuPopup.qml` 里除了卡片外框与按键徽标全是标准控件：帮助的筛选框是 `TextField`、列表是 `ListView` + Qt 自带 `ScrollBar` + `ItemDelegate`（列表只占行区域，不再需要表头/底部的遮罩）；选单的列表同样是 `ListView` + `ItemDelegate`（不滚动，所以没有滚动条；悬停与点击全部由委托提供） |
+| `src/qml/`                                | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`（三个文件都在开头写了 `pragma ComponentBehavior: Bound`）；配色一律用 `palette`，没有单独的 `Style.qml`；中文一律 `font.family: "Microsoft YaHei"`（默认族 `Segoe UI Variable` 没有中文字形，不管会回退到宋体，见第 10 节）。`HelpPopup.qml` 与 `MenuPopup.qml` 里除了卡片外框与按键徽标全是标准控件：帮助的筛选框是 `TextField`、列表是 `ListView` + Qt 自带 `ScrollBar` + `ItemDelegate`（列表只占行区域，不再需要表头/底部的遮罩）；选单的列表同样是 `ListView` + `ItemDelegate`（不滚动，所以没有滚动条；悬停与点击全部由委托提供） |
 | `tests/`                                  | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_log_tail`、`tst_audio`、`tst_interactive`（需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`，否则 skip）、`tst_menu_model`、`tst_help_model`、`tst_power_table`、`tst_desktop_table`、`tst_layout` |
 | `scripts/acceptance.ps1`                  | 桌面行为的验收脚本（注入按键 + 焦点捕捉窗口的外部观察，116 项检查：含弹窗滚轮/滚动条拖动/鼠标点选与点筛选框/鼠标点选单条目/`Enter` 与双击真的执行动作/危险动作两次确认）；需交互式桌面，**不属于 `ctest`**，见第 5 节与阶段 9 |
 
@@ -2051,6 +2056,45 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   `tst_command_line` 因此失败。改成 `entryName(...).toUpper()` 比较，
   并给测试加了一对固定的 `AAB` / `A_Z` 覆盖项，不再依赖机器上碰巧有什么环境变量。
 
+#### 2026-09 修复：弹窗里的中文落到了宋体（改成微软雅黑）
+
+* **现象**（项目所有者报）：`menu`（电源选单）与 `help` 两个弹窗里的中文看起来
+  不对（宋体/衬线）。
+* **根因**：FluentWinUI3 给控件的默认族是 **`Segoe UI Variable`**（本机实测，
+  `QFontInfo` 报的就是它），它**没有中文字形**，于是中文字符走 Qt 的逐字回退，
+  fallback 落到了宋体上 —— 跟同一行里的西文/数字摆在一起很违和。
+  用 `tmp/fontcmp.qml`（两串一样的中文，一串用默认族、一串显式 YaHei）
+  抓的对比图能一眼看出来：默认族是衬线，YaHei 是无衬线。
+* **修法**：两个窗口各自加一个
+  `readonly property string uiFontFamily: "Microsoft YaHei"`，
+  然后把卡片里**每一个会画字的控件**都写上 `font.family: root.uiFontFamily`
+  （选单 5 处：标题 / 徽标 / 副标题 / 条目名 / 底部提示；帮助 9 处：标题 /
+  计数 / 筛选框 / 两个圆点分隔符与徽标文字 / 说明 / 动作摘要 / 空结果提示 /
+  底部提示）。
+* **QML 的 `font` 值类型只有 `family`，没有 `families` 列表**（Qt 6.11 的
+  `qmltypes` 里只导出了 `family`），所以没法写“西文 Segoe UI + 中文雅黑”的
+  回退表：指定 YaHei 等于整张卡片都用它。YaHei 自带西文字形，够用。
+* **`Window`/`Item` 没有 `font` 属性**（`property("font")` 返回无效
+  `QVariant`），字号/族不会自动往子项传，所以只能逐个控件写；
+  字号仍然照旧由每个控件自己的 `font.pointSize` 定，只覆盖族。
+  标准委托 `ItemDelegate` 自己也有 `font`，但它的字是我们放在
+  `contentItem` 里的 `Label`，不用管它。
+* **怎么从机器上验证“真的是雅黑”**：`tmp/preview` 里加了一组检查 —— 遍历窗口
+  的 item 树，收集所有 `property("font")` 有效的控件，只看真的会画出字来的
+  那几个（`text` 或 `placeholderText` 非空），断言 `font.family()` 是
+  `Microsoft YaHei`，并把 `QFontInfo(font).family()` 一起打出来（它显示
+  `Microsoft YaHei` 就说明这个族真的存在、没被回退掉）。
+  本次结果：选单 17 个文字控件、帮助 120 个，全部命中，0 个例外。
+* **顺手修了预览工具里一条假失败**：`menu: reopening resets the highlight`
+  在改动前后都会挂 —— 因为上一步的 `QTest::mouseClick` 把光标留在了某一行上，
+  窗口重新出现在光标底下时 Qt 会把那一行算成**悬停**（`hover()==1`），
+  不是高亮没复位。现在先 `mouseMove` 把指针挪出卡片再断言
+  （`highlight=0 hover=-1`），工具重新全绿（`failures: 0`）。
+  **这类“工具自己造成的失败”要当场区分开**，否则下次会当成产品 bug 白查一遍。
+* **行为变化**：`menu`/`help` 里的文字一律用微软雅黑（西文也跟着用 YaHei），
+  不跟随系统字体设置；配色仍然跟随系统 `palette`。README 的「选单与电源」
+  「已知限制」两节已同步。
+
 ### 领域坑清单（动手前先看这一遍）
 
 下面这些每一条都值得在动钩子/引擎/窗口/电源之前先读一遍：
@@ -2329,6 +2373,24 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > `NumpadMult`；守护进程启动时配置出错会弹 Qt 标准消息框（README 已同步，
 > 离线命令仍然是只打印）。本机没有常驻实例在跑，release 直接链接成功。
 
+> **2026-09 修复（弹窗的中文改成微软雅黑）的 DoD**：`windows-debug` 与
+> `windows-release` 都是 `build exit 0`（唯一那句 `dxcompiler.dll` 是
+> `windeployqt` 自己的提示，不是编译器警告）；
+> `ctest --test-dir build/windows-release` **19 个测试目标全绿**
+> （本次只改 QML 与文档，没有新增/修改可单测的逻辑）；
+> `qmllint -I C:\Qt\6.11.2\mingw_64\qml` 对三个 QML 文件零警告。
+> 弹窗本身用 `tmp/preview`（真实的 `PopupHost` + 真实 QML，进程内注入，
+> 锁屏下也能跑）验证：新增的字体检查在**选单 17 个 / 帮助 120 个**会画字的
+> 控件上全部命中 `Microsoft YaHei`（`font.family()` 与 `QFontInfo(font).family()`
+> 都是它），`failures: 0`；截图 `tmp/font-yhei-menu.png` /
+> `tmp/font-yhei-help.png`（雅黑）与 `tmp/font-compare.png`（默认族 vs YaHei
+> 的对照图，默认族下的中文是衬线）。
+> `scripts/acceptance.ps1` **没跑**：验证时桌面是锁的（`LogonUI` 在跑，
+> 脚本会在“捕捉窗口拿到键盘焦点（正对照）”那一条挂掉），而本次只动 QML 的
+> `font.family`（行高、卡片宽度、行距、滚动条位置都没变，脚本用的坐标不受影响），
+> 按第 5 节不属于“必须重跑验收”的改动。解锁后想确认的话直接跑一遍即可
+> （预期仍然 **116 项 / 0 失败**）。
+
 > 提醒：Qt 的编译单元很多，`--preset` 的构建目录是分开的
 > （`build/windows-debug` / `build/windows-release`），所以
 > **debug 实例在运行不会锁住 release 产物**，反之亦然。
@@ -2412,7 +2474,10 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   `import QtQuick.Controls.FluentWinUI3`，颜色一律从 `palette`（`base`/`text`/
   `placeholderText`/`highlight`/`highlightedText`/`alternateBase`/`mid`）取，
   字号用现在这套 `pointSize`（12.5 标题 / 11 正文 / 10.5 帮助正文 /
-  9 副标题与徽标 / 8.5 细节）；需要滚动的列表用真正的 `ListView` +
+  9 副标题与徽标 / 8.5 细节）；**中文一律 `font.family: "Microsoft YaHei"`**
+  （见第 10 节“弹窗的中文落到宋体”，`Window`/`Item` 没有 `font` 属性，
+  不会自动往子项传，每个 `Label`/`TextField` 都得写）；
+  需要滚动的列表用真正的 `ListView` +
   `ScrollBar`（不要自绘滑槽），固定表头/底部提示看 `HelpPopup.qml` 的
   “`topMargin`/`bottomMargin` + 不透明底色”三件套；
   **避开 FluentWinUI3 不支持的那些控件**（见第 10 节）。
