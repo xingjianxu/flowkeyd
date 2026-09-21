@@ -1880,6 +1880,18 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > `build/windows-release`（debug 仍然必须构建，只是不再跑测试）；任何测试都不
 > 再执行真实的电源动作。上面各阶段的“两边都……”只是当年的记录，不必照抄。
 
+> **2026-09 修实（弹窗在滚轮下闪烁）的 DoD**：`windows-debug` 与
+> `windows-release` 两边都是 `build exit 0`、零警告；`ctest --test-dir
+> build/windows-release` **19 个测试目标全绿**（含新的
+> `tst_help_model::wheelKeepsTheHoverButKeyboardDropsIt`）；
+> `acceptance.ps1`（只跑 release）**77 项、0 失败**（`checks: 77, failures: 0`）。
+> 其中一次跑的“焦点正对照”两条挂了——那是第 10 节里写过的测试环境问题
+> （用户刚点过托盘的常驻实例，前台锁不在我们手上），重跑即绿；
+> 闪烁本身是用 `tmp/` 下的高速截屏工具对比出来的（修前每一格滚轮两帧、
+> 修后一帧），手法记在第 10 节。
+> **注意**：为了链接 release 的 exe，请用户关掉了提权常驻实例；
+> 构建/验证完之后要用 `Start-Process -Verb RunAs` 重新拉起它（见阶段 10）。
+
 > 提醒：Qt 的编译单元很多，`--preset` 的构建目录是分开的
 > （`build/windows-debug` / `build/windows-release`），所以
 > **debug 实例在运行不会锁住 release 产物**，反之亦然。
