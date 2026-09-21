@@ -60,7 +60,8 @@ flowkeyd 的目标是把 oskeyd 的**功能与配置语义 1:1 复刻**出来：
   （否则会被 Windows 的 UIPI 拦下）。不想看到 UAC 就加 `--no-elevate`，
   或在配置里写 `elevate = false`（例如已用任务计划程序的“最高权限”启动时）。
 
-运行期没有任何第三方依赖：Qt 的 DLL 由部署脚本复制，Lua 5.5.1 静态链在二进制里。
+运行期没有任何第三方依赖：Lua 5.5.1 静态链在二进制里，Qt 与 MinGW 的运行时 DLL
+由构建时的 `windeployqt` 拷到 exe 同目录（见下节），所以构建产物是自包含的。
 
 ## 构建与运行
 
@@ -80,6 +81,18 @@ $C = 'C:\Qt\Tools\CMake_64\bin\cmake.exe'
 
 产物分别在 `build/windows-debug/flowkeyd.exe` 与 `build/windows-release/flowkeyd.exe`。
 `CMakePresets.json` 里写死了本机的 Qt / MinGW / Ninja 路径，换机器时改那里。
+
+**构建产物是自包含的**：每次链接完 `flowkeyd` 之后会自动跑一次 `windeployqt`，
+把 Qt 与 MinGW 的运行时 DLL、以及 exe 用到的 QML 模块（`QtQuick`、
+`QtQuick.Controls.FluentWinUI3`……）拷到 exe 同目录。所以
+**直接双击 `build\windows-release\flowkeyd.exe` 就能启动**，不需要把 Qt 的
+`bin` 加进 `PATH`，也不需要额外跑部署脚本。
+（想做成发布包/换目录分发时，仍然用 `cmake --install`：那套规则走的是
+`qt_generate_deploy_app_script`；见 `CMakeLists.txt` 末段。）
+
+> 双击启动等价于**不带任何参数**启动：它没有控制台，日志只进
+> `%USERPROFILE%\.config\flowkeyd\flowkeyd.log`（用托盘「查看日志」看），
+> 并且默认会弹一次 UAC 自提权（不想提权就在配置里写 `elevate = false`）。
 
 配置文件默认放在 `%USERPROFILE%\.config\flowkeyd\config.lua`（见下文
 [配置文件在哪里](#配置文件在哪里)）。它是一段 Lua 脚本，参考配置见

@@ -284,6 +284,14 @@ Qt 自己的库随便链**：
 
 `flowkeyd_add_test(name [LIBS …])` 负责把 Qt/MinGW 的 DLL 目录写进 test 的 `PATH`。
 
+**exe 自己的产物目录是自包含的**：`flowkeyd` 上挂了一条 `POST_BUILD` 的
+`windeployqt`（`Qt6::windeployqt`），它把 Qt 与 MinGW 运行时的 DLL + exe 用到的
+QML 模块（`--qmldir src/qml`）拷到 exe 同目录，所以双击
+`build/windows-release/flowkeyd.exe` 就能启动，不必手动改 `PATH`。
+只对 `flowkeyd` 做，**不给测试可执行文件做**（那 19 个 `tst_*` 靠 ctest 注入 `PATH`，
+而且每个都部署一次会让构建慢得多）。大小参考：release 目录里 Qt 侧大约 120 MB
+（含 19.7 MB 的 `opengl32sw.dll`，刻意保留 —— 不想为了省 20 MB 去赌软件回退）。
+
 **分层铁律**：`src/core/`、`src/lua/`（除 `lua_config.cpp` 里对 Lua C API 的
 调用之外）与 `src/app/{menu,help}_model.*`、`src/app/popup_layout.*`
 **不许出现 `<windows.h>`、不许出现 QML/QtWidgets、不许出现窗口句柄**。
@@ -378,6 +386,11 @@ QML 模块注册之后，两条 profile 都要重新全量构建一次**。
 
 **离线命令（绝不允许提权）**：`--check` / `--list` / `--list-keys`。
 提权判断必须在这些命令 `return` 之后。
+
+> 从 2026-09 起，构建目录里就已经有 Qt 与 MinGW 的运行时 DLL（构建后自动跑
+> `windeployqt`，见第 4 节末），所以上面这些命令**不再需要手动把 Qt 的 `bin`
+> 加进 `PATH`**；直接 `build/windows-release/flowkeyd.exe --check` 就行。
+> 双击 `flowkeyd.exe` 也能启动（不带参数 = 守护进程 + 默认配置 + 弹一次 UAC）。
 
 ### 桌面行为怎么验证（每次动到钩子/引擎/分发/窗口后端都要过一遍）
 
@@ -1469,6 +1482,9 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 * **手动跑 exe 时要自己把 Qt 与 MinGW 的 `bin` 加进 `PATH`。** `ctest` 由
   `flowkeyd_add_test()` 的 `ENVIRONMENT_MODIFICATION` 加好了，但直接
   `Start-Process .\flowkeyd.exe` 会报 `0xc0000135`。
+  → **2026-09 已修**：`flowkeyd` 现在有一条 `POST_BUILD` 的 `windeployqt`，
+  构建目录里就已经有 `Qt6Gui.dll` 等 DLL 与 QML 模块，双击即可启动。
+  下面的两条是当时（还没部署时）的现象记录。
 * **截一个被遮住的窗口不能用 `CopyFromScreen`。** 它截的是屏幕在该坐标处的
   可见内容（窗口被终端遮住就截到终端）。要截窗口本身用
   `PrintWindow(hwnd, hdc, PW_RENDERFULLCONTENT=2)`；`GetWindowRect` 给出的
@@ -1637,6 +1653,46 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 * **`--check` 不带 `--config` 读的是真实配置**（`%USERPROFILE%\.config\flowkeyd\`）。
   过渡期里这是个坑：你以为在检查示例配置，其实在检查用户的。验收/接管脚本里
   一律显式写 `--config`，只有“确认默认搜寻路径对不对”那一条才故意不带。
+
+#### 2026-09 收尾：双击启动（windeployqt）
+
+* **“双击报 找不到 Qt6Gui.dll”不是缺少依赖，而是构建目录里根本没有 Qt 的 DLL。**
+  在装上部署之前，`build/windows-release/` 里只有一个 36 MB 的 `flowkeyd.exe`：
+  Qt 的 DLL 全靠“`PATH` 里有 `C:\Qt\6.11.2\mingw_64\bin`”这件事在撑着，
+  终端里跑得起来只是因为那个 shell 的 `PATH` 是手工加过的，资源管理器双击时
+  自然什么都找不到。修法就是构建后自己部署（见第 4 节 CMake 目标划分末段）：
+  ```cmake
+  if(WIN32 AND TARGET Qt6::windeployqt)
+      add_custom_command(TARGET flowkeyd POST_BUILD
+          COMMAND Qt6::windeployqt --no-translations
+                  --qmldir "${CMAKE_CURRENT_SOURCE_DIR}/src/qml"
+                  "$<TARGET_FILE:flowkeyd>"
+          COMMENT "windeployqt: deploying the Qt runtime next to flowkeyd.exe"
+          VERBATIM)
+  endif()
+  ```
+  `--qmldir` 必须给：QML 文件是编在 qrc 里的，`windeployqt` 只能靠扫描源码目录
+  发现 `import QtQuick.Controls.FluentWinUI3`，否则 `qml/` 半个模块都不会被拷过去
+  （现象是 `--version` 正常、一开日志窗口就抱怨模块找不到）。
+  `Qt6::windeployqt` 这个 target 要 Qt 6.3+ 才有（本机 6.11，有）。
+* **Qt 官方给 MinGW 的那套只带 release 的 Qt DLL，没有 `Qt6Cored.dll`。**
+  在 debug 的构建目录里看到 `Qt6Core.dll`（没有 `d` 后缀）是**对的**，
+  `windows-debug` 的 exe 也真的能跑（`--version` / 守护进程都验证过），
+  别照着 MSVC 的习惯去断言 `Qt6Guid.dll` 存在。MinGW 运行时的
+  `libstdc++-6.dll` / `libgcc_s_seh-1.dll` / `libwinpthread-1.dll` 三个两个 profile
+  都会部署。
+* **不要用 `--style` 去只部署一种 QML 样式**：本机 6.11 的 `windeployqt` 没有这个选项，
+  它把 Basic/Fusion/FluentWinUI3/Material/Universal/Windows **全拷了**（约 7.4 MB）。
+  真正的原因是 `LogWindow.qml` 里写着 `import QtQuick.Controls`（基础模块），
+  `qmlimportscanner` 无法知道运行时会用 `QQuickStyle::setStyle("FluentWinUI3")`。
+  7 MB 不值得为它改 QML 或者加 `--qmlimport` 花招，先放着。
+* **验证“双击能起来”要真的把 Qt 从 `PATH` 里拿掉。** 从 agent 的 shell 里
+  `Start-Process` 启动的进程继承的是同一个 `PATH`（本来就不含 Qt），
+  所以“在 agent shell 里能跑”就已经等价于双击；要断言就用
+  `Start-Process ... -RedirectStandardOutput/-Wait` 看退出码与输出（`& exe` 是
+  不等 GUI 子进程的，退出码永远是空的，见前面那条）。
+* **`.gitignore` 里的 `*.dll`/`*.exe` 让部署出来的文件不会进版本库**，
+  所以“构建目录里多出 100 MB DLL”不会污染 `git status` —— 不用为部署动 `.gitignore`。
 
 ### 从 oskeyd 继承的领域坑（照抄那份的解法，不要重新发明）
 

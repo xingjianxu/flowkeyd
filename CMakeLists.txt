@@ -212,6 +212,22 @@ flowkeyd_strict_warnings(flowkeyd)
 
 target_compile_definitions(flowkeyd PRIVATE FLOWKEYD_VERSION="${PROJECT_VERSION}")
 
+# ---------------------------------------------------------------------------
+# 让构建产物自包含：`windeployqt` 把 Qt 与 MinGW 运行时的 DLL（以及 exe 用到的
+# QML 模块）拷到 exe 同目录，于是双击 build/<preset>/flowkeyd.exe 就能启动，
+# 不必再把 Qt 的 bin 加进 PATH（见 AGENTS.md 第 5 节）。
+# 只给 flowkeyd 做；测试可执行文件仍然靠 ctest 注入 PATH。
+# ---------------------------------------------------------------------------
+if(WIN32 AND TARGET Qt6::windeployqt)
+    add_custom_command(TARGET flowkeyd POST_BUILD
+        COMMAND Qt6::windeployqt
+            --no-translations
+            --qmldir "${CMAKE_CURRENT_SOURCE_DIR}/src/qml"
+            "$<TARGET_FILE:flowkeyd>"
+        COMMENT "windeployqt: deploying the Qt runtime next to flowkeyd.exe"
+        VERBATIM)
+endif()
+
 install(TARGETS flowkeyd
     BUNDLE  DESTINATION .
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
