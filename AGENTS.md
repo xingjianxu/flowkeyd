@@ -44,14 +44,18 @@
 >    例如 `C:\Users\xingjian\scoop\apps\git\current\cmd\git.exe`）。
 >    **不要把管道默写成 `| tail`。命令行上也不要直接拼中文**
 >    （会因代码页变乱码）：要么写成脚本文件，要么只用 ASCII 的模式串。
-> 9. **oskeyd 的常驻实例在「第 10 阶段：接管」之前不要停。**
->    它是用户当前 `Win+S` / `Win+1..3` / `Win+W` / `Win+X` / `Win+/` 的唯一提供者，
->    停掉就等于让用户的快捷键全部失效。开发期 flowkeyd 一律用
->    `--no-elevate --allow-multi` + 一次性配置启动，并且**不要**占用
->    用户真实配置里已经有的和弦（`Win+S`、`Win+1..3`、`Win+W`、`Win+X`、`Win+/`、
->    `CapsLock`、`Alt+H/J/K/L`、`Alt+Space`、`LWin+Q`、`LWin+F1..F4`、
->    小键盘 `-`/`+`/`Enter`、`Ctrl+Alt+F4/F5/F12`）。
->    到接管阶段再按第 10 阶段的清单停 oskeyd 并让 flowkeyd 顶上去。
+> 9. **接管已经完成（2026-09，第 10 阶段）：现在该常驻的是 flowkeyd。**
+>    用户日常绑定的提供者已经换成 flowkeyd，oskeyd 的常驻实例不再是它，
+>    所以**不要**把 oskeyd 拉起来（回归出口除外，见阶段 10）。
+>    提权常驻的启动由用户自己一条
+>    `Start-Process -Verb RunAs ...\flowkeyd.exe` 完成 —— agent 的 shell 没有提权，
+>    也不该去点 UAC；细节见第 10 阶段与 `README.md`。
+>
+>    开发期起 flowkeyd 一律用 `--no-elevate --allow-multi` + 一次性配置，
+>    并且**不要**占用用户真实配置里已经有的和弦（`Win+S`、`Win+1..3`、`Win+W`、
+>    `Win+X`、`Win+/`、`CapsLock`、`Alt+H/J/K/L`、`Alt+Space`、`LWin+Q`、
+>    `LWin+F1..F4`、小键盘 `-`/`+`/`Enter`、`Ctrl+Alt+F4/F5/F12`）——
+>    用户随时可能在用它们。`scripts/acceptance.ps1` 用的是一次性配置，符合这一条。
 
 ---
 
@@ -88,7 +92,7 @@
 | 日志窗口   | `oskeyd --log-window` **独立进程**，跑在命令行窗口里                   | **进程内的 QML 窗口**（FluentWinUI3），尾随同一个日志文件                                                     |
 | 选单/帮助  | 自绘 GDI 原生窗口，各自一条线程                                        | **QML 窗口**（FluentWinUI3），跑在 Qt GUI 线程上                                                              |
 | 示例配置   | `oskeyd.lua.example`                                                   | `flowkeyd.lua.example`                                                                                        |
-| 自动化测试 | `cargo test` + `--selftest`/`--probe`/`--simulate` + `scripts/e2e.ps1` | **只写 Qt Test 单元测试**（见第 5 节的 DoD；`--simulate`/`--selftest`/`--probe` 与 e2e 本期不做，见第 12 节） |
+| 自动化测试 | `cargo test` + `--selftest`/`--probe`/`--simulate` + `scripts/e2e.ps1` | Qt Test 单元测试 + **`scripts/acceptance.ps1`**（68 项检查，注入按键的外部验收；`--simulate`/`--selftest`/`--probe` 本期不做，见第 12 节） |
 | 依赖管理   | `cargo`                                                                | CMake Presets + Ninja，`vendor/lua` 静态编进二进制                                                            |
 
 ---
@@ -120,9 +124,16 @@
    `oskeyd.*` 表，所以是纯复制）。
 5. **flowkeyd 最终接管这台机器**：第 10 阶段会把它做成常驻（提权），
    并让 oskeyd 退役。
-6. **不做 `--simulate` / `--selftest` / `--probe`，不写 `scripts/e2e.ps1`。**
+6. **不做 `--simulate` / `--selftest` / `--probe`，不写 oskeyd 那种 91 项检查的
+   `scripts/e2e.ps1`。**
    `--check` / `--list` / `--list-keys` 保留（它们是产品功能，也是手工验证的
-   主要工具）。这三个开关与 e2e 记在第 12 节，作为后续可选项。
+   主要工具）。
+   → **阶段 9 补充（2026-09）**：这三个开关仍然不做，但“手工冒烟清单”已经
+   自动化成了 **`scripts/acceptance.ps1`**（68 项检查），它靠一个
+   **只给测试用的后门** `FLOWKEYD_ACCEPT_INJECTED=1` 抬升“丢弃注入输入”
+   那道过滤（照抄 oskeyd 的 `OSKEYD_ACCEPT_INJECTED`，见第 10 节）。
+   这是对一个“当时无法验证”的条款的修订，不是推翻：不变量 2 本身没动，
+   日常跑的时候那道过滤照旧生效。
 7. **依赖政策：默认只有 Qt + `vendor/lua`。** 需要新依赖时**按需引入**，
    但必须在提交信息里给出理由（照抄 oskeyd 的规矩）。
    `QUICK_START_DEPS`：JSON、CLI 解析、字符串工具都自己写或用 Qt 自带的；
@@ -226,7 +237,7 @@ Qt 自己的库随便链**：
 | `src/platform/win/ffi.h/.cpp`             | 全部 Win32 声明、结构体与常量（`INPUT` 的 40 字节布局有 `static_assert` 盯着）                                                                                                                                              |
 | `src/platform/win/nt.h/.cpp`              | 未公开的 `win32u.dll` 导出，运行时解析并校验                                                                                                                                                                                |
 | `src/platform/win/dwm.h/.cpp`             | **运行时解析**的 `dwmapi!DwmSetWindowAttribute`：按窗口关掉过渡动画（`window` 的 `animate`）；拿不到 dwmapi 时只是保留动画，动作不失败                                                                                      |
-| `src/platform/win/input.h/.cpp`           | 按键注入（`SendInput`/`NtUserSendInput`）、按键状态、`ModifierGuard`（含菜单遮断标记）                                                                                                                                      |
+| `src/platform/win/input.h/.cpp`           | 按键注入（`SendInput`/`NtUserSendInput`）、按键状态、`ModifierGuard`（含菜单遮断标记）、`FLOWKEYD_ACCEPT_INJECTED` 测试后门（见第 5 节与阶段 9）                                                                                |
 | `src/platform/win/hook.h/.cpp`            | 钩子回调、**钩子线程自己的 Win32 消息循环**、`SetTimer`、控制消息、重载                                                                                                                                                     |
 | `src/platform/win/audio.h/.cpp`           | Core Audio `IAudioEndpointVolume`，手写 COM vtable（**高风险**）                                                                                                                                                            |
 | `src/platform/win/clipboard.h/.cpp`       | 剪贴板读写（`CF_UNICODETEXT`）                                                                                                                                                                                              |
@@ -247,6 +258,7 @@ Qt 自己的库随便链**：
 | `src/app/popup_host.h/.cpp`               | 把上面的模型挂到 QML 窗口上；抢前台（`requestActivate` + `win::window::raiseWindow` 的前台锁绕行）；在 Qt GUI 线程上创建/复用窗口；用户选完把活儿回投工作线程（**GUI 线程亲和**） |
 | `src/qml/`                                | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`（三个文件都在开头写了 `pragma ComponentBehavior: Bound`）；配色一律用 `palette`，没有单独的 `Style.qml` |
 | `tests/`                                  | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_log_tail`、`tst_audio`、`tst_interactive`（需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`，否则 skip）、`tst_menu_model`、`tst_help_model`、`tst_power_table`、`tst_desktop_table`、`tst_layout` |
+| `scripts/acceptance.ps1`                  | 桌面行为的验收脚本（注入按键 + 焦点捕捉窗口的外部观察，68 项检查）；需交互式桌面，**不属于 `ctest`**，见第 5 节与阶段 9 |
 
 ### CMake 目标划分（阶段 6 之后）
 
@@ -355,11 +367,34 @@ QML 模块注册之后，两条 profile 都要重新全量构建一次**。
 **离线命令（绝不允许提权）**：`--check` / `--list` / `--list-keys`。
 提权判断必须在这些命令 `return` 之后。
 
-### 没有 e2e —— 手工冒烟清单（每次动到钩子/引擎/分发/窗口后端都要过一遍）
+### 桌面行为怎么验证（每次动到钩子/引擎/分发/窗口后端都要过一遍）
 
-这是本项目**唯一**能证明桌面行为正确的方式（第 2 节第 3 条）。
-用一份只含被测绑定的**一次性配置**（`tmp/smoke.lua`，快捷键一律避开
-用户真实配置里已有的和弦）：
+清单在下面（12 条），**从阶段 9 起有了自动化版本**：
+
+```powershell
+# 68 项检查，约两分钟，会持续注入按键/抢焦点；按工作约定第 6 条先提醒用户
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance.ps1
+powershell.exe ... -Exe build\windows-release\flowkeyd.exe    # 另一条 profile
+powershell.exe ... -Phase config                              # 只看配置，不注入按键
+```
+
+它自己生成一份**一次性配置**（在 `-WorkDir`，默认 `%TEMP%\flowkeyd-accept`），
+起一个非提权的守护进程，从另一个上下文用 `SendInput` 注入按键，再用一个获得了
+焦点的 WinForms 窗口从外面观察“按键到底有没有到达前台”（未绑定的键做正对照，
+所以“焦点没拿到”不会被误会成“吞键成功”）。它需要交互式桌面会话，
+**永远不进 `ctest`**。
+
+要让注入的按键触发绑定，守护进程得用 `FLOWKEYD_ACCEPT_INJECTED=1` 启动：
+那是**只给测试用的后门**（与 oskeyd 的 `OSKEYD_ACCEPT_INJECTED` 同款；
+`core/engine.cpp` 一直会丢弃 `event.injected`，改的是 `hook.cpp` 里给它赋值
+那一步），启用时日志里有一条警告。flowkeyd 自己注入的按键带着 `"FLOW"` 标记，
+在钩子回调的第一步就被丢掉，所以抬升过滤不会让重映射自己喂自己 ——
+**不变量 2 没有被放宽**。
+
+脚本**不做**的：动画的屏幕采样、托盘菜单点击、自提权的 UAC 流程、
+“托盘图标真的消失了”的直接观察。这几项仍然只能靠人的手。
+
+用一份只含被测绑定的**一次性配置**（快捷键一律避开用户真实配置里已有的和弦）：
 
 1. `--check --config tmp/smoke.lua` 通过，`--list` 打印的形状与 oskeyd 一致。
 2. 单实例：开两个不用 `--allow-multi` 的实例，第二个必须拒绝启动。
@@ -592,8 +627,8 @@ QML 模块注册之后，两条 profile 都要重新全量构建一次**。
 | 6 弹窗 `menu` / `help` | **已完成** | `flowkeyd_models` + 两张 QML 卡片；`tst_menu_model`/`tst_help_model` 全绿；渲染/筛选/键盘选择由 `tmp/preview` 验证 |
 | 7 虚拟桌面 + 电源 | **已完成** | `platform/win/desktop|power` + dispatcher 接线；`tst_desktop_table`/`tst_power_table` 全绿；真实 COM 探测/切换与关屏由 `tst_interactive` 验证 |
 | 8 示例配置 + README | **已完成** | `flowkeyd.lua.example` 与 oskeyd 逐行对齐（除 UI/probe/simulate 那几处）；`README.md` 已写出；`--check` 37 hotkey / 3 remap |
-| 9 手工验收 | 待做 | 无 e2e 的替代：第 5 节清单跑两遍 |
-| 10 接管 | 待做 | 迁移真实配置、停 oskeyd、常驻 |
+| 9 验收（无 e2e 的替代） | **已完成** | `scripts/acceptance.ps1`（68 项检查，需交互式桌面）+ `FLOWKEYD_ACCEPT_INJECTED` 测试后门；debug 跑 3 遍、release 跑 2 遍全绿 |
+| 10 接管 | **已完成（待用户点一次 UAC）** | 真实配置已迁到 `.config\flowkeyd\config.lua`（24 hotkey / 0 remap，零警告）；oskeyd 本来就没在跑；常驻启动由用户手动 `Start-Process -Verb RunAs` |
 
 ### 阶段 0：仓库与构建骨架
 
@@ -812,6 +847,8 @@ BOM、`\t` 陷阱、`.toml` 拒绝、错误信息格式；`--check --config flow
 * 其余条目（真按键的吞键/自动重复/重映射/`send` 修饰键释放/`suspend`/`reload`/
   `window`）需要**人的手**：钩子刻意忽略注入输入（不变量 2），所以脚本无法伪造
   “物理按键”。这些条目在阶段 9 完整验收时补做；`window` 本身要等阶段 5。
+  → **阶段 9 已补做**：`scripts/acceptance.ps1` 把这些条目全跑通了（靠
+  `FLOWKEYD_ACCEPT_INJECTED=1` 抬升过滤；不变量 2 本身没动）。
 
 ### 阶段 4：托盘 + 日志窗口
 
@@ -930,10 +967,12 @@ get/set/append/clear。**`animate` 的效果要靠肉眼**（没有屏幕采样�
   `forceDisableTransitions(hwnd, true/false)` 的往返（`TransitionGuard` 的底层）。
 * `copySelectionCopiesTheFocusedSelection`：记事本里 `Ctrl+A` 全选后
   `copySelection`，剪贴板里拿到 `SELECTME-12345`（这就是 `{selection}` 的核心）。
-* **仍需人的手**：快捷键触发的完整链路（钩子吞键 → dispatcher → 动作）、
-  默认开的 `toggle`（再按一次收起）、`animate = true/false` 的肉眼区别、
-  `volume`/`clipboard`/`media` 在真实前台应用上的效果，以及托盘菜单点击。
-  这些留到阶段 9 与阶段 3 那批一起做。
+* **仍需人的手**：`animate = true/false` 的肉眼区别、`volume`/`media` 在真实
+  前台应用上的效果，以及托盘菜单点击。
+  → **阶段 9 已补做大部分**：快捷键触发的完整链路（钩子吞键 → dispatcher →
+  动作）、默认开的 `toggle`、`clipboard`/`send` 的外部证据都由
+  `scripts/acceptance.ps1` 覆盖了；`animate`、`volume` 的实际听感与托盘点击
+  仍然靠人的手。
 
 ### 阶段 6：弹窗 `menu` / `help`（FluentWinUI3）
 
@@ -1018,6 +1057,9 @@ get/set/append/clear。**`animate` 的效果要靠肉眼**（没有屏幕采样�
 「钩子吞键 → dispatcher → 弹窗」整条链路、弹窗抢到键盘焦点（在别的应用
 聚焦时按快捷键）、鼠标悬停/点击选择、`Enter` 真的写进剪贴板。
 自动化做不到的原因：钩子刻意忽略注入输入（不变量 2），脚本无法伪造物理按键。
+→ **阶段 9 已补做**：`scripts/acceptance.ps1` 里的「选单弹窗」与「帮助弹窗」
+两组检查把上面这些（除了鼠标悬停/点击）都跑通了 —— 包括弹窗在别的应用聚焦时
+抢到键盘焦点、条目键真的跑了动作、`Enter` 真的写进了剪贴板。
 
 ### 阶段 7：虚拟桌面 + 电源
 
@@ -1129,17 +1171,59 @@ Totals: 8 passed, 0 failed
   `D:\prj\flowkeyd\flowkeyd.lua.example: OK (37 hotkey(s), 3 remap(s))`，零警告。
 * `flowkeyd --list` 的形状与 oskeyd 的 `print_bindings` 逐字形似。
 
-### 阶段 9：手工验收（无 e2e 的替代）
+### 阶段 9：验收（无 e2e 的替代）
 
-**做什么**：把第 5 节的手工冒烟清单**完整跑两遍**（debug 与 release 各一遍，
-release 要从提权终端或资源管理器启动），并逐条记录结果到本文件。
+**做什么**：把第 5 节的手工冒烟清单**完整跑两遍**（debug 与 release 各一遍），
+并逐条记录结果到本文件。
 特别要覆盖：被吞掉的 `Win+S` 从四个角度（常规、0 ms 轻按、
 1–2 次模拟 Windows 键自动重复）；小键盘的 `-`/`+`/`Enter` 与主键盘
 `-`/`=`/`Enter` **互不触发**（注入小键盘 Enter 必须带
 `KEYEVENTF_EXTENDEDKEY`，否则测的就是主键盘的 Enter）；重映射的
 hold/tap；挂起/重载/退出。
 
-**验收**：清单里每一项都有“通过/不适用”的结论写进本文件。
+**状态：已完成（2026-09）。**
+
+**已完成的内容**
+
+* **`FLOWKEYD_ACCEPT_INJECTED` 测试后门**：`platform/win/input.{h,cpp}` 新增
+  `acceptInjectedInput()`（读环境变量，进程内只缓存一次），`hook.cpp` 里改成
+  `event.injected = (info->flags & LLKHF_INJECTED) != 0 && !acceptInjectedInput()`，
+  并在装完钩子之后打一条警告。oskeyd 的同款后门是 `OSKEYD_ACCEPT_INJECTED`。
+  这是能自动验证“真的吞了键”的前提：钩子不认注入输入，脚本就伪造不了物理按键，
+  而 `--simulate` 本期不做（第 12 节）。**不变量 2 没被放宽**：flowkeyd 自己
+  注入的事件带着 `"FLOW"` 标记，仍然在钩子回调第一步就被丢掉。
+* **`scripts/acceptance.ps1`**（新文件，68 项检查）：一次性配置 + 获得焦点的
+  WinForms 捕捉窗口 + `SendInput` 注入 + 剪贴板/窗口/日志当外部证据。
+  覆盖第 5 节清单的 1–12 条，另外还多做了：小键盘与主键盘互不触发（6 项）、
+  重映射 hold/tap（不只是 CapsLock）、`menu`/`help` 弹窗的键盘选择与筛选、
+  以及“重新打开的选单也要重新拿到焦点”。
+* 脚本的检查名用中文字面量（oskeyd 的 e2e 也是这个风格），所以文件必须以
+  **带 BOM 的 UTF-8** 保存 —— PowerShell 5.1 会把无 BOM 的 `.ps1` 按 ANSI
+  代码页解码。三个窗口标题故意用 `[char]` 码点拼出来，这样即使 BOM 丢了
+  逻辑也不会错（断言里的中文变乱码无所谓，检查结果仍然是对的）。
+
+**实测结果（2026-09）**
+
+```
+# debug 跑了 3 遍、release 跑了 2 遍
+checks: 68, failures: 0
+```
+
+* `flowkeyd --check --config flowkeyd.lua.example` → 37/3、零警告（未变）。
+* 四条 Win 和弦变体全绿：常规 / 0 ms 轻按 / 一次、两次 Windows 键自动重复 ——
+  外壳都不会弹出搜索面板，而动作在**按下时**就派发了（剪贴板是外部证据）。
+* 自动重复：按住 `F15` 约 1.5 秒（注入 12 次 key-down），`once.log` 只有一行。
+* `send("^{c}")` 时前台看到的是 `Ctrl+C`（`Alt=False`），说明修饰键释放对了。
+* 小键盘 `-`/`+`/`Enter` 与主键盘 `-`/`=`/`Enter` 互不触发。
+* `quit` 之后：日志最后一行是 `keyboard hook removed`、没有 `ERROR`、进程表里
+  没有它，而且再按被吞掉的键会重新到达前台窗口；最后没有按键卡在按下状态。
+* 结果里那两次「失败」是**测试环境**造成的，不是产品 bug（细节见第 10 节）：
+  一次是用户在跑测试时把 Notepad 点到前台（捕捉窗口丢了前台锁 —— 已把
+  `FocusCatcher` 换成 `AttachThreadInput` 版，并在真的抢不到焦点时明确报出来）；
+  一次是我最初选了 `Win+F16` 当被测和弦，而本机那个组合会拉出
+  `SlideToShutDownHost`（已换成 oskeyd 用的 `Win+S`）。
+* 不过它**真的**查出了一个产品 bug：`menu` 第二次打开（复用同一个 QML 窗口）
+  时拿不到键盘焦点 —— 见第 10 节的 `activateWindow` 那一条，已修并有检查盯着。
 
 ### 阶段 10：接管（品牌迁移 + 常驻）
 
@@ -1163,8 +1247,42 @@ hold/tap；挂起/重载/退出。
 5. **回归出口**：如果 flowkeyd 有问题，把 oskeyd 拉回来
    （`Start-Process -Verb RunAs target\release\oskeyd.exe`）。
 
-**验收**：用户的全部日常绑定在 flowkeyd 下可用；oskeyd 已退出且不再自启；
-回滚步骤写在文档里。
+**状态：已完成到“等用户点一次 UAC”为止（2026-09）。**
+
+**已完成的内容**
+
+1. 配置已迁到 `%USERPROFILE%\.config\flowkeyd\config.lua`：绑定与 oskeyd 那份
+   **逐条一致**（两边读的是同一套 schema），改的只有注释里的程序名与 UI 说法
+   （`oskeyd --probe` 那行删掉了，flowkeyd 没有 `--probe`）。
+   `flowkeyd --check`（**不带** `--config`，走默认搜寻）→
+   `C:\Users\xingjian\.config\flowkeyd\config.lua: OK (24 hotkey(s), 0 remap(s))`，
+   零警告；`--list` 的 24 条与第 14 节那张表逐条对应。
+2. oskeyd **没有常驻实例可停**：机器 6:24 重启后它没被拉起来（它没有登录自启项，
+   只有 `D:\prj\oskeyd\target\release\oskeyd.exe` 上的 `RUNASADMIN` 兼容性标记）。
+   那个标记**没有动过**，所以回滚照样是一条 `Start-Process -Verb RunAs`。
+3. 非提权预演（真的读用户那份配置，**不注入任何按键**，所以没触发任何真实动作）：
+   日志里 `24 hotkey(s), 0 remap(s), tick 15 ms` + `keyboard hook installed`；
+   `taskkill /PID <pid>`（**不带** `/F`）能干净退出（日志末尾
+   `keyboard hook removed`）。
+4. `README.md` 新增「本机现在常驻的是 flowkeyd」一节：启动命令、干净退出、
+   回滚到 oskeyd、为什么没加自启。
+5. **没有加开机自启**（用户拍板），也**没有**给 exe 登记 `RUNASADMIN` 兼容性
+   标记：那个标记会让 `flowkeyd --check` 之类离线命令也弹 UAC（oskeyd 现在
+   就有这个毛病，离线命令本不该弹 UAC —— 不变量 11）。
+
+**剩下要用户做的一件事**：agent 的 shell 没有提权，启动提权进程会弹 UAC 而
+没人点（也不该由 agent 去点）。所以常驻由用户自己启动一次：
+
+```powershell
+Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowkeyd.exe'
+```
+
+**验收（用户启动后逐条确认）**：`CapsLock`、`Alt+H/J/K/L`、`Alt+Space`、
+`LWin+Q`、`LWin+F1..F4`、`Win+S`、`Win+1/2/3`、`Win+W`、`Win+X`、`Win+/`、
+小键盘 `-`/`+`/`Enter`、`Ctrl+Alt+F4/F5/F12`。
+`Ctrl+Alt+F12`（挂起）与 `Ctrl+Alt+F4`（退出）是安全的自检项；
+**`Win+X` 选单里千万别按到睡眠/关机/重启**。
+回滚：`Start-Process -Verb RunAs -FilePath 'D:\prj\oskeyd\target\release\oskeyd.exe'`。
 
 ---
 
@@ -1445,6 +1563,54 @@ hold/tap；挂起/重载/退出。
   提供），前提是模板参数里没有顶层逗号；`std::optional<std::pair<A,B>>` 这种
   才需要先起一个 `using` 别名。
 
+#### 阶段 9/10 真的踩到的（2026-09）
+
+* **“物理按键”可以自动化，但必须先加一个测试后门。** 钩子照规矩丢弃一切带
+  `LLKHF_INJECTED` 的事件（不变量 2），于是 `SendInput` 伪造不了用户按键，
+  而 `--simulate` 本期不做 —— 引擎与钩子的行为就只剩“人按键盘”一条路。
+  解法是照抄 oskeyd：`FLOWKEYD_ACCEPT_INJECTED=1`（oskeyd 叫
+  `OSKEYD_ACCEPT_INJECTED`）抬升那道过滤，而且**只改钩子给 `event.injected`
+  赋值的那一步**，引擎和其余不变量一概不动；启用时打一条警告。
+  这样 `scripts/acceptance.ps1` 才能从外部观察到“键真的是被吞了”。
+* **`Start-Process -PassThru` 拿不到退出码。** 无论加不加
+  `-RedirectStandardOutput`，`$p.WaitForExit(6000)` 之后 `$p.ExitCode` 都是空
+  （只有用 `-Wait` 启动的那种才会填）。oskeyd 的 e2e 也不看守护进程的退出码，
+  所以“干净退出”要靠日志（没有 `ERROR`、最后一行是 `keyboard hook removed`）
+  加进程表里没有它来判定。
+* **`$form.Activate()` 会静默失败。** Windows 的前台锁只允许“当前就在前台的
+  那个进程”抢焦点；人家（或者用户）一点别的窗口，我们的捕捉窗口就再也拿不回来，
+  后面每一条按键检查都会看起来像产品 bug。修法是照抄守护进程自己的
+  `raiseWindow`：`AttachThreadInput` 到当前前台线程 → `SetForegroundWindow` →
+  解挂；而且真抢不到焦点时要**明确报一条失败**，而不是让检查看起来像产品坏了。
+  （就是这条让我把一次“用户中途点了 Notepad”误判成了两次产品失败。）
+* **`Win+F16` 在本机是外壳快捷键。** 我最初拿它当“被吞掉的 Win 和弦”的样本，
+  结果在某些外壳状态下它会拉出 `SlideToShutDownHost`（“滑动以关机”），
+  看起来就像遮断失效。改用 oskeyd 的 `Win+S`（失败代价只是弹个搜索框）。
+  **选测试和弦之前，先用一个不装钩子的小脚本探一下它会不会动外壳。**
+* **弹窗复用之后 `window->isActive()` 可能是陈旧的 `true`。** `activateWindow`
+  原来是
+  ```
+  window->raise();
+  window->requestActivate();
+  if (window->isActive()) return;      // ← 这里会早退
+  ```
+  于是 `menu` **第二次**打开（同一个 QML 窗口被重新 `visible = true`）时拿不到
+  键盘焦点：Qt 说它 active，而它其实不是前台窗口。这类 bug 只在“用户正聚焦在
+  别的应用”时才出现。修法是再问一句真正的状态：
+  ```
+  if (window->isActive() && GetForegroundWindow() == hwnd) return;
+  ```
+  然后照旧走 `raiseWindow`；验收脚本现在会断言“重新打开的选单也拿到了焦点”。
+  （这个 bug 是阶段 9 的脚本查出来的 —— 阶段 6 的 `tmp/preview` 自己就是前台
+  应用，所以看不到它。）
+* **命令行里不要相信中文能被 agent 的 bash 看到。** 验收脚本的中文检查名
+  经过 agent 的 bash 抓回来是乱码（控制台代码页），所以脚本把**窗口标题与前台
+  窗口的类名/码点**写进 `-WorkDir\diag.txt`（UTF-8、不带 BOM）当诊断；
+  要看中文结果就 `read` 那个文件，别盯控制台输出猜。
+* **`--check` 不带 `--config` 读的是真实配置**（`%USERPROFILE%\.config\flowkeyd\`）。
+  过渡期里这是个坑：你以为在检查示例配置，其实在检查用户的。验收/接管脚本里
+  一律显式写 `--config`，只有“确认默认搜寻路径对不对”那一条才故意不带。
+
 ### 从 oskeyd 继承的领域坑（照抄那份的解法，不要重新发明）
 
 下面这些在 `../oskeyd/AGENTS.md` 第 6 节都有**完整的现象描述 + 修法**，
@@ -1489,8 +1655,9 @@ hold/tap；挂起/重载/退出。
    （零新增警告；warning 当错误处理，直到项目所有者另有要求）。
 2. `ctest --preset debug --output-on-failure` **全绿**；
    新增/修改的逻辑都有对应测试（`core/`、`lua/`、模型层这些可测的部分）。
-3. 如果动了钩子/引擎/分发/窗口后端：**第 5 节的手工冒烟清单**过一遍，
-   把结论写进本文件。
+3. 如果动了钩子/引擎/分发/窗口后端：跑 **`scripts\acceptance.ps1`**
+   （debug 与 release 各一遍，见第 5 节），把结论写进本文件。
+   动到脚本覆盖不到的界面（托盘菜单、日志窗口、`animate`）时，仍然要人眼过一遍。
 4. `flowkeyd --check --config flowkeyd.lua.example` 通过
    （阶段 2 之后，只要示例配置存在就要能过）。
 5. 用户可见行为有变化时更新 `README.md`，有新经验时更新本文件。
@@ -1547,8 +1714,19 @@ hold/tap；挂起/重载/退出。
 > manager {53f5ca0b-158f-4124-900c-057158060b27}`，切走再切回成功；
 > `screen_off` 真的黑屏并被随后注入的 Shift 点亮。
 > `README.md` 与 `flowkeyd.lua.example` 已按 oskeyd 逐节核对。
-> **仍需人的手**：真实快捷键触发的 `desktop`/`power` 链路、托盘菜单里的
-> 电源条目，以及阶段 3/4/5/6 遗留的那批，全部留到阶段 9。
+> **仍需人的手**：`animate = true/false` 的肉眼区别、托盘菜单里的
+> 电源条目与点击，以及“托盘图标真的消失了”的直接观察（阶段 3/4/5/6 那批的
+> 其余部分已由 `scripts/acceptance.ps1` 覆盖，见阶段 9）。
+
+> **阶段 9/10 的实测结果（2026-09）**：`windows-debug` 与 `windows-release`
+> 两边仍然是 `build exit 0`、零警告，`ctest` **19 个测试目标**全绿。
+> `flowkeyd --check --config flowkeyd.lua.example` 仍通过（37/3、零警告）。
+> 新增 `scripts/acceptance.ps1`（68 项检查）：debug 跑了三遍、release 跑了两遍，
+> 结果都是 `checks: 68, failures: 0`（中间的两次失败是测试环境造成的，已记在
+> 第 10 节）。接管部分：用户真实配置已迁到 `.config\flowkeyd\config.lua`
+> （`--check` → `OK (24 hotkey(s), 0 remap(s))`、零警告），非提权预演能装钩子
+> 也能被 `taskkill /PID`（不带 `/F`）干净停掉；oskeyd 本来就没在跑，
+> 提权常驻由用户自己一条 `Start-Process -Verb RunAs` 启动（README 里有）。
 
 > 提醒：Qt 的编译单元很多，`--preset` 的构建目录是分开的
 > （`build/windows-debug` / `build/windows-release`），所以
@@ -1565,15 +1743,18 @@ hold/tap；挂起/重载/退出。
 1. **`--simulate <SCRIPT>`**（把脚本化按键事件重放给真正的引擎，干跑）。
    这是 oskeyd 里最便宜的引擎验证手段，**强烈建议尽早补**：
    它不需要焦点、不装钩子，却能把匹配/吞键/重复/挂起/重映射全跑一遍。
-   没有它，引擎的行为只能靠手工按键盘。
+   没有它，引擎的行为只能靠 `scripts/acceptance.ps1`（要真的注入按键、
+   要交互式桌面）或者手工按键盘。
 2. **`--selftest` / `--probe`**（各平台后端探测与自检）。
    补它们的收益：Core Audio 的 COM vtable、虚拟桌面接口表、
    未公开 API 的可用性这些**只能靠真实调用才能验证**的东西，
    会有一条确定的、幂等的检查路径。
-3. **`scripts/e2e.ps1`**（从第二个进程注入按键、抢焦点、屏幕采样）。
-   没有它，“钩子真的吞了键”“重映射真的注入了目标键”“动画真的被跳过”
-   就没有**外部**证据（自测只能证明“我以为我吞了”）。
-   如果以后要补，照 oskeyd 的脚本改造：它 91 项检查里的断言字符串
+3. **完整的 `scripts/e2e.ps1`**。**`scripts/acceptance.ps1` 已经是它的第一版**：
+   它从另一个上下文注入按键、抢焦点、用剪贴板/窗口/日志做外部证据，
+   把“钩子真的吞了键”“重映射真的注入了目标键”“`quit` 真的卸了钩子”都变成
+   了可重复的断言。还缺的是动画的屏幕采样、托盘菜单点击、自提权的 UAC 流程、
+   以及日志窗口那一套的外部断言。
+   如果以后要补，照 oskeyd 的脚本改造：它的断言字符串
    （英文日志、窗口标题格式）在本项目里保持兼容，正是为了这个。
 4. **鼠标钩子**（`WH_MOUSE_LL`）：oskeyd 也没做。
 5. **延迟修饰键抑制**：让 `Ctrl+Alt+H` 也隐藏 Ctrl 和 Alt
@@ -1606,7 +1787,9 @@ hold/tap；挂起/重载/退出。
   `validate_action`（顶层动作与 `menu` 条目共用它）→ 在 `lua_prelude.lua` 里加
   一个构造器并挂进 `flowkeyd` 表（否则用户只能手写 `{ type = "..." }`；
   构造器如果是“原样返回用户表”的那种，**记得自己补 `type`**）→
-  写进 `README.md` 的表格与 `flowkeyd.lua.example`。
+  写进 `README.md` 的表格与 `flowkeyd.lua.example` →
+  **在 `scripts/acceptance.ps1` 里加一条能自动验证的检查**（面板/弹窗/剪贴板
+  之类能从外部观察的，别留给人的手）。
 * **新的选单条目字段**（例如图标）：`config` 加字段 → `MenuModel` 与
   `MenuPopup.qml` 里画出来 → 校验（重名、空标签）→ README 表格。
   **几何算术全部留在 `MenuModel`**（纯函数、有单测），别散到 QML 里。
@@ -1693,7 +1876,12 @@ CLI 开关名字**完全不变**（`-c/--config`、`--no-elevate`、`--console`�
 * `window` 的 `animate`（默认**关**）只对会改变窗口状态的 `op` 有意义，
   写在不产生过渡的 `op`（`close`/`toggle_topmost`）上要被 `--check` 拒绝。
 
-### 本机真实配置（迁移的输入，也是手工验收的清单）
+### 本机真实配置（迁移的输入，也是验收的清单）
+
+**2026-09 阶段 10 之后，这份配置实际住在
+`%USERPROFILE%\.config\flowkeyd\config.lua`**（oskeyd 那份还在原地，内容除了
+注释之外与 flowkeyd 那份一致）。`flowkeyd --check`（走默认搜寻）→
+`OK (24 hotkey(s), 0 remap(s))`，零警告。
 
 `C:\Users\xingjian\.config\oskeyd\config.lua`（2026-09，12225 字节）里的绑定：
 

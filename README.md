@@ -43,7 +43,7 @@ flowkeyd 的目标是把 oskeyd 的**功能与配置语义 1:1 复刻**出来：
 | 注入标记 | `dwExtraInfo` 里的 `"OSKE"`        | `dwExtraInfo` 里的 `"FLOW"`                |
 | 日志窗口 | 独立进程里的命令行窗口             | 进程内的 QML 窗口（FluentWinUI3）          |
 | 选单/帮助 | 自绘 GDI 原生窗口，固定深色        | QML 窗口（FluentWinUI3），跟随系统主题     |
-| 自动化   | `cargo test` + `--selftest`/e2e    | 只有 Qt Test 单测 + 手工冒烟清单           |
+| 自动化   | `cargo test` + `--selftest`/e2e    | Qt Test 单测 + `scripts/acceptance.ps1`（注入按键的验收） |
 
 ## 状态
 
@@ -107,6 +107,32 @@ flowkeyd 不会去动它（`--console` 可以强制保留输出）。右键菜�
 
 用任务计划程序在登录时运行（*登录时*触发，勾上“使用最高权限运行”，
 这样不会每登录一次就弹一次 UAC），或者放到 `shell:startup` 里的快捷方式中。
+
+### 本机现在常驻的是 flowkeyd（2026-09，阶段 10）
+
+这台机器以前由 `D:\prj\oskeyd\target\release\oskeyd.exe` 提供 `Win+S`、
+`Win+1..3`、`Win+W`、`Win+X`、`Win+/`、`CapsLock`、`Alt+H/J/K/L`、
+`Alt+Space`、`LWin+Q`、`LWin+F1..F4`、小键盘 `-`/`+`/`Enter` 这些绑定。
+2026-09 起改由 flowkeyd 顶替，**oskeyd 不再常驻**（接管当时它本来就没在跑：
+机器重启后它没有自启项，也就没被拉起来）。两边读写的是同一套配置 schema，
+本机那份配置已经搬到 `%USERPROFILE%\.config\flowkeyd\config.lua`（绑定一个字
+都没改），`flowkeyd --check` 通过：24 个快捷键、0 个重映射、零警告。
+
+```powershell
+# 启动常驻：默认会自提权，所以会弹一次 UAC
+Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowkeyd.exe'
+
+# 干净退出（不带 /F）
+& taskkill.exe /PID <pid>
+
+# 回滚到 oskeyd（同样是提权启动）
+Start-Process -Verb RunAs -FilePath 'D:\prj\oskeyd\target\release\oskeyd.exe'
+```
+
+**没有**给 flowkeyd 加开机自启：oskeyd 本来也没有自启项，它是靠 exe 上的
+`RUNASADMIN` 兼容性标记手动启动的。要做自启就用任务计划程序（*登录时*触发 +
+“使用最高权限运行”）。注意 `RUNASADMIN` 标记会让**任何**调用都提权，
+连 `flowkeyd --check` 都会弹 UAC，所以本仓库没有去登记那个标记。
 
 ## 命令行
 
@@ -727,13 +753,29 @@ $env:FLOWKEYD_ALLOW_SCREEN_OFF = '1'
   以及虚拟桌面的只读探测 + 一次可逆的切换（切走再切回来）。
   `FLOWKEYD_ALLOW_SCREEN_OFF=1` 时还会执行一次真正的关屏，随后注入一个无害的
   Shift 把屏幕点亮。**睡眠/关机/重启/注销/锁定绝不会被自动化测试触碰。**
-* **手工冒烟清单**（本项目没有 e2e 脚本，这是验证桌面行为的唯一方式）：
-  用一份只含被测绑定的一次性配置（`--no-elevate --allow-multi`），逐条过：
-  单实例拒绝、吞键（用一个未绑定键做正对照）、被吞掉的 `Win+…` 不弹开始菜单
-  （按住 Win 键超过自动重复延迟再松开也不能弹）、自动重复只触发一次、
-  重映射、`send` 的修饰键释放、`suspend`/`reload`/`quit`、
-  `window` 的启动→激活→收起→恢复、以及最后确认没有按键卡在按下状态。
-  细节见 `AGENTS.md` 第 5 节的清单。
+* **验收脚本**（`scripts\acceptance.ps1`）是“钩子真的吞了键”那类结论的**外部**
+  证据：它用一个一次性配置起一个非提权的守护进程，从另一个上下文用 `SendInput`
+  注入按键，再用一个获得焦点的 WinForms 窗口观察按键到底有没有到达前台
+  （未绑定的键做正对照，所以“焦点没拿到”不会被误会成“吞键成功”）。
+  它跑 68 项检查：吞键、被吞掉的 `Win+S`（常规 / 0 ms 轻按 / 一次、两次
+  Windows 键自动重复）、自动重复只派发一次、重映射 hold/tap/`CapsLock -> Esc`、
+  `send` 的修饰键释放、小键盘与主键盘互不触发、`window` 的
+  启动→激活→收起→恢复、`menu`/`help` 弹窗的键盘选择与筛选、
+  `suspend`/`resume`/`reload`/`quit`，以及最后没有按键卡在按下状态。
+
+  ```powershell
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance.ps1
+  powershell.exe ... -Exe build\windows-release\flowkeyd.exe   # 另一条 profile
+  powershell.exe ... -Phase config                              # 只看配置，不注入按键
+  ```
+
+  它需要交互式桌面会话，并且约两分钟里会**持续注入按键、抢焦点**。
+
+  钩子默认丢弃一切带 `LLKHF_INJECTED` 的事件，脚本伪造不了物理按键 ——
+  所以守护进程用 `FLOWKEYD_ACCEPT_INJECTED=1` 启动，那是**只给测试用的后门**
+  （与 oskeyd 的 `OSKEYD_ACCEPT_INJECTED` 同款），启用时日志里有一条警告。
+  flowkeyd 自己注入的按键带着 `"FLOW"` 标记，在钩子回调的第一步就被丢掉，
+  所以抬升这道过滤不会让重映射自己喂自己。
 * **只能看得见的效果**（`animate`、弹窗的配色与布局）只能靠肉眼：
   改这块之后请自己试一遍。
 
@@ -798,9 +840,13 @@ $env:FLOWKEYD_ALLOW_SCREEN_OFF = '1'
   覆盖（那需要 UI 自动化）；自提权的 UAC 流程也只能手工验证。
 * 托盘图标还不跟随 explorer 重启（没有处理 `TaskbarCreated`），也还没有真正的
   应用图标（现在用系统图标）。
-* **没有 `--simulate` / `--selftest` / `--probe`，也没有 e2e 脚本。** 这意味着
-  “钩子真的吞了键”“重映射真的注入了目标键”“动画真的被跳过”目前只有手工证据。
-  它们是明确的待办（见[路线图](#路线图)）。
+* **没有 `--simulate` / `--selftest` / `--probe`。** 引擎与钩子的行为靠
+  `scripts/acceptance.ps1`（注入按键的外部观察）与 Qt Test 单测来验证，
+  但那三个开关仍然是明确的待办（见[路线图](#路线图)）：
+  `--simulate` 不需要焦点、不装钩子，是更便宜的一条路。
+* **`FLOWKEYD_ACCEPT_INJECTED=1` 是个测试后门**：设上它之后，**别的程序**
+  合成的按键也会触发绑定（启用时日志里有一条警告）。日常使用不要设置它；
+  它的存在理由是“物理按键”没法用脚本伪造。
 * 按桌面编号跳转虚拟桌面（`desktop`）依赖 shell 的未公开 COM 接口
   `IVirtualDesktopManagerInternal`。它没有公开的 ABI 承诺：IID 与 vtable 布局
   会随 Windows 版本（甚至补丁修订号）变化，`src/platform/win/desktop.cpp` 里是
@@ -815,8 +861,10 @@ $env:FLOWKEYD_ALLOW_SCREEN_OFF = '1'
    这是最便宜的引擎验证手段，不需要焦点、不装钩子。
 2. `--selftest` / `--probe`：各平台后端探测与自检（Core Audio 的 COM vtable、
    虚拟桌面接口表、未公开 API 的可用性）。
-3. `scripts/e2e.ps1`：从第二个进程注入按键、抢焦点、屏幕采样，
-   给“真的吞了键/真的注入了/真的跳过了动画”留下外部证据。
+3. `scripts/e2e.ps1`：`scripts/acceptance.ps1` 已经覆盖了它的大部分
+   （吞键、重映射、自动重复、挂起/重载/退出、`window`、`menu`/`help`、小键盘）；
+   还缺的是动画的屏幕采样、托盘菜单点击、自提权的 UAC 流程，
+   以及把日志窗口那一套从外面断言。
 4. 延迟修饰键抑制，让 `Ctrl+Alt+H` 也隐藏 Ctrl 和 Alt。
 5. 托盘图标跟随 explorer 重启（`TaskbarCreated`）并支持自定义图标。
 6. 通过 `WH_MOUSE_LL` 支持鼠标按键与滚轮快捷键。

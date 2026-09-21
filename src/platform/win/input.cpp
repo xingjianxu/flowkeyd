@@ -5,6 +5,7 @@
 
 #include <QVector>
 
+#include <cstdlib>
 #include <mutex>
 #include <utility>
 
@@ -43,6 +44,16 @@ BackendPreference &storedPreference()
 }
 
 } // namespace
+
+bool acceptInjectedInput()
+{
+    // oskeyd 的 `OSKEYD_ACCEPT_INJECTED` 同款：只要变量存在（且非空）就算开启。
+    static const bool accept = [] {
+        const char *value = std::getenv("FLOWKEYD_ACCEPT_INJECTED");
+        return value != nullptr && *value != '\0';
+    }();
+    return accept;
+}
 
 std::optional<BackendPreference> parseBackendPreference(const QString &name)
 {

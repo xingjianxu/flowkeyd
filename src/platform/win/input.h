@@ -23,6 +23,19 @@ namespace flowkeyd::platform::win {
 /// `"FLOW"` —— 标记由 flowkeyd 合成的输入。
 inline constexpr ULONG_PTR kSyntheticTag = 0x464C4F57;
 
+/// `FLOWKEYD_ACCEPT_INJECTED=1`：**只给测试用的后门**。
+///
+/// 钩子默认丢弃一切带 `LLKHF_INJECTED` 的事件（不变量 2），于是脚本无法伪造
+/// 物理按键 —— 吞键、重映射、自动重复这些行为就只能靠人的手验证。
+/// 设置这个环境变量会抬升那道过滤，让*别的进程*注入的按键也参与匹配
+/// （oskeyd 的 `OSKEYD_ACCEPT_INJECTED` 是同款后门，它的 `scripts/e2e.ps1`
+/// 就是靠它工作的）。
+///
+/// 注意：flowkeyd **自己**合成的输入带着 [`kSyntheticTag`]，在钩子回调的第一步
+/// 就被丢掉，所以打开这个开关也不会让重映射自己喂自己。
+/// 变量在进程内只读一次（首次调用时缓存）。
+bool acceptInjectedInput();
+
 enum class BackendPreference { Auto, User32, NtUser };
 
 /// 解析 `auto` / `user32` / `ntuser`（`documented`/`win32u`/`undocumented` 作别名）。

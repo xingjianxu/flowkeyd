@@ -118,6 +118,11 @@ void HookThread::threadMain(std::promise<QString> ready)
         return;
     }
     logInfo(QStringLiteral("keyboard hook installed (WH_KEYBOARD_LL)"));
+    if (acceptInjectedInput()) {
+        logWarn(QStringLiteral(
+            "FLOWKEYD_ACCEPT_INJECTED is set: input synthesized by other programs will "
+            "trigger hotkeys (test mode only)"));
+    }
 
     s_active.store(this);
     SetTimer(nullptr, kTimerTick, m_initialConfig->settings.tickMs, nullptr);
@@ -160,7 +165,7 @@ bool HookThread::processHookEvent(WPARAM message, KBDLLHOOKSTRUCT *info)
     event.vk = core::keyFromHook(static_cast<core::Vk>(info->vkCode),
                                  (info->flags & LLKHF_EXTENDED) != 0);
     event.down = down;
-    event.injected = (info->flags & LLKHF_INJECTED) != 0;
+    event.injected = (info->flags & LLKHF_INJECTED) != 0 && !acceptInjectedInput();
 
     m_keyEvents.fetch_add(1);
     const core::Reaction reaction = m_engine->onKey(event, monotonicMs());

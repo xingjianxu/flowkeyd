@@ -30,10 +30,15 @@ void activateWindow(QQuickWindow *window)
 {
     window->raise();
     window->requestActivate();
-    if (window->isActive()) {
+    const HWND hwnd = reinterpret_cast<HWND>(window->winId());
+    const bool qtActive = window->isActive();
+    const bool foreground = GetForegroundWindow() == hwnd;
+    win::logDebug(QStringLiteral("popup activation: qtActive=%1 foreground=%2")
+                      .arg(qtActive)
+                      .arg(foreground));
+    if (qtActive && foreground) {
         return;
     }
-    const HWND hwnd = reinterpret_cast<HWND>(window->winId());
     if (win::window::raiseWindow(hwnd)) {
         window->requestActivate();
     } else {
