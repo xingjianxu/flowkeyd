@@ -329,8 +329,16 @@ Window {
                     root.host.helpCopy(index)
             }
             onWheel: function (wheel) {
-                if (root.helpModel)
-                    root.helpModel.wheel(wheel.angleDelta.y)
+                if (!root.helpModel) {
+                    wheel.accepted = false
+                    return
+                }
+                root.helpModel.wheel(wheel.angleDelta.y)
+                // 列表滚动了，同一个物理行现在对应另一条：必须按光标位置重算
+                // 悬停的可见行下标。模型在滚轮里刻意不清悬停，两端合起来才能
+                // 让高亮一直待在光标那一行上（见 AGENTS.md 第 10 节的闪烁）。
+                hoverAt(mouseX, mouseY)
+                wheel.accepted = true
             }
 
             function hoverAt(px, py) {

@@ -343,12 +343,20 @@ void HelpModel::setHover(int line)
 
 void HelpModel::moveSelection(int delta)
 {
+    moveSelection(delta, true);
+}
+
+void HelpModel::moveSelection(int delta, bool clearHover)
+{
     if (m_visible.empty()) {
         return;
     }
     const int last = visibleCount() - 1;
-    m_selected = std::clamp(m_selected + delta, 0, last);
-    m_hover = -1;
+    const int next = std::clamp(m_selected + delta, 0, last);
+    if (clearHover) {
+        m_hover = -1;
+    }
+    m_selected = next;
     ensureVisible();
     notifyRows();
 }
@@ -356,9 +364,13 @@ void HelpModel::moveSelection(int delta)
 void HelpModel::wheel(int angleDeltaY)
 {
     // 一格滚轮（±120）跳过三行，和系统的列表控件一致（与 oskeyd 相同）。
+    //
+    // 与键盘不同：**不清掉悬停**。滚轮之后 `HelpPopup.qml` 会按光标位置重算
+    // 悬停的可见行下标（列表滚动了，同一个物理行对应另一条），于是高亮既不会
+    // 跳到选中项、也不会粘在旧的那一条上——两端都做对了就没有中间帧可闪。
     const int lines = (angleDeltaY / 120) * 3;
     if (lines != 0) {
-        moveSelection(lines);
+        moveSelection(lines, false);
     }
 }
 

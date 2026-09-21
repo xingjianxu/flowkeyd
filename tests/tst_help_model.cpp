@@ -97,6 +97,7 @@ private slots:
     void backspaceRemovesOneCharacterAndRefilters();
     void arrowKeysClampAndScroll();
     void pageKeysHomeEndAndWheel();
+    void wheelKeepsTheHoverButKeyboardDropsIt();
     void clickRowSelectsAndReportsTheVisibleIndex();
     void scrollbarAppearsOnlyWhenTheContentOverflows();
     void maxRowsLimitsTheVisibleRows();
@@ -323,6 +324,43 @@ void TestHelpModel::pageKeysHomeEndAndWheel()
     shortModel.wheel(-120);
     QCOMPARE(shortModel.selected(), 0);
     QCOMPARE(shortModel.scroll(), 0);
+}
+
+// 滚轮与键盘在高亮上的区别：键盘要“接管”高亮（清掉悬停），滚轮不能。
+// 清掉悬停会让高亮先跳到选中项、再被鼠标微抖拉回光标那一行——两帧之间就是
+// 用户看到的闪烁（AGENTS.md 第 10 节）。
+void TestHelpModel::wheelKeepsTheHoverButKeyboardDropsIt()
+{
+    app::HelpModel model;
+    model.setItems(std::nullopt, manyItems(10));
+    model.setMaxRows(3);
+
+    // 光标停在可见行 1 上（`hitTest` 返回的就是可见行下标）。
+    model.setHover(model.hitTest(100, 150));
+    QCOMPARE(model.hover(), 1);
+    QCOMPARE(model.copyText(), QStringLiteral("Ctrl+F1"));
+
+    // 滚轮：选中项动，悬停不动。
+    model.wheel(120);
+    QCOMPARE(model.selected(), 3);
+    QCOMPARE(model.hover(), 1);
+    QCOMPARE(model.scroll(), 1);
+    QCOMPARE(model.copyText(), QStringLiteral("Ctrl+F1"));
+
+    // QML 会在滚轮之后按光标位置重算悬停：列表滚了一行，同一个物理行现在是
+    // 可见下标 2，于是高亮还是留在光标底下（而不是粘着旧那条、也不是跳到选中项）。
+    model.setHover(model.hitTest(100, 150));
+    QCOMPARE(model.hover(), 2);
+    QCOMPARE(model.copyText(), QStringLiteral("Ctrl+F2"));
+
+    // 键盘的上下：仍然是把高亮从鼠标手里收回来。
+    model.moveSelection(1);
+    QCOMPARE(model.hover(), std::nullopt);
+    QCOMPARE(model.selected(), 4);
+    QCOMPARE(model.copyText(), QStringLiteral("Ctrl+F4"));
+    model.handleKey(Qt::Key_Up, QString());
+    QCOMPARE(model.hover(), std::nullopt);
+    QCOMPARE(model.copyText(), QStringLiteral("Ctrl+F3"));
 }
 
 void TestHelpModel::clickRowSelectsAndReportsTheVisibleIndex()

@@ -170,6 +170,10 @@ public:
     /// 上下移动选中项；到边界夹住（与选单的回绕不同，与 oskeyd 一致）。
     Q_INVOKABLE void moveSelection(int delta);
     /// 鼠标滚轮：一格（±120）跳过三行，和系统的列表控件一致。
+    ///
+    /// 与键盘不同的是**不清掉鼠标悬停**：滚轮只是“把列表推上去”，高亮应该
+    /// 留在光标那一行。清掉悬停会让高亮先跳到选中项、再被紧随其后的鼠标
+    /// 微抖拉回来——两帧之间就是肉眼看到的闪烁（见 AGENTS.md 第 10 节）。
     Q_INVOKABLE void wheel(int angleDeltaY);
 
     /// 点击某一行：选中它并返回它的可见下标（-1 表示点到了空白处，什么也不做）。
@@ -190,6 +194,8 @@ signals:
     void stateChanged();
 
 private:
+    /// `moveSelection` 的实体：`clearHover` 为假时保留鼠标悬停（滚轮用）。
+    void moveSelection(int delta, bool clearHover);
     /// 重新算筛选结果、几何与计数，并把视图刷新一次。
     void refilter();
     void relayout();

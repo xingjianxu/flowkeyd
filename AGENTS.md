@@ -100,7 +100,7 @@
 | 日志窗口   | `oskeyd --log-window` **独立进程**，跑在命令行窗口里                   | **进程内的 QML 窗口**（FluentWinUI3），尾随同一个日志文件                                                     |
 | 选单/帮助  | 自绘 GDI 原生窗口，各自一条线程                                        | **QML 窗口**（FluentWinUI3），跑在 Qt GUI 线程上                                                              |
 | 示例配置   | `oskeyd.lua.example`                                                   | `flowkeyd.lua.example`                                                                                        |
-| 自动化测试 | `cargo test` + `--selftest`/`--probe`/`--simulate` + `scripts/e2e.ps1` | Qt Test 单元测试 + **`scripts/acceptance.ps1`**（68 项检查，注入按键的外部验收；`--simulate`/`--selftest`/`--probe` 本期不做，见第 12 节） |
+| 自动化测试 | `cargo test` + `--selftest`/`--probe`/`--simulate` + `scripts/e2e.ps1` | Qt Test 单元测试 + **`scripts/acceptance.ps1`**（77 项检查，注入按键 + 高亮/弹窗滚轮回归的外部验收；`--simulate`/`--selftest`/`--probe` 本期不做，见第 12 节） |
 | 依赖管理   | `cargo`                                                                | CMake Presets + Ninja，`vendor/lua` 静态编进二进制                                                            |
 
 ---
@@ -137,7 +137,7 @@
    `--check` / `--list` / `--list-keys` 保留（它们是产品功能，也是手工验证的
    主要工具）。
    → **阶段 9 补充（2026-09）**：这三个开关仍然不做，但“手工冒烟清单”已经
-   自动化成了 **`scripts/acceptance.ps1`**（68 项检查），它靠一个
+   自动化成了 **`scripts/acceptance.ps1`**（77 项检查），它靠一个
    **只给测试用的后门** `FLOWKEYD_ACCEPT_INJECTED=1` 抬升“丢弃注入输入”
    那道过滤（照抄 oskeyd 的 `OSKEYD_ACCEPT_INJECTED`，见第 10 节）。
    这是对一个“当时无法验证”的条款的修订，不是推翻：不变量 2 本身没动，
@@ -267,7 +267,7 @@ Qt 自己的库随便链**：
 | `src/app/popup_host.h/.cpp`               | 把上面的模型挂到 QML 窗口上；抢前台（`requestActivate` + `win::window::raiseWindow` 的前台锁绕行）；在 Qt GUI 线程上创建/复用窗口；用户选完把活儿回投工作线程（**GUI 线程亲和**） |
 | `src/qml/`                                | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`（三个文件都在开头写了 `pragma ComponentBehavior: Bound`）；配色一律用 `palette`，没有单独的 `Style.qml` |
 | `tests/`                                  | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_log_tail`、`tst_audio`、`tst_interactive`（需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`，否则 skip）、`tst_menu_model`、`tst_help_model`、`tst_power_table`、`tst_desktop_table`、`tst_layout` |
-| `scripts/acceptance.ps1`                  | 桌面行为的验收脚本（注入按键 + 焦点捕捉窗口的外部观察，68 项检查）；需交互式桌面，**不属于 `ctest`**，见第 5 节与阶段 9 |
+| `scripts/acceptance.ps1`                  | 桌面行为的验收脚本（注入按键 + 焦点捕捉窗口的外部观察，77 项检查）；需交互式桌面，**不属于 `ctest`**，见第 5 节与阶段 9 |
 
 ### CMake 目标划分（阶段 6 之后）
 
@@ -397,7 +397,7 @@ QML 模块注册之后，两条 profile 都要重新全量构建一次**。
 清单在下面（12 条），**从阶段 9 起有了自动化版本**：
 
 ```powershell
-# 68 项检查，约两分钟，会持续注入按键/抢焦点；按工作约定第 6 条先提醒用户
+# 77 项检查，约两分钟，会持续注入按键/抢焦点；按工作约定第 6 条先提醒用户
 # 只跑 release 那一份产物（见工作约定第 2 条，脚本默认 -Exe 就是它）
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance.ps1
 powershell.exe ... -Phase config                              # 只看配置，不注入按键
@@ -653,7 +653,7 @@ powershell.exe ... -Phase config                              # 只看配置，�
 | 6 弹窗 `menu` / `help` | **已完成** | `flowkeyd_models` + 两张 QML 卡片；`tst_menu_model`/`tst_help_model` 全绿；渲染/筛选/键盘选择由 `tmp/preview` 验证 |
 | 7 虚拟桌面 + 电源 | **已完成** | `platform/win/desktop|power` + dispatcher 接线；`tst_desktop_table`/`tst_power_table` 全绿；真实 COM 探测/切换与关屏由 `tst_interactive` 验证 |
 | 8 示例配置 + README | **已完成** | `flowkeyd.lua.example` 与 oskeyd 逐行对齐（除 UI/probe/simulate 那几处）；`README.md` 已写出；`--check` 37 hotkey / 3 remap |
-| 9 验收（无 e2e 的替代） | **已完成** | `scripts/acceptance.ps1`（68 项检查，需交互式桌面）+ `FLOWKEYD_ACCEPT_INJECTED` 测试后门；debug 跑 3 遍、release 跑 2 遍全绿 |
+| 9 验收（无 e2e 的替代） | **已完成** | `scripts/acceptance.ps1`（77 项检查：68 项原样 + 9 项弹窗滚轮回归，需交互式桌面）+ `FLOWKEYD_ACCEPT_INJECTED` 测试后门；debug 跑 3 遍、release 跑 2 遍全绿 |
 | 10 接管 | **已完成（待用户点一次 UAC）** | 真实配置已迁到 `.config\flowkeyd\config.lua`（24 hotkey / 0 remap，零警告）；oskeyd 本来就没在跑；常驻启动由用户手动 `Start-Process -Verb RunAs` |
 
 ### 阶段 0：仓库与构建骨架
@@ -1230,11 +1230,12 @@ hold/tap；挂起/重载/退出。
   这是能自动验证“真的吞了键”的前提：钩子不认注入输入，脚本就伪造不了物理按键，
   而 `--simulate` 本期不做（第 12 节）。**不变量 2 没被放宽**：flowkeyd 自己
   注入的事件带着 `"FLOW"` 标记，仍然在钩子回调第一步就被丢掉。
-* **`scripts/acceptance.ps1`**（新文件，68 项检查）：一次性配置 + 获得焦点的
+* **`scripts/acceptance.ps1`**（新文件，当时 68 项检查：一次性配置 + 获得焦点的
   WinForms 捕捉窗口 + `SendInput` 注入 + 剪贴板/窗口/日志当外部证据。
   覆盖第 5 节清单的 1–12 条，另外还多做了：小键盘与主键盘互不触发（6 项）、
   重映射 hold/tap（不只是 CapsLock）、`menu`/`help` 弹窗的键盘选择与筛选、
-  以及“重新打开的选单也要重新拿到焦点”。
+  以及“重新打开的选单也要重新拿到焦点”。**后续又加了 9 项弹窗滚轮回归，
+  现在是 77 项**（见第 10 节的“弹窗在滚轮下闪烁”）。
 * 脚本的检查名用中文字面量（oskeyd 的 e2e 也是这个风格），所以文件必须以
   **带 BOM 的 UTF-8** 保存 —— PowerShell 5.1 会把无 BOM 的 `.ps1` 按 ANSI
   代码页解码。三个窗口标题故意用 `[char]` 码点拼出来，这样即使 BOM 丢了
@@ -1243,9 +1244,13 @@ hold/tap；挂起/重载/退出。
 **实测结果（2026-09）**
 
 ```
-# debug 跑了 3 遍、release 跑了 2 遍
+# debug 跑了 3 遍、release 跑了 2 遍（当时还是 68 项）
 checks: 68, failures: 0
 ```
+
+> **2026-09 补充**：修完“弹窗在滚轮下闪烁”之后又加了 9 项检查（选单/帮助各几条，
+> 包括“滚轮之后 Enter 复制的还是光标下那一行”这条能直接抓住旧代码的回归），
+> 现在是 **77 项**（`checks: 77, failures: 0`，已在 release 与 debug 上跑过）。
 
 * `flowkeyd --check --config flowkeyd.lua.example` → 37/3、零警告（未变）。
 * 四条 Win 和弦变体全绿：常规 / 0 ms 轻按 / 一次、两次 Windows 键自动重复 ——
@@ -1314,6 +1319,12 @@ checks: 68, failures: 0
 ```powershell
 Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowkeyd.exe'
 ```
+
+> **副作用：这个常驻实例会把 `build\windows-release\flowkeyd.exe` 锁住**（它跑在
+> 用户的管理员令牌下，agent 的 shell 既 `Stop-Process` 不动也 `taskkill /F` 不掉）。
+> 所以**每次要重新链接 release 的 exe 之前，都要请用户从托盘菜单点一下“退出”**，
+> 构建完再照上面那条重新启动；debug 目录没被占用，可以先用它做验证。
+> 细节见第 10 节。
 
 **验收（用户启动后逐条确认）**：`CapsLock`、`Alt+H/J/K/L`、`Alt+Space`、
 `LWin+Q`、`LWin+F1..F4`、`Win+S`、`Win+1/2/3`、`Win+W`、`Win+X`、`Win+/`、
@@ -1694,6 +1705,51 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 * **`.gitignore` 里的 `*.dll`/`*.exe` 让部署出来的文件不会进版本库**，
   所以“构建目录里多出 100 MB DLL”不会污染 `git status` —— 不用为部署动 `.gitignore`。
 
+#### 2026-09 修复：弹窗在滚轮下闪烁（`menu` / `help`）
+
+* **现象**：鼠标滚轮滚弹窗时高亮“闪一下”——上下箭头完全正常，只有滚轮会。
+* **根因**：滚轮走的是 `moveSelection()`，而它为了“键盘接管高亮”会把鼠标悬停
+  清掉（`m_hover = -1`，与 oskeyd 的 `State::move_selection` 一致）。于是
+  高亮先跳到**选中项**、下一帧又被紧随滚轮而至的鼠标微抖（1 px）拉回**光标那一行**。
+  两帧之间隔了 ~20 ms，肉眼就是闪一下。本机实测（真实守护进程 + 高速截屏）：
+  同一格滚轮前后两帧的差别是 167624 个像素，差别区域正好是整条高亮带。
+* **修法（两层，缺一不可）**：
+  1. `app::HelpModel::wheel()` 走新的 `moveSelection(delta, clearHover=false)`：
+     滚轮**不清悬停**（滚轮只是把列表推上去，高亮应该留在光标那一行）。
+     键盘的 `↑`/`↓`/`PgUp`/`Home` 仍然清悬停——那正是“键盘接管高亮”的语义。
+  2. `HelpPopup.qml` 的 `onWheel` 在滚完之后按光标位置**重算悬停行**
+     （`hoverAt(mouseX, mouseY)`）：列表滚了，同一个物理行现在对应另一条，
+     不重算的话高亮会粘在旧的那一条上。两处都在同一个事件处理里做完，
+     中间态不会被绘制。
+     另外 `wheel.accepted = true`：选单/帮助都不该把滚轮事件漏给别的接收者。
+* **`MenuPopup.qml` 的滚轮**：选单不滚动（oskeyd 也没处理 `WM_MOUSEWHEEL`），
+  但**必须接受**这个事件，否则它会继续往后冒、白白引起一次重绘。
+* **怎么验证这种“一闪而过”的 bug**（`tmp/` 下的临时工具，不进版本库）：
+  * 抓帧：`QQuickWindow::grabWindow()` 不够用（它在 GUI 线程上自己渲染一遍，
+    看不到合成器的中间帧）。用 `Graphics.CopyFromScreen` 抓弹窗那块的屏幕区域，
+    每帧算一个 FNV 指纹，~120 fps（1000x1416 区域约 8 ms/帧），
+    打印“与上一帧不同”的帧号与时间戳。
+  * 注入：`SendInput` 的 `MOUSEEVENTF_WHEEL` 之后**再注入 1 px 的
+    `MOUSEEVENTF_MOVE`**——真鼠标滚轮几乎总会带一点位移，只注入滚轮是复现不出来的。
+  * 抓到的帧存成 PNG，用 `imgdiff` 那种脚本打印“不同像素数 + 包围盒”，
+    就能一眼看出差的到底是哪一块（高亮带 vs 窗口边框）。
+  * 直接用 `tmp/wheel/realdaemon.ps1` 起一个**真实守护进程**（一次性配置 +
+    `FLOWKEYD_ACCEPT_INJECTED=1`）比用预览程序更接近用户现场。* **`QCOMPARE(optional<int>, -1)` 是错的**：`-1` 会被隐式构造成
+  `std::optional<int>{-1}`（engaged），而“没有悬停”是 `std::nullopt`（disengaged），
+  于是断言总是失败。写 `QCOMPARE(model.hover(), std::nullopt)`。
+* **`GetWindowRect` + `SetCursorPos` 必须同一种像素。** 验收脚本现在开头就
+  `SetProcessDPIAware()`（见 `FlowInject::DpiAware`），否则矩形是虚拟化过的
+  逻辑像素、而 `SetCursorPos` 要物理像素，光标会落到别处去。
+  弹窗几何靠**宽度反推缩放**（`menu` 卡片 300、`help` 卡片 500 逻辑像素），
+  比用 DPI 猜稳。
+* **提权常驻的实例会锁住 `build/windows-release/flowkeyd.exe`。** 它是以用户的
+  管理员令牌跑的，agent 的 shell 既 `Stop-Process -Force` 不动、
+  `taskkill /F` 也是“拒绝访问”。release 的全量构建因此会卡在最后一个链接步骤
+  （`cannot open output file flowkeyd.exe: Permission denied`）。**这时只能请用户
+  自己从托盘菜单点“退出”再重新 `Start-Process -Verb RunAs`**；
+  debug 目录没被占用，验证可以先用 `build\windows-debug\flowkeyd.exe` 做，
+  但 `ctest`/`acceptance.ps1` 的 DoD 仍然必须在 release 上跑完。
+
 ### 从 oskeyd 继承的领域坑（照抄那份的解法，不要重新发明）
 
 下面这些在 `../oskeyd/AGENTS.md` 第 6 节都有**完整的现象描述 + 修法**，
@@ -2026,3 +2082,13 @@ CLI 开关名字**完全不变**（`-c/--config`、`--no-elevate`、`--console`�
    但这是产品口味问题。
 5. **要不要给 flowkeyd 也做一份 `AGENTS.md` 里那种“英文日志 + 中文帮助”的
    文案约定表？** 目前只在第 4 条工作约定里写了原则。
+6. **帮助窗口的滚轮方向要不要翻过来？** 现在（与 oskeyd 1:1）是
+   `angleDelta.y > 0`（向前滚 / 系统里的“向上滚”）→ 选中项**向列表后面**走，
+   比普通列表控件的直觉**是反的**（oskeyd 的 `WM_MOUSEWHEEL` 分支也是这个方向）。
+   要改只是 `HelpModel::wheel()` 里一个符号，但那就不是 1:1 了；
+   问用户之前不要自作主张。
+7. **提权常驻实例会锁住 release 的 exe，而 agent 杀不掉它**（它跑在用户的管理员
+   令牌下，`Stop-Process -Force` / `taskkill /F` 都是“拒绝访问”）。
+   每次 release 全量构建前要请用户从托盘菜单点一下“退出”。
+   可选的长期解法：把常驻实例改从一份**拷贝**（比如 `%LOCALAPPDATA%\flowkeyd\`）
+   启动，构建目录就不再被占用 —— 但那需要用户改一下启动习惯。

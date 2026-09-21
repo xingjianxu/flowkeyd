@@ -23,9 +23,11 @@
 #   * 小键盘 `-`/`+`/`Enter` 与主键盘 `-`/`=`/`Enter` 互不触发
 #   * `window` 的启动 → 激活 → 收起（默认 toggle）→ 恢复
 #   * `menu` 弹窗：出现、拿到键盘焦点、条目键真的执行动作、Esc 只关窗、
-#     再按一次不开第二个（重新打开的窗口也必须重新拿到焦点）
+#     再按一次不开第二个（重新打开的窗口也必须重新拿到焦点）、
+#     滚轮不会把高亮从光标下拿走（AGENTS.md 第 10 节的弹窗闪烁回归）
 #   * `help` 弹窗：出现、拿到焦点、输入筛选后标题里的 `可见/总数` 变小、
-#     Enter 把选中那行的按键写进剪贴板、第一下 Esc 只清筛选、第二下才关窗
+#     Enter 把选中那行的按键写进剪贴板、第一下 Esc 只清筛选、第二下才关窗、
+#     滚轮之后高亮仍然待在光标那一行（而不是被滚轮带走的选中项）
 #   * suspend / resume（挂起时别的绑定不触发，而 suspend 自己仍然可用）
 #   * reload（改过的配置文本立刻生效）
 #   * quit（钩子卸掉、之后按键重新到达前台、没有按键卡在按下状态）
@@ -233,6 +235,76 @@ public static class FlowInject {
     [DllImport("user32.dll")] private static extern bool BringWindowToTop(IntPtr h);
     [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
 
+    // ---- 鼠标（滚轮回归用）------------------------------------------------
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct MOUSEINPUT {
+        public int dx;
+        public int dy;
+        public uint mouseData;
+        public uint dwFlags;
+        public uint time;
+        public IntPtr dwExtraInfo;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct INPUTMOUSE {
+        public uint type;
+        public MOUSEINPUT mi;
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern uint SendInput(uint nInputs, INPUTMOUSE[] pInputs, int cbSize);
+    [DllImport("user32.dll")] private static extern bool SetCursorPos(int x, int y);
+    [DllImport("user32.dll")] private static extern bool SetProcessDPIAware();
+    [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr h, out RECT r);
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RECT { public int left; public int top; public int right; public int bottom; }
+
+    private const uint INPUT_MOUSE = 0;
+    private const uint MOUSEEVENTF_WHEEL = 0x0800;
+
+    // 脚本自己 DPI 感知：不然 GetWindowRect 返回的是虚拟化过的逻辑像素，
+    // 与 SetCursorPos 要的物理像素混在一起就会把光标放到别的地方
+    // （AGENTS.md 第 10 节：“用 DPI 不感知的 PowerShell 进程去 GetWindowRect…”）。
+    public static void DpiAware() { SetProcessDPIAware(); }
+
+    public static void Cursor(int x, int y) { SetCursorPos(x, y); }
+
+    // 正数 = 向前滚（Windows 的 +120）。注意 flowkeyd/oskeyd 把它当成
+    // “往列表后面走”，与系统列表控件相反（1:1 复刻 oskeyd，见 AGENTS.md）。
+    public static void Wheel(int delta) {
+        INPUTMOUSE[] inputs = new INPUTMOUSE[1];
+        inputs[0].type = INPUT_MOUSE;
+        inputs[0].mi.dwFlags = MOUSEEVENTF_WHEEL;
+        inputs[0].mi.mouseData = (uint)delta;
+        if (SendInput(1, inputs, Marshal.SizeOf(typeof(INPUTMOUSE))) != 1) {
+            throw new Exception("SendInput(wheel) failed: " + Marshal.GetLastWin32Error());
+        }
+    }
+
+    // 属于 `pid` 的、标题以 `prefix` 开头的第一个可见顶层窗口的物理矩形。
+    public static int[] WindowRect(int pid, string prefix) {
+        IntPtr found = IntPtr.Zero;
+        EnumWindows(delegate(IntPtr h, IntPtr l) {
+            uint wpid;
+            GetWindowThreadProcessId(h, out wpid);
+            if (wpid != (uint)pid) { return true; }
+            if (!IsWindowVisible(h)) { return true; }
+            int n = GetWindowTextLengthW(h);
+            if (n <= 0) { return true; }
+            StringBuilder sb = new StringBuilder(n + 2);
+            GetWindowTextW(h, sb, sb.Capacity);
+            if (sb.ToString().StartsWith(prefix)) { found = h; return false; }
+            return true;
+        }, IntPtr.Zero);
+        if (found == IntPtr.Zero) { return new int[] { 0, 0, 0, 0 }; }
+        RECT r;
+        if (!GetWindowRect(found, out r)) { return new int[] { 0, 0, 0, 0 }; }
+        return new int[] { r.left, r.top, r.right - r.left, r.bottom - r.top };
+    }
+
     // 前台锁会拒绝“不在前台的那个进程”调用 SetForegroundWindow（这正是守护
     // 进程自己要有 raiseWindow 的原因）。这里用同样的办法：先 AttachThreadInput
     // 到当前前台线程再 SetForegroundWindow。没有它的话，用户在我们跑测试时点了
@@ -253,6 +325,9 @@ public static class FlowInject {
     }
 }
 "@
+
+# 脚本自己 DPI 感知：后面要拿弹窗的物理矩形算光标位置（见 FlowInject.DpiAware）。
+[FlowInject]::DpiAware() | Out-Null
 
 # =============================================================================
 # 一次性配置：所有用到的和弦都是真实应用不会碰的键（F13..F24 / Ctrl+Alt+Fx），
@@ -685,6 +760,29 @@ try {
     Check 'Esc 只关窗、什么都不选' (WaitUntil { -not [FlowInject]::HasWindowTitled($daemon.Id, $MENU_TITLE) } 3000)
     Check 'Esc 没动剪贴板' ((ClipGet) -eq 'MENU-OK')
 
+    # 滚轮在选单上应该什么都不做（与 oskeyd 一致），而且不能把高亮从光标下
+    # 拿走：光标压在“cancel”那一条上滚几格再 Enter，必须还是不执行任何动作。
+    FocusCatcher
+    CtrlAlt $VK_F9
+    Check '为了滚轮检查能再打开一次选单' (WaitUntil { [FlowInject]::HasWindowTitled($daemon.Id, $MENU_TITLE) } 5000)
+    $focusedForWheel = WaitUntil { [FlowInject]::ForegroundTitle() -eq $MENU_TITLE } 4000
+    $menuRect = [FlowInject]::WindowRect($daemon.Id, $MENU_TITLE)
+    Check '能拿到选单窗口的矩形' ($menuRect[2] -gt 0)
+    if ($focusedForWheel -and $menuRect[2] -gt 0) {
+        $menuScale = $menuRect[2] / 300.0
+        # 第 2 条（下标 1）的中线：pad(10) + 标题(30) + 一行(40) + 半行(19)。
+        [FlowInject]::Cursor($menuRect[0] + [int](150 * $menuScale),
+                             $menuRect[1] + [int](99 * $menuScale))
+        Pump 400
+        ClipSet 'SENTINEL'
+        for ($i = 0; $i -lt 3; $i++) { [FlowInject]::Wheel(120) }
+        Pump 500
+        TapKey $VK_RETURN
+        Pump 800
+        Check '选单不响应滚轮：Enter 选的还是光标下的“cancel”那一行' ((ClipGet) -eq 'SENTINEL')
+        Check '选完选单关掉了' (WaitUntil { -not [FlowInject]::HasWindowTitled($daemon.Id, $MENU_TITLE) } 3000)
+    }
+
     # --- 帮助弹窗 ------------------------------------------------------------
     Write-Host '--- 帮助弹窗 ---'
     FocusCatcher
@@ -701,6 +799,51 @@ try {
     $full = HelpCounts
     Write-Host "         help caption: $($full.Visible)/$($full.Total)"
     Check '标题里的可见/总数是满的' ($null -ne $full -and $full.Total -eq 17)
+
+    # --- 滚轮：高亮必须待在光标那一行上 --------------------------------------
+    # 回归的是「弹窗在滚轮下闪烁」：模型在滚轮里不再清掉鼠标悬停，QML 在滚完之后
+    # 按光标位置重算悬停行。判据是一个从外面能看到的推论：
+    #   * 光标压在第 1 行，滚一大截（选中项因此被顶到末尾）；
+    #   * Enter 复制的是**光标下那一行**（= 列表滚过之后那条），不是选中项；
+    #   * 把光标移到窗口底部（不属于任何行）再 Enter，这时复制的才是选中项。
+    # 两者必须不同——旧代码（滚轮清悬停）下它们会一样，这条就会挂。
+    # 卡片宽 500 逻辑像素、第一行中线在 itemsTop(88) + rowHeight/2，所以用
+    # 窗口宽度反推缩放（DPI 感知后矩形是物理像素）。
+    $helpRect = [FlowInject]::WindowRect($daemon.Id, $HELP_TITLE)
+    Check '能拿到帮助窗口的矩形' ($helpRect[2] -gt 0)
+    if ($helpRect[2] -gt 0) {
+        $scale = $helpRect[2] / 500.0
+        $midX = $helpRect[0] + [int](250 * $scale)
+        $rowY = $helpRect[1] + [int](111 * $scale)
+        $footerY = $helpRect[1] + $helpRect[3] - [int](18 * $scale)
+        [FlowInject]::Cursor($midX, $rowY)
+        Pump 400
+        ClipSet 'SENTINEL'
+        TapKey $VK_RETURN
+        Pump 600
+        $rowUnderCursor = ClipGet
+        Check '光标压在第 1 行时 Enter 复制的是它' (
+            $null -ne $rowUnderCursor -and $rowUnderCursor -ne 'SENTINEL')
+        for ($i = 0; $i -lt 12; $i++) { [FlowInject]::Wheel(120) }
+        Pump 800
+        Check '滚轮之后弹窗还在、计数不变' (
+            ($null -ne (HelpCounts)) -and (HelpCounts).Visible -eq $full.Visible)
+        ClipSet 'SENTINEL'
+        TapKey $VK_RETURN
+        Pump 600
+        $afterWheel = ClipGet
+        if ($afterWheel -eq $rowUnderCursor) { Diag "wheel: the row under the cursor did not move: [$afterWheel]" }
+        Check '滚轮真的滚了列表（光标下那一行变了）' ($null -ne $afterWheel -and $afterWheel -ne $rowUnderCursor)
+        [FlowInject]::Cursor($midX, $footerY)
+        Pump 400
+        ClipSet 'SENTINEL'
+        TapKey $VK_RETURN
+        Pump 600
+        $selection = ClipGet
+        if ($selection -eq $afterWheel) { Diag "wheel: hover did not survive the wheel: [$selection]" }
+        Check '滚轮不会把高亮交给选中项（光标移开后才是选中项）' (
+            $null -ne $selection -and $selection -ne 'SENTINEL' -and $selection -ne $afterWheel)
+    }
     TapKey 0x46   # 'f'
     TapKey 0x31   # '1'
     TapKey 0x38   # '8'

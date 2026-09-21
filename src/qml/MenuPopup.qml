@@ -179,6 +179,12 @@ Window {
                 if (root.menuModel)
                     root.menuModel.setHover(-1)
             }
+            // 选单不滚动（与 oskeyd 一致：那边也没处理 `WM_MOUSEWHEEL`），
+            // 但**必须接受**这个事件：留着不处理会让它继续往后冒（Qt 会接着找
+            // 接收者，窗口因此白白重绘一帧——就是肉眼看到的闪一下）。
+            onWheel: function (wheel) {
+                wheel.accepted = true
+            }
             onClicked: {
                 if (!root.menuModel || !root.host)
                     return
