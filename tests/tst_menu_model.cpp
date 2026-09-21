@@ -1,7 +1,9 @@
-// `menu` 选单模型的纯逻辑单测：几何、高亮、单字符选中、命中测试、`Esc`/`Enter`。
+// `menu` 选单模型的纯逻辑单测：卡片几何、高亮、单字符选中、`Esc`/`Enter`。
 //
-// 不碰 QML、不碰任何 Win32：窗口与前台锁那部分在 `app::PopupHost` 里，
-// 由手工冒烟验证（见 AGENTS.md 第 5 节）。
+// 不碰 QML、不碰任何 Win32：窗口与前台锁那部分在 `app::PopupHost` 里。
+// **行几何与命中测试不在这里测**——它们已经不是模型的事了（列表是标准的
+// QML `ListView` + `ItemDelegate`，见 AGENTS.md 第 10 节），只剩卡片外框的
+// 那几个数字与「列表从卡片顶部的哪里开始」。
 #include <QtTest>
 
 #include <QAbstractItemModel>
@@ -75,8 +77,7 @@ class TestMenuModel : public QObject
 
 private slots:
     void cardSizeFollowsTheItemCountAndTitle();
-    void rowsAreStackedInsideTheCard();
-    void hitTestHitsRowsAndIgnoresChrome();
+    void listMetricsMatchTheCardGeometry();
     void highlightWrapsAroundAtBothEnds();
     void acceptReturnsTheHighlightedItem();
     void emptyMenuHasNoHighlightAndIgnoresArrows();
@@ -86,7 +87,7 @@ private slots:
     void hoverOverridesTheKeyboardHighlight();
     void resetClearsTheHighlight();
     void popupPlacementStaysOnScreen();
-    void rolesExposeTheGeometryForQml();
+    void rolesExposeWhatTheDelegateNeeds();
 };
 
 void TestMenuModel::cardSizeFollowsTheItemCountAndTitle()
@@ -111,42 +112,35 @@ void TestMenuModel::cardSizeFollowsTheItemCountAndTitle()
     QCOMPARE(empty.cardHeight(), 10 + 2 + 22 + 10);
 }
 
-void TestMenuModel::rowsAreStackedInsideTheCard()
+void TestMenuModel::listMetricsMatchTheCardGeometry()
 {
     app::MenuModel model;
     model.setItems(QStringLiteral("电源"), powerItems());
 
-    checkRect(model.rowRect(0), 10, 40, 280, 38);
-    checkRect(model.rowRect(1), 10, 80, 280, 38);
-    checkRect(model.rowRect(3), 10, 160, 280, 38);
-    // 最后一行必须在底部提示之上。
-    QVERIFY(model.rowRect(3).y + model.rowRect(3).height <= model.footerRect().y);
+    // 列表从表头之下开始，一行占「行高 + 行距」一格；这几个常量让 QML 的
+    // `ListView` 与卡片几何对得上（`cardHeight` 就是用同一组数字算出来的）。
+    QCOMPARE(model.listTop(), 40);   // 内边距 10 + 标题 30
+    QCOMPARE(model.rowHeight(), 38);
+    QCOMPARE(model.rowSpacing(), 2);
+    QCOMPARE(model.rowInset(), 8);
+    QCOMPARE(model.badgeSize(), 22);
 
     checkRect(model.titleRect(), 18, 10, 264, 30);
     checkRect(model.footerRect(), 18, 202, 264, 22);
 
-    // 徽标在行内垂直居中，标签/副标题在 60% 处分割（与 oskeyd 相同）。
-    checkRect(model.badgeRect(0), 18, 48, 22, 22);
-    checkRect(model.labelRect(0), 48, 40, 130, 38);
-    checkRect(model.hintRect(0), 178, 40, 104, 38);
+    // 最后一行必须在底部提示之上。
+    const int pitch = model.rowHeight() + model.rowSpacing();
+    const int lastRowBottom = model.listTop() + model.count() * pitch - model.rowSpacing();
+    QVERIFY(lastRowBottom <= model.footerRect().y);
+    // 卡片高度 = 表头 + 列表 + 列表与底部提示之间的空隙 + 底部提示 + 内边距。
+    QCOMPARE(model.cardHeight(), model.listTop() + model.count() * pitch + 2 + 22 + 10);
     QVERIFY(model.footerText().contains(QStringLiteral("Esc")));
-}
 
-void TestMenuModel::hitTestHitsRowsAndIgnoresChrome()
-{
-    app::MenuModel model;
-    model.setItems(QStringLiteral("电源"), powerItems());
-
-    QCOMPARE(model.hitTest(10, 40), 0);
-    QCOMPARE(model.hitTest(289, 77), 0);
-    QCOMPARE(model.hitTest(10, 80), 1);
-    QCOMPARE(model.hitTest(150, 170), 3);
-    // 内边距、标题与底部提示都不是条目。
-    QCOMPARE(model.hitTest(9, 45), -1);
-    QCOMPARE(model.hitTest(18, 20), -1);
-    QCOMPARE(model.hitTest(18, 210), -1);
-    // 条目之间的空隙也不是条目。
-    QCOMPARE(model.hitTest(150, 78), -1);
+    // 没写 `title` 时表头整块高度是 0，列表直接从内边距之下开始。
+    app::MenuModel untitled;
+    untitled.setItems(std::nullopt, powerItems());
+    QCOMPARE(untitled.listTop(), 10);
+    QCOMPARE(untitled.cardHeight(), 204);
 }
 
 void TestMenuModel::highlightWrapsAroundAtBothEnds()
@@ -319,7 +313,7 @@ void TestMenuModel::popupPlacementStaysOnScreen()
     QCOMPARE(left.y, 383);
 }
 
-void TestMenuModel::rolesExposeTheGeometryForQml()
+void TestMenuModel::rolesExposeWhatTheDelegateNeeds()
 {
     app::MenuModel model;
     model.setItems(QStringLiteral("电源"), powerItems());
@@ -327,13 +321,18 @@ void TestMenuModel::rolesExposeTheGeometryForQml()
     const int labelRole = roleOf(model, "label");
     const int hintRole = roleOf(model, "hint");
     const int keyRole = roleOf(model, "keyText");
-    const int highlightedRole = roleOf(model, "highlighted");
-    const int rowRole = roleOf(model, "rowRect");
+    const int selectedRole = roleOf(model, "rowSelected");
     QVERIFY(labelRole > 0);
     QVERIFY(hintRole > 0);
     QVERIFY(keyRole > 0);
-    QVERIFY(highlightedRole > 0);
-    QVERIFY(rowRole > 0);
+    QVERIFY(selectedRole > 0);
+
+    // 行几何与「鼠标悬停」不再由模型给：每一行是标准的 `ItemDelegate`，它自己
+    // 就有 `hovered` 与 `highlighted` 两个属性（角色名撞上就声明不出来），
+    // 而行几何与命中测试归 `ListView`。这条断言盯着别把它们再加回来。
+    QCOMPARE(roleOf(model, "highlighted"), -1);
+    QCOMPARE(roleOf(model, "hovered"), -1);
+    QCOMPARE(roleOf(model, "rowRect"), -1);
 
     QCOMPARE(model.rowCount(), 4);
     QCOMPARE(model.data(model.index(0, 0), labelRole).toString(), QStringLiteral("睡眠"));
@@ -341,15 +340,13 @@ void TestMenuModel::rolesExposeTheGeometryForQml()
     // 徽标显示大写（与 oskeyd 的 `key.to_uppercase()` 一致）。
     QCOMPARE(model.data(model.index(0, 0), keyRole).toString(), QStringLiteral("S"));
     QCOMPARE(model.data(model.index(3, 0), keyRole).toString(), QString());
-    QCOMPARE(model.data(model.index(0, 0), highlightedRole).toBool(), true);
-    QCOMPARE(model.data(model.index(1, 0), highlightedRole).toBool(), false);
+    QCOMPARE(model.data(model.index(0, 0), selectedRole).toBool(), true);
+    QCOMPARE(model.data(model.index(1, 0), selectedRole).toBool(), false);
 
-    const QRect row = model.data(model.index(1, 0), rowRole).toRect();
-    QCOMPARE(row, QRect(10, 80, 280, 38));
-
+    // 鼠标悬停的那一行就是高亮那一行（`Enter` 选的也是它）。
     model.setHover(1);
-    QCOMPARE(model.data(model.index(1, 0), highlightedRole).toBool(), true);
-    QCOMPARE(model.data(model.index(0, 0), highlightedRole).toBool(), false);
+    QCOMPARE(model.data(model.index(1, 0), selectedRole).toBool(), true);
+    QCOMPARE(model.data(model.index(0, 0), selectedRole).toBool(), false);
 
     // 越界/无效下标不能崩。
     QCOMPARE(model.data(QModelIndex(), labelRole).isValid(), false);

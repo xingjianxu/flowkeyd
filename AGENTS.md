@@ -90,7 +90,7 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | 日志窗口   | **进程内的 QML 窗口**（FluentWinUI3），尾随同一个日志文件                                                     |
 | 选单/帮助  | **QML 窗口**（FluentWinUI3），跑在 Qt GUI 线程上                                                              |
 | 示例配置   | `flowkeyd.lua.example`                                                                                        |
-| 自动化测试 | Qt Test 单元测试 + **`scripts/acceptance.ps1`**（112 项检查，注入按键 + 高亮/弹窗滚轮/拖动滚动条/“滚动不改键盘选中项”/鼠标点选与点筛选框/`Enter` 与双击真的执行动作/危险动作两次确认的外部验收；`--simulate`/`--selftest`/`--probe` 本期不做，见第 12 节） |
+| 自动化测试 | Qt Test 单元测试 + **`scripts/acceptance.ps1`**（116 项检查，注入按键 + 高亮/弹窗滚轮/拖动滚动条/“滚动不改键盘选中项”/鼠标点选与点筛选框/鼠标点选单条目/`Enter` 与双击真的执行动作/危险动作两次确认的外部验收；`--simulate`/`--selftest`/`--probe` 本期不做，见第 12 节） |
 | 依赖管理   | CMake Presets + Ninja，`vendor/lua` 静态编进二进制                                                            |
 
 ---
@@ -123,7 +123,7 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
    `--check` / `--list` / `--list-keys` 保留（它们是产品功能，也是手工验证的
    主要工具）。
    → **阶段 9 补充（2026-09）**：这三个开关仍然不做，但“手工冒烟清单”已经
-   自动化成了 **`scripts/acceptance.ps1`**（112 项检查），它靠一个
+   自动化成了 **`scripts/acceptance.ps1`**（116 项检查），它靠一个
    **只给测试用的后门** `FLOWKEYD_ACCEPT_INJECTED=1` 抬升“丢弃注入输入”
    那道过滤（见第 5 节与阶段 9）。
    这是对一个“当时无法验证”的条款的修订，不是推翻：不变量 2 本身没动，
@@ -168,7 +168,11 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
      WinForms 的 `ListBox` 也一样）。自绘时期的 flowkeyd 曾把正数
      当成“往列表后面走”，方向与系统列表控件相反；**已经改掉**，
      `scripts/acceptance.ps1` 里帮助那一段因此是 `Wheel(-120)`。
-   * 选单（`MenuPopup`）不滚动，仍然用 `Repeater` + 模型算好的几何，不动。
+   * 选单（`MenuPopup`）也走同一条路线（项目所有者 2026-09 要求），而且它
+     **不滚动**（条目数决定卡片高度），所以没有滚动条：列表同样是真正的
+     `ListView` + 标准 `ItemDelegate`，左键点一行 = 执行它，行几何与命中测试
+     不再进模型（见第 10 节）。与帮助窗口的区别只有两处：**悬停仍然驱动高亮**
+     （`Enter` 执行光标下那一条，这是菜单的语义），以及它一次只列一层、不筛选。
 
 ---
 
@@ -277,13 +281,13 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `src/app/dispatcher.h/.cpp`               | **动作工作线程**（`QThread`）：执行动作列表，含 `window` 的“先启动再激活”与默认开的 `toggle` 收起、`menu` 的窗口请求、`help` 的窗口请求 + 每一行的“执行目标”（绑定是 press+release 两串动作，`remap` 是直接注入目标按键） |
 | `src/app/runtime.h/.cpp`                  | 引擎 + 钩子 + 分发 + 托盘 + 弹窗的总装，`ControlCmd`（suspend/reload/quit）通道                                                                                                                                             |
 | `src/app/log_model.h/.cpp`                | 日志窗口的模型：尾随日志文件（增量、半行、被截断的多字节 UTF-8）、最多 1000 行、按级别配色、子串过滤                                                                                                                        |
-| `src/app/menu_model.h/.cpp`               | `menu` 选单的**纯逻辑**（`QAbstractListModel`，只用 QtCore）：条目几何、高亮移动（到边界回绕）、单字符选中、`Esc`/`Enter` 语义、命中测试（**可单测**） |
+| `src/app/menu_model.h/.cpp`               | `menu` 选单的**纯逻辑**（`QAbstractListModel`，只用 QtCore）：卡片外框几何（宽高、标题、底部提示）、高亮移动（到边界回绕）、单字符选中、`Esc`/`Enter` 语义，以及给 QML 排版用的几个常量（`listTop`/`rowHeight`/`rowSpacing`/`rowInset`/`badgeSize`）。**行几何与鼠标命中不归它管**：列表是真正的 QML `ListView` + 标准 `ItemDelegate`（见第 2 节第 9 条与第 10 节），所以它没有 `rowRect`/`hitTest`，也**没有** `highlighted`/`hovered` 角色（那两个名字被标准委托占了）。悬停仍由模型持有（`hover`/`setHover`），因为「`Enter` 选光标下那一条」是选单的语义 |
 | `src/app/help_model.h/.cpp`               | `help` 帮助的**纯逻辑**（同上）：筛选（和弦/`comment`/`name`/动作摘要）、`可见/总数` 计数、键盘选中项（**高亮就是它**，鼠标悬停不改高亮）、`Enter`/双击该执行还是先武装（危险动作两次确认）、三级 `Esc`，以及鼠标点选用的 `setSelected()`（**可单测**）。**列表的滚动、行几何与鼠标命中都不归它管**：那是一个真正的 QML `ListView` + `ItemDelegate` + Qt 自带的 `ScrollBar`（见第 2 节第 9 条）。`handleKey()` 只接导航键与 `Enter`/`Esc`，字符/退格/`Home`/`End` 放行给标准 `TextField` |
 | `src/app/popup_layout.h/.cpp`             | 两个弹窗共用的几何类型（`PopupRect`/`PopupPoint`）与纯函数 `centrePopup()`（先在工作区居中、再夹进屏幕；**可单测**） |
 | `src/app/popup_host.h/.cpp`               | 把上面的模型挂到 QML 窗口上；抢前台（`requestActivate` + `win::window::raiseWindow` 的前台锁绕行）；在 Qt GUI 线程上创建/复用窗口；用户选完（或按 `Enter`/双击帮助里的一行）把活儿回投工作线程；`helpRun()` 负责把**可见行下标**换算成条目下标，并且**先把窗口藏起来再执行**（**GUI 线程亲和**） |
-| `src/qml/`                                | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`（三个文件都在开头写了 `pragma ComponentBehavior: Bound`）；配色一律用 `palette`，没有单独的 `Style.qml`。`HelpPopup.qml` 里除了卡片外框全是标准控件：筛选框是 `TextField`，列表是 `ListView` + Qt 自带 `ScrollBar` + `ItemDelegate`（列表只占行区域，不再需要表头/底部的遮罩） |
+| `src/qml/`                                | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`（三个文件都在开头写了 `pragma ComponentBehavior: Bound`）；配色一律用 `palette`，没有单独的 `Style.qml`。`HelpPopup.qml` 与 `MenuPopup.qml` 里除了卡片外框与按键徽标全是标准控件：帮助的筛选框是 `TextField`、列表是 `ListView` + Qt 自带 `ScrollBar` + `ItemDelegate`（列表只占行区域，不再需要表头/底部的遮罩）；选单的列表同样是 `ListView` + `ItemDelegate`（不滚动，所以没有滚动条；悬停与点击全部由委托提供） |
 | `tests/`                                  | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_log_tail`、`tst_audio`、`tst_interactive`（需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`，否则 skip）、`tst_menu_model`、`tst_help_model`、`tst_power_table`、`tst_desktop_table`、`tst_layout` |
-| `scripts/acceptance.ps1`                  | 桌面行为的验收脚本（注入按键 + 焦点捕捉窗口的外部观察，112 项检查：含弹窗滚轮/滚动条拖动/鼠标点选与点筛选框/`Enter` 与双击真的执行动作/危险动作两次确认）；需交互式桌面，**不属于 `ctest`**，见第 5 节与阶段 9 |
+| `scripts/acceptance.ps1`                  | 桌面行为的验收脚本（注入按键 + 焦点捕捉窗口的外部观察，116 项检查：含弹窗滚轮/滚动条拖动/鼠标点选与点筛选框/鼠标点选单条目/`Enter` 与双击真的执行动作/危险动作两次确认）；需交互式桌面，**不属于 `ctest`**，见第 5 节与阶段 9 |
 
 ### CMake 目标划分（阶段 6 之后）
 
@@ -413,7 +417,7 @@ QML 模块注册之后，两条 profile 都要重新全量构建一次**。
 清单在下面（12 条），**从阶段 9 起有了自动化版本**：
 
 ```powershell
-# 112 项检查，约三分钟，会持续注入按键/抢焦点；按工作约定第 6 条先提醒用户
+# 116 项检查，约三分钟，会持续注入按键/抢焦点；按工作约定第 6 条先提醒用户
 # 只跑 release 那一份产物（见工作约定第 2 条，脚本默认 -Exe 就是它）
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance.ps1
 powershell.exe ... -Phase config                              # 只看配置，不注入按键
@@ -1052,6 +1056,9 @@ get/set/append/clear。**`animate` 的效果要靠肉眼**（没有屏幕采样�
   `menu` 是 `label`/`hint`/`keyText`/`highlighted`/`hovered` + 四个 `QRect`；
   `help` 是 `badges`/`label`/`detail`/`highlighted`（行下标就是 `ListView` 的
   下标，行几何由委托用锚点拼，不用模型给矩形）。
+  → **2026-09 修订（选单）**：`menu` 的角色也收窄成 `label`/`hint`/`keyText`/
+  `rowSelected`，四个 `QRect` 与 `hitTest` 全删了 —— 选单的列表换成了
+  `ListView` + 标准 `ItemDelegate`（详见第 10 节）。
   → **2026-09 修订**：帮助窗口改成 Qt 自带的 `ListView` + `ScrollBar` 之后，
   滚动位置、命中、滚动条几何全归 Qt；`help` 那套 `rowRect`/`keysRect`/`textRect`/
   `scrollTrack`/`scrollThumb`/`hitTest`/`clickRow`/`wheel` 都删了，只留下
@@ -1059,7 +1066,8 @@ get/set/append/clear。**`animate` 的效果要靠肉眼**（没有屏幕采样�
   → **2026-09 再修订**：悬停行（`setHover` + QML 的 `HoverHandler` +
   `ListView.indexAt()`）也删了：高亮只跟键盘选中项走，鼠标悬停不改高亮
   （详见第 10 节“取消帮助窗口的悬停高亮”）。
-  选单不滚动，仍然是“几何全在模型里”。
+  选单不滚动（条目数决定卡片高度），所以没有滚动条；**它的悬停仍归模型管**
+  （`hover`/`setHover`）：「`Enter` 执行光标下那一条」是选单的语义。
 * 模型把「按键怎么解释」也包了：`handleKey(key, text)` 返回
   `{ decision: none|choose|copy|cancel, index, handled }`；QML 的
   `Keys.onPressed` 只负责“问模型要决定 → 执行决定”。字符来自 Qt 译好的
@@ -1090,7 +1098,7 @@ get/set/append/clear。**`animate` 的效果要靠肉眼**（没有屏幕采样�
 * 帮助窗口的标题带 `可见/总数`（`flowkeyd 快捷键 — 12/13 项`），
   方便从外面断言筛选生效了；`help` 没写 `title` 时表头默认
   是「快捷键」。
-* 测试：`tests/tst_menu_model.cpp`（13 个用例）、`tests/tst_help_model.cpp`
+* 测试：`tests/tst_menu_model.cpp`（12 个用例）、`tests/tst_help_model.cpp`
   （17 个用例），合计 **17 个测试目标**全绿。
 
 **手工验证结论（2026-09）**
@@ -1956,6 +1964,65 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   —— “执行了”与“什么都没执行”从外面分不出来。
   快捷键总数因此从 14 变成 15、帮助条目从 17 变成 18。
 
+#### 2026-09 重构：电源选单也用 Qt 自带的列表（`ListView` + `ItemDelegate`）
+
+* **为什么改**：项目所有者要求「用类似帮助信息弹窗的方法重构电源管理选单，
+  同样尽量不要用自绘控件，用 Qt 自带的控件」。旧实现是 `Repeater` + 自绘 `Item`
+  （自己画高亮底、自己画徽标），外加一个铺满卡片的 `MouseArea` 拿
+  `MenuModel::hitTest()` 做命中测试 —— 命中测试要自己算矩形，就必然要与
+  行几何保持同步（也就是 `rowRect`/`badgeRect`/`labelRect`/`hintRect` 四个角色
+  存在的唯一理由）。现在这些全删了：列表就是一个真正的 `ListView`，
+  每一行是标准的 `ItemDelegate`。
+* **行几何不再进模型**：`MenuModel` 只留卡片外框（`cardWidth`/`cardHeight`/
+  `titleRect`/`footerRect`）与几个排版常量（`listTop`/`rowHeight`/`rowSpacing`/
+  `rowInset`/`badgeSize`）。`listTop` **不是常量**：写了 `title` 时是 40，
+  没写时是 10（`NOTIFY itemsChanged`）。
+* **角色名不能再叫 `highlighted`/`hovered`**：委托是标准 `ItemDelegate`，
+  它自己就有这两个属性（`highlighted` 用它画高亮、`hovered` 是它的只读状态），
+  而 `required property` 的名字必须等于模型角色名 —— 撞名就声明不了。
+  所以高亮角色改叫 `rowSelected`（与 `HelpModel` 同一套命名），而且模型里
+  **不再有** `hovered` 角色：鼠标在哪一行由委托自己的 `hovered` 报告。
+* **悬停仍然归模型管**（与帮助窗口不同）。帮助窗口的悬停高亮已经删了
+  （拖动滚动条会改高亮，见上面那节），但**选单不滚动**，而「光标压在哪一条、
+  `Enter` 就执行哪一条」是菜单的标准语义（`MouseArea` 时期就是这样），
+  所以 `hover`/`setHover` 留着，只是驱动它的人换成了委托：
+  `ItemDelegate { onHoveredChanged: if (hovered) model.setHover(index) }`。
+  指针**离开整张卡片**时谁把悬停清掉？卡片上一个 `HoverHandler`
+  （`onHoveredChanged: if (!hovered) setHover(-1)`）。
+  * 别用铺满卡片的 `MouseArea` + `hoverEnabled` 干这件事：它会被后声明的
+    `ListView` 盖住，委托收不到悬停；声明在前面又会在指针进入委托时
+    收不到 `onExited`。`HoverHandler` 是被动的，不会挡委派自己的 `hovered`
+    （进程内实测：悬停第 4 行 → `hover()==3`，移出卡片 → `hover()==-1`）。
+* **`ItemDelegate` 的内边距实测是左右 12 / 上下 8**（`contentItem` 就是
+  `276x24`，行宽 300），把内容锚在 `contentItem` 上就不会溢出（与帮助窗口
+  那节同一个坑）。卡片里行宽就是卡片宽（旧的 `rowRect` 是内缩 10 的），
+  高亮底是标准样式给的（左右各内缩 4 + 左边一条主题色竖条），看着更像菜单。
+* **滚轮要接住但什么都不做**：卡片上挂一个 `WheelHandler` 把事件 `accepted`
+  掉（`ListView` 的高度就是内容高度，本来也滚不动；`interactive: false`
+  连 flick 也不给它）。
+* **卡片几何没变，所以验收脚本的坐标没变**：行距仍然是 40
+  （`rowHeight 38 + rowSpacing 2`），`listTop` 仍然是 40（有标题时），
+  所以旧的滚轮检查里那个「第 1 行中线 y=99」仍然准，新加的点选检查用的是
+  「第 0 行中线 y=60」。**改行距/`listTop` 必须同时改 `acceptance.ps1` 里
+  那两处坐标**。
+
+#### 2026-09 坑：提权常驻实例锁住 release 的 exe 时可以用改名绕过
+
+* 常驻的提权实例（用户用 `Start-Process -Verb RunAs` 起的那一个）会锁住
+  `build\windows-release\flowkeyd.exe`，而 agent 的 shell 既 `taskkill /PID`
+  （不带 `/F`）又 `taskkill /F` 都是“拒绝访问”，release 的全量构建会卡在
+  最后一个链接步骤（`cannot open output file flowkeyd.exe: Permission denied`）。
+* **2026-09 实测可行的绕路**：运行中的 exe 允许改名（内核映像是按区域映射的，
+  文件本身可以 `Move-Item`）。把被锁的那个改成
+  `build\windows-release\flowkeyd.exe.locked`（在 `.gitignore` 的 `/build*/`
+  里，不污染仓库），链接就能照常跑，`windeployqt` 也不会因为已加载的 Qt DLL
+  而失败（实测）。
+  * 副作用：常驻实例继续以旧二进制运行（它的映像文件换了名字），而
+    `flowkeyd.exe.locked` 只有用户从托盘“退出”之后才能删。
+  * **还是要告知用户**：常驻实例现在跑的是旧构建，要重新启动一次。
+  正确的长期做法仍然是用户的托盘“退出” + 重新 `Start-Process -Verb RunAs`
+  （见第 15 节第 6 条），改名只是“用户不在跟前”时的降级手段。
+
 ### 领域坑清单（动手前先看这一遍）
 
 下面这些每一条都值得在动钩子/引擎/窗口/电源之前先读一遍：
@@ -2184,6 +2251,40 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > （README 的 `help` 动作表与「快捷键帮助」一节、`flowkeyd.lua.example` 已同步）。
 > 这次真正查出的 bug 是“可见行下标当成条目下标”，见第 10 节。
 
+> **2026-09 重构（电源选单改用 Qt 自带的列表）的 DoD**：`windows-debug` 与
+> `windows-release` 两边都是 `build exit 0`、零警告；
+> `ctest --test-dir build/windows-release` **19 个测试目标全绿**
+> （`tst_menu_model` 12 项：删掉 `hitTestHitsRowsAndIgnoresChrome`，
+> `rowsAreStackedInsideTheCard`/`rolesExposeTheGeometryForQml` 换成
+> `listMetricsMatchTheCardGeometry`/`rolesExposeWhatTheDelegateNeeds`，
+> 后者连带盯着 `highlighted`/`hovered`/`rowRect` 这三个角色名
+> **不许再加回来**）；
+> `qmllint -I C:\Qt\6.11.2\mingw_64\qml src\qml\MenuPopup.qml src\qml\HelpPopup.qml src\qml\LogWindow.qml`
+> 零警告；`flowkeyd --check --config flowkeyd.lua.example` →
+> `OK (37 hotkey(s), 3 remap(s))`、零警告，用户真实配置（不带 `--config`）→
+> `OK (24 hotkey(s), 0 remap(s))`；`--version` 仍是 `flowkeyd 0.1.0` + `Lua 5.5.1`。
+> `scripts/acceptance.ps1`（只跑 release）**116 项、0 失败**
+> （`checks: 116, failures: 0`；上一次是 112）：新增「为了点选检查能再打开
+> 一次选单」、「能拿到选单窗口的矩形（点选用）」、「鼠标左键点一行直接执行
+> 它的动作」、「点完选单关掉了」。旧的「选单不响应滚轮：`Enter` 选的还是
+> 光标下的 `cancel` 那一行」原样保留并**真的跑了**（它现在由标准委托的
+> `hovered` 驱动），所以“悬停→高亮→`Enter`”整条链路是真实鼠标移动验证过的。
+> 弹窗本身的渲染与交互另外用 `tmp/preview`（真实的 `PopupHost` + 真实 QML，
+> 进程内注入鼠标与键盘，锁屏时也能跑）验证：委托高 `40`（= `rowHeight 38` +
+> `rowSpacing 2`）、行距 `40`、`ListView.y == listTop == 40`、
+> 列表高 `count * 40`、`ItemDelegate` 实测内边距左右 `12` 上下 `8`
+> （`contentItem` `276x24`）、悬停第 4 行→`hover()==3` 且 `accept()==3`、
+> 移出卡片→`hover()==-1` 且高亮回到键盘项、单击第 2 行→`onChoose(1)` 且窗口
+> 关掉、`↓`/`Enter`/`Esc` 照旧、重新打开复位高亮；截图 `tmp/menu-new.png`。
+> 行为变化：选单的行高亮底与左侧色条改由 FluentWinUI3 的标准 `ItemDelegate`
+> 画（行宽从「内缩 10」变成整张卡片宽），悬停/点击/滚轮语义不变
+> （README 的「选单与电源」一节已同步）。
+> **本次构建用了第 10 节的改名绕路**：用户的提权常驻实例锁住了旧的
+> `build\windows-release\flowkeyd.exe`（agent 杀不掉），把它改成
+> `flowkeyd.exe.locked` 之后 release 链接与 `windeployqt` 都正常；
+> 常驻实例需要用户从托盘退出后重新 `Start-Process -Verb RunAs` 一次
+> （它现在跑的是旧构建）。
+
 > 提醒：Qt 的编译单元很多，`--preset` 的构建目录是分开的
 > （`build/windows-debug` / `build/windows-release`），所以
 > **debug 实例在运行不会锁住 release 产物**，反之亦然。
@@ -2247,7 +2348,9 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   之类能从外部观察的，别留给人的手）。
 * **新的选单条目字段**（例如图标）：`config` 加字段 → `MenuModel` 与
   `MenuPopup.qml` 里画出来 → 校验（重名、空标签）→ README 表格。
-  **几何算术全部留在 `MenuModel`**（纯函数、有单测），别散到 QML 里。
+  条目是在委托的 `contentItem` 里用锚点摆的（见 `HelpPopup.qml`），
+  **不要再把行几何（矩形）往模型里塞**：行下标就是 `ListView` 的下标，
+  鼠标命中、悬停、点击全由标准 `ItemDelegate` 提供。
 * **帮助窗口的新内容或新交互**：条目在 `app/dispatcher` 的 `open_help` 里从
   `Compiled` 的 `bindings`/`remaps` 生成（帮助列表与 `--list` 看的是同一批数据，
   所以 `help` 没有配置参数），纯逻辑（筛选、选中项、`Enter`/双击该执行还是

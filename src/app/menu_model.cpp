@@ -1,37 +1,30 @@
 #include "app/menu_model.h"
 
-#include <QRect>
-
+#include <algorithm>
 #include <utility>
 
 namespace flowkeyd::app {
 
 namespace {
 
-// 96 DPI 下的逻辑像素（与 oskeyd 的 `menu.rs::Metrics` 同源；Qt 会按显示器的
-// DPI 自己缩放，所以这里不需要 dpi 参数）。
+// 96 DPI 下的逻辑像素（Qt 会按显示器的 DPI 自己缩放，所以这里不需要 dpi 参数）。
 constexpr int kCardWidth = 300;
 constexpr int kPad = 10;
 constexpr int kHeaderHeight = 30;
 constexpr int kRowHeight = 38;
-constexpr int kRowGap = 2;
-constexpr int kBadgeSize = 22;
-constexpr int kCardRadius = 10;
+constexpr int kRowSpacing = 2;
+constexpr int kListBottomGap = 2;
 constexpr int kFooterHeight = 22;
 constexpr int kInset = 8;
-constexpr int kListBottomGap = 2;
-
-QRect toQmlRect(const PopupRect &rect)
-{
-    return QRect(rect.x, rect.y, rect.width, rect.height);
-}
+constexpr int kBadgeSize = 22;
+constexpr int kCardRadius = 10;
 
 } // namespace
 
 MenuModel::MenuModel(QObject *parent)
     : QAbstractListModel(parent)
 {
-    relayout(false);
+    relayout();
 }
 
 void MenuModel::setItems(std::optional<QString> title, std::vector<MenuEntry> items)
@@ -41,7 +34,7 @@ void MenuModel::setItems(std::optional<QString> title, std::vector<MenuEntry> it
     m_items = std::move(items);
     m_highlight = 0;
     m_hover = -1;
-    relayout(false);
+    relayout();
     endResetModel();
     emit itemsChanged();
     emit highlightChanged();
@@ -57,42 +50,30 @@ QString MenuModel::footerText() const
     return tr("↑↓ 选择    Enter 确定    Esc 关闭");
 }
 
-PopupRect MenuModel::rowRect(int index) const
+int MenuModel::listTop() const
 {
-    const int top = kPad + (m_title.has_value() ? kHeaderHeight : 0) + index * (kRowHeight + kRowGap);
-    return PopupRect{kPad, top, kCardWidth - 2 * kPad, kRowHeight};
+    // 行区域从卡片顶部的内边距之下开始；写了 `title` 时还要让过表头。
+    return kPad + (m_title.has_value() ? kHeaderHeight : 0);
 }
 
-PopupRect MenuModel::badgeRect(int index) const
+int MenuModel::rowHeight() const
 {
-    const PopupRect row = rowRect(index);
-    return PopupRect{row.x + kInset, row.y + (kRowHeight - kBadgeSize) / 2, kBadgeSize, kBadgeSize};
+    return kRowHeight;
 }
 
-PopupRect MenuModel::labelRect(int index) const
+int MenuModel::rowSpacing() const
 {
-    const PopupRect row = rowRect(index);
-    const int left = row.x + kInset + kBadgeSize + kInset;
-    // 分割点与 oskeyd 相同：条目宽度的 60% 处，右边留给副标题。
-    const int split = row.x + row.width * 6 / 10;
-    return PopupRect{left, row.y, split - left, row.height};
+    return kRowSpacing;
 }
 
-PopupRect MenuModel::hintRect(int index) const
+int MenuModel::rowInset() const
 {
-    const PopupRect row = rowRect(index);
-    const int split = row.x + row.width * 6 / 10;
-    return PopupRect{split, row.y, row.x + row.width - kInset - split, row.height};
+    return kInset;
 }
 
-int MenuModel::hitTest(int x, int y) const
+int MenuModel::badgeSize() const
 {
-    for (int index = 0; index < count(); ++index) {
-        if (rowRect(index).contains(x, y)) {
-            return index;
-        }
-    }
-    return -1;
+    return kBadgeSize;
 }
 
 int MenuModel::accept() const
@@ -116,8 +97,9 @@ void MenuModel::moveHighlight(int delta)
     } else {
         m_highlight = m_highlight == 0 ? n - 1 : m_highlight - 1;
     }
+    // 键盘接管高亮：把鼠标悬停清掉（选单里二者不可能同时有效）。
     m_hover = -1;
-    refresh(false);
+    refresh();
     emit highlightChanged();
 }
 
@@ -128,7 +110,7 @@ void MenuModel::setHover(int index)
         return;
     }
     m_hover = next;
-    refresh(false);
+    refresh();
     emit highlightChanged();
 }
 
@@ -151,7 +133,7 @@ void MenuModel::reset()
 {
     m_highlight = 0;
     m_hover = -1;
-    refresh(false);
+    refresh();
     emit highlightChanged();
 }
 
@@ -221,18 +203,8 @@ QVariant MenuModel::data(const QModelIndex &index, int role) const
         // 徽标上显示大写（与 oskeyd 的 `key.to_uppercase()` 一致）；
         // 匹配用的 `m_items[].key` 仍然是小写。
         return item.key.has_value() ? QString(item.key->toUpper()) : QString();
-    case HighlightedRole:
+    case RowSelectedRole:
         return accept() == row;
-    case HoveredRole:
-        return m_hover == row;
-    case RowRole:
-        return QVariant::fromValue(toQmlRect(rowRect(row)));
-    case BadgeRole:
-        return QVariant::fromValue(toQmlRect(badgeRect(row)));
-    case LabelRectRole:
-        return QVariant::fromValue(toQmlRect(labelRect(row)));
-    case HintRectRole:
-        return QVariant::fromValue(toQmlRect(hintRect(row)));
     default:
         break;
     }
@@ -245,35 +217,24 @@ QHash<int, QByteArray> MenuModel::roleNames() const
         {LabelRole, QByteArrayLiteral("label")},
         {HintRole, QByteArrayLiteral("hint")},
         {KeyRole, QByteArrayLiteral("keyText")},
-        {HighlightedRole, QByteArrayLiteral("highlighted")},
-        {HoveredRole, QByteArrayLiteral("hovered")},
-        {RowRole, QByteArrayLiteral("rowRect")},
-        {BadgeRole, QByteArrayLiteral("badgeRect")},
-        {LabelRectRole, QByteArrayLiteral("labelRect")},
-        {HintRectRole, QByteArrayLiteral("hintRect")},
+        {RowSelectedRole, QByteArrayLiteral("rowSelected")},
     };
 }
 
-void MenuModel::relayout(bool notify)
+void MenuModel::relayout()
 {
     const int header = m_title.has_value() ? kHeaderHeight : 0;
     m_cardWidth = kCardWidth;
-    m_cardHeight = kPad + header + count() * (kRowHeight + kRowGap) + kListBottomGap + kFooterHeight + kPad;
+    m_cardHeight = kPad + header + count() * (kRowHeight + kRowSpacing) + kListBottomGap + kFooterHeight + kPad;
     m_titleRect = PopupRect{kPad + kInset, kPad, kCardWidth - 2 * kPad - 2 * kInset, header};
     const int footerTop = m_cardHeight - kPad - kFooterHeight;
     m_footerRect = PopupRect{kPad + kInset, footerTop, kCardWidth - 2 * kPad - 2 * kInset, kFooterHeight};
-    if (notify) {
-        emit itemsChanged();
-    }
 }
 
-void MenuModel::refresh(bool itemsChangedSignal)
+void MenuModel::refresh()
 {
     if (!m_items.empty()) {
         emit dataChanged(index(0), index(count() - 1));
-    }
-    if (itemsChangedSignal) {
-        emit itemsChanged();
     }
 }
 

@@ -22,9 +22,10 @@
 #   * `send` 会先松开用户按住的修饰键（前台看到的是 Ctrl+C 而不是 Ctrl+Alt+C）
 #   * 小键盘 `-`/`+`/`Enter` 与主键盘 `-`/`=`/`Enter` 互不触发
 #   * `window` 的启动 → 激活 → 收起（默认 toggle）→ 恢复
-#   * `menu` 弹窗：出现、拿到键盘焦点、条目键真的执行动作、Esc 只关窗、
-#     再按一次不开第二个（重新打开的窗口也必须重新拿到焦点）、
-#     滚轮不会把高亮从光标下拿走（AGENTS.md 第 10 节的弹窗闪烁回归）
+#   * `menu` 弹窗：出现、拿到键盘焦点、条目键真的执行动作、左键点一行 = 执行它、
+#     Esc 只关窗、再按一次不开第二个（重新打开的窗口也必须重新拿到焦点）、
+#     滚轮不会把高亮从光标下拿走（“高亮跟着光标走”由列表的标准委托提供，
+#     见 AGENTS.md 第 10 节）
 #   * `help` 弹窗：出现、拿到焦点、**用鼠标点一下筛选框再输入**就筛选（标题里
 #     的 `可见/总数` 变小）、左键点一行 = 选中它并把它写进剪贴板、
 #     **`Enter` 或双击一行 = 执行它的动作**（窗口先关掉再执行）、
@@ -818,6 +819,24 @@ try {
     Pump 700
     Check 'Esc 只关窗、什么都不选' (WaitUntil { -not [FlowInject]::HasWindowTitled($daemon.Id, $MENU_TITLE) } 3000)
     Check 'Esc 没动剪贴板' ((ClipGet) -eq 'MENU-OK')
+
+    # 鼠标左键点一行 = 执行它（标准 `ItemDelegate` 的 `clicked`），与 `Enter` 等价。
+    FocusCatcher
+    CtrlAlt $VK_F9
+    Check '为了点选检查能再打开一次选单' (WaitUntil { [FlowInject]::HasWindowTitled($daemon.Id, $MENU_TITLE) } 5000)
+    $focusedForClick = WaitUntil { [FlowInject]::ForegroundTitle() -eq $MENU_TITLE } 4000
+    $clickRect = [FlowInject]::WindowRect($daemon.Id, $MENU_TITLE)
+    Check '能拿到选单窗口的矩形（点选用）' ($clickRect[2] -gt 0)
+    if ($focusedForClick -and $clickRect[2] -gt 0) {
+        $clickScale = $clickRect[2] / 300.0
+        # 第 1 条（下标 0，「clipboard」）的中线：pad(10) + 标题(30) + 半行(20)。
+        ClipSet 'SENTINEL'
+        [FlowInject]::Click($clickRect[0] + [int](150 * $clickScale),
+                            $clickRect[1] + [int](60 * $clickScale))
+        Pump 900
+        Check '鼠标左键点一行直接执行它的动作' ((ClipGet) -eq 'MENU-OK')
+        Check '点完选单关掉了' (-not [FlowInject]::HasWindowTitled($daemon.Id, $MENU_TITLE))
+    }
 
     # 滚轮在选单上应该什么都不做（与 oskeyd 一致），而且不能把高亮从光标下
     # 拿走：光标压在“cancel”那一条上滚几格再 Enter，必须还是不执行任何动作。
