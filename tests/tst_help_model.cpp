@@ -1,9 +1,11 @@
 // `help` 帮助窗口模型的纯逻辑单测：筛选、`可见/总数`、`Enter` 复制、两级 `Esc`、
-// 键盘选中行。
+// 键盘与鼠标选中行。
 //
 // **滚动不在这一层**：列表是 QML 里的真 `ListView` + 自带 `ScrollBar`，所以这里
 // 只验证「卡片几何与 `ListView` 的内容高度能不能对齐」以及「选中项变了要通知视图」
 // 这类契约，不碰任何滚动位置（见 `app/help_model.h` 顶部的说明）。
+// **输入也不在这一层**：筛选框是标准的 `TextField`，字符 / 退格 / `Home` / `End`
+// 都归它，模型只接 `setFilter()`；这里盯的是「模型不接编辑键」(handled == false)。
 // 不碰 QML、不碰剪贴板：`onCopy` 的回调在 `app::PopupHost` 里，
 // 真实剪贴板由 `tst_interactive` / 手工冒烟覆盖。
 #include <QtTest>
@@ -98,16 +100,15 @@ private slots:
     void countsAndCaptionFollowTheFilter();
     void enterCopiesTheActiveRow();
     void escapeClearsTheFilterFirstThenCancels();
-    void backspaceRemovesOneCharacterAndRefilters();
     void arrowKeysClampAtTheEnds();
-    void pageKeysHomeAndEnd();
-    void scrollTargetKeepsTheRowInsideTheRowArea();
+    void pageKeysMoveTheSelection();
+    void mouseClickSelectsTheRow();
     void selectionChangedTellsTheViewToFollow();
     void maxRowsLimitsTheVisibleRows();
     void badgesSplitChordsAndInsertSeparators();
     void emptyResultShowsTheRightMessage();
     void rowsForAvailableHeightIsClamped();
-    void controlCharactersAreNotFilterInput();
+    void editingKeysAreLeftToTheTextField();
     void rolesExposeWhatTheDelegateNeeds();
 };
 
@@ -224,14 +225,14 @@ void TestHelpModel::enterCopiesTheActiveRow()
     model.setItems(std::nullopt, sampleItems());
 
     QCOMPARE(model.copyText(), QStringLiteral("Ctrl+Alt+F12"));
-    const QVariantMap first = model.handleKey(Qt::Key_Return, QString());
+    const QVariantMap first = model.handleKey(Qt::Key_Return);
     QCOMPARE(decisionOf(first), QStringLiteral("copy"));
     QCOMPARE(indexOf(first), 0);
 
     // 多个和弦用 ` / ` 连起来（与 oskeyd 的 `copy_active` 一致）。
     model.moveSelection(1);
     QCOMPARE(model.copyText(), QStringLiteral("Win+X / Ctrl+Alt+X"));
-    QCOMPARE(indexOf(model.handleKey(Qt::Key_Enter, QString())), 1);
+    QCOMPARE(indexOf(model.handleKey(Qt::Key_Enter)), 1);
 
     // 筛选之后复制的是筛选结果里的那一条。
     model.setFilter(QStringLiteral("大写"));
@@ -240,7 +241,7 @@ void TestHelpModel::enterCopiesTheActiveRow()
     // 一条都没有时没有东西可复制。
     model.setFilter(QStringLiteral("zzz"));
     QCOMPARE(model.copyText(), QString());
-    QCOMPARE(decisionOf(model.handleKey(Qt::Key_Return, QString())), QStringLiteral("none"));
+    QCOMPARE(decisionOf(model.handleKey(Qt::Key_Return)), QStringLiteral("none"));
 }
 
 void TestHelpModel::escapeClearsTheFilterFirstThenCancels()
@@ -249,32 +250,16 @@ void TestHelpModel::escapeClearsTheFilterFirstThenCancels()
     model.setItems(std::nullopt, sampleItems());
     model.setFilter(QStringLiteral("F12"));
 
-    // 第一下 `Esc` 只清筛选（否则删错一个字就得重开）。
-    const QVariantMap first = model.handleKey(Qt::Key_Escape, QString());
-    QCOMPARE(decisionOf(first), QStringLiteral("none"));
+    // 第一下 `Esc` 只清筛选（否则删错一个字就得重开），而且要告诉 QML 把
+    // 输入框里的文本也清掉（`clear`；输入框自己持有它显示的文本）。
+    const QVariantMap first = model.handleKey(Qt::Key_Escape);
+    QCOMPARE(decisionOf(first), QStringLiteral("clear"));
     QCOMPARE(handledOf(first), true);
     QCOMPARE(model.filter(), QString());
     QCOMPARE(model.visibleCount(), 3);
 
     // 筛选本来就是空的：第二下才关窗。
-    QCOMPARE(decisionOf(model.handleKey(Qt::Key_Escape, QString())), QStringLiteral("cancel"));
-}
-
-void TestHelpModel::backspaceRemovesOneCharacterAndRefilters()
-{
-    app::HelpModel model;
-    model.setItems(std::nullopt, sampleItems());
-    model.setFilter(QStringLiteral("CapsX"));
-
-    QCOMPARE(decisionOf(model.handleKey(Qt::Key_Backspace, QString())), QStringLiteral("none"));
-    QCOMPARE(model.filter(), QStringLiteral("Caps"));
-    QCOMPARE(model.visibleIndices(), std::vector<int>{2});
-
-    // 筛选已经空了：退格什么也不做，也不关窗。
-    model.clearFilter();
-    model.handleKey(Qt::Key_Backspace, QString());
-    QCOMPARE(model.filter(), QString());
-    QCOMPARE(model.visibleCount(), 3);
+    QCOMPARE(decisionOf(model.handleKey(Qt::Key_Escape)), QStringLiteral("cancel"));
 }
 
 void TestHelpModel::arrowKeysClampAtTheEnds()
@@ -290,90 +275,82 @@ void TestHelpModel::arrowKeysClampAtTheEnds()
     model.moveSelection(-1);
     QCOMPARE(model.selected(), 0);
 
-    QCOMPARE(decisionOf(model.handleKey(Qt::Key_Down, QString())), QStringLiteral("none"));
+    QCOMPARE(decisionOf(model.handleKey(Qt::Key_Down)), QStringLiteral("none"));
     QCOMPARE(model.selected(), 1);
-    model.handleKey(Qt::Key_Down, QString());
+    model.handleKey(Qt::Key_Down);
     QCOMPARE(model.selected(), 2);
 
     // 一直往下：停在最后一条。
     for (int i = 0; i < 10; ++i) {
-        model.handleKey(Qt::Key_Down, QString());
+        model.handleKey(Qt::Key_Down);
     }
     QCOMPARE(model.selected(), 4);
     QCOMPARE(model.visibleRows(), 2);
 
-    model.handleKey(Qt::Key_Up, QString());
+    model.handleKey(Qt::Key_Up);
     QCOMPARE(model.selected(), 3);
 }
 
-void TestHelpModel::pageKeysHomeAndEnd()
+void TestHelpModel::pageKeysMoveTheSelection()
 {
     app::HelpModel model;
     model.setItems(std::nullopt, manyItems(10));
     model.setMaxRows(3);
 
-    model.handleKey(Qt::Key_PageDown, QString());
+    model.handleKey(Qt::Key_PageDown);
     QCOMPARE(model.selected(), 3);
-    model.handleKey(Qt::Key_PageUp, QString());
+    model.handleKey(Qt::Key_PageUp);
     QCOMPARE(model.selected(), 0);
 
-    model.handleKey(Qt::Key_End, QString());
-    QCOMPARE(model.selected(), 9);
-    model.handleKey(Qt::Key_Home, QString());
+    // `Home`/`End` 归筛选框那个标准 `TextField`（它们在那里是光标移动），
+    // 模型一概不接。
+    QCOMPARE(handledOf(model.handleKey(Qt::Key_End)), false);
+    QCOMPARE(handledOf(model.handleKey(Qt::Key_Home)), false);
     QCOMPARE(model.selected(), 0);
 
-    // 内容放得下时也照样能选。
+    // 内容放得下时翻页照样能选，而且会被夹在两端。
     app::HelpModel shortModel;
     shortModel.setItems(std::nullopt, sampleItems());
-    shortModel.handleKey(Qt::Key_End, QString());
+    shortModel.handleKey(Qt::Key_PageDown);
     QCOMPARE(shortModel.selected(), 2);
-    shortModel.handleKey(Qt::Key_Home, QString());
+    shortModel.handleKey(Qt::Key_PageDown);
+    QCOMPARE(shortModel.selected(), 2);
+    shortModel.handleKey(Qt::Key_PageUp);
     QCOMPARE(shortModel.selected(), 0);
 }
 
-// `scrollTargetY` 是 QML 在键盘改过选中项之后用来摆 `contentY` 的：它必须把行
-// 保持在**行区域**（表头与底部提示之间），而不是列表自己的矩形里（`ListView`
-// 的 `Contain` 只看后者，会把最后一行留在底部提示底下）。
-void TestHelpModel::scrollTargetKeepsTheRowInsideTheRowArea()
+// 鼠标点选走的是 `setSelected()`（`ItemDelegate.onClicked` 调它），它与键盘的
+// `moveSelection()` 只共用「键盘选中项」这一个状态：高亮跟着它走。
+void TestHelpModel::mouseClickSelectsTheRow()
 {
     app::HelpModel model;
-    model.setItems(std::nullopt, manyItems(13));
-    model.setMaxRows(12);
+    QSignalSpy spy(&model, &app::HelpModel::selectedChanged);
+    model.setItems(std::nullopt, manyItems(5));
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(model.selected(), 0);
 
-    const int top = model.listTop();        // 88
-    const int bottom = model.listBottom();  // 44
-    const int viewport = model.cardHeight();
-    const int slot = model.rowHeight() + model.rowSpacing();
-    const int areaBottom = viewport - bottom;
+    model.setSelected(3);
+    QCOMPARE(model.selected(), 3);
+    QCOMPARE(spy.count(), 2);
 
-    // 第 0 条：顶部就是行区域顶部。
-    QCOMPARE(model.scrollTargetY(0, -top, top, bottom, viewport), -top);
-    // 第 0 条藏在表头底下 → 拉回来。
-    QCOMPARE(model.scrollTargetY(0, areaBottom - viewport, top, bottom, viewport), -top);
-    // 最后一条（12）：底部提示会盖住它，往上拉一行的高度。
-    const int last = model.scrollTargetY(12, -top, top, bottom, viewport);
-    QCOMPARE(12 * slot + model.rowHeight() - last, areaBottom);
-    QVERIFY(last >= -top);
-    // 中间的行已经完整可见时什么也不做。
-    QCOMPARE(model.scrollTargetY(6, -top, top, bottom, viewport), -top);
+    // 点同一行不重复发信号（QML 不必白白重算一遍）。
+    model.setSelected(3);
+    QCOMPARE(spy.count(), 2);
 
-    // 不管算出来多少，落在行区域里是硬条件。
-    for (int line = 0; line < model.visibleCount(); ++line) {
-        for (int contentY : {-top, last, 0}) {
-            const int target = model.scrollTargetY(line, contentY, top, bottom, viewport);
-            const int rowTop = line * slot - target;
-            QVERIFY(rowTop >= top);
-            QVERIFY(rowTop + model.rowHeight() <= areaBottom);
-        }
-    }
+    // 越界夹住（与键盘导航一致，不回绕）。
+    model.setSelected(99);
+    QCOMPARE(model.selected(), 4);
+    model.setSelected(-7);
+    QCOMPARE(model.selected(), 0);
 
-    // 越界不崩，也不动。
-    QCOMPARE(model.scrollTargetY(-1, -top, top, bottom, viewport), -top);
-    QCOMPARE(model.scrollTargetY(99, -top, top, bottom, viewport), -top);
+    // 一条都没有时什么也不做。
+    app::HelpModel empty;
+    empty.setSelected(2);
+    QCOMPARE(empty.selected(), 0);
 }
 
-// QML 用 `selectedChanged` 把选中项带进视野（`scrollTargetY`）。筛选之后
-// 列表短了、选中项回到第 0 条，也必须通知一次，否则视图会停在旧位置上。
+// QML 用 `selectedChanged` 把选中项带进视野（`positionViewAtIndex(..., Contain)`）。
+// 筛选之后列表短了、选中项回到第 0 条，也必须通知一次，否则视图会停在旧位置上。
 void TestHelpModel::selectionChangedTellsTheViewToFollow()
 {
     app::HelpModel model;
@@ -475,21 +452,26 @@ void TestHelpModel::rowsForAvailableHeightIsClamped()
     QCOMPARE(app::HelpModel::rowsForAvailableHeight(100), 1);
 }
 
-void TestHelpModel::controlCharactersAreNotFilterInput()
+void TestHelpModel::editingKeysAreLeftToTheTextField()
 {
     app::HelpModel model;
     model.setItems(std::nullopt, sampleItems());
 
-    // `Tab`/`Ctrl+字母` 这类控制字符不是输入内容（退格另有处理）。
-    QCOMPARE(handledOf(model.handleKey(Qt::Key_Tab, QString(QChar(0x0009)))), false);
-    QCOMPARE(handledOf(model.handleKey(Qt::Key_A, QString(QChar(0x0001)))), false);
+    // 字符、退格、`Home`/`End`、左右箭头、`Tab` 全部放行给筛选框那个标准
+    // `TextField`：模型一概不接，也不许自己拼筛选串。
+    QCOMPARE(handledOf(model.handleKey(Qt::Key_C)), false);
+    QCOMPARE(handledOf(model.handleKey(Qt::Key_Backspace)), false);
+    QCOMPARE(handledOf(model.handleKey(Qt::Key_Delete)), false);
+    QCOMPARE(handledOf(model.handleKey(Qt::Key_Left)), false);
+    QCOMPARE(handledOf(model.handleKey(Qt::Key_Right)), false);
+    QCOMPARE(handledOf(model.handleKey(Qt::Key_Home)), false);
+    QCOMPARE(handledOf(model.handleKey(Qt::Key_End)), false);
+    QCOMPARE(handledOf(model.handleKey(Qt::Key_Tab)), false);
     QCOMPARE(model.filter(), QString());
+    QCOMPARE(model.selected(), 0);
 
-    // 普通字符追加到筛选串后面。
-    QCOMPARE(handledOf(model.handleKey(Qt::Key_C, QStringLiteral("c"))), true);
-    model.handleKey(Qt::Key_A, QStringLiteral("a"));
-    model.handleKey(Qt::Key_P, QStringLiteral("p"));
-    QCOMPARE(model.filter(), QStringLiteral("cap"));
+    // 筛选串只从 `setFilter()` 进来（QML 在 `onTextEdited` 里调它）。
+    model.setFilter(QStringLiteral("cap"));
     QCOMPARE(model.visibleIndices(), std::vector<int>{2});
 }
 
@@ -501,31 +483,33 @@ void TestHelpModel::rolesExposeWhatTheDelegateNeeds()
     const int badgesRole = roleOf(model, "badges");
     const int labelRole = roleOf(model, "label");
     const int detailRole = roleOf(model, "detail");
-    const int highlightedRole = roleOf(model, "highlighted");
+    // 角色名是 `rowSelected`，不是 `highlighted`：委托是标准 `ItemDelegate`，
+    // 它自己就有 `highlighted`（撞名就声明不了必需属性）。
+    const int rowSelectedRole = roleOf(model, "rowSelected");
     QVERIFY(badgesRole > 0);
     QVERIFY(labelRole > 0);
     QVERIFY(detailRole > 0);
-    QVERIFY(highlightedRole > 0);
+    QVERIFY(rowSelectedRole > 0);
 
     // 行下标就是 `ListView` 的下标，几何由委托自己用锚点拼，模型不再给矩形。
     QCOMPARE(model.rowCount(), 3);
     QCOMPARE(model.data(model.index(0, 0), labelRole).toString(), QStringLiteral("睡眠"));
     QCOMPARE(model.data(model.index(0, 0), detailRole).toString(), QStringLiteral("power sleep"));
     QCOMPARE(model.data(model.index(2, 0), detailRole).toString(), QString());
-    QCOMPARE(model.data(model.index(0, 0), highlightedRole).toBool(), true);
-    QCOMPARE(model.data(model.index(1, 0), highlightedRole).toBool(), false);
+    QCOMPARE(model.data(model.index(0, 0), rowSelectedRole).toBool(), true);
+    QCOMPARE(model.data(model.index(1, 0), rowSelectedRole).toBool(), false);
     QCOMPARE(model.data(model.index(0, 0), badgesRole).toList().size(), 3);
 
-    // 高亮就是键盘选中项（鼠标悬停不再参与：拖动滚动条时高亮会跟着指针乱跳，
-    // 2026-09 已取消）。
-    model.moveSelection(2);
+    // 高亮就是键盘选中项（鼠标悬停不参与：拖动滚动条时高亮会跟着指针乱跳，
+    // 2026-09 已取消；鼠标**点选**改的是同一个状态，走 `setSelected`）。
+    model.setSelected(2);
     QCOMPARE(model.selected(), 2);
-    QCOMPARE(model.data(model.index(0, 0), highlightedRole).toBool(), false);
-    QCOMPARE(model.data(model.index(2, 0), highlightedRole).toBool(), true);
+    QCOMPARE(model.data(model.index(0, 0), rowSelectedRole).toBool(), false);
+    QCOMPARE(model.data(model.index(2, 0), rowSelectedRole).toBool(), true);
     QCOMPARE(model.copyText(), QStringLiteral("CapsLock"));
     model.moveSelection(-2);
-    QCOMPARE(model.data(model.index(0, 0), highlightedRole).toBool(), true);
-    QCOMPARE(model.data(model.index(2, 0), highlightedRole).toBool(), false);
+    QCOMPARE(model.data(model.index(0, 0), rowSelectedRole).toBool(), true);
+    QCOMPARE(model.data(model.index(2, 0), rowSelectedRole).toBool(), false);
 
     // 越界/无效下标不能崩。
     QCOMPARE(model.data(QModelIndex(), labelRole).isValid(), false);

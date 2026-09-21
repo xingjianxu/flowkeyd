@@ -116,7 +116,7 @@ QString HelpModel::emptyMessage() const
 
 QString HelpModel::footerText() const
 {
-    return tr("输入筛选    ↑↓ 滚动    Enter 复制    Esc 关闭");
+    return tr("输入筛选    ↑↓ 选择    Enter 复制    Esc 关闭");
 }
 
 int HelpModel::cardWidth() const
@@ -285,32 +285,21 @@ void HelpModel::moveSelection(int delta)
     notifyRows();
 }
 
-int HelpModel::scrollTargetY(int line,
-                            int contentY,
-                            int topMargin,
-                            int bottomMargin,
-                            int viewportHeight) const
+void HelpModel::setSelected(int line)
 {
-    if (line < 0 || line >= visibleCount()) {
-        return contentY;
+    if (m_visible.empty()) {
+        return;
     }
-    const int slot = kRowHeight + kRowGap;
-    const int top = line * slot;
-    // 视口坐标里，内容坐标 `c` 落在 `c - contentY`（`topMargin` 只决定
-    // `contentY` 的起始位置，不改变这个换算）。行区域是
-    // `[topMargin, viewportHeight - bottomMargin]`。
-    const int areaTop = topMargin;
-    const int areaBottom = viewportHeight - bottomMargin;
-    if (top - contentY < areaTop) {
-        return top - areaTop;
+    const int next = std::clamp(line, 0, visibleCount() - 1);
+    if (next == m_selected) {
+        return;
     }
-    if (top + kRowHeight - contentY > areaBottom) {
-        return top + kRowHeight - areaBottom;
-    }
-    return contentY;
+    m_selected = next;
+    emit selectedChanged();
+    notifyRows();
 }
 
-QVariantMap HelpModel::handleKey(int key, const QString &text)
+QVariantMap HelpModel::handleKey(int key)
 {
     QVariantMap result;
     result.insert(QStringLiteral("decision"), QStringLiteral("none"));
@@ -320,17 +309,13 @@ QVariantMap HelpModel::handleKey(int key, const QString &text)
     switch (key) {
     case Qt::Key_Escape:
         // 先清筛选；筛选本来就是空的才关窗——否则删错一个字就得重开。
+        // `clear` 告诉 QML 把输入框里的文本也跟着清掉（模型是筛选的唯一真相，
+        // 但输入框自己持有它显示的文本）。
         if (!m_filter.isEmpty()) {
             clearFilter();
+            result.insert(QStringLiteral("decision"), QStringLiteral("clear"));
         } else {
             result.insert(QStringLiteral("decision"), QStringLiteral("cancel"));
-        }
-        return result;
-    case Qt::Key_Backspace:
-        if (!m_filter.isEmpty()) {
-            QString next = m_filter;
-            next.chop(1);
-            setFilter(next);
         }
         return result;
     case Qt::Key_Return:
@@ -354,26 +339,12 @@ QVariantMap HelpModel::handleKey(int key, const QString &text)
     case Qt::Key_PageDown:
         moveSelection(m_rows);
         return result;
-    case Qt::Key_Home:
-        if (!m_visible.empty()) {
-            moveSelection(-visibleCount());
-        }
-        return result;
-    case Qt::Key_End:
-        if (!m_visible.empty()) {
-            moveSelection(visibleCount());
-        }
-        return result;
     default:
         break;
     }
 
-    // 字符键：Qt 已经按当前键盘布局翻译过（`QKeyEvent::text()`），
-    // 控制字符不是输入内容（退格另有处理）。
-    if (text.size() == 1 && text.at(0).isPrint()) {
-        setFilter(m_filter + text);
-        return result;
-    }
+    // 其余的键（字符、退格、`Home`/`End`、左右方向键、输入法的候选键……）
+    // 全部放行给筛选框那个标准 `TextField`。
     result.insert(QStringLiteral("handled"), false);
     return result;
 }
@@ -405,7 +376,7 @@ QVariant HelpModel::data(const QModelIndex &index, int role) const
         return item.label;
     case DetailRole:
         return item.detail.value_or(QString());
-    case HighlightedRole:
+    case RowSelectedRole:
         return activeLine() == line;
     default:
         break;
@@ -419,7 +390,7 @@ QHash<int, QByteArray> HelpModel::roleNames() const
         {BadgesRole, QByteArrayLiteral("badges")},
         {LabelRole, QByteArrayLiteral("label")},
         {DetailRole, QByteArrayLiteral("detail")},
-        {HighlightedRole, QByteArrayLiteral("highlighted")},
+        {RowSelectedRole, QByteArrayLiteral("rowSelected")},
     };
 }
 

@@ -90,7 +90,7 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | 日志窗口   | **进程内的 QML 窗口**（FluentWinUI3），尾随同一个日志文件                                                     |
 | 选单/帮助  | **QML 窗口**（FluentWinUI3），跑在 Qt GUI 线程上                                                              |
 | 示例配置   | `flowkeyd.lua.example`                                                                                        |
-| 自动化测试 | Qt Test 单元测试 + **`scripts/acceptance.ps1`**（84 项检查，注入按键 + 高亮/弹窗滚轮/拖动滚动条/“滚动不改键盘选中项”回归的外部验收；`--simulate`/`--selftest`/`--probe` 本期不做，见第 12 节） |
+| 自动化测试 | Qt Test 单元测试 + **`scripts/acceptance.ps1`**（86 项检查，注入按键 + 高亮/弹窗滚轮/拖动滚动条/“滚动不改键盘选中项”/鼠标点选与点筛选框回归的外部验收；`--simulate`/`--selftest`/`--probe` 本期不做，见第 12 节） |
 | 依赖管理   | CMake Presets + Ninja，`vendor/lua` 静态编进二进制                                                            |
 
 ---
@@ -123,7 +123,7 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
    `--check` / `--list` / `--list-keys` 保留（它们是产品功能，也是手工验证的
    主要工具）。
    → **阶段 9 补充（2026-09）**：这三个开关仍然不做，但“手工冒烟清单”已经
-   自动化成了 **`scripts/acceptance.ps1`**（84 项检查），它靠一个
+   自动化成了 **`scripts/acceptance.ps1`**（86 项检查），它靠一个
    **只给测试用的后门** `FLOWKEYD_ACCEPT_INJECTED=1` 抬升“丢弃注入输入”
    那道过滤（见第 5 节与阶段 9）。
    这是对一个“当时无法验证”的条款的修订，不是推翻：不变量 2 本身没动，
@@ -134,12 +134,25 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
    不要引入 `sol2`、`nlohmann::json`、`CLI11`、`spdlog` 之类“顺手”的库。
 8. **构建：CMake Presets + Ninja，debug 与 release 双 profile 都必须编译通过；
    单元测试与验收脚本只跑 release**（见工作约定第 2 条）。
-9. **帮助窗口的列表用 Qt 自带的 `ListView` + `ScrollBar`，不自绘。**
-   （2026-09，项目所有者拍板：“不能用 qt 自带的列表控件实现么？不要自己绘制”。）
-   之前那套自己在 `HelpModel` 里算滑槽/滑块几何、自己命中测试、自己按格滚轮的
-   做法，结果是**滑块拖不动**、**滚轮下高亮闪**（详见第 10 节）。现在：
-   * 滚动位置、滚轮、拖动滑块、惯性全归 `ListView`；模型只管筛选、选中项、
-     光标悬停行，以及 `scrollTargetY()`（键盘）要摆到哪个 `contentY`；
+9. **帮助窗口的界面用 Qt 自带的标准控件，不自绘。**
+   （2026-09，项目所有者拍板：“不能用 qt 自带的列表控件实现么？不要自己绘制”，
+   随后又要求“上部的搜索栏要用标准的 input 控件实现、鼠标能点选并执行列表项”。）
+   之前那套自己算滑槽/滑块几何、自己命中测试、自己按格滚轮、用 `Rectangle` +
+   `Label` + 一根 `Rectangle` 光标拼一个假输入框的做法，结果是**滑块拖不动**、
+   **滚轮下高亮闪**、**筛选框点不动也进不了输入状态**、**列表项鼠标点不中**
+   （详见第 10 节）。现在：
+   * 列表是 `ListView` + `ItemDelegate`：滚动位置、滚轮、拖动滑块、惯性、
+     悬停/按下/高亮全归 Qt 的标准样式；模型只管筛选、选中项与计数；
+   * 筛选框是真正的 `TextField`：鼠标点一下就能打字，光标、选区、输入法、
+     右键菜单、`Home`/`End`/左右箭头都是标准行为；模型只在 `setFilter()` 里
+     接收最终文本（**它因此必须是 `Q_INVOKABLE`**，否则 QML 里那行调用会抛
+     TypeError 而看上去像“处理器没跑”）；
+   * **鼠标左键点一行 = 选中它 + 执行它**（帮助窗口里“执行”就是复制那一行的
+     按键），滚动（滚轮、拖滑块）仍然只滚视图、**不动**选中项；
+   * 列表只占行区域，所以旧实现里那两块“遮住滚进来的一行”的不透明底色
+     与 `scrollTargetY()` 都删掉了；键盘把选中项带进视野用 Qt 的
+     `positionViewAtIndex(..., Contain)`（行区域就是 `ListView` 的视口，
+     不再有“表头盖住行”的问题）；
    * **滚轮方向跟着系统/Qt**（本机实测 `mouseData=-120` 往下、`+120` 往上，
      WinForms 的 `ListBox` 也一样）。自绘时期的 flowkeyd 曾把正数
      当成“往列表后面走”，方向与系统列表控件相反；**已经改掉**，
@@ -254,12 +267,12 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `src/app/runtime.h/.cpp`                  | 引擎 + 钩子 + 分发 + 托盘 + 弹窗的总装，`ControlCmd`（suspend/reload/quit）通道                                                                                                                                             |
 | `src/app/log_model.h/.cpp`                | 日志窗口的模型：尾随日志文件（增量、半行、被截断的多字节 UTF-8）、最多 1000 行、按级别配色、子串过滤                                                                                                                        |
 | `src/app/menu_model.h/.cpp`               | `menu` 选单的**纯逻辑**（`QAbstractListModel`，只用 QtCore）：条目几何、高亮移动（到边界回绕）、单字符选中、`Esc`/`Enter` 语义、命中测试（**可单测**） |
-| `src/app/help_model.h/.cpp`               | `help` 帮助的**纯逻辑**（同上）：筛选（和弦/`comment`/`name`/动作摘要）、`可见/总数` 计数、键盘选中项（**高亮就是它**，鼠标悬停不改高亮）、`Enter` 复制哪一行、两级 `Esc`，以及「键盘改了选中项之后视图的 `contentY` 该放哪里」的纯算术 `scrollTargetY()`（**可单测**）。**列表的滚动与鼠标命中都不归它管**：那是一个真正的 QML `ListView` + Qt 自带的 `ScrollBar`，点击由委托的 `TapHandler` 直接处理（见第 2 节第 9 条） |
+| `src/app/help_model.h/.cpp`               | `help` 帮助的**纯逻辑**（同上）：筛选（和弦/`comment`/`name`/动作摘要）、`可见/总数` 计数、键盘选中项（**高亮就是它**，鼠标悬停不改高亮）、`Enter` 复制哪一行、两级 `Esc`，以及鼠标点选用的 `setSelected()`（**可单测**）。**列表的滚动、行几何与鼠标命中都不归它管**：那是一个真正的 QML `ListView` + `ItemDelegate` + Qt 自带的 `ScrollBar`（见第 2 节第 9 条）。`handleKey()` 只接导航键与 `Enter`/`Esc`，字符/退格/`Home`/`End` 放行给标准 `TextField` |
 | `src/app/popup_layout.h/.cpp`             | 两个弹窗共用的几何类型（`PopupRect`/`PopupPoint`）与纯函数 `centrePopup()`（先在工作区居中、再夹进屏幕；**可单测**） |
 | `src/app/popup_host.h/.cpp`               | 把上面的模型挂到 QML 窗口上；抢前台（`requestActivate` + `win::window::raiseWindow` 的前台锁绕行）；在 Qt GUI 线程上创建/复用窗口；用户选完把活儿回投工作线程（**GUI 线程亲和**） |
-| `src/qml/`                                | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`（三个文件都在开头写了 `pragma ComponentBehavior: Bound`）；配色一律用 `palette`，没有单独的 `Style.qml`。`HelpPopup.qml` 的列表是真正的 `ListView` + Qt 自带 `ScrollBar`（铺满整张卡片 + `topMargin`/`bottomMargin` 让出表头/底部提示的位置 + 两块不透明底色遮住滚进来的行） |
+| `src/qml/`                                | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`（三个文件都在开头写了 `pragma ComponentBehavior: Bound`）；配色一律用 `palette`，没有单独的 `Style.qml`。`HelpPopup.qml` 里除了卡片外框全是标准控件：筛选框是 `TextField`，列表是 `ListView` + Qt 自带 `ScrollBar` + `ItemDelegate`（列表只占行区域，不再需要表头/底部的遮罩） |
 | `tests/`                                  | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_log_tail`、`tst_audio`、`tst_interactive`（需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`，否则 skip）、`tst_menu_model`、`tst_help_model`、`tst_power_table`、`tst_desktop_table`、`tst_layout` |
-| `scripts/acceptance.ps1`                  | 桌面行为的验收脚本（注入按键 + 焦点捕捉窗口的外部观察，84 项检查：含弹窗滚轮/滚动条拖动回归与“滚动不改键盘选中项”）；需交互式桌面，**不属于 `ctest`**，见第 5 节与阶段 9 |
+| `scripts/acceptance.ps1`                  | 桌面行为的验收脚本（注入按键 + 焦点捕捉窗口的外部观察，86 项检查：含弹窗滚轮/滚动条拖动/鼠标点选与点筛选框回归）；需交互式桌面，**不属于 `ctest`**，见第 5 节与阶段 9 |
 
 ### CMake 目标划分（阶段 6 之后）
 
@@ -389,7 +402,7 @@ QML 模块注册之后，两条 profile 都要重新全量构建一次**。
 清单在下面（12 条），**从阶段 9 起有了自动化版本**：
 
 ```powershell
-# 84 项检查，约两分钟，会持续注入按键/抢焦点；按工作约定第 6 条先提醒用户
+# 86 项检查，约两分钟，会持续注入按键/抢焦点；按工作约定第 6 条先提醒用户
 # 只跑 release 那一份产物（见工作约定第 2 条，脚本默认 -Exe 就是它）
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance.ps1
 powershell.exe ... -Phase config                              # 只看配置，不注入按键
@@ -1039,11 +1052,17 @@ get/set/append/clear。**`animate` 的效果要靠肉眼**（没有屏幕采样�
   `Keys.onPressed` 只负责“问模型要决定 → 执行决定”。字符来自 Qt 译好的
   `QKeyEvent::text()`，所以
   `VK_UNASSIGNED`(0xE8) 那条菜单遮断注入不会凭空变成筛选框里的一个字母。
+  → **2026-09 再修订**：帮助窗口的 `handleKey()` 不再接字符/退格/`Home`/`End`
+  （参数也从 `(key, text)` 收窄成 `(key)`）：筛选框换成了真正的 `TextField`，
+  编辑键归它，模型只接导航键、`Enter`、`Esc`（详见第 2 节第 9 条与第 10 节）。
 * `qml/MenuPopup.qml`、`qml/HelpPopup.qml`：无边框圆角卡片（
   `Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint`，
   `color: "transparent"`），配色一律走 `palette`（于是自动跟随系统浅色/深色）；
   帮助窗口的筛选框**不是 `TextField`**，而是自己画的一行字 + 一根光标——
   所有按键都走一个 `Keys.onPressed`，`↑`/`↓`/`Enter`/`Esc` 与输入不会互相抢键。
+  → **2026-09 再修订**：那个自绘的假输入框已经删掉，换成真正的 `TextField`
+  （点得进去、打得了字），列表项换成 `ItemDelegate`（点得中）。
+  上面的取舍已经作废，以第 2 节第 9 条为准。
 * `app/popup_host.{h,cpp}`（GUI 线程亲和）：
   `requestMenu`/`requestHelp` 可从任意线程调用（内部 `Qt::QueuedConnection`）；
   窗口懒创建、复用；抢前台用 `win::window::raiseWindow`（不变量 17）；
@@ -1826,6 +1845,60 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   任何“用 `indexAt(指针位置)` 算悬停/命中”的写法都必须自己排除滚动条那一块
   （或者干脆别让悬停参与选中语义）。
 
+#### 2026-09 重做：帮助窗口的筛选框与列表项换成标准控件（鼠标点得中）
+
+* **现象**（项目所有者报）：帮助窗口里**鼠标点不中列表项**，上部的筛选框也
+  **点不进去**、进不了输入状态。要求：用标准的 input 控件实现，整个界面尽量
+  别出现自绘控件。
+* **根因**：那两处本来就是自绘件 —— 筛选框是 `Rectangle` + `Label` + 一根
+  `Rectangle` 光标拼的，点它当然没反应；列表项的点击只有一个 `TapHandler`，
+  点了既不选中（高亮只跟键盘选中项走）也没有可见反馈，看起来就像“点不动”。
+  列表还铺满整张卡片，靠两块不透明底色遮住滚进来的行。
+* **改法**：筛选框换成真正的 `TextField`（`onTextChanged` 回写模型），每一行
+  换成 `ItemDelegate`（`onClicked` = `setSelected(index)` + `helpCopy`），列表缩到
+  行区域里、两块遮罩与 `scrollTargetY()` 一起删掉，键盘带选中项进视野改用
+  `positionViewAtIndex(line, Contain)`。
+* **`setFilter()` 必须是 `Q_INVOKABLE`。** 它原来是普通的 C++ public 方法
+  （只有 `clearFilter()` 是 `Q_INVOKABLE`），QML 里 `model.setFilter(text)` 会抛
+  `TypeError: Property 'setFilter' ... is not a function`。**这个错误在预览程序里
+  既没打到 stderr，也没让 QML 处理器整体停下来**（处理器里它后面的语句被跳过），
+  表现为“信号发了、处理器跑了、模型就是不变”，非常误导。
+  诊断手法：在处理器里把中间状态写到一个能观察的属性上（当时是
+  `filterField.placeholderText = "EDITED:" + ...`），再从 C++ 读回来。
+  **教训：QML 要调的 C++ 方法一律加 `Q_INVOKABLE`，别指望异常会自己叫。**
+* **`ItemDelegate` 的 padding 覆盖不掉。** FluentWinUI3 的 `ItemDelegate.qml`
+  用 `topPadding: __config.topPadding || 0 + verticalOffset` 这类绑定给每个实例
+  定内边距（实测左右 12 / 上下 8），**在实例上写 `padding: 0` 会被这些绑定压
+  回去**，于是 `contentItem` 只有 `500x48` 里的 `476x32`，写死
+  `height: rowHeight(46)` 的子项会溢出到下一行。**不要和样式的内边距较劲**：
+  内容区里的东西全部锚在 `contentItem` 上（`anchors.top` + `anchors.bottom`），
+  让它自适应。
+* **模型角色名不能叫 `highlighted`。** 委托是标准 `ItemDelegate`，它自己就有
+  `highlighted` 属性（标准样式用它画高亮），而委托里 `required property bool
+  highlighted` 的名字必须等于模型角色名 —— 撞名就声明不了。角色改名
+  `rowSelected`，委托里 `highlighted: rowItem.rowSelected`。
+* **`QQuickTextInput` 故意忽略 `↑`/`↓`**（Qt 6 起，源码注释写着 “Don't allow
+  MacOSX up/down support”），所以它们会冒到父项的 `Keys`；而 `Keys` 的默认
+  优先级 `Keys.BeforeItem` 意味着**挂在 `TextField` 上的 `Keys.onPressed` 在
+  `TextInput` 自己的键盘处理之前跑**，没接住的键原样放行就是标准的打字/退格/
+  `Home`/`End`。这就是“一个输入框 + 一个列表”的键盘分工：模型只接导航键、
+  `Enter`、`Esc`，编辑键全给输入框。
+* **筛选回写用 `onTextChanged` + 等值判断，不要 `onTextEdited`。**
+  `textEdited` 只在“逐字编辑”那条路径上发；输入法提交中文、粘贴、拖选文本
+  不一定发。`textChanged` 一定会发，而 `if (field.text !== model.filter)` 这一句
+  保证我们自己同步过去的文本不会被当成用户输入回吐一次（不会来回振荡）。
+* **进程内预览里 `console.log` 不一定看得见。** 当时它一行都没出现在 `stderr`
+  重定向里（而 `fprintf` 的输出都在），别拿它当调试的唯一手段；用“写一个能从
+  C++ 读回来的属性”更可靠（见上面那条）。
+* **QML 类型的类名带 id 后缀。** `TextField { id: filterField }` 在
+  `metaObject()->className()` 里是 `TextField_QMLTYPE_1544` 这种，预览程序里找
+  控件要用 `contains("TextField")` 而不是相等比较（`ListView` 没有 id 时才是干净
+  的 `QQuickListView`）。
+* **验收脚本跟着改了两处**：滚动条现在只铺在行区域上（`listTop 88` 到
+  `卡片高 - listBottom 44`），所以拖动起点从“卡片顶下方 30”改成“行区域里靠上”
+  （100）；另外“拖动/滚轮不改选中项”的判据改成**先不点击直接 `Enter`**
+  （点选现在会改选中项，旧的判据会误报）。
+
 ### 领域坑清单（动手前先看这一遍）
 
 下面这些每一条都值得在动钩子/引擎/窗口/电源之前先读一遍：
@@ -2011,6 +2084,26 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > 这一类任务只碰模型/QML/文档，但按工作约定第 2 条仍然两个 profile 都构建、
 > 只在 release 上跑测试与验收脚本。
 
+> **2026-09 重做（帮助窗口换成标准控件）的 DoD**：`windows-debug` 与
+> `windows-release` 两边都是 `build exit 0`、零警告；
+> `ctest --test-dir build/windows-release` **19 个测试目标全绿**
+> （`tst_help_model` 19 项：删掉退格/`Home`/`End`/`scrollTargetY` 的用例，
+> 新增 `mouseClickSelectsTheRow`、`editingKeysAreLeftToTheTextField`）；
+> `qmllint -I C:\Qt\6.11.2\mingw_64\qml src\qml\HelpPopup.qml` 零警告；
+> `flowkeyd --check --config flowkeyd.lua.example` → `OK (37 hotkey(s), 3 remap(s))`、
+> 零警告，用户真实配置（不带 `--config`）→ `OK (24 hotkey(s), 0 remap(s))`。
+> `scripts/acceptance.ps1`（只跑 release）**86 项、0 失败**
+> （`checks: 86, failures: 0`）：新增「点选之后 `Enter` 复制的就是刚点中的那一
+> 行」（拖动滚动条之后、滚轮之后各一条）与「用鼠标点一下筛选框再输入就会筛选」。
+> 弹窗本身用 `tmp/preview`（真实的 `PopupHost` + 真实 QML，进程内注入鼠标与
+> 键盘）验证：筛选框一打开就有焦点、**点一下筛选框就拿到焦点**、**点一行会选中
+> 并复制**、点完焦点仍在输入框里、打字就筛选、模型改筛选输入框也跟着变、
+> `↓`/`Enter`/两级 `Esc` 正常、选到最后一行会滚进视野（`contentY=864`）；
+> 截图 `tmp/help-new.png`（标准 `TextField` 的焦点下划线、标准 `ItemDelegate`
+> 的悬停/高亮都在）。
+> 行为变化：`Home`/`End` 不再是列表导航键（归输入框做光标移动），
+> 鼠标左键点一行会**改变键盘选中项**（点选 + 复制），滚轮/拖滑块仍然不改。
+
 > 提醒：Qt 的编译单元很多，`--preset` 的构建目录是分开的
 > （`build/windows-debug` / `build/windows-release`），所以
 > **debug 实例在运行不会锁住 release 产物**，反之亦然。
@@ -2053,7 +2146,8 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
     注意这是**行为变化**：`keys = "Up"` 将不再匹配小键盘的 `8`。
 11. **弹窗的条目图标**（配色已经跟随系统了：卡片全部走 `palette`；
     剩下的是条目左侧的图标位）与更细的动画。
-12. **帮助窗口的模糊搜索、IME/中文输入、按 `comment` 分组**。
+12. **帮助窗口的模糊搜索、按 `comment` 分组**（筛选框自 2026-09 起是标准的
+    `TextField`，所以中文/输入法已经能用了；缺的只是模糊匹配与分组）。
 13. **日志窗口的增强**：`--follow`/`--grep` 之类的参数、把 `INFO` 与 `DEBUG`
     分色渲染（现在只按级别上色）。
 14. **托盘图标跟随 explorer 重启**（处理 `TaskbarCreated`）并使用真正的
@@ -2076,10 +2170,13 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   **几何算术全部留在 `MenuModel`**（纯函数、有单测），别散到 QML 里。
 * **帮助窗口的新内容或新交互**：条目在 `app/dispatcher` 的 `open_help` 里从
   `Compiled` 的 `bindings`/`remaps` 生成（帮助列表与 `--list` 看的是同一批数据，
-  所以 `help` 没有配置参数），纯逻辑（筛选、选中项、悬停行、`scrollTargetY`）
-  在 `HelpModel`，列表与滚动在 `HelpPopup.qml`（真正的 `ListView` +
-  `ScrollBar`）。**新加一行字段时不要再把行几何往模型里塞**：委托用锚点自己摆，
-  模型只出内容（见第 2 节第 9 条与第 10 节的重写笔记）。
+  所以 `help` 没有配置参数），纯逻辑（筛选、选中项、`Enter` 复制哪一行、
+  两级 `Esc`、鼠标点选用的 `setSelected`）在 `HelpModel`，界面在
+  `HelpPopup.qml`（真正的 `TextField` 筛选框 + `ListView`/`ItemDelegate`/`ScrollBar`）。
+  **新加一行字段时不要再把行几何往模型里塞**：委托用锚点自己摆，模型只出内容。
+  新加模型角色名时注意别和标准控件自己的属性撞名 —— `highlighted` 被
+  `ItemDelegate` 占了，所以模型里叫 `rowSelected`（见第 2 节第 9 条与第 10 节
+  的重写笔记）。
 * **新的 QML 弹窗（第三种）**：不要另起一套配色与字号：
   `import QtQuick.Controls.FluentWinUI3`，颜色一律从 `palette`（`base`/`text`/
   `placeholderText`/`highlight`/`highlightedText`/`alternateBase`/`mid`）取，

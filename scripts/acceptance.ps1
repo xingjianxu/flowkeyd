@@ -25,9 +25,10 @@
 #   * `menu` 弹窗：出现、拿到键盘焦点、条目键真的执行动作、Esc 只关窗、
 #     再按一次不开第二个（重新打开的窗口也必须重新拿到焦点）、
 #     滚轮不会把高亮从光标下拿走（AGENTS.md 第 10 节的弹窗闪烁回归）
-#   * `help` 弹窗：出现、拿到焦点、输入筛选后标题里的 `可见/总数` 变小、
-#     Enter 把选中那行的按键写进剪贴板、第一下 Esc 只清筛选、第二下才关窗、
-#     滚轮之后高亮仍然待在光标那一行（而不是被滚轮带走的选中项）
+#   * `help` 弹窗：出现、拿到焦点、**用鼠标点一下筛选框再输入**就筛选（标题里
+#     的 `可见/总数` 变小）、左键点一行 = 选中它并把它写进剪贴板（`Enter` 复制
+#     的就是刚点中的那一行）、拖动滚动条 / 滚轮只滚视图而不改选中项、
+#     第一下 Esc 只清筛选、第二下才关窗
 #   * suspend / resume（挂起时别的绑定不触发，而 suspend 自己仍然可用）
 #   * reload（改过的配置文本立刻生效）
 #   * quit（钩子卸掉、之后按键重新到达前台、没有按键卡在按下状态）
@@ -841,12 +842,13 @@ try {
     # --- 滚动：只滚视图，不动键盘选中项 --------------------------------------
     # 回归的是「拖动滚动条会改变高亮/选中项」与「弹窗在滚轮下闪烁」：列表是一个
     # 真正的 `ListView` + Qt 自带的 `ScrollBar`，滚轮与拖动都交给 Qt；高亮就是
-    # 键盘选中项，只由 `↑`/`↓`/`PgUp`/`PgDn`/`Home`/`End` 改，鼠标悬停与滚动
-    # 都不碰它（2026-09 取消了悬停高亮，见 AGENTS.md 第 10 节）。
+    # 键盘选中项，只有 `↑`/`↓`/`PgUp`/`PgDn` 会改它，鼠标悬停与滚动都不碰它
+    # （2026-09 取消了悬停高亮，见 AGENTS.md 第 10 节）。
     # 判据都是从外面能看到的：
-    #   * 左键点某一行 = 复制那一行（帮助窗口的鼠标语义）；
-    #   * 拖动滑块 / 滚轮之后，同一个屏幕位置下已经是**另一行**（列表真滚了）；
-    #   * 这两种滚动都不改键盘选中项：`Enter` 复制的一直是第 1 行。
+    #   * 左键点某一行 = **选中**那一行 + 复制它（标准列表的鼠标语义）；
+    #   * 拖动滑块 / 滚轮之后，同一个屏幕位置下已经是**另一行**（列表真滚了），
+    #     而且这时候 `Enter` 复制的一直是**原来**那一行 —— 滚动不改选中项；
+    #   * 点选之后 `Enter` 复制的是**刚点中的**那一行 —— 鼠标真的改了选中项。
     # 卡片宽 500 逻辑像素、第一行中线在 listTop(88) + rowHeight/2，所以用
     # 窗口宽度反推缩放（DPI 感知后矩形是物理像素）。
     $helpRect = [FlowInject]::WindowRect($daemon.Id, $HELP_TITLE)
@@ -863,23 +865,30 @@ try {
         Check '左键点某一行会复制它的按键' (
             $null -ne $firstRow -and $firstRow -ne 'SENTINEL')
 
-        # 键盘选中项从外面看不到，只能用 `Enter` 复制的那一条当证据：它必须
-        # 一直是第 1 行，拖动与滚轮都不许把它带走。
+        # 键盘选中项从外面看不到，只能用 `Enter` 复制的那一条当证据：点选之后
+        # 它就是刚点中的那一行，而拖动与滚轮都不许把它带走。
         ClipSet 'SENTINEL'
         TapKey $VK_RETURN
         Pump 600
-        Check '一开始 Enter 复制的就是键盘选中项（第 1 行）' ((ClipGet) -eq $firstRow)
+        Check '点选之后 Enter 复制的就是刚点中的那一行（鼠标选中项生效）' ((ClipGet) -eq $firstRow)
 
         # --- 拖动滚动条 ----------------------------------------------------
-        # 滚动条是卡片右边 10 逻辑像素宽的那一条，滑块离卡片顶 2 像素、比卡片
-        # 矮不了多少，所以压在卡片顶下方 30 像素处必定落在滑块上。往下拖到远
-        # 远超过滑槽的地方（Qt 会把滑块夹在滑槽里）——列表必须滚到底。
+        # 滚动条是卡片右边 10 逻辑像素宽的那一条，现在只铺在**行区域**上
+        # （表头与底部提示之间：listTop 88 到卡片高 - listBottom 44），所以
+        # 起点取行区域里靠上的位置，必定落在滑块上。往下拖到远远超过滑槽的
+        # 地方（Qt 会把滑块夹在滑槽里）——列表必须滚到底。
         $barX = $helpRect[0] + $helpRect[2] - [int](5 * $scale)
-        $barY = $helpRect[1] + [int](30 * $scale)
-        $barBottom = $helpRect[1] + $helpRect[3] - [int](30 * $scale)
+        $barY = $helpRect[1] + [int](100 * $scale)
+        $barBottom = $helpRect[1] + $helpRect[3] - [int](50 * $scale)
         [FlowInject]::DragMouse($barX, $barY, $barX, $barBottom + [int](400 * $scale))
         Pump 600
         Check '拖动滚动条之后弹窗还在' ($null -ne (HelpCounts))
+        # 拖动**只滚视图**：先不点击，直接 `Enter`，复制的还是第 1 行。
+        ClipSet 'SENTINEL'
+        TapKey $VK_RETURN
+        Pump 600
+        Check '拖动滚动条不会改键盘选中项（Enter 复制的还是第 1 行）' ((ClipGet) -eq $firstRow)
+        # 同一个屏幕位置下已经是**另一行**，说明列表真的滚了；点它会把它选上。
         ClipSet 'SENTINEL'
         [FlowInject]::Click($midX, $rowY)
         Pump 600
@@ -890,7 +899,7 @@ try {
         ClipSet 'SENTINEL'
         TapKey $VK_RETURN
         Pump 600
-        Check '拖动滚动条不会改键盘选中项（Enter 复制的还是第 1 行）' ((ClipGet) -eq $firstRow)
+        Check '点选之后 Enter 复制的就是刚点中的那一行（滚动之后）' ((ClipGet) -eq $afterDrag)
 
         # 重新打开一次：滚动位置、筛选与选中项都复位（下面的滚轮检查要从顶部开始）。
         TapKey $VK_ESC
@@ -912,6 +921,10 @@ try {
         Check '滚轮之后弹窗还在、计数不变' (
             ($null -ne (HelpCounts)) -and (HelpCounts).Visible -eq $full.Visible)
         ClipSet 'SENTINEL'
+        TapKey $VK_RETURN
+        Pump 600
+        Check '滚轮不会改键盘选中项（Enter 复制的还是第 1 行）' ((ClipGet) -eq $firstRow)
+        ClipSet 'SENTINEL'
         [FlowInject]::Click($midX, $rowY)
         Pump 600
         $afterWheel = ClipGet
@@ -921,7 +934,14 @@ try {
         ClipSet 'SENTINEL'
         TapKey $VK_RETURN
         Pump 600
-        Check '滚轮不会改键盘选中项（Enter 复制的还是第 1 行）' ((ClipGet) -eq $firstRow)
+        Check '点选之后 Enter 复制的就是刚点中的那一行（滚轮之后）' ((ClipGet) -eq $afterWheel)
+    }
+    # 筛选框是一个真正的 `TextField`：**先用鼠标点一下**再打字。这一条同时验证
+    # 「点得进去」和「打进去就筛选」——焦点不在框里的话，字符根本不会到框里。
+    if ($helpRect[2] -gt 0) {
+        [FlowInject]::Click($helpRect[0] + [int](250 * $scale),
+                             $helpRect[1] + [int](65 * $scale))   # filterRect: y = 50..80
+        Pump 400
     }
     TapKey 0x46   # 'f'
     TapKey 0x31   # '1'
@@ -929,7 +949,7 @@ try {
     Pump 800
     $filtered = HelpCounts
     Write-Host "         筛选 F18 之后: $($filtered.Visible)/$($filtered.Total)"
-    Check '输入就筛选，标题里的计数变小' (
+    Check '用鼠标点一下筛选框再输入就会筛选（计数变小）' (
         $null -ne $filtered -and $filtered.Visible -lt $full.Visible -and $filtered.Visible -ge 1)
     TapKey $VK_RETURN
     Pump 800

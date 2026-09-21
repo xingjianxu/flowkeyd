@@ -18,6 +18,15 @@
 // 指针压在列表上，高亮会随滚动在行之间乱跳 —— 项目所有者要求取消，改用
 // 系统列表控件的语义（悬停不动高亮、拖动与滚轮只滚视图）。所以这里也**没有**
 // `hover`/`setHover`。
+//
+// **2026-09 修订（第二个版本）：界面上的交互全部交给标准控件。**
+// 筛选框是一个真正的 `TextField`：光标、选区、输入法、右键菜单、鼠标点选
+// 全部由 Qt 负责，模型只在 `setFilter()` 里接收最终文本，因此 `handleKey()`
+// **不再处理字符与退格**（那正是把自绘输入框换成标准控件的意义）。列表的委托
+// 是一个真正的 `ItemDelegate`：鼠标点一行 = `setSelected()` 选中它 + `helpCopy()`
+// 执行它，滚动位置由 `ListView` 自己持有，所以模型**也没有** `hitTest`/`wheel`。
+// `handleKey()` 只剩导航键（`↑`/`↓`/`PgUp`/`PgDn`）、`Enter`（复制）与 `Esc`
+// （先清筛选、再关窗）；`Home`/`End` 归输入框（标准的光标移动）。
 #pragma once
 
 #include "app/popup_layout.h"
@@ -91,7 +100,12 @@ public:
         BadgesRole = Qt::UserRole + 1,
         LabelRole,
         DetailRole,
-        HighlightedRole,
+        /// 这一行是不是键盘选中的那一行（高亮）。
+        ///
+        /// **不叫 `highlighted`**：QML 里每一行是标准的 `ItemDelegate`，它自己
+        /// 就有一个 `highlighted` 属性（标准样式用它画高亮），而委托里的
+        /// `required property` 名字必须等于模型角色名 —— 撞名就声明不了。
+        RowSelectedRole,
     };
     Q_ENUM(Role)
 
@@ -143,8 +157,9 @@ public:
     const std::vector<int> &visibleIndices() const { return m_visible; }
     std::optional<int> itemIndexForVisible(int line) const;
 
-    /// 换筛选串（`handleKey` 会自己调它；窗口复位时也用它）。
-    void setFilter(const QString &filter);
+    /// 换筛选串。**QML 的筛选框直接调它**（`onTextChanged`），`handleKey` 与
+    /// 窗口复位时也用它。
+    Q_INVOKABLE void setFilter(const QString &filter);
     Q_INVOKABLE void clearFilter();
 
     /// 已生效的那一行的按键文本（`Ctrl+A / Ctrl+B`）；没有选中时返回空串。
@@ -163,24 +178,22 @@ public:
     /// 上下移动选中项（高亮跟着它走）；到边界夹住（与选单的回绕不同，与 oskeyd 一致）。
     Q_INVOKABLE void moveSelection(int delta);
 
-    /// 键盘改过选中项之后，视图的 `contentY` 应该放在哪里。
+    /// 鼠标点选某一行（`ItemDelegate.onClicked`）。越界时夹进 `[0, 可见条数-1]`。
     ///
-    /// 为什么不由 `ListView.positionViewAtIndex(line, Contain)` 自己搞定：列表
-    /// 铺满整张卡片，视口上下各有表头/底部提示盖着，而 Qt 的 `Contain` 只保证
-    /// 「行落在**列表自己的矩形**里」——对最后几行它会把行留在底部提示底下
-    /// （实测 13 条时只挪 4 像素，行基本看不见）。所以这里按**行区域**
-    /// （`topMargin` 到 `viewportHeight - bottomMargin`）算一个目标值，滚动本身
-    /// 仍然完全交给 `ListView`（滚轮、拖滑块、惯性都不经过这里）。
-    ///
-    /// 参数是视图的几何；纯算术，`tst_help_model` 直接盯着它。
-    Q_INVOKABLE int scrollTargetY(int line,
-                                  int contentY,
-                                  int topMargin,
-                                  int bottomMargin,
-                                  int viewportHeight) const;
+    /// 与 `moveSelection` 分开是刻意的：点选是**绝对**位置，键盘导航是相对位移；
+    /// 两者都只改「键盘选中项」这一个状态，高亮跟着它走。
+    Q_INVOKABLE void setSelected(int line);
 
-    /// 一次按键的处理结果：`{ decision: "none"|"copy"|"cancel", index, handled }`。
-    Q_INVOKABLE QVariantMap handleKey(int key, const QString &text);
+    /// 一次按键的处理结果：
+    /// `{ decision: "none"|"copy"|"cancel"|"clear", index, handled }`。
+    ///
+    /// 只管导航键（`↑`/`↓`/`PgUp`/`PgDn`）、`Enter`（复制光标那一行）与
+    /// `Esc`（有筛选文本就先清掉、否则关窗）。**编辑键不在这里**：字符、退格、
+    /// `Home`/`End`/左右方向键都归筛选框那个标准 `TextField` 自己。
+    /// 没被接住的键返回 `handled == false`，QML 把它放行给输入框。
+    ///
+    /// `clear` 表示模型已经把筛选清掉了，QML 要把输入框里的文本同步过来。
+    Q_INVOKABLE QVariantMap handleKey(int key);
 
     /// 再次打开时清空筛选、高亮。
     void reset();
