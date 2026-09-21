@@ -114,14 +114,6 @@ QString HelpModel::emptyMessage() const
     return m_items.empty() ? tr("配置里还没有快捷键") : tr("没有匹配的快捷键");
 }
 
-std::optional<int> HelpModel::hover() const
-{
-    if (m_hover < 0) {
-        return std::nullopt;
-    }
-    return m_hover;
-}
-
 QString HelpModel::footerText() const
 {
     return tr("输入筛选    ↑↓ 滚动    Enter 复制    Esc 关闭");
@@ -278,33 +270,13 @@ QVariantList HelpModel::badgesForItem(std::size_t itemIndex) const
     return out;
 }
 
-void HelpModel::setHover(int line)
-{
-    const int next = line >= 0 && line < visibleCount() ? line : -1;
-    if (next == m_hover) {
-        return;
-    }
-    m_hover = next;
-    notifyRows();
-}
-
 void HelpModel::moveSelection(int delta)
-{
-    moveSelection(delta, true);
-}
-
-void HelpModel::moveSelection(int delta, bool clearHover)
 {
     if (m_visible.empty()) {
         return;
     }
     const int last = visibleCount() - 1;
     const int next = std::clamp(m_selected + delta, 0, last);
-    if (clearHover) {
-        // 键盘接管高亮：把鼠标悬停交回去（滚轮已经不管滚动位置了，所以这条路
-        // 只剩键盘用得到）。
-        m_hover = -1;
-    }
     const bool moved = next != m_selected;
     m_selected = next;
     if (moved) {
@@ -461,7 +433,6 @@ void HelpModel::refilter()
         }
     }
     m_selected = 0;
-    m_hover = -1;
     relayout();
 }
 
@@ -493,8 +464,7 @@ int HelpModel::activeLine() const
     if (m_visible.empty()) {
         return -1;
     }
-    const int line = m_hover >= 0 ? m_hover : m_selected;
-    return std::clamp(line, 0, visibleCount() - 1);
+    return std::clamp(m_selected, 0, visibleCount() - 1);
 }
 
 } // namespace flowkeyd::app

@@ -5,18 +5,11 @@
 先读这个文件。它记录了环境、真正能用的命令、**已经拍板的设计决策**、
 不能破坏的不变量，以及已经让人浪费过时间一次的坑。
 
-> **参考实现是隔壁的 `../oskeyd`（Rust），但是不需要直接将rust翻译为C++。**
-> 凡是 oskeyd 的 `AGENTS.md` / `README.md` 已经写清楚的**领域知识**
-> （键盘钩子的各种坑、窗口动作的前台锁绕行、虚拟桌面的接口表、
-> 日志查看器的设计、提权的尾巴、`INPUT` 结构体布局……），本文件**不重复**，
-> 动手前直接去读那一份。本文件只写「用 Qt/C++ 复刻」特有的东西，
-> 以及本项目已经拍板的决策与实施计划。
->
-> oskeyd 的两份文档都在本机：
-> `D:\prj\oskeyd\AGENTS.md`（1059 行，工程笔记）与
-> `D:\prj\oskeyd\README.md`（886 行，用户文档 + 完整配置/动作/schema 说明）。
-> **本项目的目标是把 oskeyd 的功能与配置语义 1:1 复刻出来**，
-> 所以那两份文档同时也是 flowkeyd 的规格书。
+> **本文件是 flowkeyd 唯一的工程笔记，`README.md` 是唯一的用户文档。**
+> 领域知识（键盘钩子的各种坑、窗口动作的前台锁绕行、虚拟桌面的接口表、
+> 日志窗口的设计、提权的尾巴、`INPUT` 结构体布局……）都已经写进这两个文件，
+> 不再有外部规格书。配置 schema、动作字段与键名的权威定义在 `README.md`
+> 的「配置」那一章与 `flowkeyd.lua.example`。
 
 > **本仓库的工作约定**（由项目所有者设定，2026-09）：
 > 1. 每个任务结束后都要更新本文件，把新得到的经验和新出现的要求写进去，
@@ -29,17 +22,17 @@
 > 3. 目标平台是 **Windows**；可以使用未公开的 Win32 API。
 > 4. **代码注释、本文件、README 与示例配置一律用中文。**
 >    **日志与错误信息保持英文**（配置校验信息、`--check` 输出也一样）：
->    这是从 oskeyd 继承的约定，理由是日志/校验信息是机器可断言的字符串，
+>    理由是日志/校验信息是机器可断言的字符串，
 >    而且中英混排的日志在终端里很难读。用户可见的 CLI 帮助文本用中文。
 > 5. **可以自行结束本项目（flowkeyd）正在运行的进程**，不必事先征求许可；
 >    重建被锁住的 exe、跑手工冒烟验证时先自己找 pid 再停。
->    停法照抄 oskeyd：`taskkill /PID <pid>`（**不带** `/F`）让它走干净退出路径；
+>    停法：`taskkill /PID <pid>`（**不带** `/F`）让它走干净退出路径；
 >    `/F` 只在进程提权而当前 shell 杀不掉时兜底（代价是留下幽灵托盘图标）。
 >    **这条只管 flowkeyd 自己；见第 9 条。**
 > 6. **需要用户暂时别用这台机器时**（会抢前台/焦点、会注入按键的手工冒烟验证），
 >    用提问的形式提醒，但**不等回答**（例如“接下来约 N 分钟会注入按键/抢焦点，
 >    请先别碰键盘和鼠标”），约 3 秒后自行继续。提醒里要写清预计时长与影响范围。
-> 7. **依赖按需引入，但每次引入都要在提交信息里给出理由**（照抄 oskeyd 的规矩）。
+> 7. **依赖按需引入，但每次引入都要在提交信息里给出理由**。
 >    默认只有 **Qt + `vendor/lua`**，见第 3 节的依赖政策。
 > 8. **agent 的 bash 是一个极简 WSL，`/bin` 下只有 `bash`/`mount`/`login`，
 >    `ls`/`grep`/`cat`/`head`/`tail` 全都没有。** 看文件用 read/edit 工具，
@@ -48,8 +41,7 @@
 >    **不要把管道默写成 `| tail`。命令行上也不要直接拼中文**
 >    （会因代码页变乱码）：要么写成脚本文件，要么只用 ASCII 的模式串。
 > 9. **接管已经完成（2026-09，第 10 阶段）：现在该常驻的是 flowkeyd。**
->    用户日常绑定的提供者已经换成 flowkeyd，oskeyd 的常驻实例不再是它，
->    所以**不要**把 oskeyd 拉起来（回归出口除外，见阶段 10）。
+>    用户日常绑定的提供者就是它，所以**不要**再去拉起别的实现。
 >    提权常驻的启动由用户自己一条
 >    `Start-Process -Verb RunAs ...\flowkeyd.exe` 完成 —— agent 的 shell 没有提权，
 >    也不该去点 UAC；细节见第 10 阶段与 `README.md`。
@@ -69,39 +61,37 @@
 
 ## 1. 这个项目是什么
 
-`flowkeyd` 是 [`oskeyd`](../oskeyd) 的 **Qt 6 / C++ 复刻版**：一个由 **Lua 脚本**
-配置的 Windows 键盘钩子守护进程。它安装一个 `WH_KEYBOARD_LL` 钩子，匹配按键和弦，
+`flowkeyd` 是一个由 **Lua 脚本**配置的 Windows 键盘钩子守护进程，
+用 **C++20 + Qt 6** 写成。它安装一个 `WH_KEYBOARD_LL` 钩子，匹配按键和弦，
 按需把匹配到的按键从前台应用那里隐藏掉（也就是 AutoHotkey 的行为），然后执行绑定
 的动作（启动进程、发送按键、控制音量/媒体、操作窗口、切换虚拟桌面与剪贴板、
 弹出通知、弹出选单、弹出快捷键帮助、睡眠/关机/重启/关屏）。它也能做按键重映射。
 
 一句话：**用 Lua 配置、用 Qt/C++ 写的 AutoHotkey。**
 
-> 与 oskeyd 唯一的功能性差异是 **UI 那一层**：oskeyd 的日志查看器是一个真正的
-> 命令行窗口（独立进程），选单与帮助窗口是自己用 GDI 画的原生窗口；
-> flowkeyd 把它们全部换成 **Qt Quick（QML）+ FluentWinUI3 样式**的窗口，
-> 而且都跑在**同一个进程**里（理由见第 4 节第 4 条）。
-> 除此之外，配置 schema、动作字段、按键名、CLI 开关、日志文案都保持 1:1。
+UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，全部是
+**Qt Quick（QML）+ FluentWinUI3 样式**的窗口，跑在**同一个进程**里
+（理由见第 2 节第 1 条与第 4 节）。
 
-**当前的非目标**（与 oskeyd 一致）：图形化编辑器、鼠标钩子，
+**当前的非目标**：图形化编辑器、鼠标钩子，
 以及**把 Lua 函数当动作**（配置是脚本，但动作只能是声明式的表/字符串）。
 
-### 与 oskeyd 的差异清单（有意为之，不是遗漏）
+### 技术选型一览
 
-| 方面       | oskeyd                                                                 | flowkeyd                                                                                                      |
-| ---------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| 语言/框架  | Rust + 手写 FFI                                                        | C++20 + Qt 6.11（Quick/QML 做 UI）+ 手写 Win32 声明                                                           |
-| Lua        | Lua 5.4（`mlua` vendored）                                             | **Lua 5.5.1**（`vendor/lua`，见第 3 节）                                                                      |
-| DSL 全局表 | `oskeyd.*` + 全局构造器                                                | **`flowkeyd.*`** + 全局构造器（构造器名不变）                                                                 |
-| 配置目录   | `%USERPROFILE%\.config\oskeyd\config.lua`                              | `%USERPROFILE%\.config\flowkeyd\config.lua`                                                                   |
-| 日志文件   | `%USERPROFILE%\.config\oskeyd\oskeyd.log`                              | `%USERPROFILE%\.config\flowkeyd\flowkeyd.log`                                                                 |
-| 注入标记   | `dwExtraInfo` 里的 `"OSKE"`                                            | `dwExtraInfo` 里的 `"FLOW"`                                                                                   |
-| 互斥体     | `Local\oskeyd-log-viewer-<pid>` 等                                     | `Local\flowkeyd-<配置路径散列>` 等（不再需要查看器互斥体）                                                    |
-| 日志窗口   | `oskeyd --log-window` **独立进程**，跑在命令行窗口里                   | **进程内的 QML 窗口**（FluentWinUI3），尾随同一个日志文件                                                     |
-| 选单/帮助  | 自绘 GDI 原生窗口，各自一条线程                                        | **QML 窗口**（FluentWinUI3），跑在 Qt GUI 线程上                                                              |
-| 示例配置   | `oskeyd.lua.example`                                                   | `flowkeyd.lua.example`                                                                                        |
-| 自动化测试 | `cargo test` + `--selftest`/`--probe`/`--simulate` + `scripts/e2e.ps1` | Qt Test 单元测试 + **`scripts/acceptance.ps1`**（82 项检查，注入按键 + 高亮/弹窗滚轮/拖动滚动条回归的外部验收；`--simulate`/`--selftest`/`--probe` 本期不做，见第 12 节） |
-| 依赖管理   | `cargo`                                                                | CMake Presets + Ninja，`vendor/lua` 静态编进二进制                                                            |
+| 方面       | flowkeyd                                                                                                      |
+| ---------- | ------------------------------------------------------------------------------------------------------------- |
+| 语言/框架  | C++20 + Qt 6.11（Quick/QML 做 UI）+ 手写 Win32 声明                                                           |
+| Lua        | **Lua 5.5.1**（`vendor/lua`，见第 3 节）                                                                      |
+| DSL 全局表 | **`flowkeyd.*`** + 全局构造器                                                                                 |
+| 配置目录   | `%USERPROFILE%\.config\flowkeyd\config.lua`                                                                   |
+| 日志文件   | `%USERPROFILE%\.config\flowkeyd\flowkeyd.log`                                                                 |
+| 注入标记   | `dwExtraInfo` 里的 `"FLOW"`                                                                                   |
+| 互斥体     | `Local\flowkeyd-<配置路径散列>`                                                                               |
+| 日志窗口   | **进程内的 QML 窗口**（FluentWinUI3），尾随同一个日志文件                                                     |
+| 选单/帮助  | **QML 窗口**（FluentWinUI3），跑在 Qt GUI 线程上                                                              |
+| 示例配置   | `flowkeyd.lua.example`                                                                                        |
+| 自动化测试 | Qt Test 单元测试 + **`scripts/acceptance.ps1`**（84 项检查，注入按键 + 高亮/弹窗滚轮/拖动滚动条/“滚动不改键盘选中项”回归的外部验收；`--simulate`/`--selftest`/`--probe` 本期不做，见第 12 节） |
+| 依赖管理   | CMake Presets + Ninja，`vendor/lua` 静态编进二进制                                                            |
 
 ---
 
@@ -117,33 +107,29 @@
    日志窗口、`menu` 选单、`help` 帮助这四样。
 2. **Lua 用 `vendor/lua` 里现成的 Lua 5.5.1**（`lua/lua` @ `v5.5.1`），
    不换成 5.4。与 5.4 的差异要自己适配，**关键差异见第 7 节**。
-3. **目标是全量对齐 oskeyd**，分阶段实施（第 10 节），但**自动化测试只写
-   Qt Test 单元测试**（第 5 节）。这意味着桌面行为（钩子真的吞了键、窗口真的
-   被激活……）只能靠**手工冒烟验证** —— 每次动到钩子/引擎/分发/窗口后端，
-   都要按第 6 节的清单手工过一遍。
-4. **配置 schema 与 CLI 开关 1:1 兼容 oskeyd，但换品牌名**：
+3. **分阶段实施**（第 9 节），但**自动化测试以 Qt Test 单元测试为主**
+   （第 5 节）。桌面行为（钩子真的吞了键、窗口真的被激活……）在阶段 9 之后
+   由 `scripts/acceptance.ps1` 覆盖；脚本覆盖不到的仍然靠**手工冒烟验证**
+   —— 每次动到钩子/引擎/分发/窗口后端，都要按第 5 节的清单过一遍。
+4. **配置 schema 与 CLI 开关是 flowkeyd 自己的、稳定的公开接口**：
    字段名、取值、动作字段、DSL 构造器名（`settings{}`/`hotkey{}`/`remap{}`/
    `run()`/`send()`/`type_text()`/`open()`/`notify()`/`volume()`/`media()`/
    `window()`/`clipboard()`/`caps_lock()`/`suspend()`/`desktop()`/`power()`/
-   `menu{}`/`help()`/`reload()`/`quit()`/`none()`）**全部不变**；
-   只有「注册表」那张挂在脚本全局的表从 `oskeyd` 改名成 **`flowkeyd`**，
-   以及配置目录/日志文件/窗口标题/日志前缀/注入标记换成 flowkeyd。
-   现有 oskeyd 的 `config.lua` 复制过来即可直接跑（本机那份根本没用到
-   `oskeyd.*` 表，所以是纯复制）。
-5. **flowkeyd 最终接管这台机器**：第 10 阶段会把它做成常驻（提权），
-   并让 oskeyd 退役。
-6. **不做 `--simulate` / `--selftest` / `--probe`，不写 oskeyd 那种 91 项检查的
-   `scripts/e2e.ps1`。**
+   `menu{}`/`help()`/`reload()`/`quit()`/`none()`）都要在 `README.md` 里写清楚，
+   改动要当作破坏性变更对待（同步更新示例配置与 README）。
+   挂在脚本全局的注册表表名是 **`flowkeyd`**。
+5. **flowkeyd 最终接管这台机器**：第 10 阶段会把它做成常驻（提权）。
+6. **不做 `--simulate` / `--selftest` / `--probe`。**
    `--check` / `--list` / `--list-keys` 保留（它们是产品功能，也是手工验证的
    主要工具）。
    → **阶段 9 补充（2026-09）**：这三个开关仍然不做，但“手工冒烟清单”已经
-   自动化成了 **`scripts/acceptance.ps1`**（82 项检查），它靠一个
+   自动化成了 **`scripts/acceptance.ps1`**（84 项检查），它靠一个
    **只给测试用的后门** `FLOWKEYD_ACCEPT_INJECTED=1` 抬升“丢弃注入输入”
-   那道过滤（照抄 oskeyd 的 `OSKEYD_ACCEPT_INJECTED`，见第 10 节）。
+   那道过滤（见第 5 节与阶段 9）。
    这是对一个“当时无法验证”的条款的修订，不是推翻：不变量 2 本身没动，
    日常跑的时候那道过滤照旧生效。
 7. **依赖政策：默认只有 Qt + `vendor/lua`。** 需要新依赖时**按需引入**，
-   但必须在提交信息里给出理由（照抄 oskeyd 的规矩）。
+   但必须在提交信息里给出理由。
    `QUICK_START_DEPS`：JSON、CLI 解析、字符串工具都自己写或用 Qt 自带的；
    不要引入 `sol2`、`nlohmann::json`、`CLI11`、`spdlog` 之类“顺手”的库。
 8. **构建：CMake Presets + Ninja，debug 与 release 双 profile 都必须编译通过；
@@ -155,9 +141,9 @@
    * 滚动位置、滚轮、拖动滑块、惯性全归 `ListView`；模型只管筛选、选中项、
      光标悬停行，以及 `scrollTargetY()`（键盘）要摆到哪个 `contentY`；
    * **滚轮方向跟着系统/Qt**（本机实测 `mouseData=-120` 往下、`+120` 往上，
-     WinForms 的 `ListBox` 也一样）。oskeyd——以及自绘时期的 flowkeyd——把正数
-     当成“往列表后面走”，方向与系统列表控件相反；**这条有意不再复刻**，
-     `scripts/acceptance.ps1` 里帮助那一段因此改成 `Wheel(-120)`。
+     WinForms 的 `ListBox` 也一样）。自绘时期的 flowkeyd 曾把正数
+     当成“往列表后面走”，方向与系统列表控件相反；**已经改掉**，
+     `scripts/acceptance.ps1` 里帮助那一段因此是 `Wheel(-120)`。
    * 选单（`MenuPopup`）不滚动，仍然用 `Repeater` + 模型算好的几何，不动。
 
 ---
@@ -168,7 +154,6 @@
 | ---------- | ----------------------------------------------------------------------------------------------------------- |
 | 开发环境   | 原生 Windows 10.0 build 26200 (x64)，交互式桌面会话                                                         |
 | 工程路径   | `D:\prj\flowkeyd`                                                                                           |
-| 参考实现   | `D:\prj\oskeyd`（Rust，正在常驻运行）                                                                       |
 | Qt         | `C:\Qt\6.11.2\mingw_64`（只有 mingw_64 这一套）                                                             |
 | C++ 编译器 | `C:\Qt\Tools\mingw1310_64\bin\g++.exe`（GCC 13.1.0）                                                        |
 | CMake      | `C:\Qt\Tools\CMake_64\bin\cmake.exe`                                                                        |
@@ -200,8 +185,7 @@
 
 ### 依赖政策：什么可以静态链接，什么必须运行时解析
 
-照抄 oskeyd 的规则（见 `../oskeyd/AGENTS.md` 第 2 节末），**唯一的例外是
-Qt 自己的库随便链**：
+**唯一的例外是 Qt 自己的库随便链**：
 
 * **允许静态链接的集合**（MinGW 的工具链自带这些导入库，实测都在
   `C:\Qt\Tools\mingw1310_64\x86_64-w64-mingw32\lib` 下，
@@ -209,8 +193,7 @@ Qt 自己的库随便链**：
   `user32`、`kernel32`、`shell32`、`ole32`、`ntdll`、`advapi32`、
   `powrprof`、`uxtheme`、`comctl32`、`shlwapi`。
   （`comctl32`/`shlwapi`/`gdi32` 大概率用不到 —— UI 是 QML，不用手画。
-  `powrprof` 比 oskeyd 那边好办：oskeyd 之所以运行时解析 `SetSuspendState`，
-  只是 rust-mingw 的 self-contained 导入库里没有它，C++ 这边直接链即可。）
+  `powrprof` 直接静态链接 `SetSuspendState` 即可，不需要运行时解析。）
 * **必须 `LoadLibraryW` + `GetProcAddress` 运行时解析**：
   未公开入口（`win32u!NtUserSendInput`、`NtUserGetAsyncKeyState`……，
   实测**没有** `libwin32u.a`）以及任何不在上面那个集合里的 DLL。
@@ -218,15 +201,13 @@ Qt 自己的库随便链**：
   exe 根本起不来”的机会。
   **`dwmapi` 也走这条路**（虽然 `libdwmapi.a` 存在）：按窗口的
   `DWMWA_TRANSITIONS_FORCEDISABLED` 是 Win10 才有的属性，运行时解析 +
-  `available()` 探测的成本几乎为零，而 oskeyd 也是这么做的。
+  `available()` 探测的成本几乎为零。
 * **COM 接口手写 vtable**（Core Audio `IAudioEndpointVolume`、
   shell 的 `IVirtualDesktopManagerInternal`）。**这是本仓库风险最高的两块代码**：
-  vtable 布局写错不是返回错误码，而是崩溃。写法照抄
-  `../oskeyd/src/win/audio.rs` 与 `../oskeyd/src/win/desktop.rs`
-  （后者有一张按 `build.revision` 索引的接口版本表）。
+  vtable 布局写错不是返回错误码，而是崩溃。接口定义以真机验证为准，
+  虚拟桌面那张表按 `build.revision` 索引（见 `platform/win/desktop`）。
 
-> oskeyd 拒绝引入 `windows` crate 的理由在 C++ 侧不适用（我们本来就直接
-> 写 Win32），但同样的精神要保留：**不引入会藏起未公开入口的封装层。**
+> 不引入会藏起未公开入口的封装层 —— 未公开 API 一律自己 `GetProcAddress`。
 
 ---
 
@@ -240,7 +221,7 @@ Qt 自己的库随便链**：
 | `CMakePresets.json`                       | `windows-debug` / `windows-release` 两个 preset（Ninja + `mingw1310_64` + Qt 6.11.2）                                                                                                                                       |
 | `cmake/VendorLua.cmake`                   | 把 `vendor/lua` 编成静态库 `lua_static`（排除 `lua.c`/`luac.c`/`onelua.c`/`ltests.c`，定义 `LUA_USE_WINDOWS`）                                                                                                              |
 | `flowkeyd.lua.example`                    | 有文档、覆盖全部特性的参考配置（中文注释、无警告），`--check` 就是拿它跑的                                                                                                                                                  |
-| `README.md`                               | 用户文档（中文），结构照抄 oskeyd 的 `README.md`，改掉品牌名与 UI 那两节                                                                                                                                                    |
+| `README.md`                               | 用户文档（中文，含完整配置/动作/schema 说明），是配置 schema 的权威定义                                                                                                                                                      |
 | `src/main.cpp`                            | `AttachConsole` + CLI 分发 + 日志初始化 + 单实例 + 组装 Runtime + Qt 事件循环                                                                                                                                               |
 | `src/cli.h/.cpp`                          | 参数解析 + 中文帮助文本（手写，不用 CLI11）                                                                                                                                                                                 |
 | `src/core/`                               | **纯逻辑层：不碰 Win32、不碰 Qt GUI**（只用 QtCore 的类型），因此能被 Qt Test 直接测                                                                                                                                        |
@@ -273,12 +254,12 @@ Qt 自己的库随便链**：
 | `src/app/runtime.h/.cpp`                  | 引擎 + 钩子 + 分发 + 托盘 + 弹窗的总装，`ControlCmd`（suspend/reload/quit）通道                                                                                                                                             |
 | `src/app/log_model.h/.cpp`                | 日志窗口的模型：尾随日志文件（增量、半行、被截断的多字节 UTF-8）、最多 1000 行、按级别配色、子串过滤                                                                                                                        |
 | `src/app/menu_model.h/.cpp`               | `menu` 选单的**纯逻辑**（`QAbstractListModel`，只用 QtCore）：条目几何、高亮移动（到边界回绕）、单字符选中、`Esc`/`Enter` 语义、命中测试（**可单测**） |
-| `src/app/help_model.h/.cpp`               | `help` 帮助的**纯逻辑**（同上）：筛选（和弦/`comment`/`name`/动作摘要）、`可见/总数` 计数、键盘选中项与光标悬停行、`Enter` 复制哪一行、两级 `Esc`，以及「键盘改了选中项之后视图的 `contentY` 该放哪里」的纯算术 `scrollTargetY()`（**可单测**）。**列表的滚动本身不归它管**：那是一个真正的 QML `ListView` + Qt 自带的 `ScrollBar`（见第 2 节第 9 条） |
+| `src/app/help_model.h/.cpp`               | `help` 帮助的**纯逻辑**（同上）：筛选（和弦/`comment`/`name`/动作摘要）、`可见/总数` 计数、键盘选中项（**高亮就是它**，鼠标悬停不改高亮）、`Enter` 复制哪一行、两级 `Esc`，以及「键盘改了选中项之后视图的 `contentY` 该放哪里」的纯算术 `scrollTargetY()`（**可单测**）。**列表的滚动与鼠标命中都不归它管**：那是一个真正的 QML `ListView` + Qt 自带的 `ScrollBar`，点击由委托的 `TapHandler` 直接处理（见第 2 节第 9 条） |
 | `src/app/popup_layout.h/.cpp`             | 两个弹窗共用的几何类型（`PopupRect`/`PopupPoint`）与纯函数 `centrePopup()`（先在工作区居中、再夹进屏幕；**可单测**） |
 | `src/app/popup_host.h/.cpp`               | 把上面的模型挂到 QML 窗口上；抢前台（`requestActivate` + `win::window::raiseWindow` 的前台锁绕行）；在 Qt GUI 线程上创建/复用窗口；用户选完把活儿回投工作线程（**GUI 线程亲和**） |
 | `src/qml/`                                | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`（三个文件都在开头写了 `pragma ComponentBehavior: Bound`）；配色一律用 `palette`，没有单独的 `Style.qml`。`HelpPopup.qml` 的列表是真正的 `ListView` + Qt 自带 `ScrollBar`（铺满整张卡片 + `topMargin`/`bottomMargin` 让出表头/底部提示的位置 + 两块不透明底色遮住滚进来的行） |
 | `tests/`                                  | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_log_tail`、`tst_audio`、`tst_interactive`（需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`，否则 skip）、`tst_menu_model`、`tst_help_model`、`tst_power_table`、`tst_desktop_table`、`tst_layout` |
-| `scripts/acceptance.ps1`                  | 桌面行为的验收脚本（注入按键 + 焦点捕捉窗口的外部观察，82 项检查：含弹窗滚轮回归与滚动条拖动）；需交互式桌面，**不属于 `ctest`**，见第 5 节与阶段 9 |
+| `scripts/acceptance.ps1`                  | 桌面行为的验收脚本（注入按键 + 焦点捕捉窗口的外部观察，84 项检查：含弹窗滚轮/滚动条拖动回归与“滚动不改键盘选中项”）；需交互式桌面，**不属于 `ctest`**，见第 5 节与阶段 9 |
 
 ### CMake 目标划分（阶段 6 之后）
 
@@ -384,7 +365,7 @@ QML 模块注册之后，两条 profile 都要重新全量构建一次**。
 ### 运行（开发期一定要带这两个开关）
 
 ```powershell
-# 手工冒烟：不抢用户的 oskeyd，用一次性配置，见工作约定第 9 条
+# 手工冒烟：用一次性配置，避免打扰常驻实例，见工作约定第 9 条
 & build/windows-debug/flowkeyd.exe --no-elevate --allow-multi --console --config .\tmp\smoke.lua
 ```
 
@@ -408,7 +389,7 @@ QML 模块注册之后，两条 profile 都要重新全量构建一次**。
 清单在下面（12 条），**从阶段 9 起有了自动化版本**：
 
 ```powershell
-# 82 项检查，约两分钟，会持续注入按键/抢焦点；按工作约定第 6 条先提醒用户
+# 84 项检查，约两分钟，会持续注入按键/抢焦点；按工作约定第 6 条先提醒用户
 # 只跑 release 那一份产物（见工作约定第 2 条，脚本默认 -Exe 就是它）
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance.ps1
 powershell.exe ... -Phase config                              # 只看配置，不注入按键
@@ -421,9 +402,9 @@ powershell.exe ... -Phase config                              # 只看配置，�
 **永远不进 `ctest`**。
 
 要让注入的按键触发绑定，守护进程得用 `FLOWKEYD_ACCEPT_INJECTED=1` 启动：
-那是**只给测试用的后门**（与 oskeyd 的 `OSKEYD_ACCEPT_INJECTED` 同款；
-`core/engine.cpp` 一直会丢弃 `event.injected`，改的是 `hook.cpp` 里给它赋值
-那一步），启用时日志里有一条警告。flowkeyd 自己注入的按键带着 `"FLOW"` 标记，
+那是**只给测试用的后门**（`core/engine.cpp` 一直会丢弃 `event.injected`，
+改的是 `hook.cpp` 里给它赋值那一步），启用时日志里有一条警告。
+flowkeyd 自己注入的按键带着 `"FLOW"` 标记，
 在钩子回调的第一步就被丢掉，所以抬升过滤不会让重映射自己喂自己 ——
 **不变量 2 没有被放宽**。
 
@@ -437,7 +418,7 @@ powershell.exe ... -Phase config                              # 只看配置，�
 
 用一份只含被测绑定的**一次性配置**（快捷键一律避开用户真实配置里已有的和弦）：
 
-1. `--check --config tmp/smoke.lua` 通过，`--list` 打印的形状与 oskeyd 一致。
+1. `--check --config tmp/smoke.lua` 通过，`--list` 打印的形状与 README 里记录的一致。
 2. 单实例：开两个不用 `--allow-multi` 的实例，第二个必须拒绝启动。
 3. 吞键：临时用 PowerShell 起一个能显示收到按键的窗口（记事本即可），
    按被测和弦，**前台窗口不应该收到那个键**；用一个未绑定的键做正对照
@@ -445,7 +426,7 @@ powershell.exe ... -Phase config                              # 只看配置，�
    当成“吞键成功”）。
 4. 被吞掉的 `Win+…` 和弦：按完之后 Windows **不能**弹出开始菜单/搜索；
    按住 Windows 键超过自动重复延迟再松开，**仍然不能**弹（这是遮断标记
-   必须挂在修饰键 key-up 上的原因，见 `../oskeyd/AGENTS.md` 第 6 节）。
+   必须挂在修饰键 key-up 上的原因，见不变量 9）。
 5. 自动重复：按住和弦键 2 秒，动作只执行一次（日志里只出现一条）。
 6. 重映射：`remap{ from = "CapsLock", to = "Esc" }` 之后按 CapsLock，
    前台窗口收到 `Esc` 而不是 CapsLock。
@@ -483,7 +464,7 @@ powershell.exe ... -Phase config                              # 只看配置，�
         └──────────────────────────────┘
 ```
 
-三线程的分工与 oskeyd 完全一致，理由也一样：
+三线程的分工（理由如下）：
 
 1. **钩子线程**：`LowLevelHooksTimeout` 默认 300 ms，慢回调的钩子会被 Windows
    **静默卸掉**（守护进程看起来还活着，却什么都不做）。所以回调只做
@@ -514,8 +495,7 @@ powershell.exe ... -Phase config                              # 只看配置，�
 * 托盘/CLI → 钩子线程：`PostThreadMessage(hookThreadId, WM_APP_*, ...)`。
   **注意 `PostThreadMessage` 在目标线程还没建消息队列时会失败**，
   钩子线程必须在开始工作前先 `PeekMessage` 一次建出队列，并把
-  “队列已就绪”通过一个 `std::promise`/原子量告诉启动方——照
-  `../oskeyd/src/win/hook.rs` 的做法。
+  “队列已就绪”通过一个 `std::promise`/原子量告诉启动方。
 * 跨线程共享的配置：`Compiled` 用 `std::shared_ptr<const Compiled>` 交给
   钩子线程与工作线程各持一份，**reload 时整体替换指针**，绝不做“就地改”。
 
@@ -523,7 +503,7 @@ powershell.exe ... -Phase config                              # 只看配置，�
 
 ## 7. 不变量 —— 不要破坏这些
 
-前 6 条是从 oskeyd 直接继承的（那边有血泪史，见 `../oskeyd/AGENTS.md` 第 4/6 节）：
+这些都是踩过坑之后定下来的规矩：
 
 1. **钩子回调必须快速返回。** 不要在回调里 sleep、写慢速日志、做 IO 或执行动作。
    工作排给工作线程。
@@ -538,13 +518,13 @@ powershell.exe ... -Phase config                              # 只看配置，�
 5. **不要跨 `SendInput` 持有锁。** 钩子状态放在钩子线程自己拥有的对象里
    （只有那个线程碰它），用“没有锁”的方式保证安全。**不要给它再套一层锁。**
 6. **配置错误必须可操作。** 每条校验信息都要指出出错的快捷键
-   （用 `name` 或序号）和出错的值，格式与 oskeyd 一致：
+   （用 `name` 或序号）和出错的值，格式固定为：
    `hotkey #3 (\`terminal\`): unknown field \`nope\`, expected one of \`name\`, \`keys\`, ...`。
    **未知字段一律报错**（C++ 侧要自己实现严格白名单 —— 这是本项目最容易做漏的
    一条，因为 C++ 没有 serde 的 `deny_unknown_fields`）。
-   **动作表顶层是唯一的例外**：oskeyd 那边（serde 的内部标签枚举 + `untagged`）
-   也做不到，所以 `window("activate", { togle = false })` 里的拼写错误两边都
-   会被忽略——保持一致，但要在 README 的已知限制里写明。
+   **动作表顶层是唯一的例外**：内部标签枚举 + `untagged` 的写法做不到，
+   所以 `window("activate", { togle = false })` 里的拼写错误会被忽略
+   —— 要在 README 的已知限制里写明。
 7. **`core/` 与 `lua/` 保持无 Win32、无 GUI。** 这是核心逻辑无需桌面就能测试的前提。
 8. **固定结构体布局是契约。** `INPUT` 在 x64 上必须 40 字节
    （`MOUSEINPUT` 是联合体中最大的成员）。用
@@ -556,8 +536,8 @@ powershell.exe ... -Phase config                              # 只看配置，�
    而**下一次** Win/Alt 的 key-up（它是被转发的）先注入标记。
    在钩子回调里做这件事正是让顺序安全的原因。
 10. **`send`/`type` 动作的 `release_modifiers` 也要做同样的菜单遮断。**
-    见 `../oskeyd/AGENTS.md` 第 6 节那条长坑：`ModifierGuard` 注入的
-    真实 key-up 引擎看不到，必须在注入层自己插一次 `VK_UNASSIGNED` 空按键。
+    `ModifierGuard` 注入的真实 key-up 引擎看不到，必须在注入层自己插一次
+    `VK_UNASSIGNED` 空按键。
 11. **提权只发生在守护进程模式，且必须能降级。**
     `--check`/`--list`/`--list-keys` 绝不能弹 UAC；UAC 被拒绝时打 warning
     继续以普通权限运行，而不是静默退出。提权重启时要转发完整命令行
@@ -587,8 +567,7 @@ powershell.exe ... -Phase config                              # 只看配置，�
     于是窗口弹出来了却收不到键盘 —— 一个只在“用户正聚焦在别的应用”时才出现的
     bug。做法是 `requestActivate()` → `SetForegroundWindow` → `AttachThreadInput`
     到持有锁的线程再重试 → `BringWindowToTop` + `SetWindowPos(HWND_TOP)`，
-    **每条路径上 `AttachThreadInput` 都要配平**（照抄
-    `../oskeyd/src/win/window.rs::raise_window`）。
+    **每条路径上 `AttachThreadInput` 都要配平**。
 18. **模态/前台相关的一切都要在 Qt GUI 线程上做。**
     `QSystemTrayIcon`、`QQuickWindow`、`QMenu` 都不能跨线程。
 19. **DPI 感知必须在创建任何窗口之前就绪。** 好消息是 **Qt 6 在 Windows 上
@@ -601,16 +580,16 @@ powershell.exe ... -Phase config                              # 只看配置，�
 20. **日志窗口是一个普通窗口，不是独立进程。** 关掉它不能退出应用：
     构造 `QApplication` 之后立刻 `setQuitOnLastWindowClosed(false)`，
     退出只走 `quit` 动作 / 托盘菜单 / `WM_CLOSE` 到隐藏的“主”窗口。
-    （oskeyd 做成独立进程是因为**它用的是真控制台**，用户点叉会给守护进程发
-    `CTRL_CLOSE_EVENT`；Qt 窗口没有这个问题，所以这条有意偏离 oskeyd。）
+    （Qt 窗口没有真控制台那个「点叉就给守护进程发 `CTRL_CLOSE_EVENT`」的问题，
+    所以日志窗口可以直接跑在同一个进程里。）
 
 ---
 
-## 8. Lua 5.5.1 与 oskeyd 的 Lua 5.4 的差异（已实测）
+## 8. Lua 5.5.1 的注意点（已实测）
 
 `vendor/lua` 是 **v5.5.1**（`lua/lua`，commit `7579fc9d`，`describe` 出来就是
-`v5.5.1`）。配置 DSL 只用到最基础的表/字符串/数字/循环，所以差异不大，
-但下面这几条**已经确认**、集成时会直接撞上：
+`v5.5.1`）。配置 DSL 只用到最基础的表/字符串/数字/循环，所以与 Lua 5.4
+相比差异不大，但下面这几条**已经确认**、集成时会直接撞上：
 
 1. **`luaL_openlibs` 现在是宏**，展开成
    `luaL_openselectedlibs(L, ~0, 0)`；原来的函数签名换成了
@@ -637,8 +616,8 @@ powershell.exe ... -Phase config                              # 只看配置，�
    `lua_error`、`lua_atpanic`、`lua_newuserdatauv`。
    编译：`vendor/lua` 的 32 个 `.c` 用 `-O2 -DLUA_USE_WINDOWS` 全部通过。
 6. **Lua 侧的行为差异**要留意的两点（写配置示例时别踩）：
-   * `repeat` 仍然是 Lua 关键字 → 字段名用 `repeatable`（与 oskeyd 的
-     `alias = "repeat"` 规矩一致）。
+   * `repeat` 仍然是 Lua 关键字 → 字段名用 `repeatable`（配置里要认
+     `["repeat"]` 这个别名，见第 14 节）。
    * 字符串里的 `\t`/`\n`/`\r` 是**合法但致命**的转义：
      `open("C:\tools")` 会**静默**变成 `C:` + TAB + `ools`、不报错。
      Windows 路径一律用长字符串 `[[C:\path\app.exe]]`。
@@ -667,9 +646,9 @@ powershell.exe ... -Phase config                              # 只看配置，�
 | 5 窗口动作 + 剪贴板 + 音量/媒体 | **已完成** | `core/window_match`、`platform/win/dwm|window|clipboard|audio`、dispatcher 接线与 `{selection}`；`tst_window_match`/`tst_audio` 全绿；真实桌面后端由 `tst_interactive` 验证 |
 | 6 弹窗 `menu` / `help` | **已完成** | `flowkeyd_models` + 两张 QML 卡片；`tst_menu_model`/`tst_help_model` 全绿；渲染/筛选/键盘选择由 `tmp/preview` 验证；帮助窗口的列表后来（2026-09）改成了 Qt 自带的 `ListView` + `ScrollBar` |
 | 7 虚拟桌面 + 电源 | **已完成** | `platform/win/desktop|power` + dispatcher 接线；`tst_desktop_table`/`tst_power_table` 全绿；真实 COM 探测/切换与关屏由 `tst_interactive` 验证 |
-| 8 示例配置 + README | **已完成** | `flowkeyd.lua.example` 与 oskeyd 逐行对齐（除 UI/probe/simulate 那几处）；`README.md` 已写出；`--check` 37 hotkey / 3 remap |
+| 8 示例配置 + README | **已完成** | 覆盖全特性的 `flowkeyd.lua.example`（37 hotkey / 3 remap，`--check` 零警告）；`README.md` 已写全 |
 | 9 验收（无 e2e 的替代） | **已完成** | `scripts/acceptance.ps1`（77 项检查：68 项原样 + 9 项弹窗滚轮回归，需交互式桌面）+ `FLOWKEYD_ACCEPT_INJECTED` 测试后门；debug 跑 3 遍、release 跑 2 遍全绿 |
-| 10 接管 | **已完成（待用户点一次 UAC）** | 真实配置已迁到 `.config\flowkeyd\config.lua`（24 hotkey / 0 remap，零警告）；oskeyd 本来就没在跑；常驻启动由用户手动 `Start-Process -Verb RunAs` |
+| 10 接管 | **已完成（待用户点一次 UAC）** | 真实配置已迁到 `.config\flowkeyd\config.lua`（24 hotkey / 0 remap，零警告）；常驻启动由用户手动 `Start-Process -Verb RunAs` |
 
 ### 阶段 0：仓库与构建骨架
 
@@ -728,7 +707,7 @@ powershell.exe ... -Phase config                              # 只看配置，�
 ### 阶段 1：纯逻辑核心（无 FFI、无 GUI）
 
 **做什么**：`src/core/keys`、`config`、`engine`、`template`、`action`。
-逐项对齐 oskeyd 的同名模块，包括那些非显然的细节：
+包括那些非显然的细节：
 
 * 通用修饰键 `VK_SHIFT` 与分侧 `VK_LSHIFT`/`VK_RSHIFT` 的 `same_key` 处理。
 * 小键盘 Enter 的内部伪码（`0x100`）+ `key_from_hook(vk, extended)` /
@@ -749,9 +728,7 @@ powershell.exe ... -Phase config                              # 只看配置，�
   `enabled`/`comment`/`swallow`、`menu` 条目校验（重名、空标签）、
   `--check` 的警告（例如重映射里的 `{Sleep}`）。
 
-**验收**：Qt Test 覆盖以上每一条（对齐
-`../oskeyd/src/keys.rs`、`engine.rs`、`template.rs`、`config.rs` 里那些测试的
-**测试点**，不必逐字照抄断言）。双构建绿。
+**验收**：Qt Test 覆盖以上每一条。双构建绿。
 
 **状态：已完成（2026-09）。**
 
@@ -762,13 +739,12 @@ powershell.exe ... -Phase config                              # 只看配置，�
 * `Action` 用「一个结构体 + `Kind` 判别式」而不是 `std::variant`：
   `menu` 的递归（Menu → MenuItemDef → ActionSpec → Action）天然成立，
   也省掉了 20 个包装结构体与到处 `std::visit` 的噪音。
-  各字段与 oskeyd 的同名变体一一对应。
+  各字段与 `README.md` 里那一张动作表一一对应。
 * `ActionSpec` / `Settings` / `HotkeyDef` / `RemapDef` / `Compiled` / `ConfigError`
   都在 `core/config.h`；动作的**摘要文本**（`--list` 与 `help()` 的显示）在
   `core/action.h`。
-* 校验与 oskeyd 同源：未知 `--check` 之外的字段由**阶段 2 的 Lua 层**逐字段核对
-  白名单（C++ 没有 `deny_unknown_fields`，见不变量 6），动作表顶层与 oskeyd 一样
-  是例外。
+* 校验：未知（`--check` 之外的）字段由**阶段 2 的 Lua 层**逐字段核对
+  白名单（C++ 没有 `deny_unknown_fields`，见不变量 6），动作表顶层是例外。
 * 这一阶段**不经过 Lua**：`loadConfig(Evaluator, path, out)` 把求值回调当参数，
   阶段 2 只要传一个真的 Lua 求值器进来即可；BOM 剥离、`.toml` 拒绝、
   候选路径与 `pickConfigPath()` 已经在本阶段实现并有单测（用一个假求值器）。
@@ -777,7 +753,7 @@ powershell.exe ... -Phase config                              # 只看配置，�
 * **`tst_layout` 推迟到阶段 3**：它要盯的是 `platform/win/ffi.h` 里
   `static_assert(sizeof(INPUT) == 40)`，本阶段还没有那个文件。
 * 路径一律用 `QDir::toNativeSeparators()` 输出，错误信息里看到的是
-  `C:\Users\…\.config\flowkeyd\config.lua`（与 oskeyd 的 `PathBuf` 显示一致）。
+  `C:\Users\…\.config\flowkeyd\config.lua`。
 
 ### 阶段 2：Lua 配置层
 
@@ -787,17 +763,15 @@ powershell.exe ... -Phase config                              # 只看配置，�
 * 建状态 → 注入 prelude（把注册表 `state` 作为 `...` 传给 prelude）→
   求值配置文件 → 把 `settings`/`hotkeys`/`remaps` 三张表逐条目转成 C++ 结构
   → 收集错误（`hotkey #3 (\`terminal\`): ...`，一次性列全）→ 关状态。
-* **逐条目转，不要一次 `deserialize_any` 整张表**（oskeyd 也是逐条目的，
-  这样错误才能带上下文）。
+* **逐条目转，不要一次整张表反序列化**，这样错误才能带上下文。
 * 空表歧义：`args = {}` 要当空列表，`env = {}` 要当空 map 并给出人话提示
   （Lua 里 `{}` 既是空列表也是空表）。
 * `ActionSpec::List([])`（空的动作列表）**必须显式报错**：
   `an empty action list does nothing`。
 * 尾部调用的行号坑：DSL 报错的那次调用如果是脚本的最后一条语句，Lua 会丢掉
-  调用者栈帧、traceback 里没有行号。**别为了行号改结构**（oskeyd 也接受了）。
+  调用者栈帧、traceback 里没有行号。**别为了行号改结构**。
 * `--check` / `--list` / `--list-keys` 三个离线命令；
-  `.toml` 后缀要**明确拒绝**并给迁移提示（照抄 oskeyd 的 `ConfigError::LegacyToml`
-  文案，把 oskeyd 换成 flowkeyd）。
+  `.toml` 后缀要**明确拒绝**并给迁移提示（说明现在只认 `.lua`）。
 * 配置搜寻顺序：`%USERPROFILE%\.config\flowkeyd\config.lua` → exe 同目录 →
   `%APPDATA%\flowkeyd` → 当前目录；回退到非默认位置时打 warning。
   历史位置（`~\.config\flowkeyd\config.toml` 等）只给迁移提示，不加载。
@@ -819,11 +793,11 @@ BOM、`\t` 陷阱、`.toml` 拒绝、错误信息格式；`--check --config flow
   `tst_lua` 链接。静态库里的 qrc 会被链接器丢掉，因此在 `lua_config.cpp` 里
   显式调了一次 `Q_INIT_RESOURCE(lua_prelude)`。
 * `main.cpp`：`--check` 打印 `PATH: OK (N hotkey(s), M remap(s))`；
-  `--list` 的排版与 oskeyd 的 `print_bindings` 逐字形似（`tst_lua` 之外也可肉眼比对）。
-* `flowkeyd.lua.example`：由 oskeyd 的示例改写（品牌名 + UI 相关注释），
+  `--list` 的排版固定（`tst_lua` 之外也可肉眼比对）。
+* `flowkeyd.lua.example`：覆盖全部特性的示例配置，
   37 hotkey / 3 remap，`--check` 通过、零警告。
-* 测试：`tests/tst_lua.cpp`，25 个用例，覆盖 oskeyd `src/lua.rs` 的全部测试点
-  （两种写法一致、循环生成、构造器等价于手写表、错误信息带条目名/行号、
+* 测试：`tests/tst_lua.cpp`，25 个用例（两种写法一致、循环生成、
+  构造器等价于手写表、错误信息带条目名/行号、
   空动作列表、空表在 map 位置、重复 `settings` 只警告、BOM、`.toml` 拒绝）。
 
 ### 阶段 3：Win32 基础设施 + 钩子 + 引擎接线
@@ -841,7 +815,7 @@ BOM、`\t` 陷阱、`.toml` 拒绝、错误信息格式；`--check --config flow
 * 先实现这些动作：`none`、`suspend`、`reload`、`quit`、`caps_lock`、
   `notify`、`run`、`send`、`type`、`open`。`run` 的 `show` 要注意
   **不要用 `DETACHED_PROCESS`**（会静默杀死控制台子进程，用
-  `CREATE_NO_WINDOW`；见 `../oskeyd/AGENTS.md` 第 6 节）。
+  `CREATE_NO_WINDOW`）。
 
 **验收**：单测（发送脚本→注入序列、`ModifierGuard` 的顺序断言、
 `quote_arg`、`single_instance` 的名字散列、结构体布局）；**手工冒烟清单
@@ -856,7 +830,7 @@ BOM、`\t` 陷阱、`.toml` 拒绝、错误信息格式；`--check --config flow
   `advapi32`/`powrprof`）写成它的 `PUBLIC` 依赖。
 * `ffi.{h,cpp}`：统一的 `windows.h` 入口 + `static_assert(sizeof(INPUT)==40)` 等，
   `monotonicMs()`、`winErrorMessage()`。
-* `logging.{h,cpp}`：`HH:MM:SS LEVEL message`（与 oskeyd 同形），ANSI 颜色可选，
+* `logging.{h,cpp}`：`HH:MM:SS LEVEL message`，ANSI 颜色可选，
   同时追加写到日志文件；英文、可断言。
 * `nt.{h,cpp}`：运行时解析 `win32u!NtUserSendInput` / `NtUserGetAsyncKeyState`，
   零输入调用校验后才启用。本机实测 `auto` 会选中 `win32u!NtUserSendInput`。
@@ -1055,13 +1029,15 @@ get/set/append/clear。**`animate` 的效果要靠肉眼**（没有屏幕采样�
   → **2026-09 修订**：帮助窗口改成 Qt 自带的 `ListView` + `ScrollBar` 之后，
   滚动位置、命中、滚动条几何全归 Qt；`help` 那套 `rowRect`/`keysRect`/`textRect`/
   `scrollTrack`/`scrollThumb`/`hitTest`/`clickRow`/`wheel` 都删了，只留下
-  `scrollTargetY()`（键盘选中项要摆到哪里）与悬停行（`setHover`，
-  由 QML 的 `HoverHandler` + `ListView.indexAt()` 算出来）。
+  `scrollTargetY()`（键盘选中项要摆到哪里）。
+  → **2026-09 再修订**：悬停行（`setHover` + QML 的 `HoverHandler` +
+  `ListView.indexAt()`）也删了：高亮只跟键盘选中项走，鼠标悬停不改高亮
+  （详见第 10 节“取消帮助窗口的悬停高亮”）。
   选单不滚动，仍然是“几何全在模型里”。
 * 模型把「按键怎么解释」也包了：`handleKey(key, text)` 返回
   `{ decision: none|choose|copy|cancel, index, handled }`；QML 的
   `Keys.onPressed` 只负责“问模型要决定 → 执行决定”。字符来自 Qt 译好的
-  `QKeyEvent::text()`（等价于 oskeyd 的 `WM_CHAR`），所以
+  `QKeyEvent::text()`，所以
   `VK_UNASSIGNED`(0xE8) 那条菜单遮断注入不会凭空变成筛选框里的一个字母。
 * `qml/MenuPopup.qml`、`qml/HelpPopup.qml`：无边框圆角卡片（
   `Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint`，
@@ -1080,8 +1056,8 @@ get/set/append/clear。**`animate` 的效果要靠肉眼**（没有屏幕采样�
   （`comment` 优先于 `name`，动作摘要用 `Action::summary()`，重映射渲染成
   `remap → Ctrl+C`）。
 * 帮助窗口的标题带 `可见/总数`（`flowkeyd 快捷键 — 12/13 项`），
-  与 oskeyd 一样方便从外面断言筛选生效了；`help` 没写 `title` 时表头默认
-  是「快捷键」（oskeyd 的 `unwrap_or("快捷键")`）。
+  方便从外面断言筛选生效了；`help` 没写 `title` 时表头默认
+  是「快捷键」。
 * 测试：`tests/tst_menu_model.cpp`（13 个用例）、`tests/tst_help_model.cpp`
   （17 个用例），合计 **17 个测试目标**全绿。
 
@@ -1116,7 +1092,7 @@ get/set/append/clear。**`animate` 的效果要靠肉眼**（没有屏幕采样�
   → `IVirtualDesktopManagerInternal`；**按 `build.revision` 查表**
   （表里是“起始版本”，取“生效版本不高于当前系统的最后一条”；修订号用
   `RegGetValueW` 从注册表读 `UBR`）；每次调用一条一次性 **STA** 线程；
-  每个 HRESULT 都检查。**表的内容照抄 `../oskeyd/src/win/desktop.rs`。**
+  每个 HRESULT 都检查。
 * `platform/win/power`：`SetSuspendState`（睡眠/休眠）、`ExitWindowsEx`
   （关机/重启/注销，只带 `EWX_FORCEIFHUNG`，**不用 `EWX_FORCE`**）、
   `LockWorkStation`、`WM_SYSCOMMAND` + `SC_MONITORPOWER` 广播（关屏，
@@ -1141,7 +1117,7 @@ get/set/append/clear。**`animate` 的效果要靠肉眼**（没有屏幕采样�
 
 * `src/platform/win/desktop.{h,cpp}`：`CLSID_ImmersiveShell` →
   `IServiceProvider::QueryService` → 未公开的 `IVirtualDesktopManagerInternal`。
-  `versionTable()` 是照抄 `../oskeyd/src/win/desktop.rs` 的七条版本表，
+  `versionTable()` 是当前支持的七条版本表，
   `apiFor(build, revision)` 是纯函数（“最后一个生效版本不高于当前系统”）；
   三种 vtable 布局（`Plain` / `Monitor` / `MonitorShifted`）各写一套结构体，
   未用到的槽只留 `void *` 占位。`windowsVersion()` 用运行时解析的
@@ -1156,10 +1132,9 @@ get/set/append/clear。**`animate` 的效果要靠肉眼**（没有屏幕采样�
   是不是 `ERROR_NOT_ALL_ASSIGNED`）。**`powerOpTable()` 与
   `requiresShutdownPrivilege()` 是纯逻辑**：`lock`/`sleep`/`hibernate`/`screen_off`
   在 `enableShutdownPrivilege()` **之前** return，只有关机/重启/注销强制要特权。
-  直接静态链接 `powrprof`（AGENTS.md 第 2 节允许），不像 oskeyd 那样运行时解析。
-* `src/platform/win/ffi.{h,cpp}`：新增 `hresultText()`（与 oskeyd 的
-  `hresult_text` 同源的人话说明：`E_NOINTERFACE` 意味着版本表选错了 IID），
-  `hresultMessage()` 改用它。
+  直接静态链接 `powrprof`（见第 3 节的依赖政策）。
+* `src/platform/win/ffi.{h,cpp}`：新增 `hresultText()`（常见 HRESULT 的人话说明：
+  `E_NOINTERFACE` 意味着版本表选错了 IID），`hresultMessage()` 改用它。
 * `app/dispatcher.cpp`：`desktop` / `power` 两个分支接上真实后端；`power` 失败时
   除日志外补一条托盘气泡（没提权时用户看不到控制台）。原先那句
   `not implemented yet (later stage)` 的兜底警告保留在 `default:` 分支。
@@ -1195,9 +1170,9 @@ Totals: 8 passed, 0 failed
 
 ### 阶段 8：`flowkeyd.lua.example` + README
 
-**做什么**：把 oskeyd 的 `oskeyd.lua.example` 译成 `flowkeyd.lua.example`
-（品牌名替换 + UI 相关注释改写），把 `README.md` 从 oskeyd 的版本翻译过来
-（改掉品牌名、日志窗口那一节、选单/帮助那一节、验证那一节）。
+**做什么**：写出覆盖全部特性的 `flowkeyd.lua.example`（中文注释、无警告），
+并把 `README.md` 写成完整的中文用户文档（含配置/动作/schema 说明、
+日志窗口、选单/帮助、验证那一节）。
 `--check --config flowkeyd.lua.example` 必须通过。
 
 **验收**：手工通读示例配置，确认每条注释与实现一致；双构建 + 测试绿。
@@ -1206,16 +1181,13 @@ Totals: 8 passed, 0 failed
 
 **已完成的内容**
 
-* `flowkeyd.lua.example` 在阶段 2 就已经写出；本阶段用
-  `git diff --no-index`（把 oskeyd 那份做品牌名替换、再删掉 `--simulate` 行）
-  逐行核对过：除了有意为之的四处（头部多一行 `--list-keys`、虚拟桌面那节
-  去掉 `--probe`、选单/帮助那节把“自绘 GDI 原生窗口”改成 QML/FluentWinUI3、
-  help 那节去掉 `--simulate` 提示），其余完全一致。
-* `README.md`（新增，约 700 行）从 oskeyd 的 README 翻译并改写：
-  品牌名、Lua 5.5.1、CMake preset 构建、去掉 `--simulate`/`--selftest`/`--probe`、
-  **日志窗口**改成“进程内 QML 窗口”、**选单/帮助**改成“QML + 跟随系统 palette”、
-  **验证那一节**改成“Qt Test + 手工冒烟清单”（并写明没有 e2e）、
-  工作原理图改成三线程 + Qt GUI 线程、已知限制与路线图按本项目重写。
+* `flowkeyd.lua.example` 在阶段 2 就已经写出；本阶段逐行通读过，
+  确认每条注释与实现一致（Lua 5.5.1、CMake preset 构建、
+  不存在 `--simulate`/`--selftest`/`--probe` 这类开关）。
+* `README.md`（新增，约 700 行，中文）：Lua 5.5.1、CMake preset 构建、
+  **日志窗口**（进程内 QML 窗口）、**选单/帮助**（QML + 跟随系统 palette）、
+  **验证那一节**（Qt Test + 手工冒烟清单，并写明没有 e2e）、
+  工作原理图（三线程 + Qt GUI 线程）、已知限制与路线图。
   文中所有 `--check`/`--list`/`--version` 的输出形状都用真实运行结果核对过。
 
 **实测结果（2026-09）**
@@ -1224,7 +1196,7 @@ Totals: 8 passed, 0 failed
   能一眼看出是哪一份 Lua）。
 * `flowkeyd --check --config flowkeyd.lua.example` →
   `D:\prj\flowkeyd\flowkeyd.lua.example: OK (37 hotkey(s), 3 remap(s))`，零警告。
-* `flowkeyd --list` 的形状与 oskeyd 的 `print_bindings` 逐字形似。
+* `flowkeyd --list` 的形状与 README 里记录的一致。
 
 ### 阶段 9：验收（无 e2e 的替代）
 
@@ -1247,7 +1219,7 @@ hold/tap；挂起/重载/退出。
 * **`FLOWKEYD_ACCEPT_INJECTED` 测试后门**：`platform/win/input.{h,cpp}` 新增
   `acceptInjectedInput()`（读环境变量，进程内只缓存一次），`hook.cpp` 里改成
   `event.injected = (info->flags & LLKHF_INJECTED) != 0 && !acceptInjectedInput()`，
-  并在装完钩子之后打一条警告。oskeyd 的同款后门是 `OSKEYD_ACCEPT_INJECTED`。
+  并在装完钩子之后打一条警告。
   这是能自动验证“真的吞了键”的前提：钩子不认注入输入，脚本就伪造不了物理按键，
   而 `--simulate` 本期不做（第 12 节）。**不变量 2 没被放宽**：flowkeyd 自己
   注入的事件带着 `"FLOW"` 标记，仍然在钩子回调第一步就被丢掉。
@@ -1259,7 +1231,7 @@ hold/tap；挂起/重载/退出。
   （见第 10 节的“弹窗在滚轮下闪烁”），2026-09 再把帮助窗口的列表换成 Qt 自带的
   `ListView` + `ScrollBar`时加了 5 项（拖动滑块 + 重新打开复位滚动位置），
   现在是 82 项**。
-* 脚本的检查名用中文字面量（oskeyd 的 e2e 也是这个风格），所以文件必须以
+* 脚本的检查名用中文字面量，所以文件必须以
   **带 BOM 的 UTF-8** 保存 —— PowerShell 5.1 会把无 BOM 的 `.ps1` 按 ANSI
   代码页解码。三个窗口标题故意用 `[char]` 码点拼出来，这样即使 BOM 丢了
   逻辑也不会错（断言里的中文变乱码无所谓，检查结果仍然是对的）。
@@ -1291,7 +1263,7 @@ checks: 68, failures: 0
   一次是用户在跑测试时把 Notepad 点到前台（捕捉窗口丢了前台锁 —— 已把
   `FocusCatcher` 换成 `AttachThreadInput` 版，并在真的抢不到焦点时明确报出来）；
   一次是我最初选了 `Win+F16` 当被测和弦，而本机那个组合会拉出
-  `SlideToShutDownHost`（已换成 oskeyd 用的 `Win+S`）。
+  `SlideToShutDownHost`（已换成 `Win+S`）。
 * 不过它**真的**查出了一个产品 bug：`menu` 第二次打开（复用同一个 QML 窗口）
   时拿不到键盘焦点 —— 见第 10 节的 `activateWindow` 那一条，已修并有检查盯着。
 
@@ -1299,46 +1271,35 @@ checks: 68, failures: 0
 
 **做什么**
 
-1. 把 `C:\Users\xingjian\.config\oskeyd\config.lua` 译到
-   `%USERPROFILE%\.config\flowkeyd\config.lua`（本机那份**没有**用到
-   `oskeyd.*` 表，所以基本是整份复制 + 改注释里的命令名），
-   逐条核对本机真实绑定：`CapsLock`→Ctrl+Space、`Alt+H/J/K/L`、
+1. 把本机真实绑定写进 `%USERPROFILE%\.config\flowkeyd\config.lua`，
+   逐条核对：`CapsLock`→Ctrl+Space、`Alt+H/J/K/L`、
    `Alt+Space`→F14、`LWin+Q`→F24、`LWin+F1..F4`→虚拟桌面 1..4、
    `Win+S`→WezTerm、`Win+1/2/3`→Chrome/VS Code/WPS、`Win+W`→微信、
    `Win+X`→电源选单、`Win+/`→快捷键帮助、小键盘 `-`/`+`/`Enter`→音量、
    `Ctrl+Alt+F4/F5/F12`→quit/reload/suspend。
-2. 按工作约定第 6 条提醒用户后，停掉 oskeyd 的常驻实例
-   （`taskkill /PID <pid>`，不带 `/F`；提权实例见
-   `../oskeyd/AGENTS.md` 第 5 节的三条出路），
-   把 `target\release\oskeyd.exe` 的 RUNASADMIN 兼容性标记与登录自启动项
-   一并记录清楚（不要静默删掉用户的东西 —— 要么备份、要么在总结里说明）。
+2. 确认没有别的键盘钩子守护进程在抢事件（有的话按工作约定第 5 条
+   `taskkill /PID <pid>` 不带 `/F` 干净停掉）。
 3. 用 release 版 flowkeyd（提权）接管常驻，逐条手工验证上面那批绑定。
 4. 在本文件与 `README.md` 里写清“现在常驻的是 flowkeyd”。
-5. **回归出口**：如果 flowkeyd 有问题，把 oskeyd 拉回来
-   （`Start-Process -Verb RunAs target\release\oskeyd.exe`）。
 
 **状态：已完成到“等用户点一次 UAC”为止（2026-09）。**
 
 **已完成的内容**
 
-1. 配置已迁到 `%USERPROFILE%\.config\flowkeyd\config.lua`：绑定与 oskeyd 那份
-   **逐条一致**（两边读的是同一套 schema），改的只有注释里的程序名与 UI 说法
-   （`oskeyd --probe` 那行删掉了，flowkeyd 没有 `--probe`）。
+1. 配置已迁到 `%USERPROFILE%\.config\flowkeyd\config.lua`：
    `flowkeyd --check`（**不带** `--config`，走默认搜寻）→
    `C:\Users\xingjian\.config\flowkeyd\config.lua: OK (24 hotkey(s), 0 remap(s))`，
    零警告；`--list` 的 24 条与第 14 节那张表逐条对应。
-2. oskeyd **没有常驻实例可停**：机器 6:24 重启后它没被拉起来（它没有登录自启项，
-   只有 `D:\prj\oskeyd\target\release\oskeyd.exe` 上的 `RUNASADMIN` 兼容性标记）。
-   那个标记**没有动过**，所以回滚照样是一条 `Start-Process -Verb RunAs`。
+2. 机器重启后没有找到别的常驻实例，无需停。
 3. 非提权预演（真的读用户那份配置，**不注入任何按键**，所以没触发任何真实动作）：
    日志里 `24 hotkey(s), 0 remap(s), tick 15 ms` + `keyboard hook installed`；
    `taskkill /PID <pid>`（**不带** `/F`）能干净退出（日志末尾
    `keyboard hook removed`）。
 4. `README.md` 新增「本机现在常驻的是 flowkeyd」一节：启动命令、干净退出、
-   回滚到 oskeyd、为什么没加自启。
+   为什么没加自启。
 5. **没有加开机自启**（用户拍板），也**没有**给 exe 登记 `RUNASADMIN` 兼容性
-   标记：那个标记会让 `flowkeyd --check` 之类离线命令也弹 UAC（oskeyd 现在
-   就有这个毛病，离线命令本不该弹 UAC —— 不变量 11）。
+   标记：那个标记会让 `flowkeyd --check` 之类离线命令也弹 UAC
+   （离线命令本不该弹 UAC —— 不变量 11）。
 
 **剩下要用户做的一件事**：agent 的 shell 没有提权，启动提权进程会弹 UAC 而
 没人点（也不该由 agent 去点）。所以常驻由用户自己启动一次：
@@ -1358,7 +1319,6 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 小键盘 `-`/`+`/`Enter`、`Ctrl+Alt+F4/F5/F12`。
 `Ctrl+Alt+F12`（挂起）与 `Ctrl+Alt+F4`（退出）是安全的自检项；
 **`Win+X` 选单里千万别按到睡眠/关机/重启**。
-回滚：`Start-Process -Verb RunAs -FilePath 'D:\prj\oskeyd\target\release\oskeyd.exe'`。
 
 ---
 
@@ -1385,7 +1345,7 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 * **QML 窗口默认会让“关掉最后一个窗口”直接退出应用。** 日志窗口是普通窗口，
   用户点叉会退掉整个守护进程 —— 必须在构造 `QApplication` 之后立刻
   `QGuiApplication::setQuitOnLastWindowClosed(false)`。
-  （这正是 oskeyd 把日志查看器做成独立进程的那类问题的 Qt 版本。）
+  （日志窗口跑在同一个进程里，就必须自己保证它不会退掉守护进程。）
 * **FluentWinUI3 是 Qt **Quick Controls** 的样式，不是 Widgets 样式。**
   Widgets 那边没有 FluentWinUI3，所以「用 FluentWinUI3」= 「UI 用 QML」。
   它自 Qt 6.8 起提供，用 `QQuickStyle::setStyle("FluentWinUI3")`
@@ -1405,14 +1365,14 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   transparent 的话看不到圆角。**Windows 11 本身也会给无边框窗口加圆角**，
   两套圆角会打架，调的时候两个都试一下。
 * **Qt 6 在 Windows 上默认就是 Per-Monitor DPI Aware V2**，
-  不要再手动调 `SetProcessDpiAwarenessContext`（oskeyd 需要，
-  因为它自己建原生窗口）。**不要在 `QApplication` 之前创建窗口**；
+  不要再手动调 `SetProcessDpiAwarenessContext`。**不要在
+  `QApplication` 之前创建窗口**；
   要改缩放取整策略就 `QGuiApplication::setHighDpiScaleFactorRoundingPolicy()`
   在它之前调。
 * **Qt 会自动给我们一个有 COM 的线程**（主线程是 STA，为了 OLE/拖放）。
   虚拟桌面那条路要 STA、音频要 MTA，**别把音频初始化放到主线程**
   （否则会把主线程的单元模型定死成 MTA，Qt 的拖放/剪贴板可能出问题）。
-  照 oskeyd 的做法：桌面调用走一次性 STA 线程，音频在它自己的一次性 MTA 线程上。
+  做法：桌面调用走一次性 STA 线程，音频在它自己的一次性 MTA 线程上。
 * **`PostThreadMessage` 在目标线程还没消息队列时会静默失败。** 钩子线程要先
   `PeekMessage` 建出队列并把就绪状态告诉启动方，否则最早发出的
   “suspend/reload” 控制消息会丢。
@@ -1453,7 +1413,7 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   `QCOMPARE(x, std::optional<std::pair<Vk, bool>>(...))` 会被当成三个参数
   （尖括号不算括号）。给这种类型起一个 `using VkShift = std::optional<std::pair<Vk, bool>>;`
   别名就解决了。`QVector<SendOp>{a, b}` 这种字面量要套一层 `(…)`。
-* **`QDir::filePath()` 一律用 `/` 当分隔符**，与 oskeyd 的 `PathBuf` 显示不同。
+* **`QDir::filePath()` 一律用 `/` 当分隔符**，不是 Windows 的 `\`。
   配置文件路径、候选列表、错误信息里都统一过一遍
   `QDir::toNativeSeparators()`，这样看到的是
   `C:\Users\xingjian\.config\flowkeyd\config.lua`。
@@ -1570,7 +1530,7 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   （该样式模块的 qmldir 里没有 `Label.qml`，但基础模块的类型会一起导出；
   用 qmllint 实测过，不会报 `Label was not found`）。
 * **本机 225% 缩放下 Qt 报出的 `availableGeometry()` 比 `geometry()` 还宽**
-  （工作区从 x=108 开始、宽 485，而屏幕只有 533 宽）。照 oskeyd 那样
+  （工作区从 x=108 开始、宽 485，而屏幕只有 533 宽）。只在工作区里居中
   “在工作区里居中”会把 500 逻辑像素宽的帮助卡片放到屏幕外面去，右边被切掉
   一大块。修法：居中之后**再按屏幕 `geometry()` 夹一次**
   （`app::centrePopup()`，纯函数、有单测）。
@@ -1616,10 +1576,8 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   解码，多字节中文被误读（这是“无 BOM 的 `.ps1` 被按 GBK 解码”那个坑的另一个面）。
   数行数、比对配置文本一律用 `-Encoding UTF8` 或
   `[System.IO.File]::ReadAllLines`。
-* **核对“示例配置有没有漏东西”的好办法：把参考文件做品牌名替换后
-  `git diff --no-index`。** 把 `oskeyd.lua.example` 读成字符串、`-replace`
-  掉品牌名、删掉 `--simulate` 行、写成临时文件，再与 `flowkeyd.lua.example`
-  diff；本机实测两者只差有意为之的四处（见阶段 8）。注意 git 会自动处理
+* **核对文档/示例改动的好办法是 `git diff --no-index`。** 把改动前的版本
+  读到临时文件再与当前文件 diff，比肉眼比对可靠；注意 git 会自动处理
   CRLF/LF，不要自己去对齐行尾。
 * **MinGW 的头文件里没有 `MONITOR_OFF`**（`SC_MONITORPOWER` 与
   `SMTO_ABORTIFHUNG` 有，`MONITOR_OFF` 没有），要自己写 `constexpr LPARAM kMonitorOff = 2;`。
@@ -1649,13 +1607,13 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 * **“物理按键”可以自动化，但必须先加一个测试后门。** 钩子照规矩丢弃一切带
   `LLKHF_INJECTED` 的事件（不变量 2），于是 `SendInput` 伪造不了用户按键，
   而 `--simulate` 本期不做 —— 引擎与钩子的行为就只剩“人按键盘”一条路。
-  解法是照抄 oskeyd：`FLOWKEYD_ACCEPT_INJECTED=1`（oskeyd 叫
-  `OSKEYD_ACCEPT_INJECTED`）抬升那道过滤，而且**只改钩子给 `event.injected`
-  赋值的那一步**，引擎和其余不变量一概不动；启用时打一条警告。
+  解法是加一个只给测试用的后门 `FLOWKEYD_ACCEPT_INJECTED=1` 抬升那道过滤，
+  而且**只改钩子给 `event.injected` 赋值的那一步**，引擎和其余不变量一概不动；
+  启用时打一条警告。
   这样 `scripts/acceptance.ps1` 才能从外部观察到“键真的是被吞了”。
 * **`Start-Process -PassThru` 拿不到退出码。** 无论加不加
   `-RedirectStandardOutput`，`$p.WaitForExit(6000)` 之后 `$p.ExitCode` 都是空
-  （只有用 `-Wait` 启动的那种才会填）。oskeyd 的 e2e 也不看守护进程的退出码，
+  （只有用 `-Wait` 启动的那种才会填）。验收脚本也不看守护进程的退出码，
   所以“干净退出”要靠日志（没有 `ERROR`、最后一行是 `keyboard hook removed`）
   加进程表里没有它来判定。
 * **`$form.Activate()` 会静默失败。** Windows 的前台锁只允许“当前就在前台的
@@ -1666,7 +1624,7 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   （就是这条让我把一次“用户中途点了 Notepad”误判成了两次产品失败。）
 * **`Win+F16` 在本机是外壳快捷键。** 我最初拿它当“被吞掉的 Win 和弦”的样本，
   结果在某些外壳状态下它会拉出 `SlideToShutDownHost`（“滑动以关机”），
-  看起来就像遮断失效。改用 oskeyd 的 `Win+S`（失败代价只是弹个搜索框）。
+  看起来就像遮断失效。改用 `Win+S`（失败代价只是弹个搜索框）。
   **选测试和弦之前，先用一个不装钩子的小脚本探一下它会不会动外壳。**
 * **弹窗复用之后 `window->isActive()` 可能是陈旧的 `true`。** `activateWindow`
   原来是
@@ -1741,7 +1699,7 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 
 * **现象**：鼠标滚轮滚弹窗时高亮“闪一下”——上下箭头完全正常，只有滚轮会。
 * **根因**：滚轮走的是 `moveSelection()`，而它为了“键盘接管高亮”会把鼠标悬停
-  清掉（`m_hover = -1`，与 oskeyd 的 `State::move_selection` 一致）。于是
+  清掉（`m_hover = -1`）。于是
   高亮先跳到**选中项**、下一帧又被紧随滚轮而至的鼠标微抖（1 px）拉回**光标那一行**。
   两帧之间隔了 ~20 ms，肉眼就是闪一下。本机实测（真实守护进程 + 高速截屏）：
   同一格滚轮前后两帧的差别是 167624 个像素，差别区域正好是整条高亮带。
@@ -1754,7 +1712,7 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
      不重算的话高亮会粘在旧的那一条上。两处都在同一个事件处理里做完，
      中间态不会被绘制。
      另外 `wheel.accepted = true`：选单/帮助都不该把滚轮事件漏给别的接收者。
-* **`MenuPopup.qml` 的滚轮**：选单不滚动（oskeyd 也没处理 `WM_MOUSEWHEEL`），
+* **`MenuPopup.qml` 的滚轮**：选单不滚动，
   但**必须接受**这个事件，否则它会继续往后冒、白白引起一次重绘。
 * **怎么验证这种“一闪而过”的 bug**（`tmp/` 下的临时工具，不进版本库）：
   * 抓帧：`QQuickWindow::grabWindow()` 不够用（它在 GUI 线程上自己渲染一遍，
@@ -1766,9 +1724,10 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   * 抓到的帧存成 PNG，用 `imgdiff` 那种脚本打印“不同像素数 + 包围盒”，
     就能一眼看出差的到底是哪一块（高亮带 vs 窗口边框）。
   * 直接用 `tmp/wheel/realdaemon.ps1` 起一个**真实守护进程**（一次性配置 +
-    `FLOWKEYD_ACCEPT_INJECTED=1`）比用预览程序更接近用户现场。* **`QCOMPARE(optional<int>, -1)` 是错的**：`-1` 会被隐式构造成
+    `FLOWKEYD_ACCEPT_INJECTED=1`）比用预览程序更接近用户现场。* **`QCOMPARE(optional<int>, -1)` 是错的**（当年 `hover()` 还在时踩的；现在悬停
+  已经删了，但这条适用于任何返回 `std::optional` 的接口）：`-1` 会被隐式构造成
   `std::optional<int>{-1}`（engaged），而“没有悬停”是 `std::nullopt`（disengaged），
-  于是断言总是失败。写 `QCOMPARE(model.hover(), std::nullopt)`。
+  于是断言总是失败（当时要写 `QCOMPARE(model.hover(), std::nullopt)`）。
 * **`GetWindowRect` + `SetCursorPos` 必须同一种像素。** 验收脚本现在开头就
   `SetProcessDPIAware()`（见 `FlowInject::DpiAware`），否则矩形是虚拟化过的
   逻辑像素、而 `SetCursorPos` 要物理像素，光标会落到别处去。
@@ -1816,29 +1775,60 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   必须是前台窗口**：`WM_MOUSEWHEEL` 送给**焦点**窗口，背景窗口收不到（现象：
   滚轮/拖动全无效而悬停却正常，看上去像两套 bug，其实是同一个环境问题）。
 * **滚轮方向**：本机实测（一个 WinForms `ListBox` 当原生基线，加上 Qt 的
-  `ListView`）**两者一致**：`mouseData = -120` 往下、`+120` 往上。oskeyd 与自绘
-  时期的 flowkeyd 是反的（`zDelta > 0` → 选中项往列表后面走），
-  `scripts/acceptance.ps1` 里那句注释（“与系统列表控件相反”）就是当年记下来的。
-  改用 Qt 自带的列表之后就跟着系统走了，脚本里帮助那段改成 `Wheel(-120)`。
+  `ListView`）**两者一致**：`mouseData = -120` 往下、`+120` 往上。
+  自绘时期的 flowkeyd 是反的（`zDelta > 0` → 选中项往列表后面走）；
+  改用 Qt 自带的列表之后就跟着系统走了，脚本里帮助那段是 `Wheel(-120)`。
 * **滚动条那个 QML 类型的类名是 `ScrollBar_QMLTYPE_<n>`**，不是 `QQuickScrollBar`
   （`ScrollBar.qml` 是个 QML 文件）。在 `tmp/preview` 那种“遍历 item 树找控件”
   的工具里用 `contains("ScrollBar")` 匹配；它的 `x = 490 / w = 10 / h = 708`，
   `position`/`size` 就是滑块的位置/大小。
-* **悬停与命中都靠 `ListView.indexAt()`**：`HoverHandler`（被动、不抢滚轮）
-  在卡片上追光标，`indexAt(x + contentX, y + contentY)` 算行下标，再
-  `setHover()` 给模型；`onContentYChanged` 里必须重算一次（列表滚了，同一个
-  物理行现在是另一条），否则高亮粘在旧行上。滚轮在表头/底部提示上也能滚，
-  靠的是 Qt 的“未被接住的指针事件继续递给指针下面其他 item”——那两块只是
-  普通的 `Rectangle`，不接滚轮，正好让下面的 `ListView` 接住。
+* **悬停与命中的那一套后来被整个删掉了（2026-09）**：当时是 `HoverHandler`
+  （被动、不抢滚轮）在卡片上追光标，`indexAt(x + contentX, y + contentY)` 算行
+  下标，再 `setHover()` 给模型，`onContentYChanged` 里再重算一次。这套东西的
+  副作用就是“拖动滚动条会改高亮” —— 见下一节的记录。留下来的那条有用的知识：
+  **滚轮在表头/底部提示上也能滚**，靠的是 Qt 的“未被接住的指针事件继续递给
+  指针下面其他 item” —— 那两块只是普通的 `Rectangle`，不接滚轮，正好让下面的
+  `ListView` 接住。
 * **桌面被锁时（`LogonUI` 在跑）这些验证全都做不了**：`GetForegroundWindow()`
   返回 0、`SendInput` 报 `5`（ACCESS_DENIED）、弹窗抢不到前台。
   `scripts/acceptance.ps1` 会在“捕捉窗口拿到了键盘焦点（正对照）”那一条挂掉，
   看上去像产品 bug，其实是环境。先看 `LogonUI` 在不在。
 
-### 从 oskeyd 继承的领域坑（照抄那份的解法，不要重新发明）
+#### 2026-09 修复：取消帮助窗口的悬停高亮（拖动滚动条不再改高亮）
 
-下面这些在 `../oskeyd/AGENTS.md` 第 6 节都有**完整的现象描述 + 修法**，
-这里只列标题，动手前**务必去读那一条**：
+* **现象**（项目所有者报）：在 `help` 弹窗里拖右侧滚动条，高亮会在行之间乱跳
+  —— 看起来像“拖动滚动条改变了选中的列表项”。按照系统列表控件的语义，滚动
+  不该动选中项/高亮。要求：取消这个非标准的自定义行为。
+* **根因**：高亮取的是 `activeLine()`，当时写成
+  `m_hover >= 0 ? m_hover : m_selected`，而 QML 侧有一个 `HoverHandler` 追光标，
+  `syncHover()`（还有 `onContentYChanged` 里那一次重算）用 `ListView.indexAt()`
+  把“指针下那一行”写成 `m_hover`。**滚动条就在 `ListView` 的矩形里面**，
+  `indexAt()` 只看行矩形、不区分“指针是不是压在滚动条上”，于是一拖动，
+  `contentY` 每变一点、`m_hover` 就换一行，高亮跟着指针跑。
+* **修法**（直接删，不做特例）：
+  * `HelpModel`：删掉 `m_hover`/`hover()`/`setHover()`，`activeLine()` 直接用
+    `m_selected`（夹在 `[0, visibleCount-1]`）；`refilter()` 不再复位悬停；
+    `moveSelection(delta, clearHover)` 的私有重载合并回单参数版本。
+  * `HelpPopup.qml`：删掉 `HoverHandler`、`syncHover()`、`rowIndexAt()` 与
+    `onContentYChanged` 那行。**高亮从此只有 `moveSelection()` 会改**
+    （`↑`/`↓`/`PgUp`/`PgDn`/`Home`/`End`）；滚轮、拖滑块、点鼠标都不动它。
+    委托上的 `TapHandler`（点一行 = 复制那一行）保留，本来就有。
+  * README 的「快捷键帮助」那两条跟着改成“悬停不改高亮、`Enter` 复制的永远是
+    键盘选中项”。
+* **验收脚本怎么从外面看“列表真的滚了”**（这是本次最需要想的一点）：以前靠
+  “把光标悬停在某一行上再 `Enter`，看剪贴板复制到哪一条”当外部证据 —— 悬停
+  没了之后这条路断了。改用**左键点某一行 = 复制那一行**（委托的 `TapHandler`）：
+  同一个屏幕位置在滚动前后复制到**不同的行**，就证明列表滚了；再按一次 `Enter`
+  （复制键盘选中项，永远是第 1 行），就证明滚动没有把选中项带走。
+  为此给 `FlowInject` 加了一个 `Click(x, y)`（`SetCursorPos` + 左键按下/抬起）。
+  帮助那一段现在是 12 项检查，脚本总数 **84**（原 82）。
+* **教训**：QML `ListView` 自带的 `ScrollBar` 在 `ListView` 的矩形**内部**，
+  任何“用 `indexAt(指针位置)` 算悬停/命中”的写法都必须自己排除滚动条那一块
+  （或者干脆别让悬停参与选中语义）。
+
+### 领域坑清单（动手前先看这一遍）
+
+下面这些每一条都值得在动钩子/引擎/窗口/电源之前先读一遍：
 
 * 通用修饰键 `VK_SHIFT` vs 分侧 `VK_LSHIFT`/`VK_RSHIFT`（`same_key`）。
 * 小键盘 Enter 与主键盘 Enter 共用 `VK_RETURN`，只能靠扩展键标志区分；
@@ -1927,7 +1917,7 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > （新增 `tst_menu_model` 13 个用例、`tst_help_model` 17 个用例）。
 > `flowkeyd --check --config flowkeyd.lua.example` 仍通过（37/3、零警告）；
 > 一次性配置 `tmp/smoke6.lua`（一个 `menu` + 一个 `help` + 一个 `none`）的
-> `--check`/`--list` 形状与 oskeyd 一致（`menu "冒烟选单" (3 item(s))`、`help`），
+> `--check`/`--list` 形状符合预期（`menu "冒烟选单" (3 item(s))`、`help`），
 > 守护进程用 `--no-elevate --allow-multi` 启停正常（日志里有
 > `keyboard hook removed`）。两个弹窗的渲染、筛选变矮、键盘选择、
 > 回调回投与窗口复用由 `tmp/preview/` 的临时预览程序截图/日志验证，
@@ -1939,14 +1929,14 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > 两边都是 `build exit 0`、零警告，`ctest` **19 个测试目标**全绿
 > （新增 `tst_desktop_table` 5 个用例、`tst_power_table` 7 个用例）。
 > `flowkeyd --check --config flowkeyd.lua.example` 仍通过（37/3、零警告）；
-> `--version` 打印 `flowkeyd 0.1.0` + `Lua 5.5.1`；`--list` 的形状与 oskeyd 一致。
+> `--version` 打印 `flowkeyd 0.1.0` + `Lua 5.5.1`。
 > 交互式验证（`FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`，另加
 > `FLOWKEYD_ALLOW_SCREEN_OFF=1`）8 个用例全绿（其中的
 > `powerScreenOffBlanksTheDisplay` 后来已删除：电源动作不再进测试）：虚拟桌面探测到
 > `count 4 / current 2 / os 26200.9457 / api 26100 / layout plain /
 > manager {53f5ca0b-158f-4124-900c-057158060b27}`，切走再切回成功；
 > `screen_off` 真的黑屏并被随后注入的 Shift 点亮。
-> `README.md` 与 `flowkeyd.lua.example` 已按 oskeyd 逐节核对。
+> `README.md` 与 `flowkeyd.lua.example` 已逐节核对一致。
 > **仍需人的手**：`animate = true/false` 的肉眼区别、托盘菜单里的
 > 电源条目与点击，以及“托盘图标真的消失了”的直接观察（阶段 3/4/5/6 那批的
 > 其余部分已由 `scripts/acceptance.ps1` 覆盖，见阶段 9）。
@@ -1958,7 +1948,7 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > 结果都是 `checks: 68, failures: 0`（中间的两次失败是测试环境造成的，已记在
 > 第 10 节）。接管部分：用户真实配置已迁到 `.config\flowkeyd\config.lua`
 > （`--check` → `OK (24 hotkey(s), 0 remap(s))`、零警告），非提权预演能装钩子
-> 也能被 `taskkill /PID`（不带 `/F`）干净停掉；oskeyd 本来就没在跑，
+> 也能被 `taskkill /PID`（不带 `/F`）干净停掉；
 > 提权常驻由用户自己一条 `Start-Process -Verb RunAs` 启动（README 里有）。
 
 > **2026-09 修订（DoD 收窄）**：从这里往后，`ctest` 与 `acceptance.ps1` 都只跑
@@ -1995,12 +1985,36 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > `powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance.ps1`
 > （预期 **82 项**：原 77 + 拖动滑块 2 项 + 重新打开复位 2 项 + 滚轮前置 1 项；
 > 帮助那一段的滚轮注入已改成 `Wheel(-120)`）。
+> → **后来又有一次改动（2026-09，取消悬停高亮）**：脚本现在是 **84 项**，帮助那
+> 一段改用「左键点一行 = 复制它」来观察滚动，见第 10 节与本节最后一条记录。
+
+> **2026-09 文档整理（本文件自包含）**：本文件与 `README.md` 是 flowkeyd 唯一的
+> 工程笔记与用户文档，不再引用任何外部项目的文档；配置 schema、动作字段与键名的
+> 权威定义在 `README.md`。本次只改了本文件，所以 debug/release 两个 profile 都是
+> `ninja: no work to do`（`build exit 0`），`ctest --test-dir build/windows-release`
+> 19 个测试目标全绿，`--check --config flowkeyd.lua.example` →
+> `OK (37 hotkey(s), 3 remap(s))`、零警告。
+
+> **2026-09 修复（取消帮助窗口的悬停高亮）的 DoD**：`windows-debug` 与
+> `windows-release` 两边都是 `build exit 0`、零警告；
+> `ctest --test-dir build/windows-release` **19 个测试目标全绿**（`tst_help_model`
+> 删掉了两个悬停用例，`rolesExposeWhatTheDelegateNeeds` 改成盯“高亮只跟键盘
+> 选中项”）；`qmllint -I C:\Qt\6.11.2\mingw_64\qml src\qml\HelpPopup.qml`
+> 零警告；`flowkeyd --check --config flowkeyd.lua.example` →
+> `OK (37 hotkey(s), 3 remap(s))`、零警告。
+> `scripts/acceptance.ps1`（只跑 release）**84 项、0 失败**
+> （`checks: 84, failures: 0`），新增「左键点某一行会复制它的按键」、
+> 「拖动滚动条不会改键盘选中项（Enter 复制的还是第 1 行）」与「滚轮不会改
+> 键盘选中项」三条；拖动/滚轮之后用“同一屏幕位置已经换了一行”证明列表真的滚了。
+> 行为变化：鼠标悬停不再改变高亮，`Enter` 只复制键盘选中项那一行，
+> 拖动滚动条只滚视图（README 的「快捷键帮助」已同步）。
+> 这一类任务只碰模型/QML/文档，但按工作约定第 2 条仍然两个 profile 都构建、
+> 只在 release 上跑测试与验收脚本。
 
 > 提醒：Qt 的编译单元很多，`--preset` 的构建目录是分开的
 > （`build/windows-debug` / `build/windows-release`），所以
 > **debug 实例在运行不会锁住 release 产物**，反之亦然。
-> 这比 oskeyd 那边的体验好，但仍然要记住：正在运行的
-> `flowkeyd.exe` 会锁住它自己那个 profile 的产物。
+> 但仍然要记住：正在运行的 `flowkeyd.exe` 会锁住它自己那个 profile 的产物。
 
 ---
 
@@ -2009,7 +2023,7 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 按项目所有者的决定，**本期不做**下面这些；它们是明确的待办，不是遗忘：
 
 1. **`--simulate <SCRIPT>`**（把脚本化按键事件重放给真正的引擎，干跑）。
-   这是 oskeyd 里最便宜的引擎验证手段，**强烈建议尽早补**：
+   这是最便宜的引擎验证手段，**强烈建议尽早补**：
    它不需要焦点、不装钩子，却能把匹配/吞键/重复/挂起/重映射全跑一遍。
    没有它，引擎的行为只能靠 `scripts/acceptance.ps1`（要真的注入按键、
    要交互式桌面）或者手工按键盘。
@@ -2022,12 +2036,11 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
    把“钩子真的吞了键”“重映射真的注入了目标键”“`quit` 真的卸了钩子”都变成
    了可重复的断言。还缺的是动画的屏幕采样、托盘菜单点击、自提权的 UAC 流程、
    以及日志窗口那一套的外部断言。
-   如果以后要补，照 oskeyd 的脚本改造：它的断言字符串
-   （英文日志、窗口标题格式）在本项目里保持兼容，正是为了这个。
-4. **鼠标钩子**（`WH_MOUSE_LL`）：oskeyd 也没做。
+   如果以后要补，就沿着现在这套脚本扩展：断言字符串（英文日志、
+   窗口标题格式）是稳定的，正是为了这个。
+4. **鼠标钩子**（`WH_MOUSE_LL`）。
 5. **延迟修饰键抑制**：让 `Ctrl+Alt+H` 也隐藏 Ctrl 和 Alt
-   （相对 AutoHotkey 唯一真正的行为差距）。设计草案见
-   `../oskeyd/AGENTS.md` 第 8 节第 1 条。
+   （相对 AutoHotkey 唯一真正的行为差距）。
 6. **配置文件热重载**（去抖的 `ReadDirectoryChangesW`），
    取代手动 `reload` 快捷键。
 7. **按应用限定的快捷键**（等价于 AutoHotkey 的 `#If WinActive(...)`）。
@@ -2070,7 +2083,7 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 * **新的 QML 弹窗（第三种）**：不要另起一套配色与字号：
   `import QtQuick.Controls.FluentWinUI3`，颜色一律从 `palette`（`base`/`text`/
   `placeholderText`/`highlight`/`highlightedText`/`alternateBase`/`mid`）取，
-  字号用 oskeyd 那套 `pointSize`（12.5 标题 / 11 正文 / 10.5 帮助正文 /
+  字号用现在这套 `pointSize`（12.5 标题 / 11 正文 / 10.5 帮助正文 /
   9 副标题与徽标 / 8.5 细节）；需要滚动的列表用真正的 `ListView` +
   `ScrollBar`（不要自绘滑槽），固定表头/底部提示看 `HelpPopup.qml` 的
   “`topMargin`/`bottomMargin` + 不透明底色”三件套；
@@ -2104,24 +2117,23 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 
 ---
 
-## 14. 配置 schema 速查（与 oskeyd 1:1，只换品牌名）
+## 14. 配置 schema 速查
 
-**这一节是索引，权威定义在 `../oskeyd/README.md`「配置」那一章与
-其 `oskeyd.lua.example`。** 两边任何一处不一致，**以 oskeyd 为准并修 flowkeyd**。
+**这一节只是索引，权威定义在 `README.md`「配置」那一章与
+`flowkeyd.lua.example`。** 任何一处不一致，**以 README 为准并修本文件**。
 
-### 命令行的两处改名
+### 路径与全局表
 
-| oskeyd                                    | flowkeyd                                      |
-| ----------------------------------------- | --------------------------------------------- |
-| `%USERPROFILE%\.config\oskeyd\config.lua` | `%USERPROFILE%\.config\flowkeyd\config.lua`   |
-| `%USERPROFILE%\.config\oskeyd\oskeyd.log` | `%USERPROFILE%\.config\flowkeyd\flowkeyd.log` |
-| `oskeyd.*`（DSL 全局表）                  | `flowkeyd.*`                                  |
-| `oskeyd.lua.example`                      | `flowkeyd.lua.example`                        |
+| 项         | 值                                            |
+| ---------- | --------------------------------------------- |
+| 配置目录   | `%USERPROFILE%\.config\flowkeyd\config.lua`   |
+| 日志文件   | `%USERPROFILE%\.config\flowkeyd\flowkeyd.log` |
+| DSL 全局表 | `flowkeyd.*`（挂在脚本全局的注册表）          |
+| 示例配置   | `flowkeyd.lua.example`                        |
 
-CLI 开关名字**完全不变**（`-c/--config`、`--no-elevate`、`--console`、
-`--elevated`、`--check`、`--list`、`--list-keys`、`--log-window`、
-`--log-level`、`--log-file`、`--no-color`、`--allow-multi`、`-h/--help`、
-`-V/--version`），只有帮助文本里的程序名换成 `flowkeyd`。
+CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、
+`--check`、`--list`、`--list-keys`、`--log-window`、`--log-level`、
+`--log-file`、`--no-color`、`--allow-multi`、`-h/--help`、`-V/--version`。
 `--parent-pid` 与 `--simulate`/`--selftest`/`--probe` 见第 12 节。
 
 ### 配置语义要点（容易做漏的）
@@ -2140,7 +2152,7 @@ CLI 开关名字**完全不变**（`-c/--config`、`--no-elevate`、`--console`�
 * 和弦语法：`~` 放行原始按键、`*` 忽略额外修饰键；`Numpad*` 与主键盘同名键不同。
 * 动作：`run`/`send`/`type`/`open`/`volume`/`media`/`clipboard`/`window`/
   `notify`/`menu`/`help`/`power`/`desktop`/`caps_lock`/`suspend`/`reload`/
-  `quit`/`none`，字段逐条见 oskeyd README 的动作表。
+  `quit`/`none`，字段逐条见 `README.md` 的动作表。
   简写字符串：`"run:…"`、`"send:…"`、`"type:…"`、`"open:…"`、`"notify:t|b"`、
   `"volume:up"`、`"media:next"`、`"clipboard:get"`、`"window:minimize"`、
   `"desktop:1"`、`"power:sleep"`、裸关键字 `reload`/`quit`/`help`/`none`。
@@ -2150,14 +2162,12 @@ CLI 开关名字**完全不变**（`-c/--config`、`--no-elevate`、`--console`�
 * `window` 的 `animate`（默认**关**）只对会改变窗口状态的 `op` 有意义，
   写在不产生过渡的 `op`（`close`/`toggle_topmost`）上要被 `--check` 拒绝。
 
-### 本机真实配置（迁移的输入，也是验收的清单）
+### 本机真实配置（也是验收的清单）
 
-**2026-09 阶段 10 之后，这份配置实际住在
-`%USERPROFILE%\.config\flowkeyd\config.lua`**（oskeyd 那份还在原地，内容除了
-注释之外与 flowkeyd 那份一致）。`flowkeyd --check`（走默认搜寻）→
-`OK (24 hotkey(s), 0 remap(s))`，零警告。
+**这份配置住在 `%USERPROFILE%\.config\flowkeyd\config.lua`**。
+`flowkeyd --check`（走默认搜寻）→ `OK (24 hotkey(s), 0 remap(s))`，零警告。
 
-`C:\Users\xingjian\.config\oskeyd\config.lua`（2026-09，12225 字节）里的绑定：
+`%USERPROFILE%\.config\flowkeyd\config.lua` 里的绑定：
 
 | 快捷键                 | 动作                                                                              |
 | ---------------------- | --------------------------------------------------------------------------------- |
@@ -2199,16 +2209,11 @@ CLI 开关名字**完全不变**（`-c/--config`、`--no-elevate`、`--console`�
    （为了 CLI 兼容）。如果用户觉得没必要，删掉更干净。
    → **已按这个方案实现（阶段 0）**；不想要的再说一声。
 4. **示例配置要不要保留 `Win+X`/`Win+1..3` 这类会吞系统快捷键的例子？**
-   oskeyd 的示例保留并加了醒目注释。倾向保留（注释里说明“这会吞掉系统快捷键”），
+   现在的示例保留并加了醒目注释（注释里说明“这会吞掉系统快捷键”），
    但这是产品口味问题。
-5. **要不要给 flowkeyd 也做一份 `AGENTS.md` 里那种“英文日志 + 中文帮助”的
-   文案约定表？** 目前只在第 4 条工作约定里写了原则。
-6. **帮助窗口的滚轮方向要不要翻过来？** 现在（与 oskeyd 1:1）是
-   `angleDelta.y > 0`（向前滚 / 系统里的“向上滚”）→ 选中项**向列表后面**走，
-   比普通列表控件的直觉**是反的**（oskeyd 的 `WM_MOUSEWHEEL` 分支也是这个方向）。
-   要改只是 `HelpModel::wheel()` 里一个符号，但那就不是 1:1 了；
-   问用户之前不要自作主张。
-7. **提权常驻实例会锁住 release 的 exe，而 agent 杀不掉它**（它跑在用户的管理员
+5. **要不要给 flowkeyd 做一份“英文日志 + 中文帮助”的文案约定表？**
+   目前只在第 4 条工作约定里写了原则。
+6. **提权常驻实例会锁住 release 的 exe，而 agent 杀不掉它**（它跑在用户的管理员
    令牌下，`Stop-Process -Force` / `taskkill /F` 都是“拒绝访问”）。
    每次 release 全量构建前要请用户从托盘菜单点一下“退出”。
    可选的长期解法：把常驻实例改从一份**拷贝**（比如 `%LOCALAPPDATA%\flowkeyd\`）

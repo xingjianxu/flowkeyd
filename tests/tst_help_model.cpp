@@ -1,5 +1,5 @@
 // `help` 帮助窗口模型的纯逻辑单测：筛选、`可见/总数`、`Enter` 复制、两级 `Esc`、
-// 选中行与光标悬停行。
+// 键盘选中行。
 //
 // **滚动不在这一层**：列表是 QML 里的真 `ListView` + 自带 `ScrollBar`，所以这里
 // 只验证「卡片几何与 `ListView` 的内容高度能不能对齐」以及「选中项变了要通知视图」
@@ -101,8 +101,6 @@ private slots:
     void backspaceRemovesOneCharacterAndRefilters();
     void arrowKeysClampAtTheEnds();
     void pageKeysHomeAndEnd();
-    void hoverWinsOverSelectionButKeyboardDropsIt();
-    void setHoverIgnoresLinesOutsideTheList();
     void scrollTargetKeepsTheRowInsideTheRowArea();
     void selectionChangedTellsTheViewToFollow();
     void maxRowsLimitsTheVisibleRows();
@@ -333,47 +331,6 @@ void TestHelpModel::pageKeysHomeAndEnd()
     QCOMPARE(shortModel.selected(), 0);
 }
 
-// 高亮的优先级：光标悬停优先于键盘选中；键盘动一下就把高亮从鼠标手里收回来。
-// （滚动位置归 `ListView` 管，所以这里不再测「滚轮不清悬停」那套旧逻辑。）
-void TestHelpModel::hoverWinsOverSelectionButKeyboardDropsIt()
-{
-    app::HelpModel model;
-    model.setItems(std::nullopt, manyItems(10));
-    model.setMaxRows(3);
-
-    model.setHover(1);
-    QCOMPARE(model.hover().value_or(-1), 1);
-    QCOMPARE(model.copyText(), QStringLiteral("Ctrl+F1"));
-
-    model.moveSelection(3);
-    QCOMPARE(model.hover(), std::nullopt);
-    QCOMPARE(model.selected(), 3);
-    QCOMPARE(model.copyText(), QStringLiteral("Ctrl+F3"));
-
-    // 悬停回来又盖过选中项。
-    model.setHover(2);
-    QCOMPARE(model.copyText(), QStringLiteral("Ctrl+F2"));
-    // 光标离开列表 / 移到底部提示上：回到选中项。
-    model.setHover(-1);
-    QCOMPARE(model.copyText(), QStringLiteral("Ctrl+F3"));
-}
-
-void TestHelpModel::setHoverIgnoresLinesOutsideTheList()
-{
-    app::HelpModel model;
-    model.setItems(std::nullopt, manyItems(3));
-
-    model.setHover(0);
-    QCOMPARE(model.hover().value_or(-1), 0);
-    // 越界的下标（`ListView.indexAt()` 返回 -1，或列表比视口短）不算悬停。
-    model.setHover(-1);
-    QCOMPARE(model.hover(), std::nullopt);
-    model.setHover(3);
-    QCOMPARE(model.hover(), std::nullopt);
-    model.setHover(99);
-    QCOMPARE(model.hover(), std::nullopt);
-}
-
 // `scrollTargetY` 是 QML 在键盘改过选中项之后用来摆 `contentY` 的：它必须把行
 // 保持在**行区域**（表头与底部提示之间），而不是列表自己的矩形里（`ListView`
 // 的 `Contain` 只看后者，会把最后一行留在底部提示底下）。
@@ -559,10 +516,16 @@ void TestHelpModel::rolesExposeWhatTheDelegateNeeds()
     QCOMPARE(model.data(model.index(1, 0), highlightedRole).toBool(), false);
     QCOMPARE(model.data(model.index(0, 0), badgesRole).toList().size(), 3);
 
-    // 悬停行高亮的是悬停那一条，不是选中那一条。
-    model.setHover(2);
+    // 高亮就是键盘选中项（鼠标悬停不再参与：拖动滚动条时高亮会跟着指针乱跳，
+    // 2026-09 已取消）。
+    model.moveSelection(2);
+    QCOMPARE(model.selected(), 2);
     QCOMPARE(model.data(model.index(0, 0), highlightedRole).toBool(), false);
     QCOMPARE(model.data(model.index(2, 0), highlightedRole).toBool(), true);
+    QCOMPARE(model.copyText(), QStringLiteral("CapsLock"));
+    model.moveSelection(-2);
+    QCOMPARE(model.data(model.index(0, 0), highlightedRole).toBool(), true);
+    QCOMPARE(model.data(model.index(2, 0), highlightedRole).toBool(), false);
 
     // 越界/无效下标不能崩。
     QCOMPARE(model.data(QModelIndex(), labelRole).isValid(), false);

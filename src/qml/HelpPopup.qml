@@ -5,10 +5,15 @@ import QtQuick.Controls.FluentWinUI3
 
 // `help` 动作弹出的快捷键帮助窗口：**看**的而不是**选**的。
 //
-// 筛选、`Enter` 复制哪一行、两级 `Esc`、选中行/光标悬停行全在 `app::HelpModel`
+// 筛选、`Enter` 复制哪一行、两级 `Esc`、键盘选中项全在 `app::HelpModel`
 // 里（纯逻辑、有单测）；列表本身是一个真正的 `ListView` + Qt 自带的
 // `ScrollBar`：滚轮、拖动滑块、平滑滚动全部交给 Qt。**不再自己画滑槽/滑块，
 // 也不自己算滚动位置** —— 旧实现那套既拖不动滑块，又在滚轮下闪（AGENTS.md 第 10 节）。
+//
+// 高亮就是键盘选中项，只有 `↑`/`↓`/`PgUp`/`PgDn`/`Home`/`End` 会改它。
+// **鼠标悬停不改高亮**：悬停高亮属于非标准的自定义行为 —— 拖动滚动条时指针
+// 压在列表上，高亮会随着滚动在行之间乱跳；现在拖动与滚轮都只滚视图
+// （2026-09，AGENTS.md 第 10 节）。
 //
 // 布局上的三个要点：
 // * 列表铺满整张卡片，上下用 `Flickable` 的 `topMargin`/`bottomMargin` 把表头与
@@ -52,38 +57,6 @@ Window {
     readonly property int badgeGap: root.helpModel ? root.helpModel.badgeGap : 3
     readonly property int rowInset: root.helpModel ? root.helpModel.rowInset : 10
     readonly property int rowHeight: root.helpModel ? root.helpModel.rowHeight : 46
-
-    /// 卡片坐标 → 行下标。`ListView.indexAt()` 要的是**内容坐标**，而光标位置
-    /// 是卡片坐标，所以要加上滚动偏移。
-    function rowIndexAt(point) {
-        if (!root.helpModel || !listView)
-            return -1
-        var x = point.x - listView.x + listView.contentX
-        var y = point.y - listView.y + listView.contentY
-        return listView.indexAt(x, y)
-    }
-
-    /// 把「光标下那一行」告诉模型。列表滚动之后也必须重算（滚动条、滚轮都会
-    /// 改 `contentY`），否则高亮会粘在旧的那一条上。
-    ///
-    /// 只有光标在**行区域**里才算“停在某一行上”：列表铺满整张卡片，表头与
-    /// 底部提示那两块盖着的地方如果也走 `indexAt()`，光标在表头上时会命中一条
-    /// 藏在下面的行（高亮看不见，而 `Enter` 却把它复制走了）。
-    function syncHover() {
-        if (!root.helpModel)
-            return
-        if (!cardHover.hovered) {
-            root.helpModel.setHover(-1)
-            return
-        }
-        var point = cardHover.point.position
-        if (point.y < listView.y + listView.topMargin
-                || point.y >= listView.y + listView.height - listView.bottomMargin) {
-            root.helpModel.setHover(-1)
-            return
-        }
-        root.helpModel.setHover(root.rowIndexAt(point))
-    }
 
     /// 键盘改过选中项之后把它带进视野。
     ///
@@ -295,10 +268,8 @@ Window {
                 }
             }
 
-            // 列表滚了（滚轮、拖滑块、键盘把选中项带进视野）之后，「光标下那一行」
-            // 换了一条：必须重算悬停，否则高亮会粘在旧的那一条上。
-            onContentYChanged: root.syncHover()
-
+            // 这里**没有** `onContentYChanged` 处理：滚动只改视图，高亮只跟键盘
+            // 选中项走，悬停不再参与（2026-09 取消了悬停高亮）。
             // 列表刚长出来时 Qt 会把 `contentY` 摆到「保持当前滚动比例」的位置
             // （实测 30 条时是 90，而不是顶部），内容/几何稳下来之后要再摆一次。
             // `followSelection` 是幂等的：行已经在行区域里就什么都不改，所以这
@@ -426,16 +397,6 @@ Window {
             font.pointSize: 8.5
             verticalAlignment: Text.AlignVCenter
             elide: Text.ElideRight
-        }
-
-        // 光标追踪：`HoverHandler` 是**被动**的，不会抢滚轮/点击。
-        // 悬停行由 `ListView.indexAt()` 命中，不再自己算行矩形。
-        HoverHandler {
-            id: cardHover
-
-            acceptedDevices: PointerDevice.Mouse
-            onPointChanged: root.syncHover()
-            onHoveredChanged: root.syncHover()
         }
     }
 }

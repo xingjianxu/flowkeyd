@@ -312,6 +312,16 @@ public static class FlowInject {
         SendMouse(MOUSEEVENTF_LEFTUP);
     }
 
+    // 在 (x,y) 左键单击一次（帮助窗口里点一行 = 复制那一行的按键；
+    // 验收脚本靠它在滚动之后读出「同一个屏幕位置下现在是哪一行」）。
+    public static void Click(int x, int y) {
+        Cursor(x, y);
+        System.Threading.Thread.Sleep(120);
+        SendMouse(MOUSEEVENTF_LEFTDOWN);
+        System.Threading.Thread.Sleep(60);
+        SendMouse(MOUSEEVENTF_LEFTUP);
+    }
+
     // 属于 `pid` 的、标题以 `prefix` 开头的第一个可见顶层窗口的物理矩形。
     public static int[] WindowRect(int pid, string prefix) {
         IntPtr found = IntPtr.Zero;
@@ -828,15 +838,15 @@ try {
     Write-Host "         help caption: $($full.Visible)/$($full.Total)"
     Check '标题里的可见/总数是满的' ($null -ne $full -and $full.Total -eq 17)
 
-    # --- 滚轮：高亮必须待在光标那一行上 --------------------------------------
-    # 回归的是「弹窗在滚轮下闪烁」与「滚动条拖不动」：列表改成一个真正的
-    # `ListView` + Qt 自带的 `ScrollBar` 之后，滚轮与拖动都交给 Qt；模型只在
-    # 后面算「高亮应该落在哪一行」。判据都是从外面能看到的：
-    #   * 光标压在第 1 行时 Enter 复制的是**光标下那一行**（悬停生效）；
-    #   * 滚轮往下滚一大截，鼠标不动，Enter 复制的那一行要跟着变；
-    #   * 把光标移到底部提示上（不属于任何行）再 Enter，这时复制的才是键盘
-    #     选中项——滚轮只滚视图，不会把选中项一起拖走；
-    #   * 拖动滑块能让列表滚起来（自绘滑槽做不到的那件事）。
+    # --- 滚动：只滚视图，不动键盘选中项 --------------------------------------
+    # 回归的是「拖动滚动条会改变高亮/选中项」与「弹窗在滚轮下闪烁」：列表是一个
+    # 真正的 `ListView` + Qt 自带的 `ScrollBar`，滚轮与拖动都交给 Qt；高亮就是
+    # 键盘选中项，只由 `↑`/`↓`/`PgUp`/`PgDn`/`Home`/`End` 改，鼠标悬停与滚动
+    # 都不碰它（2026-09 取消了悬停高亮，见 AGENTS.md 第 10 节）。
+    # 判据都是从外面能看到的：
+    #   * 左键点某一行 = 复制那一行（帮助窗口的鼠标语义）；
+    #   * 拖动滑块 / 滚轮之后，同一个屏幕位置下已经是**另一行**（列表真滚了）；
+    #   * 这两种滚动都不改键盘选中项：`Enter` 复制的一直是第 1 行。
     # 卡片宽 500 逻辑像素、第一行中线在 listTop(88) + rowHeight/2，所以用
     # 窗口宽度反推缩放（DPI 感知后矩形是物理像素）。
     $helpRect = [FlowInject]::WindowRect($daemon.Id, $HELP_TITLE)
@@ -845,15 +855,20 @@ try {
         $scale = $helpRect[2] / 500.0
         $midX = $helpRect[0] + [int](250 * $scale)
         $rowY = $helpRect[1] + [int](111 * $scale)
-        $footerY = $helpRect[1] + $helpRect[3] - [int](18 * $scale)
-        [FlowInject]::Cursor($midX, $rowY)
-        Pump 400
+
+        ClipSet 'SENTINEL'
+        [FlowInject]::Click($midX, $rowY)
+        Pump 600
+        $firstRow = ClipGet
+        Check '左键点某一行会复制它的按键' (
+            $null -ne $firstRow -and $firstRow -ne 'SENTINEL')
+
+        # 键盘选中项从外面看不到，只能用 `Enter` 复制的那一条当证据：它必须
+        # 一直是第 1 行，拖动与滚轮都不许把它带走。
         ClipSet 'SENTINEL'
         TapKey $VK_RETURN
         Pump 600
-        $rowUnderCursor = ClipGet
-        Check '光标压在第 1 行时 Enter 复制的是它' (
-            $null -ne $rowUnderCursor -and $rowUnderCursor -ne 'SENTINEL')
+        Check '一开始 Enter 复制的就是键盘选中项（第 1 行）' ((ClipGet) -eq $firstRow)
 
         # --- 拖动滚动条 ----------------------------------------------------
         # 滚动条是卡片右边 10 逻辑像素宽的那一条，滑块离卡片顶 2 像素、比卡片
@@ -865,15 +880,17 @@ try {
         [FlowInject]::DragMouse($barX, $barY, $barX, $barBottom + [int](400 * $scale))
         Pump 600
         Check '拖动滚动条之后弹窗还在' ($null -ne (HelpCounts))
-        [FlowInject]::Cursor($midX, $rowY)
-        Pump 400
+        ClipSet 'SENTINEL'
+        [FlowInject]::Click($midX, $rowY)
+        Pump 600
+        $afterDrag = ClipGet
+        if ($afterDrag -eq $firstRow) { Diag "scrollbar: the row at the clicked spot did not move: [$afterDrag]" }
+        Check '拖动滚动条真的滚了列表（同一位置已经换了一行）' (
+            $null -ne $afterDrag -and $afterDrag -ne 'SENTINEL' -and $afterDrag -ne $firstRow)
         ClipSet 'SENTINEL'
         TapKey $VK_RETURN
         Pump 600
-        $afterDrag = ClipGet
-        if ($afterDrag -eq $rowUnderCursor) { Diag "scrollbar: the row under the cursor did not move: [$afterDrag]" }
-        Check '拖动滚动条真的滚了列表（光标下那一行变了）' (
-            $null -ne $afterDrag -and $afterDrag -ne 'SENTINEL' -and $afterDrag -ne $rowUnderCursor)
+        Check '拖动滚动条不会改键盘选中项（Enter 复制的还是第 1 行）' ((ClipGet) -eq $firstRow)
 
         # 重新打开一次：滚动位置、筛选与选中项都复位（下面的滚轮检查要从顶部开始）。
         TapKey $VK_ESC
@@ -886,33 +903,25 @@ try {
             WaitUntil { [FlowInject]::ForegroundTitle() -like "$HELP_TITLE*" } 4000)
 
         # --- 滚轮 ----------------------------------------------------------
-        [FlowInject]::Cursor($midX, $rowY)
-        Pump 400
         ClipSet 'SENTINEL'
-        TapKey $VK_RETURN
+        [FlowInject]::Click($midX, $rowY)
         Pump 600
-        $rowUnderCursor = ClipGet
-        Check '滚轮之前光标压在第 1 行' (
-            $null -ne $rowUnderCursor -and $rowUnderCursor -ne 'SENTINEL')
+        Check '重新打开的帮助窗口还是从第 1 行开始' ((ClipGet) -eq $firstRow)
         for ($i = 0; $i -lt 12; $i++) { [FlowInject]::Wheel(-120) }
         Pump 800
         Check '滚轮之后弹窗还在、计数不变' (
             ($null -ne (HelpCounts)) -and (HelpCounts).Visible -eq $full.Visible)
         ClipSet 'SENTINEL'
-        TapKey $VK_RETURN
+        [FlowInject]::Click($midX, $rowY)
         Pump 600
         $afterWheel = ClipGet
-        if ($afterWheel -eq $rowUnderCursor) { Diag "wheel: the row under the cursor did not move: [$afterWheel]" }
-        Check '滚轮真的滚了列表（光标下那一行变了）' ($null -ne $afterWheel -and $afterWheel -ne $rowUnderCursor)
-        [FlowInject]::Cursor($midX, $footerY)
-        Pump 400
+        if ($afterWheel -eq $firstRow) { Diag "wheel: the row at the clicked spot did not move: [$afterWheel]" }
+        Check '滚轮真的滚了列表（同一位置已经换了一行）' (
+            $null -ne $afterWheel -and $afterWheel -ne 'SENTINEL' -and $afterWheel -ne $firstRow)
         ClipSet 'SENTINEL'
         TapKey $VK_RETURN
         Pump 600
-        $selection = ClipGet
-        if ($selection -eq $afterWheel) { Diag "wheel: the wheel dragged the selection along: [$selection]" }
-        Check '滚轮只滚视图、不拖走选中项（光标移开后复制的是选中项）' (
-            $null -ne $selection -and $selection -ne 'SENTINEL' -and $selection -ne $afterWheel)
+        Check '滚轮不会改键盘选中项（Enter 复制的还是第 1 行）' ((ClipGet) -eq $firstRow)
     }
     TapKey 0x46   # 'f'
     TapKey 0x31   # '1'

@@ -1,17 +1,23 @@
 // `help` 动作弹出的快捷键帮助窗口的**纯逻辑**模型。
 //
 // 与 `menu_model` 一样只依赖 QtCore：筛选、`可见/总数` 计数、`Enter` 复制哪一行、
-// 两级 `Esc`、选中行与光标悬停行都在这里，`tst_help_model` 直接覆盖它们。
+// 两级 `Esc` 与键盘选中行都在这里，`tst_help_model` 直接覆盖它们。
 //
 // 对应 oskeyd 的 `../oskeyd/src/win/help.rs` 里的 `Metrics` + `State`。
 //
 // **有意偏离（2026-09，项目所有者拍板）：滚动不归模型管。**
 // 列表是一个真正的 QML `ListView` + Qt 自带的 `ScrollBar`，滚轮、拖动滑块、
-// 平滑滚动全部交给 Qt；模型只保留「键盘选中哪一行 / 光标悬停哪一行」以及
-// 卡片外框的几何。旧实现自己算滑槽/滑块几何、自己命中测试、自己滚轮步进，
-// 结果是滑块拖不动、滚轮下高亮闪（见 AGENTS.md 第 10 节）。因此这里**没有**
-// `scroll`/`hitTest`/`wheel`：行下标就是 `ListView` 的下标，命中交给
-// `ListView.indexAt()`，滚动位置由视图自己持有。
+// 平滑滚动全部交给 Qt；模型只保留「键盘选中哪一行」以及卡片外框的几何。
+// 旧实现自己算滑槽/滑块几何、自己命中测试、自己滚轮步进，结果是滑块拖不动、
+// 滚轮下高亮闪（见 AGENTS.md 第 10 节）。因此这里**没有**
+// `scroll`/`hitTest`/`wheel`：行下标就是 `ListView` 的下标，滚动位置由视图
+// 自己持有，鼠标点击直接交给委托的 `TapHandler`。
+//
+// **2026-09 修订：鼠标悬停不再改变高亮。** 高亮就是键盘选中项，只有
+// `moveSelection()` 会改它。悬停高亮是一种「自定义列表行为」：拖动滚动条时
+// 指针压在列表上，高亮会随滚动在行之间乱跳 —— 项目所有者要求取消，改用
+// 系统列表控件的语义（悬停不动高亮、拖动与滚轮只滚视图）。所以这里也**没有**
+// `hover`/`setHover`。
 #pragma once
 
 #include "app/popup_layout.h"
@@ -120,9 +126,8 @@ public:
     /// 卡片一次最多能画出来的行数（`min(可见条数, maxRows)`，至少 1）。
     int visibleRows() const { return m_rows; }
     /// 键盘选中的行下标（**不是**滚动位置；滚动由 `ListView` 自己持有）。
+    /// 它也是高亮的唯一来源：鼠标悬停与滚动都不碰它。
     int selected() const { return m_selected; }
-    /// 光标悬停的行下标（-1 = 光标不在任何行上）。
-    std::optional<int> hover() const;
     QString footerText() const;
     int rowHeight() const;
     int rowSpacing() const;
@@ -155,9 +160,7 @@ public:
     QVariantList badgesForVisible(int line) const;
     QVariantList badgesForItem(std::size_t itemIndex) const;
 
-    /// 鼠标悬停的行下标（-1 = 不在任何行上）。QML 用 `ListView.indexAt()` 算出来。
-    Q_INVOKABLE void setHover(int line);
-    /// 上下移动选中项；到边界夹住（与选单的回绕不同，与 oskeyd 一致）。
+    /// 上下移动选中项（高亮跟着它走）；到边界夹住（与选单的回绕不同，与 oskeyd 一致）。
     Q_INVOKABLE void moveSelection(int delta);
 
     /// 键盘改过选中项之后，视图的 `contentY` 应该放在哪里。
@@ -193,13 +196,11 @@ signals:
     void selectedChanged();
 
 private:
-    /// `moveSelection` 的实体：`clearHover` 为假时保留鼠标悬停。
-    void moveSelection(int delta, bool clearHover);
     /// 重新算筛选结果、几何与计数（不发信号，调用方负责把 reset 包起来）。
     void refilter();
     void relayout();
     void notifyRows();
-    /// 当前高亮那条的行下标（鼠标悬停优先）；没有可见条目时返回 -1。
+    /// 当前高亮那条的行下标（就是键盘选中项）；没有可见条目时返回 -1。
     int activeLine() const;
 
     std::optional<QString> m_title;
@@ -213,7 +214,6 @@ private:
     int m_maxRows = 12;
     int m_rows = 1;
     int m_selected = 0;
-    int m_hover = -1;
 
     int m_cardHeight = 0;
     PopupRect m_titleRect;
