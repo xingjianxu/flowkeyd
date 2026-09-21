@@ -1,5 +1,5 @@
-// `help` 帮助窗口模型的纯逻辑单测：筛选、`可见/总数`、`Enter` 复制、两级 `Esc`、
-// 键盘与鼠标选中行。
+// `help` 帮助窗口模型的纯逻辑单测：筛选、`可见/总数`、`Enter` 执行、危险动作的
+// 二次确认、三级 `Esc`、键盘与鼠标选中行。
 //
 // **滚动不在这一层**：列表是 QML 里的真 `ListView` + 自带 `ScrollBar`，所以这里
 // 只验证「卡片几何与 `ListView` 的内容高度能不能对齐」以及「选中项变了要通知视图」
@@ -20,12 +20,14 @@ namespace {
 
 app::HelpEntry entry(const QStringList &chords,
                      const QString &label,
-                     std::optional<QString> detail = std::nullopt)
+                     std::optional<QString> detail = std::nullopt,
+                     bool destructive = false)
 {
     app::HelpEntry item;
     item.chords = chords;
     item.label = label;
     item.detail = detail;
+    item.destructive = destructive;
     return item;
 }
 
@@ -98,7 +100,10 @@ private slots:
     void filterMatchesChordsLabelsAndDetails();
     void filterTrimsWhitespaceAndIsCaseInsensitive();
     void countsAndCaptionFollowTheFilter();
-    void enterCopiesTheActiveRow();
+    void enterRunsTheActiveRow();
+    void destructiveRowsNeedASecondConfirmation();
+    void escapeAndNavigationDisarm();
+    void doubleClickActivatesTheRow();
     void escapeClearsTheFilterFirstThenCancels();
     void arrowKeysClampAtTheEnds();
     void pageKeysMoveTheSelection();
@@ -219,29 +224,132 @@ void TestHelpModel::countsAndCaptionFollowTheFilter()
     QCOMPARE(model.caption(), QStringLiteral("flowkeyd 快捷键 — 3/3 项"));
 }
 
-void TestHelpModel::enterCopiesTheActiveRow()
+void TestHelpModel::enterRunsTheActiveRow()
 {
     app::HelpModel model;
     model.setItems(std::nullopt, sampleItems());
 
+    // 单击复制走的是 `copyText()`；`Enter` 执行的是那一行的动作（`run`）。
     QCOMPARE(model.copyText(), QStringLiteral("Ctrl+Alt+F12"));
     const QVariantMap first = model.handleKey(Qt::Key_Return);
-    QCOMPARE(decisionOf(first), QStringLiteral("copy"));
+    QCOMPARE(decisionOf(first), QStringLiteral("run"));
     QCOMPARE(indexOf(first), 0);
 
-    // 多个和弦用 ` / ` 连起来（与 oskeyd 的 `copy_active` 一致）。
+    // 多个和弦用 ` / ` 连起来（与 oskeyd 的 `copy_active` 一致），执行的是同一个下标。
     model.moveSelection(1);
     QCOMPARE(model.copyText(), QStringLiteral("Win+X / Ctrl+Alt+X"));
-    QCOMPARE(indexOf(model.handleKey(Qt::Key_Enter)), 1);
+    const QVariantMap second = model.handleKey(Qt::Key_Enter);
+    QCOMPARE(decisionOf(second), QStringLiteral("run"));
+    QCOMPARE(indexOf(second), 1);
 
-    // 筛选之后复制的是筛选结果里的那一条。
+    // 筛选之后执行的是筛选结果里的那一条。
     model.setFilter(QStringLiteral("大写"));
     QCOMPARE(model.copyText(), QStringLiteral("CapsLock"));
+    const QVariantMap filtered = model.handleKey(Qt::Key_Return);
+    QCOMPARE(decisionOf(filtered), QStringLiteral("run"));
+    QCOMPARE(indexOf(filtered), 0);
 
-    // 一条都没有时没有东西可复制。
+    // 一条都没有时没有东西可执行。
     model.setFilter(QStringLiteral("zzz"));
     QCOMPARE(model.copyText(), QString());
     QCOMPARE(decisionOf(model.handleKey(Qt::Key_Return)), QStringLiteral("none"));
+}
+
+// `quit`/`suspend`/`power` 这类危险动作要两次：第一次只是把那一行武装起来
+// （`arm`），再按一次才真的执行（项目所有者拍板）。
+void TestHelpModel::destructiveRowsNeedASecondConfirmation()
+{
+    app::HelpModel model;
+    std::vector<app::HelpEntry> items = sampleItems();
+    items[0].destructive = true;
+    model.setItems(std::nullopt, std::move(items));
+    QSignalSpy spy(&model, &app::HelpModel::armedChanged);
+
+    QCOMPARE(model.armed(), -1);
+    QCOMPARE(model.footerText().contains(QStringLiteral("Esc")), true);
+
+    const QVariantMap first = model.handleKey(Qt::Key_Return);
+    QCOMPARE(decisionOf(first), QStringLiteral("arm"));
+    QCOMPARE(indexOf(first), 0);
+    QCOMPARE(model.armed(), 0);
+    QCOMPARE(spy.count(), 1);
+    // 底部提示换成确认文案（行上的待确认标记走 `rowArmed` 角色）。
+    QCOMPARE(model.footerText().contains(QStringLiteral("再按一次")), true);
+    QCOMPARE(model.data(model.index(0, 0), roleOf(model, "rowArmed")).toBool(), true);
+
+    const QVariantMap second = model.handleKey(Qt::Key_Return);
+    QCOMPARE(decisionOf(second), QStringLiteral("run"));
+    QCOMPARE(indexOf(second), 0);
+    QCOMPARE(model.armed(), -1);
+    QCOMPARE(spy.count(), 2);
+    // 执行完就忘了：下一次再按又是「第一次」。
+    QCOMPARE(decisionOf(model.handleKey(Qt::Key_Return)), QStringLiteral("arm"));
+
+    // 非危险行一次就执行，而且顺手把武装状态清掉。
+    model.setSelected(1);
+    QCOMPARE(model.armed(), -1);
+    QCOMPARE(decisionOf(model.handleKey(Qt::Key_Return)), QStringLiteral("run"));
+}
+
+// 取消确认的三条路：`Esc`、挪选中项、换筛选（项目所有者拍板：换行或 Esc 取消）。
+void TestHelpModel::escapeAndNavigationDisarm()
+{
+    app::HelpModel model;
+    std::vector<app::HelpEntry> items = sampleItems();
+    items[0].destructive = true;
+    items[1].destructive = true;
+    model.setItems(std::nullopt, std::move(items));
+
+    // `Esc` 先取消武装：窗口不关、筛选也不被一起清掉。
+    model.setFilter(QStringLiteral("Ctrl"));
+    QCOMPARE(decisionOf(model.handleKey(Qt::Key_Return)), QStringLiteral("arm"));
+    QCOMPARE(model.armed(), 0);
+    QCOMPARE(decisionOf(model.handleKey(Qt::Key_Escape)), QStringLiteral("disarm"));
+    QCOMPARE(model.armed(), -1);
+    QCOMPARE(model.filter(), QStringLiteral("Ctrl"));
+    QCOMPARE(decisionOf(model.handleKey(Qt::Key_Escape)), QStringLiteral("clear"));
+    QCOMPARE(decisionOf(model.handleKey(Qt::Key_Escape)), QStringLiteral("cancel"));
+
+    // 挪动选中项取消。
+    model.handleKey(Qt::Key_Return);
+    QCOMPARE(model.armed(), 0);
+    model.moveSelection(1);
+    QCOMPARE(model.armed(), -1);
+
+    // 换筛选也取消（列表换了内容，之前确认的是哪一行已经说不清了）。
+    QCOMPARE(decisionOf(model.handleKey(Qt::Key_Return)), QStringLiteral("arm"));
+    QCOMPARE(model.armed(), 1);
+    model.setFilter(QStringLiteral("F12"));
+    QCOMPARE(model.armed(), -1);
+}
+
+// 双击走 `activateRow()`：它先选中那一行，再决定执行还是武装。
+void TestHelpModel::doubleClickActivatesTheRow()
+{
+    app::HelpModel model;
+    std::vector<app::HelpEntry> items = sampleItems();
+    items[2].destructive = true;
+    model.setItems(std::nullopt, std::move(items));
+
+    const QVariantMap run = model.activateRow(1);
+    QCOMPARE(model.selected(), 1);
+    QCOMPARE(decisionOf(run), QStringLiteral("run"));
+    QCOMPARE(indexOf(run), 1);
+
+    // 危险行：第一次双击只是武装。
+    QCOMPARE(decisionOf(model.activateRow(2)), QStringLiteral("arm"));
+    QCOMPARE(model.armed(), 2);
+    // 双击前 Qt 会先发两次 `clicked` → `setSelected(同一个下标)`：
+    // 那一下**不能**把武装状态清掉，否则第二次双击又变成「第一次确认」。
+    model.setSelected(2);
+    QCOMPARE(model.armed(), 2);
+    QCOMPARE(decisionOf(model.activateRow(2)), QStringLiteral("run"));
+    QCOMPARE(model.armed(), -1);
+
+    // 越界夹住；一条可见条目都没有时什么都不做。
+    QCOMPARE(indexOf(model.activateRow(99)), 2);
+    app::HelpModel empty;
+    QCOMPARE(decisionOf(empty.activateRow(3)), QStringLiteral("none"));
 }
 
 void TestHelpModel::escapeClearsTheFilterFirstThenCancels()
@@ -486,10 +594,14 @@ void TestHelpModel::rolesExposeWhatTheDelegateNeeds()
     // 角色名是 `rowSelected`，不是 `highlighted`：委托是标准 `ItemDelegate`，
     // 它自己就有 `highlighted`（撞名就声明不了必需属性）。
     const int rowSelectedRole = roleOf(model, "rowSelected");
+    // 危险动作的「待确认」是另一个角色（与高亮分开，委托要给两种不同的视觉）。
+    const int rowArmedRole = roleOf(model, "rowArmed");
     QVERIFY(badgesRole > 0);
     QVERIFY(labelRole > 0);
     QVERIFY(detailRole > 0);
     QVERIFY(rowSelectedRole > 0);
+    QVERIFY(rowArmedRole > 0);
+    QCOMPARE(model.data(model.index(0, 0), rowArmedRole).toBool(), false);
 
     // 行下标就是 `ListView` 的下标，几何由委托自己用锚点拼，模型不再给矩形。
     QCOMPARE(model.rowCount(), 3);

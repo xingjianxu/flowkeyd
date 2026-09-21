@@ -158,11 +158,26 @@ void openMenuAction(Runtime *runtime,
                      .arg(count));
 }
 
+/// 帮助窗口里一行的「执行」目标。
+///
+/// 快捷键行是一串声明式动作（按下那半程 + 松开那半程，与真按一下那个键等价）；
+/// `remap` 行没有动作，执行它就是**注入它的目标按键**（等价于按一下 `from`）。
+struct HelpRunTarget
+{
+    QString name;
+    std::vector<core::Action> actions;
+    bool isRemap = false;
+    std::vector<core::SendOp> remapPress;
+    std::vector<core::SendOp> remapRelease;
+};
+
 /// 弹出 `help` 动作的快捷键帮助窗口。
 ///
 /// 列表直接从当前编译好的配置生成（绑定 + 重映射），所以这个动作不需要任何
-/// 参数；`onCopy` 也只写一次剪贴板，不执行任何动作。
+/// 参数。`onCopy` 只写一次剪贴板（单击某一行），`onRun` 才是执行那一行的动作
+/// （`Enter` 或双击）—— 动作回投给工作线程，弹窗自己从不执行动作。
 void openHelpAction(Runtime *runtime,
+                    Dispatcher *dispatcher,
                     const std::shared_ptr<const core::Compiled> &config,
                     const QString &hotkey,
                     const core::Action &action)
@@ -170,6 +185,8 @@ void openHelpAction(Runtime *runtime,
     HelpRequest request;
     request.title = action.helpTitle;
     request.items.reserve(config->bindings.size() + config->remaps.size());
+    std::vector<HelpRunTarget> targets;
+    targets.reserve(config->bindings.size() + config->remaps.size());
     for (const core::Binding &binding : config->bindings) {
         HelpEntry entry;
         for (const core::Chord &chord : binding.chords) {
@@ -177,14 +194,31 @@ void openHelpAction(Runtime *runtime,
         }
         entry.label = binding.comment.value_or(binding.name);
         entry.detail = bindingDetail(binding);
+
+        HelpRunTarget target;
+        target.name = binding.name;
+        target.actions = binding.press;
+        target.actions.insert(target.actions.end(), binding.release.begin(), binding.release.end());
+        // `quit`/`suspend`/`power` 要再确认一次（模型只认这个布尔量）。
+        entry.destructive = core::isDestructive(target.actions);
+
         request.items.push_back(std::move(entry));
+        targets.push_back(std::move(target));
     }
     for (const core::CompiledRemap &remap : config->remaps) {
         HelpEntry entry;
         entry.chords.append(remap.from.render());
         entry.label = remap.name;
         entry.detail = QStringLiteral("remap → %1").arg(describeRemapTarget(remap));
+
+        HelpRunTarget target;
+        target.name = remap.name;
+        target.isRemap = true;
+        target.remapPress = remap.press;
+        target.remapRelease = remap.release;
+
         request.items.push_back(std::move(entry));
+        targets.push_back(std::move(target));
     }
     const int count = static_cast<int>(request.items.size());
     request.onCopy = [](const QString &text) {
@@ -193,6 +227,30 @@ void openHelpAction(Runtime *runtime,
             win::logWarn(QStringLiteral("could not copy %1 from the help window: %2")
                              .arg(core::rustDebug(text), error));
         }
+    };
+    request.onRun = [dispatcher, config, targets = std::move(targets)](int index) {
+        if (index < 0 || index >= static_cast<int>(targets.size())) {
+            return;
+        }
+        const HelpRunTarget &target = targets[static_cast<std::size_t>(index)];
+        if (target.isRemap) {
+            // 与钩子里内联注入重映射按键同一条路：先按下那半程，再松开那半程。
+            QString error;
+            if (!win::sendOps(target.remapPress, true, &error)
+                || !win::sendOps(target.remapRelease, true, &error)) {
+                win::logWarn(QStringLiteral("`%1`: remap injection from the help window failed: %2")
+                                 .arg(target.name, error));
+                return;
+            }
+            win::logInfo(QStringLiteral("`%1` -> remap (from the help window)").arg(target.name));
+            return;
+        }
+        if (target.actions.empty()) {
+            // 一个按键屏蔽器（没有任何动作）从帮助窗口触发时什么都不发生。
+            win::logInfo(QStringLiteral("`%1` -> none (from the help window)").arg(target.name));
+            return;
+        }
+        dispatcher->submitActions(config, target.name, target.actions);
     };
     runtime->showHelpFromAnyThread(std::move(request));
     win::logInfo(QStringLiteral("`%1` -> help (%2 entry(s))").arg(hotkey).arg(count));
@@ -662,7 +720,7 @@ void executeAction(Runtime *runtime,
         openMenuAction(runtime, dispatcher, config, hotkey, action);
         break;
     case core::Action::Kind::Help:
-        openHelpAction(runtime, config, hotkey, action);
+        openHelpAction(runtime, dispatcher, config, hotkey, action);
         break;
     default:
         win::logWarn(QStringLiteral("`%1`: action `%2` is not implemented yet")

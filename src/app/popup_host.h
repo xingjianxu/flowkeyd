@@ -42,9 +42,19 @@ struct HelpRequest
 {
     std::optional<QString> title;
     std::vector<HelpEntry> items;
-    /// 用户按 `Enter`（或点某一行）时带着那一条的按键文本调用。
+    /// 用户按 `Enter`（或单击某一行）时带着那一条的按键文本调用。
     /// 同样在 GUI 线程上，必须很快返回（`Dispatcher` 给它的实现只写一次剪贴板）。
     std::function<void(const QString &)> onCopy;
+    /// 用户按 `Enter`（或双击某一行）要执行那一行的动作时，带着**条目下标**
+    /// （也就是 `items` 里的下标，不是筛选之后的可见行下标 —— `PopupHost`
+    /// 会用 `HelpModel::itemIndexForVisible()` 先换算好）调用。
+    ///
+    /// 调用前窗口已经藏起来了（跟 `menu` 的 `onChoose` 一样），因为很多动作
+    /// （`send`/`type`/`window`）会作用到**前台窗口**上 —— 帮助窗口必须先把前台
+    /// 让回去，否则那些按键会打回它自己的筛选框。
+    /// 同样在 GUI 线程上，所以实现只应该把活儿转交给别处（`Dispatcher` 再投一次
+    /// 队列），不要阻塞。
+    std::function<void(int)> onRun;
 };
 
 /// `menu` / `help` 两个弹窗的宿主（GUI 线程亲和）。
@@ -77,6 +87,7 @@ public:
     Q_INVOKABLE void menuChoose(int index);
     Q_INVOKABLE void menuDismiss();
     Q_INVOKABLE void helpCopy(int index);
+    Q_INVOKABLE void helpRun(int index);
     Q_INVOKABLE void helpDismiss();
 
 private:

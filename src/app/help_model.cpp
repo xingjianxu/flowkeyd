@@ -56,6 +56,7 @@ HelpModel::HelpModel(QObject *parent)
 
 void HelpModel::setItems(std::optional<QString> title, std::vector<HelpEntry> items)
 {
+    const bool wasArmed = m_armed >= 0;
     beginResetModel();
     m_title = std::move(title);
     m_items = std::move(items);
@@ -69,6 +70,9 @@ void HelpModel::setItems(std::optional<QString> title, std::vector<HelpEntry> it
     endResetModel();
     emit itemsChanged();
     emit stateChanged();
+    if (wasArmed) {
+        emit armedChanged();
+    }
     // 换了一批条目（同一个窗口复用），视图要回到第一条。
     emit selectedChanged();
 }
@@ -116,7 +120,14 @@ QString HelpModel::emptyMessage() const
 
 QString HelpModel::footerText() const
 {
-    return tr("输入筛选    ↑↓ 选择    Enter 复制    Esc 关闭");
+    if (m_armed >= 0) {
+        // 危险动作的第二次确认：明确写出「再按一次」与怎么取消。
+        const std::optional<int> index = itemIndexForVisible(m_armed);
+        const QString label = index.has_value() ? m_items[static_cast<std::size_t>(*index)].label
+                                                : QString();
+        return tr("危险动作「%1」：再按一次 Enter 执行，Esc 取消").arg(label);
+    }
+    return tr("输入筛选    ↑↓ 选择    Enter 执行    Esc 关闭");
 }
 
 int HelpModel::cardWidth() const
@@ -193,11 +204,15 @@ void HelpModel::setFilter(const QString &filter)
     if (filter == m_filter) {
         return;
     }
+    const bool wasArmed = m_armed >= 0;
     beginResetModel();
     m_filter = filter;
     refilter();
     endResetModel();
     emit stateChanged();
+    if (wasArmed) {
+        emit armedChanged();
+    }
     // 筛选之后列表短了：让视图把选中项（第 0 条）带回视野。
     emit selectedChanged();
 }
@@ -209,11 +224,15 @@ void HelpModel::clearFilter()
 
 void HelpModel::reset()
 {
+    const bool wasArmed = m_armed >= 0;
     beginResetModel();
     m_filter.clear();
     refilter();
     endResetModel();
     emit stateChanged();
+    if (wasArmed) {
+        emit armedChanged();
+    }
     emit selectedChanged();
 }
 
@@ -280,7 +299,12 @@ void HelpModel::moveSelection(int delta)
     const bool moved = next != m_selected;
     m_selected = next;
     if (moved) {
+        // 换了一行，危险动作的「等第二次确认」作废（项目所有者拍板：换行取消）。
+        const bool wasArmed = disarm();
         emit selectedChanged();
+        if (wasArmed) {
+            emit armedChanged();
+        }
     }
     notifyRows();
 }
@@ -292,11 +316,62 @@ void HelpModel::setSelected(int line)
     }
     const int next = std::clamp(line, 0, visibleCount() - 1);
     if (next == m_selected) {
+        // 点在已经选中的那一行上（双击的第一下也会走到这里）：**不动武装状态**，
+        // 否则第二次双击就又变成「第一次确认」了。
         return;
     }
     m_selected = next;
+    const bool wasArmed = disarm();
     emit selectedChanged();
+    if (wasArmed) {
+        emit armedChanged();
+    }
     notifyRows();
+}
+
+QVariantMap HelpModel::activateRow(int line)
+{
+    QVariantMap result;
+    result.insert(QStringLiteral("decision"), QStringLiteral("none"));
+    result.insert(QStringLiteral("index"), -1);
+    result.insert(QStringLiteral("handled"), true);
+    if (m_visible.empty()) {
+        return result;
+    }
+
+    const int next = std::clamp(line, 0, visibleCount() - 1);
+    if (next != m_selected) {
+        m_selected = next;
+        const bool wasArmed = disarm();
+        emit selectedChanged();
+        if (wasArmed) {
+            emit armedChanged();
+        }
+        notifyRows();
+    }
+
+    const std::optional<int> index = itemIndexForVisible(m_selected);
+    if (!index.has_value()) {
+        return result;
+    }
+    // 危险动作（`quit`/`suspend`/`power`）要两次：第一次只是武装起来。
+    if (m_items[static_cast<std::size_t>(*index)].destructive && m_armed != m_selected) {
+        armLine(m_selected);
+        emit armedChanged();
+        notifyRows();
+        result.insert(QStringLiteral("decision"), QStringLiteral("arm"));
+        result.insert(QStringLiteral("index"), m_selected);
+        return result;
+    }
+
+    // 真的执行了：把武装状态清掉（下一次再按又是「第一次确认」）。
+    if (disarm()) {
+        emit armedChanged();
+        notifyRows();
+    }
+    result.insert(QStringLiteral("decision"), QStringLiteral("run"));
+    result.insert(QStringLiteral("index"), m_selected);
+    return result;
 }
 
 QVariantMap HelpModel::handleKey(int key)
@@ -308,9 +383,16 @@ QVariantMap HelpModel::handleKey(int key)
 
     switch (key) {
     case Qt::Key_Escape:
-        // 先清筛选；筛选本来就是空的才关窗——否则删错一个字就得重开。
+        // 三级：先取消危险动作的确认（窗口不关）→ 再清筛选 → 最后才关窗。
         // `clear` 告诉 QML 把输入框里的文本也跟着清掉（模型是筛选的唯一真相，
         // 但输入框自己持有它显示的文本）。
+        if (m_armed >= 0) {
+            disarm();
+            emit armedChanged();
+            notifyRows();
+            result.insert(QStringLiteral("decision"), QStringLiteral("disarm"));
+            return result;
+        }
         if (!m_filter.isEmpty()) {
             clearFilter();
             result.insert(QStringLiteral("decision"), QStringLiteral("clear"));
@@ -319,14 +401,9 @@ QVariantMap HelpModel::handleKey(int key)
         }
         return result;
     case Qt::Key_Return:
-    case Qt::Key_Enter: {
-        const int line = activeLine();
-        if (line >= 0) {
-            result.insert(QStringLiteral("decision"), QStringLiteral("copy"));
-            result.insert(QStringLiteral("index"), line);
-        }
-        return result;
-    }
+    case Qt::Key_Enter:
+        // 执行光标那一行（危险动作第一次只会得到 `arm`）。
+        return activateRow(m_selected);
     case Qt::Key_Up:
         moveSelection(-1);
         return result;
@@ -378,6 +455,8 @@ QVariant HelpModel::data(const QModelIndex &index, int role) const
         return item.detail.value_or(QString());
     case RowSelectedRole:
         return activeLine() == line;
+    case RowArmedRole:
+        return m_armed == line;
     default:
         break;
     }
@@ -391,6 +470,7 @@ QHash<int, QByteArray> HelpModel::roleNames() const
         {LabelRole, QByteArrayLiteral("label")},
         {DetailRole, QByteArrayLiteral("detail")},
         {RowSelectedRole, QByteArrayLiteral("rowSelected")},
+        {RowArmedRole, QByteArrayLiteral("rowArmed")},
     };
 }
 
@@ -404,6 +484,9 @@ void HelpModel::refilter()
         }
     }
     m_selected = 0;
+    // 列表换了内容，武装状态一律作废。调用方在 `endResetModel()` 之后补
+    // `armedChanged`（在 reset 中间发 `dataChanged` 是非法的）。
+    m_armed = -1;
     relayout();
 }
 
@@ -436,6 +519,20 @@ int HelpModel::activeLine() const
         return -1;
     }
     return std::clamp(m_selected, 0, visibleCount() - 1);
+}
+
+void HelpModel::armLine(int line)
+{
+    m_armed = line;
+}
+
+bool HelpModel::disarm()
+{
+    if (m_armed < 0) {
+        return false;
+    }
+    m_armed = -1;
+    return true;
 }
 
 } // namespace flowkeyd::app

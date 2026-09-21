@@ -90,7 +90,7 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | 日志窗口   | **进程内的 QML 窗口**（FluentWinUI3），尾随同一个日志文件                                                     |
 | 选单/帮助  | **QML 窗口**（FluentWinUI3），跑在 Qt GUI 线程上                                                              |
 | 示例配置   | `flowkeyd.lua.example`                                                                                        |
-| 自动化测试 | Qt Test 单元测试 + **`scripts/acceptance.ps1`**（86 项检查，注入按键 + 高亮/弹窗滚轮/拖动滚动条/“滚动不改键盘选中项”/鼠标点选与点筛选框回归的外部验收；`--simulate`/`--selftest`/`--probe` 本期不做，见第 12 节） |
+| 自动化测试 | Qt Test 单元测试 + **`scripts/acceptance.ps1`**（112 项检查，注入按键 + 高亮/弹窗滚轮/拖动滚动条/“滚动不改键盘选中项”/鼠标点选与点筛选框/`Enter` 与双击真的执行动作/危险动作两次确认的外部验收；`--simulate`/`--selftest`/`--probe` 本期不做，见第 12 节） |
 | 依赖管理   | CMake Presets + Ninja，`vendor/lua` 静态编进二进制                                                            |
 
 ---
@@ -123,7 +123,7 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
    `--check` / `--list` / `--list-keys` 保留（它们是产品功能，也是手工验证的
    主要工具）。
    → **阶段 9 补充（2026-09）**：这三个开关仍然不做，但“手工冒烟清单”已经
-   自动化成了 **`scripts/acceptance.ps1`**（86 项检查），它靠一个
+   自动化成了 **`scripts/acceptance.ps1`**（112 项检查），它靠一个
    **只给测试用的后门** `FLOWKEYD_ACCEPT_INJECTED=1` 抬升“丢弃注入输入”
    那道过滤（见第 5 节与阶段 9）。
    这是对一个“当时无法验证”的条款的修订，不是推翻：不变量 2 本身没动，
@@ -147,8 +147,19 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
      右键菜单、`Home`/`End`/左右箭头都是标准行为；模型只在 `setFilter()` 里
      接收最终文本（**它因此必须是 `Q_INVOKABLE`**，否则 QML 里那行调用会抛
      TypeError 而看上去像“处理器没跑”）；
-   * **鼠标左键点一行 = 选中它 + 执行它**（帮助窗口里“执行”就是复制那一行的
-     按键），滚动（滚轮、拖滑块）仍然只滚视图、**不动**选中项；
+   * **鼠标左键点一行 = 选中它 + 把它的按键复制走**；滚动（滚轮、拖滑块）仍然
+     只滚视图、**不动**选中项；
+   * **`Enter`（或双击一行）= 关掉窗口并执行那一行的动作**（2026-09 项目所有者
+     拍板：“双击高亮选中的列表项或者直接回车，应该可以直接触发对应的 action”）。
+     执行前先关窗是刻意的：`send`/`type`/`window` 这类动作作用在**前台窗口**上，
+     不关窗就会打回帮助窗口自己的筛选框。触发的效果等价于按一下那个快捷键
+     （先执行按下时的动作、再执行松开时的动作）；`remap` 行等价于按一下源键
+     （注入它的目标按键）。
+   * **`quit`/`suspend`/`power` 要两次**（项目所有者拍板）：第一次 `Enter`/双击
+     只是把那一行“武装”起来（行变色 + 底部提示换成确认文案），再按一次才真的
+     执行；`Esc`、上下换行、改筛选都取消。判定在 `core::isDestructive()`；
+     **`menu` 不算危险**（它只是把选单弹出来，真正的危险条目在选单里还有一次
+     选择）。
    * 列表只占行区域，所以旧实现里那两块“遮住滚进来的一行”的不透明底色
      与 `scrollTargetY()` 都删掉了；键盘把选中项带进视野用 Qt 的
      `positionViewAtIndex(..., Contain)`（行区域就是 `ListView` 的视口，
@@ -242,7 +253,7 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `src/core/config.h/.cpp`                  | 配置结构体、严格校验（未知字段要报错）、编译成 `Compiled`/`Binding`/`CompiledRemap`、配置文件搜寻与旧 TOML 的迁移提示                                                                                                       |
 | `src/core/engine.h/.cpp`                  | 快捷键状态机：匹配、优先级、吞键、自动重复抑制、长按重复、挂起、重映射 hold/tap、Win/Alt 菜单遮断按键                                                                                                                       |
 | `src/core/template.h/.cpp`                | `{clipboard}`、`{selection}`、`{date}` 等占位符展开                                                                                                                                                                         |
-| `src/core/action.h/.cpp`                  | 声明式动作的表示 + 摘要文本（`--list` 与 `help()` 都用它）                                                                                                                                                                  |
+| `src/core/action.h/.cpp`                  | 声明式动作的表示 + 摘要文本（`--list` 与 `help()` 都用它）+ `isDestructive()`（帮助窗口要靠它决定“要不要再确认一次”）                                                                                                        |
 | `src/core/log_tail.h/.cpp`                | 日志文件的增量尾随（纯逻辑，可单测）：按字节读、末尾不完整的 UTF-8 序列不消费、半行留到下一轮、一次最多 1000 行                                                                                                            |
 | `src/core/window_match.h/.cpp`            | 窗口匹配与 `window` 动作决策的纯函数：标题/进程名子串、可执行文件名提取、`toggle` 边界、`animate` 是否有意义                                                                                                                |
 | `src/lua/lua_config.h/.cpp`               | **Lua 与 C++ 的唯一边界**：建 `lua_State`、注入 DSL、把脚本里的表转成 `core::Config`（逐条目、带上下文的错误）、UTF-8 BOM 剔除、`.toml` 明确拒绝                                                                            |
@@ -263,16 +274,16 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `src/platform/win/single_instance.h/.cpp` | 按配置路径散列命名的互斥体，含提权重启后的重试                                                                                                                                                                              |
 | `src/platform/win/elevate.h/.cpp`         | `ShellExecuteW("runas")` 自提权 + UAC 被拒时降级继续 + `--elevated` 标记 + 命令行/工作目录转发（`quote_arg`）                                                                                                               |
 | `src/app/`                                | 组装层：把 core / lua / platform 串起来，并拥有 Qt 对象                                                                                                                                                                     |
-| `src/app/dispatcher.h/.cpp`               | **动作工作线程**（`QThread`）：执行动作列表，含 `window` 的“先启动再激活”与默认开的 `toggle` 收起、`menu`/`help` 的窗口请求                                                                                                 |
+| `src/app/dispatcher.h/.cpp`               | **动作工作线程**（`QThread`）：执行动作列表，含 `window` 的“先启动再激活”与默认开的 `toggle` 收起、`menu` 的窗口请求、`help` 的窗口请求 + 每一行的“执行目标”（绑定是 press+release 两串动作，`remap` 是直接注入目标按键） |
 | `src/app/runtime.h/.cpp`                  | 引擎 + 钩子 + 分发 + 托盘 + 弹窗的总装，`ControlCmd`（suspend/reload/quit）通道                                                                                                                                             |
 | `src/app/log_model.h/.cpp`                | 日志窗口的模型：尾随日志文件（增量、半行、被截断的多字节 UTF-8）、最多 1000 行、按级别配色、子串过滤                                                                                                                        |
 | `src/app/menu_model.h/.cpp`               | `menu` 选单的**纯逻辑**（`QAbstractListModel`，只用 QtCore）：条目几何、高亮移动（到边界回绕）、单字符选中、`Esc`/`Enter` 语义、命中测试（**可单测**） |
-| `src/app/help_model.h/.cpp`               | `help` 帮助的**纯逻辑**（同上）：筛选（和弦/`comment`/`name`/动作摘要）、`可见/总数` 计数、键盘选中项（**高亮就是它**，鼠标悬停不改高亮）、`Enter` 复制哪一行、两级 `Esc`，以及鼠标点选用的 `setSelected()`（**可单测**）。**列表的滚动、行几何与鼠标命中都不归它管**：那是一个真正的 QML `ListView` + `ItemDelegate` + Qt 自带的 `ScrollBar`（见第 2 节第 9 条）。`handleKey()` 只接导航键与 `Enter`/`Esc`，字符/退格/`Home`/`End` 放行给标准 `TextField` |
+| `src/app/help_model.h/.cpp`               | `help` 帮助的**纯逻辑**（同上）：筛选（和弦/`comment`/`name`/动作摘要）、`可见/总数` 计数、键盘选中项（**高亮就是它**，鼠标悬停不改高亮）、`Enter`/双击该执行还是先武装（危险动作两次确认）、三级 `Esc`，以及鼠标点选用的 `setSelected()`（**可单测**）。**列表的滚动、行几何与鼠标命中都不归它管**：那是一个真正的 QML `ListView` + `ItemDelegate` + Qt 自带的 `ScrollBar`（见第 2 节第 9 条）。`handleKey()` 只接导航键与 `Enter`/`Esc`，字符/退格/`Home`/`End` 放行给标准 `TextField` |
 | `src/app/popup_layout.h/.cpp`             | 两个弹窗共用的几何类型（`PopupRect`/`PopupPoint`）与纯函数 `centrePopup()`（先在工作区居中、再夹进屏幕；**可单测**） |
-| `src/app/popup_host.h/.cpp`               | 把上面的模型挂到 QML 窗口上；抢前台（`requestActivate` + `win::window::raiseWindow` 的前台锁绕行）；在 Qt GUI 线程上创建/复用窗口；用户选完把活儿回投工作线程（**GUI 线程亲和**） |
+| `src/app/popup_host.h/.cpp`               | 把上面的模型挂到 QML 窗口上；抢前台（`requestActivate` + `win::window::raiseWindow` 的前台锁绕行）；在 Qt GUI 线程上创建/复用窗口；用户选完（或按 `Enter`/双击帮助里的一行）把活儿回投工作线程；`helpRun()` 负责把**可见行下标**换算成条目下标，并且**先把窗口藏起来再执行**（**GUI 线程亲和**） |
 | `src/qml/`                                | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`（三个文件都在开头写了 `pragma ComponentBehavior: Bound`）；配色一律用 `palette`，没有单独的 `Style.qml`。`HelpPopup.qml` 里除了卡片外框全是标准控件：筛选框是 `TextField`，列表是 `ListView` + Qt 自带 `ScrollBar` + `ItemDelegate`（列表只占行区域，不再需要表头/底部的遮罩） |
 | `tests/`                                  | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_log_tail`、`tst_audio`、`tst_interactive`（需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`，否则 skip）、`tst_menu_model`、`tst_help_model`、`tst_power_table`、`tst_desktop_table`、`tst_layout` |
-| `scripts/acceptance.ps1`                  | 桌面行为的验收脚本（注入按键 + 焦点捕捉窗口的外部观察，86 项检查：含弹窗滚轮/滚动条拖动/鼠标点选与点筛选框回归）；需交互式桌面，**不属于 `ctest`**，见第 5 节与阶段 9 |
+| `scripts/acceptance.ps1`                  | 桌面行为的验收脚本（注入按键 + 焦点捕捉窗口的外部观察，112 项检查：含弹窗滚轮/滚动条拖动/鼠标点选与点筛选框/`Enter` 与双击真的执行动作/危险动作两次确认）；需交互式桌面，**不属于 `ctest`**，见第 5 节与阶段 9 |
 
 ### CMake 目标划分（阶段 6 之后）
 
@@ -402,7 +413,7 @@ QML 模块注册之后，两条 profile 都要重新全量构建一次**。
 清单在下面（12 条），**从阶段 9 起有了自动化版本**：
 
 ```powershell
-# 86 项检查，约两分钟，会持续注入按键/抢焦点；按工作约定第 6 条先提醒用户
+# 112 项检查，约三分钟，会持续注入按键/抢焦点；按工作约定第 6 条先提醒用户
 # 只跑 release 那一份产物（见工作约定第 2 条，脚本默认 -Exe 就是它）
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance.ps1
 powershell.exe ... -Phase config                              # 只看配置，不注入按键
@@ -1025,6 +1036,8 @@ get/set/append/clear。**`animate` 的效果要靠肉眼**（没有屏幕采样�
 * 一次只允许一个选单/一个帮助窗口：再按快捷键只是把它前置
   （帮助窗口还要清空筛选）。
 * 选中的动作**回投给工作线程执行**；`help` 只写剪贴板、不执行动作。
+  → **2026-09 修订**：`help` 现在也执行动作（`Enter`/双击），但入口仍然是
+  “回投给工作线程”：弹窗自己从不执行动作，见第 2 节第 9 条与第 10 节。
 
 **验收**：单测（两个模型的全部分支）；手工：键盘/鼠标都能选、
 `Esc` 只关窗不选、帮助窗口的筛选让窗口变矮、`Enter` 真的复制到剪贴板、
@@ -1899,6 +1912,50 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   （100）；另外“拖动/滚轮不改选中项”的判据改成**先不点击直接 `Enter`**
   （点选现在会改选中项，旧的判据会误报）。
 
+#### 2026-09 新增：帮助窗口里 `Enter`/双击直接执行动作
+
+* **“执行”的入口是 `HelpRequest::onRun`（条目下标），不是 `HelpEntry` 里带动作。**
+  模型层（`flowkeyd_models`）只认 `HelpEntry::destructive` 这个布尔量，
+  `core::Action` 一概不进模型；动作列表由 `dispatcher.cpp` 的 `openHelpAction()`
+  建好并捕获在 `onRun` 里（绑定是 `press` + `release` 两串接起来，`remap` 是
+  `remap.press` / `remap.release` 两串 `SendOp`，用 `win::sendOps` 注入）。
+  这与 `menu` 的 `onChoose` 是同一套分工：弹窗从不执行动作。
+* **`helpRun(index)` 拿到的是可见行下标，回调要的是条目下标。** 筛选之后
+  “第几行”与“第几个条目”不是一回事：`HelpModel::itemIndexForVisible()` 换算。
+  忘了换算的表现是“**筛选之后按 `Enter` 执行的是另一条的动作**”，
+  而且看起来很像“动作没跑”（当 `targets[0]` 恰好是个 `none()` 时）。
+  这个 bug 是验收脚本里「点选之后 `Enter` 执行的就是刚点中的那一行」与
+  「危险动作第二次 `Enter` 真的执行了」两条检查查出来的，
+  所以那两条要留着（它们各自钉住了筛选与危险动作下的映射）。
+* **先关窗再执行。** `send`/`type`/`window` 作用在**前台窗口**上，而弹窗刚才是
+  前台；不先 `visible = false` 就会把按键打进自己的筛选框（`menuChoose` 早就是
+  这么做的）。验收脚本因此每个检查组都要重新开窗（`OpenHelp`）。
+* **双击前 Qt 会先发两次 `clicked`，`setSelected(同一个下标)` 不能清武装状态。**
+  否则“第二次双击”又变成“第一次确认”，危险动作永远执行不了。
+  所以 `setSelected()` 只在选中项**真的变了**时才 `disarm()`（`moveSelection()`
+  没有这个问题，它本来就只有变了才动）。单元测试
+  `doubleClickActivatesTheRow` 盯着这一条。
+* **单击仍然是“选中 + 复制”。** 项目所有者选的：双击/`Enter` 是执行，
+  复制保留在鼠标上（也是验收脚本用来从外面读出“屏幕这一行现在是哪一条”的
+  唯一手段）。不要把 `onClicked` 的 `helpCopy` 删掉，否则
+  「拖动/滚轮真的滚了列表」那几条检查就没法从外部观察了。
+* **危险动作的判定在 `core::isDestructive()`**（`quit`/`suspend`/`power`）。
+  `menu` **不算**：它只是把选单弹出来，真正的危险条目在选单里还有一次选择。
+  验收脚本用可逆的 `suspend` 验证“第二次 `Enter` 真的执行了”
+  （`quit` 执行了脚本就没法接着跑了），之后立即用 `Ctrl+Alt+F11` 恢复。
+* **“待确认”的视觉是模型的一个角色（`rowArmed`）+ 改掉的 `footerText`。**
+  角色名不能叫 `highlighted`（标准 `ItemDelegate` 占了），
+  `footerText` 因此从 `CONSTANT` 变成 `NOTIFY stateChanged`。
+  那一行底色用了一个硬编码的琥珀色（`#E8A33D`，`opacity 0.22`）：
+  系统 `palette` 里没有警告色，这是整个帮助窗口里唯一一处硬编码颜色。
+* **`Esc` 现在是三级**：取消待确认 → 清筛选 → 关窗。
+  验收脚本里对应“第一下只取消确认、再一下只清筛选、第三下才关窗”。
+* **验收配置的第一行必须有一个能从外面看到的动作。**
+  脚本新增了 `accept-help-first`（`Ctrl+Alt+F19` → `clipboard set HELP-FIRST`），
+  因为 `Enter` 执行的是“第 1 行”，而原来的第一行 `accept-swallow` 是 `none()`
+  —— “执行了”与“什么都没执行”从外面分不出来。
+  快捷键总数因此从 14 变成 15、帮助条目从 17 变成 18。
+
 ### 领域坑清单（动手前先看这一遍）
 
 下面这些每一条都值得在动钩子/引擎/窗口/电源之前先读一遍：
@@ -2104,6 +2161,29 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > 行为变化：`Home`/`End` 不再是列表导航键（归输入框做光标移动），
 > 鼠标左键点一行会**改变键盘选中项**（点选 + 复制），滚轮/拖滑块仍然不改。
 
+> **2026-09 新增（帮助窗口 `Enter`/双击直接执行动作）的 DoD**：
+> `windows-debug` 与 `windows-release` 两边都是 `build exit 0`、零警告；
+> `ctest --test-dir build/windows-release` **19 个测试目标全绿**
+> （`tst_help_model` 22 项：`enterCopiesTheActiveRow` 换成 `enterRunsTheActiveRow`，
+> 新增 `destructiveRowsNeedASecondConfirmation`、`escapeAndNavigationDisarm`、
+> `doubleClickActivatesTheRow`；`tst_config` 新增 `destructiveActionsAreFlagged`）；
+> `qmllint -I C:\Qt\6.11.2\mingw_64\qml src\qml\HelpPopup.qml` 零警告；
+> `flowkeyd --check --config flowkeyd.lua.example` → `OK (37 hotkey(s), 3 remap(s))`、
+> 零警告，用户真实配置（不带 `--config`）→ `OK (24 hotkey(s), 0 remap(s))`。
+> `scripts/acceptance.ps1`（只跑 release）**112 项、0 失败**
+> （`checks: 112, failures: 0`；上一次是 86）：新增「`Enter` 执行的是刚点中的
+> 那一行（动作真的跑了）」、「执行动作之前帮助窗口先关掉了」、「双击一行直接
+> 执行它的动作」、「点选之后 `Enter` 执行的就是刚点中的那一行」、
+> 「危险动作第一次 `Enter` 只是等确认（窗口没关 / 守护进程还活着 / 日志里没有
+> `quit`）」、「`Esc` 取消确认」、「第二下 `Esc` 只清筛选」、「第三下才关窗」、
+> 「危险动作第二次 `Enter` 真的执行了」（用可逆的 `suspend` + 立刻恢复）。
+> 脚本的一次性配置新增了 `accept-help-first`（`Ctrl+Alt+F19` →
+> `clipboard set HELP-FIRST`），快捷键 14 → 15、帮助条目 17 → 18。
+> 行为变化：`Enter` 不再复制而是执行（复制保留在左键单击上），
+> 执行前先关窗，`quit`/`suspend`/`power` 要按两次，`Esc` 从两级变三级
+> （README 的 `help` 动作表与「快捷键帮助」一节、`flowkeyd.lua.example` 已同步）。
+> 这次真正查出的 bug 是“可见行下标当成条目下标”，见第 10 节。
+
 > 提醒：Qt 的编译单元很多，`--preset` 的构建目录是分开的
 > （`build/windows-debug` / `build/windows-release`），所以
 > **debug 实例在运行不会锁住 release 产物**，反之亦然。
@@ -2170,13 +2250,17 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   **几何算术全部留在 `MenuModel`**（纯函数、有单测），别散到 QML 里。
 * **帮助窗口的新内容或新交互**：条目在 `app/dispatcher` 的 `open_help` 里从
   `Compiled` 的 `bindings`/`remaps` 生成（帮助列表与 `--list` 看的是同一批数据，
-  所以 `help` 没有配置参数），纯逻辑（筛选、选中项、`Enter` 复制哪一行、
-  两级 `Esc`、鼠标点选用的 `setSelected`）在 `HelpModel`，界面在
+  所以 `help` 没有配置参数），纯逻辑（筛选、选中项、`Enter`/双击该执行还是
+  先武装、三级 `Esc`、鼠标点选用的 `setSelected`）在 `HelpModel`，界面在
   `HelpPopup.qml`（真正的 `TextField` 筛选框 + `ListView`/`ItemDelegate`/`ScrollBar`）。
   **新加一行字段时不要再把行几何往模型里塞**：委托用锚点自己摆，模型只出内容。
   新加模型角色名时注意别和标准控件自己的属性撞名 —— `highlighted` 被
-  `ItemDelegate` 占了，所以模型里叫 `rowSelected`（见第 2 节第 9 条与第 10 节
-  的重写笔记）。
+  `ItemDelegate` 占了，所以模型里叫 `rowSelected`（待确认的叫 `rowArmed`）
+  （见第 2 节第 9 条与第 10 节的重写笔记）。
+  **要让一行能执行动作，就在 `openHelpAction()` 的 `targets` 里给它一个条目
+  （绑定用 `press`+`release`，`remap` 用两串 `SendOp`），不要往 `HelpEntry`
+  里塞 `core::Action`**：模型层与 `core` 之间现在只靠一个 `destructive` 布尔量
+  连着，那样才能保持只用 QtCore、没有桌面也能单测。
 * **新的 QML 弹窗（第三种）**：不要另起一套配色与字号：
   `import QtQuick.Controls.FluentWinUI3`，颜色一律从 `palette`（`base`/`text`/
   `placeholderText`/`highlight`/`highlightedText`/`alternateBase`/`mid`）取，

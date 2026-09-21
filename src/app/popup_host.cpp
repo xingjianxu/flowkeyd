@@ -152,6 +152,28 @@ void PopupHost::helpCopy(int index)
     }
 }
 
+void PopupHost::helpRun(int index)
+{
+    if (m_helpWindow == nullptr || m_helpModel == nullptr) {
+        return;
+    }
+    // `index` 是**可见行**下标（筛选之后「第几行」与「第几个条目」不是一回事），
+    // 而回调那边拿到的是原始条目列表 —— 这里先换算，否则筛选状态下执行的就是
+    // 另一条的动作（这个 bug 是验收脚本的「点选之后 Enter 执行的就是刚点中的
+    // 那一行」与「第二次 Enter 真的执行」两条检查查出来的）。
+    const std::optional<int> item = m_helpModel->itemIndexForVisible(index);
+    // 先把窗口藏起来再交出去（与 `menuChoose` 一致，理由也一样）：
+    //   * `send`/`type`/`window` 这类动作作用在**前台窗口**上，而窗口刚才是前台；
+    //   * 可能立刻触发睡眠/关机之类的动作，用户不该还看着残影。
+    // 隐藏之后 Windows 会把前台交还给下一个窗口（通常就是用户原来那个应用）。
+    m_helpWindow->setProperty("visible", false);
+    HelpRequest request = std::move(m_helpRequest);
+    m_helpRequest = HelpRequest{};
+    if (request.onRun && item.has_value()) {
+        request.onRun(*item);
+    }
+}
+
 void PopupHost::helpDismiss()
 {
     if (m_helpWindow != nullptr) {

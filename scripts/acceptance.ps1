@@ -26,9 +26,13 @@
 #     再按一次不开第二个（重新打开的窗口也必须重新拿到焦点）、
 #     滚轮不会把高亮从光标下拿走（AGENTS.md 第 10 节的弹窗闪烁回归）
 #   * `help` 弹窗：出现、拿到焦点、**用鼠标点一下筛选框再输入**就筛选（标题里
-#     的 `可见/总数` 变小）、左键点一行 = 选中它并把它写进剪贴板（`Enter` 复制
-#     的就是刚点中的那一行）、拖动滚动条 / 滚轮只滚视图而不改选中项、
-#     第一下 Esc 只清筛选、第二下才关窗
+#     的 `可见/总数` 变小）、左键点一行 = 选中它并把它写进剪贴板、
+#     **`Enter` 或双击一行 = 执行它的动作**（窗口先关掉再执行）、
+#     拖动滚动条 / 滚轮只滚视图而不改选中项（`Enter` 执行的还是第 1 行）、
+#     点选之后 `Enter` 执行的就是刚点中的那一行、
+#     **`quit`/`suspend`/`power` 这类危险动作要按两次**（第一次只是等确认，
+#     `Esc` 或挪动选中项取消；脚本用可逆的 `suspend` 验证第二次真的执行了）、
+#     三级 `Esc`（取消确认 → 清筛选 → 关窗）
 #   * suspend / resume（挂起时别的绑定不触发，而 suspend 自己仍然可用）
 #   * reload（改过的配置文本立刻生效）
 #   * quit（钩子卸掉、之后按键重新到达前台、没有按键卡在按下状态）
@@ -323,6 +327,15 @@ public static class FlowInject {
         SendMouse(MOUSEEVENTF_LEFTUP);
     }
 
+    // 在 (x,y) 左键双击（帮助窗口里双击一行 = 执行它的动作）。
+    // 两次单击之间的间隔必须小于系统的双击时间（默认 500 ms），而且两次都落在
+    // 同一行上，Qt 才会合成一个 `doubleClicked`。
+    public static void DoubleClick(int x, int y) {
+        Click(x, y);
+        System.Threading.Thread.Sleep(80);
+        Click(x, y);
+    }
+
     // 属于 `pid` 的、标题以 `prefix` 开头的第一个可见顶层窗口的物理矩形。
     public static int[] WindowRect(int pid, string prefix) {
         IntPtr found = IntPtr.Zero;
@@ -389,6 +402,13 @@ settings {
   log_level = "debug",
   tick_ms = 15,
 }
+
+-- 0. 帮助窗口的**第一行**。它必须有一个能从外面观察到的动作：`Enter`/双击
+--    触发的检查靠「剪贴板真的变成了这个值」当证据，而这一行是默认选中项。
+--    （`Ctrl+Alt+F19` 本身从不会被按下：`F19` 是下面「焦点正对照」用的未绑定键，
+--    带修饰键的它则没有任何地方会碰。）
+hotkey { name = "accept-help-first", comment = "help first row", keys = "Ctrl+Alt+F19",
+  action = clipboard("set", { text = "HELP-FIRST" }) }
 
 -- 1. 只吞不做：这个键永远不该到达焦点窗口。
 hotkey { name = "accept-swallow", comment = "swallow", keys = "F18", action = none() }
@@ -489,7 +509,7 @@ $p = Start-Process -FilePath $Exe -ArgumentList @('--check', '--config', $config
     -RedirectStandardOutput $checkOut -RedirectStandardError $checkErr -Wait -PassThru -NoNewWindow
 $checkText = (Get-Content $checkOut -Raw -ErrorAction SilentlyContinue) + (Get-Content $checkErr -Raw -ErrorAction SilentlyContinue)
 Check '--check 接受验收配置' ($p.ExitCode -eq 0 -and $checkText -match 'OK \(\d+ hotkey')
-Check '--check 报告 14 个快捷键' ($checkText -match 'OK \(14 hotkey')
+Check '--check 报告 15 个快捷键' ($checkText -match 'OK \(15 hotkey')
 
 $listOut = Join-Path $WorkDir 'list.out'
 $listErr = Join-Path $WorkDir 'list.err'
@@ -824,40 +844,51 @@ try {
 
     # --- 帮助弹窗 ------------------------------------------------------------
     Write-Host '--- 帮助弹窗 ---'
-    FocusCatcher
-    ClipSet 'SENTINEL'
-    CtrlAlt $VK_F8
-    $helpUp = WaitUntil { [FlowInject]::HasWindowTitled($daemon.Id, $HELP_TITLE) } 5000
-    Check '帮助窗口出现了' $helpUp
-    Check '帮助窗口拿到了键盘焦点' (WaitUntil { [FlowInject]::ForegroundTitle() -like "$HELP_TITLE*" } 4000)
     function HelpCounts {
         $t = [FlowInject]::TitlesOfPid($daemon.Id) | Where-Object { $_ -like "$HELP_TITLE*" } | Select-Object -First 1
         if ($t -match '(\d+)/(\d+)') { return @{ Visible = [int]$Matches[1]; Total = [int]$Matches[2] } }
         return $null
     }
+    # 开窗 + 抢焦点 + 量矩形。`Enter`/双击触发动作时窗口会先关掉再执行
+    # （项目所有者拍板：这样 `send`/`type` 才作用在原来的前台应用上），
+    # 所以下面每个检查组都要重开一次。
+    function OpenHelp([string]$where) {
+        FocusCatcher
+        CtrlAlt $VK_F8
+        $up = WaitUntil { [FlowInject]::HasWindowTitled($daemon.Id, $HELP_TITLE) } 5000
+        Check "帮助窗口出现了（$where）" $up
+        Check "帮助窗口拿到了键盘焦点（$where）" (
+            WaitUntil { [FlowInject]::ForegroundTitle() -like "$HELP_TITLE*" } 4000)
+        return [FlowInject]::WindowRect($daemon.Id, $HELP_TITLE)
+    }
+
+    ClipSet 'SENTINEL'
+    $helpRect = OpenHelp '第一次'
     $full = HelpCounts
     Write-Host "         help caption: $($full.Visible)/$($full.Total)"
-    Check '标题里的可见/总数是满的' ($null -ne $full -and $full.Total -eq 17)
+    Check '标题里的可见/总数是满的' ($null -ne $full -and $full.Total -eq 18)
 
-    # --- 滚动：只滚视图，不动键盘选中项 --------------------------------------
-    # 回归的是「拖动滚动条会改变高亮/选中项」与「弹窗在滚轮下闪烁」：列表是一个
-    # 真正的 `ListView` + Qt 自带的 `ScrollBar`，滚轮与拖动都交给 Qt；高亮就是
-    # 键盘选中项，只有 `↑`/`↓`/`PgUp`/`PgDn` 会改它，鼠标悬停与滚动都不碰它
-    # （2026-09 取消了悬停高亮，见 AGENTS.md 第 10 节）。
+    # --- 执行：`Enter` / 双击一行 = 触发那一行的动作 --------------------------
     # 判据都是从外面能看到的：
     #   * 左键点某一行 = **选中**那一行 + 复制它（标准列表的鼠标语义）；
+    #   * `Enter` / 双击 = **执行**键盘选中项那一行的动作（窗口先关掉），
+    #     证据是剪贴板变成了那一行动作写进去的值；
     #   * 拖动滑块 / 滚轮之后，同一个屏幕位置下已经是**另一行**（列表真滚了），
-    #     而且这时候 `Enter` 复制的一直是**原来**那一行 —— 滚动不改选中项；
-    #   * 点选之后 `Enter` 复制的是**刚点中的**那一行 —— 鼠标真的改了选中项。
+    #     而这时候 `Enter` 执行的还是**原来**那一行 —— 滚动不改选中项；
+    #   * 危险动作（`quit`/`suspend`/`power`）要两次：第一次只是等确认。
     # 卡片宽 500 逻辑像素、第一行中线在 listTop(88) + rowHeight/2，所以用
     # 窗口宽度反推缩放（DPI 感知后矩形是物理像素）。
-    $helpRect = [FlowInject]::WindowRect($daemon.Id, $HELP_TITLE)
     Check '能拿到帮助窗口的矩形' ($helpRect[2] -gt 0)
     if ($helpRect[2] -gt 0) {
         $scale = $helpRect[2] / 500.0
         $midX = $helpRect[0] + [int](250 * $scale)
         $rowY = $helpRect[1] + [int](111 * $scale)
+        # 一行 = rowHeight(46) + rowSpacing(2)。
+        $rowStep = [int](48 * $scale)
+        $filterX = $helpRect[0] + [int](250 * $scale)
+        $filterY = $helpRect[1] + [int](65 * $scale)   # filterRect: y = 50..80
 
+        # --- 单击复制，`Enter` 执行 ------------------------------------------
         ClipSet 'SENTINEL'
         [FlowInject]::Click($midX, $rowY)
         Pump 600
@@ -865,14 +896,26 @@ try {
         Check '左键点某一行会复制它的按键' (
             $null -ne $firstRow -and $firstRow -ne 'SENTINEL')
 
-        # 键盘选中项从外面看不到，只能用 `Enter` 复制的那一条当证据：点选之后
-        # 它就是刚点中的那一行，而拖动与滚轮都不许把它带走。
         ClipSet 'SENTINEL'
         TapKey $VK_RETURN
-        Pump 600
-        Check '点选之后 Enter 复制的就是刚点中的那一行（鼠标选中项生效）' ((ClipGet) -eq $firstRow)
+        Pump 900
+        Check 'Enter 执行的是刚点中的那一行（动作真的跑了）' ((ClipGet) -eq 'HELP-FIRST')
+        Check '执行动作之前帮助窗口先关掉了' (
+            -not [FlowInject]::HasWindowTitled($daemon.Id, $HELP_TITLE))
 
-        # --- 拖动滚动条 ----------------------------------------------------
+        # --- 双击也执行 ------------------------------------------------------
+        # 双击前 Qt 会先发两次 `clicked`（把按键文本复制进剪贴板），最后才是
+        # `doubleClicked`；所以最终剪贴板里应该是动作写的值。
+        $helpRect = OpenHelp '双击'
+        ClipSet 'SENTINEL'
+        [FlowInject]::DoubleClick($midX, $rowY)
+        Pump 900
+        Check '双击一行直接执行它的动作' ((ClipGet) -eq 'HELP-FIRST')
+        Check '双击执行之后窗口也关掉了' (
+            -not [FlowInject]::HasWindowTitled($daemon.Id, $HELP_TITLE))
+
+        # --- 拖动滚动条：只滚视图，不动键盘选中项 ----------------------------
+        $helpRect = OpenHelp '拖动滚动条'
         # 滚动条是卡片右边 10 逻辑像素宽的那一条，现在只铺在**行区域**上
         # （表头与底部提示之间：listTop 88 到卡片高 - listBottom 44），所以
         # 起点取行区域里靠上的位置，必定落在滑块上。往下拖到远远超过滑槽的
@@ -883,12 +926,17 @@ try {
         [FlowInject]::DragMouse($barX, $barY, $barX, $barBottom + [int](400 * $scale))
         Pump 600
         Check '拖动滚动条之后弹窗还在' ($null -ne (HelpCounts))
-        # 拖动**只滚视图**：先不点击，直接 `Enter`，复制的还是第 1 行。
+        # 拖动**只滚视图**：先不点击，直接 `Enter`，执行的还是第 1 行。
         ClipSet 'SENTINEL'
         TapKey $VK_RETURN
+        Pump 900
+        Check '拖动滚动条不会改键盘选中项（Enter 执行的还是第 1 行）' ((ClipGet) -eq 'HELP-FIRST')
+
+        # 同一个屏幕位置下已经是**另一行**，说明列表真的滚了（上面那个 `Enter`
+        # 把窗口关掉了，所以重开一次、再拖一次）。
+        $helpRect = OpenHelp '拖动滚动条（证据）'
+        [FlowInject]::DragMouse($barX, $barY, $barX, $barBottom + [int](400 * $scale))
         Pump 600
-        Check '拖动滚动条不会改键盘选中项（Enter 复制的还是第 1 行）' ((ClipGet) -eq $firstRow)
-        # 同一个屏幕位置下已经是**另一行**，说明列表真的滚了；点它会把它选上。
         ClipSet 'SENTINEL'
         [FlowInject]::Click($midX, $rowY)
         Pump 600
@@ -896,34 +944,25 @@ try {
         if ($afterDrag -eq $firstRow) { Diag "scrollbar: the row at the clicked spot did not move: [$afterDrag]" }
         Check '拖动滚动条真的滚了列表（同一位置已经换了一行）' (
             $null -ne $afterDrag -and $afterDrag -ne 'SENTINEL' -and $afterDrag -ne $firstRow)
-        ClipSet 'SENTINEL'
-        TapKey $VK_RETURN
-        Pump 600
-        Check '点选之后 Enter 复制的就是刚点中的那一行（滚动之后）' ((ClipGet) -eq $afterDrag)
-
-        # 重新打开一次：滚动位置、筛选与选中项都复位（下面的滚轮检查要从顶部开始）。
         TapKey $VK_ESC
-        Pump 500
-        FocusCatcher
-        CtrlAlt $VK_F8
-        Check '重新打开帮助窗口（复位滚动位置）' (
-            WaitUntil { [FlowInject]::HasWindowTitled($daemon.Id, $HELP_TITLE) } 5000)
-        Check '重新打开的帮助窗口拿到了焦点' (
-            WaitUntil { [FlowInject]::ForegroundTitle() -like "$HELP_TITLE*" } 4000)
-
-        # --- 滚轮 ----------------------------------------------------------
-        ClipSet 'SENTINEL'
-        [FlowInject]::Click($midX, $rowY)
         Pump 600
-        Check '重新打开的帮助窗口还是从第 1 行开始' ((ClipGet) -eq $firstRow)
+
+        # --- 滚轮：同上 ------------------------------------------------------
+        $helpRect = OpenHelp '滚轮'
+        [FlowInject]::Cursor($midX, $rowY)
         for ($i = 0; $i -lt 12; $i++) { [FlowInject]::Wheel(-120) }
         Pump 800
         Check '滚轮之后弹窗还在、计数不变' (
             ($null -ne (HelpCounts)) -and (HelpCounts).Visible -eq $full.Visible)
         ClipSet 'SENTINEL'
         TapKey $VK_RETURN
-        Pump 600
-        Check '滚轮不会改键盘选中项（Enter 复制的还是第 1 行）' ((ClipGet) -eq $firstRow)
+        Pump 900
+        Check '滚轮不会改键盘选中项（Enter 执行的还是第 1 行）' ((ClipGet) -eq 'HELP-FIRST')
+
+        $helpRect = OpenHelp '滚轮（证据）'
+        [FlowInject]::Cursor($midX, $rowY)
+        for ($i = 0; $i -lt 12; $i++) { [FlowInject]::Wheel(-120) }
+        Pump 800
         ClipSet 'SENTINEL'
         [FlowInject]::Click($midX, $rowY)
         Pump 600
@@ -931,36 +970,98 @@ try {
         if ($afterWheel -eq $firstRow) { Diag "wheel: the row at the clicked spot did not move: [$afterWheel]" }
         Check '滚轮真的滚了列表（同一位置已经换了一行）' (
             $null -ne $afterWheel -and $afterWheel -ne 'SENTINEL' -and $afterWheel -ne $firstRow)
+        TapKey $VK_ESC
+        Pump 600
+
+        # --- 筛选框 + 点选 + `Enter`：执行的是**点中**那一行 -------------------
+        # 筛选框是一个真正的 `TextField`：**先用鼠标点一下**再打字。这一条同时验证
+        # 「点得进去」和「打进去就筛选」——焦点不在框里的话，字符根本不会到框里。
+        $helpRect = OpenHelp '筛选'
+        [FlowInject]::Click($filterX, $filterY)
+        Pump 400
+        TapKey 0x4E   # 'n'
+        TapKey 0x55   # 'u'
+        TapKey 0x4D   # 'm'
+        TapKey 0x50   # 'p'
+        TapKey 0x41   # 'a'
+        TapKey 0x44   # 'd'
+        Pump 800
+        $filtered = HelpCounts
+        Write-Host "         筛选 numpad 之后: $($filtered.Visible)/$($filtered.Total)"
+        Check '用鼠标点一下筛选框再输入就会筛选（计数变小）' (
+            $null -ne $filtered -and $filtered.Visible -lt $full.Visible -and $filtered.Visible -ge 1)
+        # 筛选之后选中项回到第 1 行（`NumpadSub`），所以点第 2 行（`NumpadAdd`）
+        # 真的改了选中项；`Enter` 执行的必须是点中的那一个。
+        ClipSet 'SENTINEL'
+        [FlowInject]::Click($midX, $rowY + $rowStep)
+        Pump 600
+        Check '点选第 2 行复制的是它自己的按键' ((ClipGet) -match 'NumpadAdd')
         ClipSet 'SENTINEL'
         TapKey $VK_RETURN
-        Pump 600
-        Check '点选之后 Enter 复制的就是刚点中的那一行（滚轮之后）' ((ClipGet) -eq $afterWheel)
-    }
-    # 筛选框是一个真正的 `TextField`：**先用鼠标点一下**再打字。这一条同时验证
-    # 「点得进去」和「打进去就筛选」——焦点不在框里的话，字符根本不会到框里。
-    if ($helpRect[2] -gt 0) {
-        [FlowInject]::Click($helpRect[0] + [int](250 * $scale),
-                             $helpRect[1] + [int](65 * $scale))   # filterRect: y = 50..80
+        Pump 900
+        Check '点选之后 Enter 执行的就是刚点中的那一行' ((ClipGet) -eq 'NUMPAD-ADD')
+        Check '执行之后窗口关掉了（筛选那一次）' (
+            -not [FlowInject]::HasWindowTitled($daemon.Id, $HELP_TITLE))
+
+        # --- 危险动作：第一次 `Enter` 只是等确认 ------------------------------
+        $helpRect = OpenHelp '危险动作确认'
+        [FlowInject]::Click($filterX, $filterY)
         Pump 400
+        TapKey 0x51   # 'q'
+        TapKey 0x55   # 'u'
+        TapKey 0x49   # 'i'
+        TapKey 0x54   # 't'
+        Pump 800
+        Check '筛选 quit 之后只剩一条' (
+            ($null -ne (HelpCounts)) -and (HelpCounts).Visible -eq 1)
+        TapKey $VK_RETURN
+        Pump 800
+        $daemon.Refresh()
+        Check '危险动作第一次 Enter 只是等确认（窗口没关）' ($null -ne (HelpCounts))
+        Check '危险动作没有被执行（守护进程还活着）' (-not $daemon.HasExited)
+        Check '日志里没有 quit' (-not ((DaemonText) -match '-> quit'))
+        TapKey $VK_ESC
+        Pump 600
+        Check 'Esc 取消确认（窗口还在、筛选也还在）' (
+            ($null -ne (HelpCounts)) -and (HelpCounts).Visible -eq 1)
+        TapKey $VK_ESC
+        Pump 600
+        Check '再一下 Esc 只清筛选' (
+            ($null -ne (HelpCounts)) -and (HelpCounts).Visible -eq $full.Visible)
+        TapKey $VK_ESC
+        Pump 700
+        Check '第三下 Esc 才关窗' (-not [FlowInject]::HasWindowTitled($daemon.Id, $HELP_TITLE))
+
+        # --- 危险动作：第二次 `Enter` 真的执行 -------------------------------
+        # 用 `suspend` 做这一条：它是可逆的（挂起之后 suspend 快捷键自己仍然可用，
+        # 马上用 `Ctrl+Alt+F11` 恢复）；`quit` 执行了就没法接着跑了。
+        $helpRect = OpenHelp '危险动作执行'
+        [FlowInject]::Click($filterX, $filterY)
+        Pump 400
+        TapKey 0x53   # 's'
+        TapKey 0x55   # 'u'
+        TapKey 0x53   # 's'
+        TapKey 0x50   # 'p'
+        TapKey 0x45   # 'e'
+        TapKey 0x4E   # 'n'
+        TapKey 0x44   # 'd'
+        Pump 800
+        Check '筛选 suspend 之后只剩一条' (
+            ($null -ne (HelpCounts)) -and (HelpCounts).Visible -eq 1)
+        TapKey $VK_RETURN
+        Pump 800
+        Check '危险动作第一次 Enter 还是只等确认' ($null -ne (HelpCounts))
+        TapKey $VK_RETURN
+        Pump 900
+        Check '危险动作第二次 Enter 真的执行了（日志里挂起了）' (
+            WaitUntil { (DaemonText) -match 'hotkeys suspended' } 4000)
+        Check '执行之后窗口关掉了（危险动作）' (
+            -not [FlowInject]::HasWindowTitled($daemon.Id, $HELP_TITLE))
+        # 马上恢复：后面的检查还要用快捷键。
+        CtrlAlt $VK_F11
+        Check '用 suspend 快捷键恢复（帮助窗口那一次）' (
+            WaitUntil { (DaemonText) -match 'hotkeys resumed' } 4000)
     }
-    TapKey 0x46   # 'f'
-    TapKey 0x31   # '1'
-    TapKey 0x38   # '8'
-    Pump 800
-    $filtered = HelpCounts
-    Write-Host "         筛选 F18 之后: $($filtered.Visible)/$($filtered.Total)"
-    Check '用鼠标点一下筛选框再输入就会筛选（计数变小）' (
-        $null -ne $filtered -and $filtered.Visible -lt $full.Visible -and $filtered.Visible -ge 1)
-    TapKey $VK_RETURN
-    Pump 800
-    Check 'Enter 把选中那行的按键写进了剪贴板' ((ClipGet) -match 'F18')
-    TapKey $VK_ESC
-    Pump 600
-    $cleared = HelpCounts
-    Check '第一下 Esc 只清筛选' ($null -ne $cleared -and $cleared.Visible -eq $full.Visible)
-    TapKey $VK_ESC
-    Pump 700
-    Check '第二下 Esc 才关窗' (-not [FlowInject]::HasWindowTitled($daemon.Id, $HELP_TITLE))
     FocusCatcher
 
     # --- 挂起 / 恢复 ---------------------------------------------------------

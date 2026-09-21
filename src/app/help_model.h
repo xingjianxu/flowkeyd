@@ -25,8 +25,21 @@
 // **不再处理字符与退格**（那正是把自绘输入框换成标准控件的意义）。列表的委托
 // 是一个真正的 `ItemDelegate`：鼠标点一行 = `setSelected()` 选中它 + `helpCopy()`
 // 执行它，滚动位置由 `ListView` 自己持有，所以模型**也没有** `hitTest`/`wheel`。
-// `handleKey()` 只剩导航键（`↑`/`↓`/`PgUp`/`PgDn`）、`Enter`（复制）与 `Esc`
-// （先清筛选、再关窗）；`Home`/`End` 归输入框（标准的光标移动）。
+// **2026-09 修订（第三个版本）：`Enter`/双击不再只是复制，而是执行那一行的动作。**
+// 项目所有者要求「双击高亮选中的列表项或者直接回车，应该可以直接触发对应的
+// action」。于是这里多了一层「危险动作要再确认一次」的状态机：
+//   * `Enter`（或双击）落在 `quit`/`suspend`/`power` 这类危险行上时，第一次只是
+//     把这一行**武装**（`armed`，界面上高亮成待确认色 + 底部提示换成确认文案），
+//     再按一次才真的执行；`Esc`、挪动选中项、换筛选都取消武装；
+//   * 其余行一次就执行（决策 `run`）；`remap` 行等价于按一下那个键。
+// 是否危险由 `core::isDestructive()` 判定（`HelpEntry::destructive`），模型自己
+// 不认识动作，仍然只用 QtCore。
+//
+// **单击仍然是「选中 + 复制」**（项目所有者拍板）：复制这个能力保留在鼠标上，
+// 键盘的 `Enter` 才是执行。
+//
+// `handleKey()` 只剩导航键（`↑`/`↓`/`PgUp`/`PgDn`）、`Enter`（执行/武装）与
+// `Esc`（取消武装 → 清筛选 → 关窗）；`Home`/`End` 归输入框（标准的光标移动）。
 #pragma once
 
 #include "app/popup_layout.h"
@@ -55,6 +68,8 @@ struct HelpEntry
     QString label;
     /// 次要文本（动作摘要）。
     std::optional<QString> detail;
+    /// 执行它之前要不要再确认一次（`quit`/`suspend`/`power`，见 `core::isDestructive`）。
+    bool destructive = false;
 };
 
 /// `help` 帮助窗口的模型。
@@ -80,8 +95,10 @@ class HelpModel : public QAbstractListModel
     Q_PROPERTY(int visibleCount READ visibleCount NOTIFY stateChanged)
     Q_PROPERTY(int visibleRows READ visibleRows NOTIFY stateChanged)
     Q_PROPERTY(int selected READ selected NOTIFY selectedChanged)
+    /// 正在等第二次确认的那一行（`-1` 表示没有）。
+    Q_PROPERTY(int armed READ armed NOTIFY armedChanged)
     Q_PROPERTY(int maxRows READ maxRows NOTIFY stateChanged)
-    Q_PROPERTY(QString footerText READ footerText CONSTANT)
+    Q_PROPERTY(QString footerText READ footerText NOTIFY stateChanged)
     Q_PROPERTY(int rowHeight READ rowHeight CONSTANT)
     /// 行与行之间的空隙；`ListView` 的 `spacing` 用它，行高本身不含它。
     Q_PROPERTY(int rowSpacing READ rowSpacing CONSTANT)
@@ -106,6 +123,8 @@ public:
         /// 就有一个 `highlighted` 属性（标准样式用它画高亮），而委托里的
         /// `required property` 名字必须等于模型角色名 —— 撞名就声明不了。
         RowSelectedRole,
+        /// 这一行正在等第二次 `Enter` 确认（危险动作的武装状态）。
+        RowArmedRole,
     };
     Q_ENUM(Role)
 
@@ -142,6 +161,8 @@ public:
     /// 键盘选中的行下标（**不是**滚动位置；滚动由 `ListView` 自己持有）。
     /// 它也是高亮的唯一来源：鼠标悬停与滚动都不碰它。
     int selected() const { return m_selected; }
+    /// 正在等第二次确认的行下标；`-1` 表示没有。
+    int armed() const { return m_armed; }
     QString footerText() const;
     int rowHeight() const;
     int rowSpacing() const;
@@ -184,15 +205,28 @@ public:
     /// 两者都只改「键盘选中项」这一个状态，高亮跟着它走。
     Q_INVOKABLE void setSelected(int line);
 
-    /// 一次按键的处理结果：
-    /// `{ decision: "none"|"copy"|"cancel"|"clear", index, handled }`。
+    /// 触发某一行的动作（`Enter` 与 `ItemDelegate.onDoubleClicked` 共用）。
     ///
-    /// 只管导航键（`↑`/`↓`/`PgUp`/`PgDn`）、`Enter`（复制光标那一行）与
-    /// `Esc`（有筛选文本就先清掉、否则关窗）。**编辑键不在这里**：字符、退格、
-    /// `Home`/`End`/左右方向键都归筛选框那个标准 `TextField` 自己。
-    /// 没被接住的键返回 `handled == false`，QML 把它放行给输入框。
+    /// 先把这一行选中（双击时鼠标那一下已经选过了，这里是幂等的），再决定
+    /// 「现在就能执行」还是「危险动作、先武装起来等第二次确认」：
+    ///
+    /// * 返回 `{ decision: "run", index }`：执行它（QML 交给 `host.helpRun`）；
+    /// * 返回 `{ decision: "arm", index }`：只是武装（模型状态已经改了，
+    ///   界面靠 `rowArmed` 角色与 `footerText` 自己表现）；
+    /// * 一条可见条目都没有时返回 `{ decision: "none" }`。
+    Q_INVOKABLE QVariantMap activateRow(int line);
+
+    /// 一次按键的处理结果：
+    /// `{ decision: "none"|"run"|"arm"|"disarm"|"copy"|"cancel"|"clear", index, handled }`。
+    ///
+    /// 只管导航键（`↑`/`↓`/`PgUp`/`PgDn`）、`Enter`（执行光标那一行；危险动作
+    /// 先返回一次 `arm`）与 `Esc`（有武装就先取消武装，其次清筛选，最后才关窗）。
+    /// **编辑键不在这里**：字符、退格、`Home`/`End`/左右方向键都归筛选框那个
+    /// 标准 `TextField` 自己。没被接住的键返回 `handled == false`，QML 把它放行
+    /// 给输入框。
     ///
     /// `clear` 表示模型已经把筛选清掉了，QML 要把输入框里的文本同步过来。
+    /// `arm`/`disarm`/`none` 不需要 QML 做任何事（状态已经变了，信号会到）。
     Q_INVOKABLE QVariantMap handleKey(int key);
 
     /// 再次打开时清空筛选、高亮。
@@ -207,6 +241,8 @@ signals:
     void stateChanged();
     /// 选中行变了（或者列表被换过/筛过，视图该把选中项带回视野）。
     void selectedChanged();
+    /// 「等第二次确认」的那一行变了（包括被取消）。
+    void armedChanged();
 
 private:
     /// 重新算筛选结果、几何与计数（不发信号，调用方负责把 reset 包起来）。
@@ -215,6 +251,10 @@ private:
     void notifyRows();
     /// 当前高亮那条的行下标（就是键盘选中项）；没有可见条目时返回 -1。
     int activeLine() const;
+    /// 武装 / 取消武装（只改状态；要不要发信号由调用方决定）。
+    void armLine(int line);
+    /// 清掉武装状态；返回是否真的清掉了（调用方据此决定发不发信号）。
+    bool disarm();
 
     std::optional<QString> m_title;
     std::vector<HelpEntry> m_items;
@@ -227,6 +267,8 @@ private:
     int m_maxRows = 12;
     int m_rows = 1;
     int m_selected = 0;
+    /// 正在等第二次确认的行下标（`-1` = 没有）。
+    int m_armed = -1;
 
     int m_cardHeight = 0;
     PopupRect m_titleRect;

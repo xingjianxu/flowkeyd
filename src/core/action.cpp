@@ -2,6 +2,8 @@
 
 #include <QRegularExpression>
 
+#include <algorithm>
+
 namespace flowkeyd::core {
 
 QString rustDebug(const QString &text)
@@ -440,6 +442,29 @@ QString Action::summary() const
         return QStringLiteral("none");
     }
     return QStringLiteral("none");
+}
+
+// ---------------------------------------------------------------------------
+// 「危险动作」
+// ---------------------------------------------------------------------------
+
+bool isDestructive(const Action &action)
+{
+    switch (action.kind) {
+    case Action::Kind::Quit:
+    case Action::Kind::Suspend:
+    case Action::Kind::Power:
+        return true;
+    default:
+        break;
+    }
+    return false;
+}
+
+bool isDestructive(const std::vector<Action> &actions)
+{
+    return std::any_of(actions.begin(), actions.end(),
+                       [](const Action &action) { return isDestructive(action); });
 }
 
 // ---------------------------------------------------------------------------

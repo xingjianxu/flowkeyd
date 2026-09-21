@@ -22,6 +22,7 @@ private slots:
     void emptyConfigIsValid();
     void actionListsAndShorthand();
     void summaries();
+    void destructiveActionsAreFlagged();
     void unknownActionShorthandIsReported();
     void emptyActionListIsReported();
     void badChordIsReportedWithContext();
@@ -148,6 +149,37 @@ void TestConfig::summaries()
     Action notify = actionOf(Action::Kind::Notify);
     notify.title = QStringLiteral("hi");
     QCOMPARE(notify.summary(), QStringLiteral("notify \"hi\""));
+}
+
+void TestConfig::destructiveActionsAreFlagged()
+{
+    // `quit` / `suspend` / `power` 是「不该误触」的三类（帮助窗口里要对它们
+    // 再确认一次）。
+    QCOMPARE(isDestructive(quitAction()), true);
+    QCOMPARE(isDestructive(suspendAction()), true);
+    QCOMPARE(isDestructive(powerAction(PowerOp::Sleep)), true);
+    QCOMPARE(isDestructive(powerAction(PowerOp::ScreenOff)), true);
+
+    // 其余动作都不算：`reload` 顶多打断一下手头的事；`window("close")` 也是。
+    QCOMPARE(isDestructive(noneAction()), false);
+    QCOMPARE(isDestructive(reloadAction()), false);
+    QCOMPARE(isDestructive(runAction(QStringLiteral("notepad.exe"))), false);
+    QCOMPARE(isDestructive(sendAction(QStringLiteral("^{c}"))), false);
+    QCOMPARE(isDestructive(windowAction(WindowOp::Close)), false);
+    QCOMPARE(isDestructive(actionOf(Action::Kind::Help)), false);
+
+    // **`menu` 不算危险**：它只是把选单弹出来，真正的危险条目在选单里还有一次
+    // 选择（用户的 `Win+X` 电源选单因此可以放心地从帮助窗口打开）。
+    Action menu = actionOf(Action::Kind::Menu);
+    menu.items.push_back(menuItem(QStringLiteral("sleep")));
+    menu.items.back().action = std::make_shared<ActionSpec>(specOne(powerAction(PowerOp::Sleep)));
+    QCOMPARE(isDestructive(menu), false);
+
+    // 整条列表：只要有一个危险动作就算危险。
+    QCOMPARE(isDestructive(std::vector<Action>{}), false);
+    QCOMPARE(isDestructive(std::vector<Action>{noneAction(), reloadAction()}), false);
+    QCOMPARE(isDestructive(std::vector<Action>{sendAction(QStringLiteral("^{c}")), quitAction()}),
+             true);
 }
 
 void TestConfig::unknownActionShorthandIsReported()

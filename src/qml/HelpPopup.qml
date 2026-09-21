@@ -3,14 +3,15 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls.FluentWinUI3
 
-// `help` 动作弹出的快捷键帮助窗口：**看**的而不是**选**的。
+// `help` 动作弹出的快捷键帮助窗口：看快捷键，也能**直接把它跑起来**。
 //
 // 这个界面里除了卡片外框（无边框圆角窗口总得有一块底）之外，**全是 Qt 的
 // 标准控件**：
 //   * 筛选框是一个真正的 `TextField`：鼠标点一下就能进去打字，光标、选区、
 //     输入法候选、右键菜单、`Home`/`End`/左右箭头都是 Qt 的标准行为；
 //   * 列表是 `ListView`，每一行是 `ItemDelegate`：悬停 / 按下 / 高亮都由
-//     FluentWinUI3 的标准样式画；点一行 = 选中它 + 把它复制到剪贴板；
+//     FluentWinUI3 的标准样式画；**单击 = 选中它 + 把它的按键复制走**，
+//     **双击 = 选中它 + 直接执行它的动作**；
 //   * 滚动是 Qt 自带的 `ScrollBar`（滚轮、拖动滑块、平滑滚动全归 Qt），
 //     键盘选中项用 `positionViewAtIndex(..., Contain)` 带进视野。
 //
@@ -20,9 +21,9 @@ import QtQuick.Controls.FluentWinUI3
 // 这种自绘件（项目所有者 2026-09 要求）。
 //
 // 逻辑仍然全在 `app::HelpModel`（纯逻辑、有单测）：筛选、`可见/总数` 计数、
-// 键盘选中项、`Enter` 复制哪一行、两级 `Esc`。QML 只做两件事：
-//   * 把 `handleKey()` 给的决定执行掉；
-//   * 把模型的状态（筛选文本、选中行）同步给控件。
+// 键盘选中项、`Enter` 执行哪一行、危险动作的两次确认、三级 `Esc`。QML 只做两件事：
+//   * 把 `handleKey()` / `activateRow()` 给的决定执行掉（`applyDecision`）；
+//   * 把模型的状态（筛选文本、选中行、待确认行）同步给控件。
 Window {
     id: root
 
@@ -86,6 +87,31 @@ Window {
         listView.positionViewAtIndex(line, ListView.Contain)
     }
 
+    /// 执行模型给的决定（`handleKey()` 与双击的 `activateRow()` 共用一套）。
+    ///
+    /// `arm`/`disarm`/`none` 不需要做任何事：模型的状态已经改了，行上的待确认
+    /// 标记（`rowArmed`）与底部提示（`footerText`）会跟着信号自己更新。
+    function applyDecision(decision) {
+        if (!decision || !root.host)
+            return
+        if (decision.decision === "cancel")
+            root.host.helpDismiss()
+        else if (decision.decision === "copy")
+            root.host.helpCopy(decision.index)
+        else if (decision.decision === "run")
+            root.host.helpRun(decision.index)
+        else if (decision.decision === "clear")
+            root.syncFilterField()
+    }
+
+    /// 双击一行（或 `Enter`）：选中它并执行它的动作。
+    /// 危险动作（`quit`/`suspend`/`power`）第一次只会得到 `arm`，再双击一次才执行。
+    function activateRow(line) {
+        if (!root.helpModel)
+            return
+        root.applyDecision(root.helpModel.activateRow(line))
+    }
+
     /// 按键决定由模型给，这里只执行（与 `MenuPopup` 同一套）。
     function handleKeyEvent(event) {
         if (!root.helpModel || !root.host) {
@@ -98,12 +124,7 @@ Window {
             return
         }
         event.accepted = true
-        if (decision.decision === "cancel")
-            root.host.helpDismiss()
-        else if (decision.decision === "copy")
-            root.host.helpCopy(decision.index)
-        else if (decision.decision === "clear")
-            root.syncFilterField()
+        root.applyDecision(decision)
     }
 
     Rectangle {
@@ -241,6 +262,8 @@ Window {
                 // **不叫 `highlighted`**：`ItemDelegate` 自己就有这个属性
                 // （标准样式用它画高亮），撞名之余也分不清是谁的。
                 required property bool rowSelected
+                // 这一行正在等第二次 `Enter`/双击确认（危险动作）。
+                required property bool rowArmed
 
                 width: listView.width
                 // 一行占 48 逻辑像素（模型的 `rowHeight` 46 + `rowSpacing` 2；
@@ -253,7 +276,7 @@ Window {
                 // 定的标准内边距，内容区跟着它自适应（下面全部锚在 contentItem 上）。
                 highlighted: rowItem.rowSelected
 
-                // 点一行 = 选中它 + 把它复制到剪贴板（帮助窗口复制完不关，
+                // 单击一行 = 选中它 + 把它复制到剪贴板（帮助窗口复制完不关，
                 // 用户可能还要抄下一条）。
                 onClicked: {
                     if (!root.helpModel || !root.host)
@@ -262,7 +285,22 @@ Window {
                     root.host.helpCopy(rowItem.index)
                 }
 
+                // 双击一行 = 选中它 + 直接执行它的动作（危险动作要两次双击）。
+                // 注意：双击前 Qt 会先发两次 `clicked`，上面那个处理器因此会跑两次
+                // （把按键文本复制进剪贴板），这是无害的；`setSelected` 在选中项没
+                // 变时不会清掉待确认状态，所以「第二次双击」仍然是第二次。
+                onDoubleClicked: root.activateRow(rowItem.index)
+
                 contentItem: Item {
+                    // 「待确认」的底色：系统 `palette` 里没有警告色，所以这是整个
+                    // 帮助窗口里唯一一处硬编码颜色 —— 只用来提示「再按一次才执行」。
+                    Rectangle {
+                        anchors.fill: parent
+                        visible: rowItem.rowArmed
+                        color: "#E8A33D"
+                        opacity: 0.22
+                    }
+
                     // 按键徽标列：宽度固定，所以每一行的说明文字都对齐。
                     // 高度跟着标准内边距留下的内容区（不写死 46，免得溢出到下一行）。
                     Item {
