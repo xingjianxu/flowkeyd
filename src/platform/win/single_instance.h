@@ -46,6 +46,14 @@ bool requestQuit(const QString &key, bool *running, QString *error);
 /// 「那个实例已经退干净了」——`--quit` 用它来等进程真正收尾。
 bool quitEventExists(const QString &key);
 
+/// 客户端侧：`key` 对应的实例现在是不是已经在跑。
+///
+/// 只查命名互斥体在不在（`OpenMutexW(SYNCHRONIZE)`，**不获取所有权**），所以
+/// 不会影响那个正在运行的实例。它刻意设计成可以在**提权之前**调用：
+/// 双重启时先在 UAC 之前就告诉用户「已经有一个实例在运行」，用户确认后退出，
+/// 免得白白弹一次提权。互斥体不存在（或打不开）时返回 false。
+bool instanceRunning(const QString &key);
+
 /// 一个已持有的命名互斥体。
 class SingleInstance
 {

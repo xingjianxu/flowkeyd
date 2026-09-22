@@ -241,6 +241,21 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
     * 任务的每个参数（`PT15S` 延迟、`ExecutionTimeLimit=PT0S`、电池两项、
       `InteractiveToken`、`IgnoreNew`、`RestartOnFailure`）与当年 `install.ps1`
       的 XML 逐字段一致，为什么见第 10 节与 `README.md` 的「开机自启与更新」。
+    * **注册 / 刷新之前先问用户**（2026-09 要求）：任务缺失、或指向的 exe 不是
+      当前这一个时，先弹一个原生确认框；同意才动任务，拒绝就保持原样。
+      `--no-prompt` 跳过这个询问、按默认「注册 / 更新」处理。
+11. **启动时的两个交互确认（项目所有者 2026-09 要求）。**
+    1. **已经在运行**：守护进程启动时先看一眼同一配置文件有没有实例在跑；有就弹一个
+       原生提示框（`flowkeyd 已在运行`），用户点确定后以**退出码 1** 退出。
+       **这一步刻意放在 UAC 提权之前**，所以重复双击不会白弹一次 UAC，也不会动到
+       正在运行的那个实例（真正的互斥体获取仍在提权之后，用来兜住「两个进程同时
+       启动」的竞态）。
+    2. **开机自启**：任务缺失、或指向别的 exe 时先弹确认框（`flowkeyd 开机自启`）
+       问要不要注册 / 更新，见第 2 节第 10 条的最后一条。
+
+    两者都用**原生 `MessageBoxW`**（不需要 Qt 应用对象，因为它们跑在
+    `QApplication` 构造之前）；`--no-prompt` 跳过这两个提示、按默认处理，
+    供脚本与 `scripts/acceptance.ps1` 使用。细节与验过的路径见第 10 节。
 
 ---
 
@@ -318,7 +333,7 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `cmake/VendorLua.cmake`                   | 把 `vendor/lua` 编成静态库 `lua_static`（排除 `lua.c`/`luac.c`/`onelua.c`/`ltests.c`，定义 `LUA_USE_WINDOWS`）                                                                                                              |
 | `flowkeyd.lua.example`                    | 有文档、覆盖全部特性的参考配置（中文注释、无警告），`--check` 就是拿它跑的                                                                                                                                                  |
 | `README.md`                               | 用户文档（中文，含完整配置/动作/schema 说明），是配置 schema 的权威定义                                                                                                                                                      |
-| `src/main.cpp`                            | `AttachConsole` + CLI 分发 + 日志初始化 + 单实例 + 组装 Runtime + Qt 事件循环                                                                                                                                               |
+| `src/main.cpp`                            | `AttachConsole` + CLI 分发 + 日志初始化 + **提权之前的单实例预检（“已在运行”原生提示框）** + 开机自启的确认框 + 组装 Runtime + Qt 事件循环                                                                                                                                               |
 | `src/cli.h/.cpp`                          | 参数解析 + 中文帮助文本（手写，不用 CLI11）；`--quit` 走单独的早期分支：不装钩子、不提权，也不在 `isOfflineCommand()` 里（它确实要去碰另一个进程）                                                                                                                                                                                 |
 | `src/core/`                               | **纯逻辑层：不碰 Win32、不碰 Qt GUI**（只用 QtCore 的类型），因此能被 Qt Test 直接测                                                                                                                                        |
 | `src/core/keys.h/.cpp`                    | 键名 ↔ `VK` 表、`Modifiers`、`Chord`、AutoHotkey 发送脚本解析、小键盘 Enter 的内部伪码 `0x100`、`key_from_hook()`/`native_key()`                                                                                            |
@@ -343,9 +358,9 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `src/platform/win/power.h/.cpp`           | `powrprof!SetSuspendState`、`user32!ExitWindowsEx`、`LockWorkStation`、`WM_SYSCOMMAND`/`SC_MONITORPOWER` 广播，外加 `SeShutdownPrivilege`                                                                                   |
 | `src/platform/win/tray.h/.cpp`            | 托盘图标 + 气泡提示 + 右键菜单（查看日志/挂起/重载/打开配置/退出）+ 悬停提示                                                                                                                                                |
 | `src/platform/win/logging.h/.cpp`         | 控制台/文件日志器（英文、分级别、可选 ANSI 颜色），`--log-level`/`--log-file`/`--no-color`                                                                                                                                  |
-| `src/platform/win/single_instance.h/.cpp` | 按配置路径散列命名的互斥体（含提权重启后的重试）；**`--quit` 的命名事件通道**：`quitEventName`/`createQuitEvent`（带 Low 完整性标签的 SDDL，让不提权的调用方也能 `SetEvent`）/`requestQuit`/`quitEventExists` |
+| `src/platform/win/single_instance.h/.cpp` | 按配置路径散列命名的互斥体（含提权重启后的重试）；`instanceRunning`（`OpenMutexW`，不获取所有权，**提权之前**的「已在运行」检查）；**`--quit` 的命名事件通道**：`quitEventName`/`createQuitEvent`（带 Low 完整性标签的 SDDL，让不提权的调用方也能 `SetEvent`）/`requestQuit`/`quitEventExists` |
 | `src/platform/win/elevate.h/.cpp`         | `ShellExecuteW("runas")` 自提权 + UAC 被拒时降级继续 + `--elevated` 标记 + 命令行/工作目录转发（`quote_arg`）                                                                                                               |
-| `src/platform/win/autostart.h/.cpp`       | 开机自启的计划任务：`buildTaskXml`/`taskXmlCommand`/`decodeTaskOutput`/`sameExecutablePath` 是**纯函数**（可单测），`query/register/removeAutostartTask` 走隐藏的 `schtasks.exe /Create /XML`，`ensureAutostart` 是启动时的“缺失或指向别的 exe 就刷新成当前路径”策略。**不写任何安装目录**（见第 2 节第 10 条与第 10 节） |
+| `src/platform/win/autostart.h/.cpp`       | 开机自启的计划任务：`buildTaskXml`/`taskXmlCommand`/`decodeTaskOutput`/`sameExecutablePath` 是**纯函数**（可单测），`query/register/removeAutostartTask` 走隐藏的 `schtasks.exe /Create /XML`，`ensureAutostart(spec, confirm)` 是启动时的“缺失或指向别的 exe 就**先问用户、同意后**刷新成当前路径”策略（`confirm` 为空表示不问）。**不写任何安装目录**（见第 2 节第 10 条与第 10 节） |
 | `src/app/`                                | 组装层：把 core / lua / platform 串起来，并拥有 Qt 对象                                                                                                                                                                     |
 | `src/app/dispatcher.h/.cpp`               | **动作工作线程**（`QThread`）：执行动作列表，含 `window` 的“先启动再激活”与默认开的 `toggle` 收起、`menu` 的窗口请求、`help` 的窗口请求 + 每一行的“执行目标”（绑定是 press+release 两串动作，`remap` 是直接注入目标按键） |
 | `src/app/runtime.h/.cpp`                  | 引擎 + 钩子 + 分发 + 托盘 + 弹窗的总装，`ControlCmd`（suspend/reload/quit）通道；还持有 `--quit` 的事件句柄并用 `QWinEventNotifier` 在 GUI 线程上监听（收到就走 `performShutdown`）                                                       |
@@ -574,7 +589,10 @@ flowkeyd 自己注入的按键带着 `"FLOW"` 标记，
 用一份只含被测绑定的**一次性配置**（快捷键一律避开用户真实配置里已有的和弦）：
 
 1. `--check --config tmp/smoke.lua` 通过，`--list` 打印的形状与 README 里记录的一致。
-2. 单实例：开两个不用 `--allow-multi` 的实例，第二个必须拒绝启动。
+2. 单实例：开两个不用 `--allow-multi` 的实例，第二个会**先弹「已经在运行」的
+   原生提示框**（这一步在 UAC 提权之前），点确定后以退出码 1 退出；
+   加 `--no-prompt` 时只记日志、直接退出（`scripts/acceptance.ps1` 用它避免
+   卡在对话框上）。
 3. 吞键：临时用 PowerShell 起一个能显示收到按键的窗口（记事本即可），
    按被测和弦，**前台窗口不应该收到那个键**；用一个未绑定的键做正对照
    （正对照收不到就说明焦点没拿到，本次验证无效 —— 别把“焦点压根不在”
@@ -2199,6 +2217,35 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   `tst_command_line` 因此失败。改成 `entryName(...).toUpper()` 比较，
   并给测试加了一对固定的 `AAB` / `A_Z` 覆盖项，不再依赖机器上碰巧有什么环境变量。
 
+#### 2026-09 新增：启动时的两个交互确认（已在运行 / 开机自启）
+
+* **为什么用原生 `MessageBoxW` 而不是 `QMessageBox`**：这两个提示都跑在
+  `QApplication` 构造**之前** —— 「已在运行」必须在提权之前（否则重复双击会白弹
+  一次 UAC），而「开机自启」在守护进程的现有顺序里也在 `QApplication` 之前。
+  `MessageBoxW` 不需要 Qt 应用对象，于是 `QApplication` 的构造时机不用动。
+  代价是：这两个框是系统原生样式，而配置错误那个仍然是 `QMessageBox`。
+* **「已在运行」怎么在提权之前看得见**：新增 `platform::win::instanceRunning()`，
+  用 `OpenMutexW(SYNCHRONIZE)`（**不获取所有权**）查命名互斥体在不在。
+  为了让**提权实例**创建的互斥体也能被非提权进程打开，互斥体改用与 `--quit`
+  事件**同一套** SDDL（`D:(A;;GA;;;<用户 SID>)S:(ML;;NW;;;LW)`，压到 Low 完整性）
+  —— 否则 `CreateMutexW` 要的写权限会吃 no-write-up。
+  （`OpenMutexW` 只要读权限，本来大概率也能过；带上 SDDL 是为了两边都不靠运气。）
+* **拒绝的路径要真的验一次**：确认框返回 false 时任务必须**原封不动**。
+  实测（一次性配置 + 提权实例，`build\windows-debug`）：弹框后
+  `CloseMainWindow()`（= WM_CLOSE = IDCANCEL）→ 日志
+  `logon autostart task `flowkeyd` left unchanged: the user declined to update it`，
+  并且 `schtasks /Query /TN flowkeyd /XML` 前后逐字节相同。
+* **`--no-prompt` 是给自动化的**：`scripts/acceptance.ps1` 的「同配置的第二个实例
+  被拒绝」那一条用 `-Wait` 等进程退出，弹框就会**永远卡住**。加了这个开关之后，
+  第二个实例照旧「日志 + 退出码 1」，只是不弹框。没有它脚本没法跑。
+* **对话框开着的时候 `--quit` 叫不动这个进程**：这两个框在 `QApplication::exec()`
+  之前，`QWinEventNotifier` 还没开始转，所以框开着时 `--quit` 只能等到 10 秒超时、
+  报 `still running`。正常路径（任务已经匹配、没有别的实例）不会弹框，
+  用户点掉框就恢复了；只是脚本别在框开着的时候指望 `--quit`。
+* **测试脚本里不要用 `$Pid` 当参数名**（PowerShell 自动变量，只读），
+  与第 10 节的 `$args` 是同一类坑；同理 `Start-Process -PassThru` 的
+  `ExitCode` 在 `-RedirectStandardOutput` 下仍然是空的（见本节另一条）。
+
 #### 2026-09 修复：弹窗里的中文落到了宋体（改成微软雅黑）
 
 * **现象**（项目所有者报）：`menu`（电源选单）与 `help` 两个弹窗里的中文看起来
@@ -2769,6 +2816,27 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > 常驻实例现在从 `build\dist-release\flowkeyd.exe` 跑，任务指向它。
 > 本次只有新的 `tst_autostart` 不碰真实计划任务（纯函数断言），其他测试未变。
 
+> **2026-09 新增（启动时的两个交互确认）的 DoD**：`windows-debug` 与
+> `windows-release` 两边都是 `build exit 0`、零编译警告；
+> `ctest --test-dir build/windows-debug` **20 个测试目标全绿**
+> （`tst_instance` 新增 `instanceRunningSeesTheMutex`：互斥体在时看得见、
+> 释放后看不见）；`flowkeyd --check --config flowkeyd.lua.example` →
+> `OK (37 hotkey(s), 3 remap(s))`、零警告。
+> 实机验证（`build/windows-debug`）：
+> * 已在运行：第一个实例起来后，第二个加 `--no-prompt --console` 退出码 1、
+>   stderr 是 `another flowkeyd instance already owns … (use --allow-multi to override)`；
+>   不加 `--no-prompt` 时弹出一个标题为 `flowkeyd 已在运行` 的原生框，
+>   关掉它之后进程退出（提示确实出现在**提权之前**：该次启动全程没弹 UAC）。
+> * 开机自启：提权实例 + 一次性配置 → 弹出 `flowkeyd 开机自启` 框（任务当时指向
+>   `build\dist-release\flowkeyd.exe`，与调试 exe 不同），拒绝后日志是
+>   `logon autostart task `flowkeyd` left unchanged: the user declined to update it`，
+>   前后 `schtasks /Query /XML` 逐字节相同。
+> * `scripts/acceptance.ps1` 的「第二个实例被拒绝」改用 `--no-prompt` 启动。
+> 行为变化：重复启动不再静默退出，而是（提权之前）弹一个「已在运行」提示框；
+> 注册 / 刷新开机自启之前先问用户；新增 CLI 开关 `--no-prompt`。
+> `README.md` 的「开机自启与更新」「命令行」两节与 `AGENTS.md` 第 2 节第 11 条
+> 已同步。
+
 ---
 
 ## 12. 本期不做的（有意留白）与后续工作
@@ -2900,7 +2968,7 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、
 `--check`、`--list`、`--list-keys`、`--quit`、`--no-autostart`、
 `--remove-autostart`、`--log-window`、`--log-level`、`--log-file`、`--no-color`、
-`--allow-multi`、`-h/--help`、`-V/--version`。
+`--allow-multi`、`--no-prompt`、`-h/--help`、`-V/--version`。
 `--parent-pid` 与 `--simulate`/`--selftest`/`--probe` 见第 12 节；
 `--quit`（请正在跑的实例干净退出）见第 2 节第 10 条与第 5 节；
 `--no-autostart` / `--remove-autostart`（自启任务的跳过与删除）见第 2 节第 10 条。

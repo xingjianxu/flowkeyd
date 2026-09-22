@@ -12,14 +12,15 @@ namespace flowkeyd::platform::win {
 
 namespace {
 
-/// 退出事件的安全描述符字符串：
+/// 命名对象（退出事件 / 单实例互斥体）的安全描述符字符串：
 ///
 /// * `D:(A;;GA;;;<当前用户 SID>)` —— 只给这个用户账号完全访问（不用 Everyone，
-///   否则同机器上任何账号都能把守护进程关掉）；
+///   否则同机器上任何账号都能把守护进程关掉 / 冒充它）；
 /// * `S:(ML;;NW;;;LW)` —— 给对象打 **Low** 强制完整性标签。提权的守护进程会
 ///   以 High 创建对象，而「no write up」禁止低完整性主体写高完整性对象；
-///   把标签压到 Low 之后，非提权的 `--quit` 也能 `SetEvent`。
-QString quitEventSecurityDescriptor()
+///   把标签压到 Low 之后，非提权的调用方也能 `SetEvent`（`--quit`），
+///   也能在提权之前 `OpenMutexW` 看一眼有没有实例在跑。
+QString sessionObjectSecurityDescriptor()
 {
     QString user = QStringLiteral("WD"); // 兜底：Everyone（拿不到 SID 时）
     HANDLE token = nullptr;
@@ -42,6 +43,25 @@ QString quitEventSecurityDescriptor()
     return QStringLiteral("D:(A;;GA;;;%1)S:(ML;;NW;;;LW)").arg(user);
 }
 
+/// 用上面的描述符构造 `SECURITY_ATTRIBUTES`。
+///
+/// 转换失败时退回默认属性（`*descriptor` 置空，调用方不用 `LocalFree`）：
+/// 对象会带上创建者的完整性级别，跨权限的 `--quit` / 已在运行的检查会因此
+/// 失败，但守护进程本身照常跑。
+SECURITY_ATTRIBUTES makeObjectAttributes(PSECURITY_DESCRIPTOR *descriptor)
+{
+    SECURITY_ATTRIBUTES attributes{};
+    attributes.nLength = sizeof(attributes);
+    attributes.bInheritHandle = FALSE;
+    *descriptor = nullptr;
+    const std::wstring sddl = sessionObjectSecurityDescriptor().toStdWString();
+    if (ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(), SDDL_REVISION_1,
+                                                             descriptor, nullptr) != 0) {
+        attributes.lpSecurityDescriptor = *descriptor;
+    }
+    return attributes;
+}
+
 } // namespace
 
 QString quitEventName(const QString &key)
@@ -53,18 +73,8 @@ HANDLE createQuitEvent(const QString &key, QString *error)
 {
     const std::wstring name = quitEventName(key).toStdWString();
 
-    SECURITY_ATTRIBUTES attributes{};
-    attributes.nLength = sizeof(attributes);
-    attributes.bInheritHandle = FALSE;
     PSECURITY_DESCRIPTOR descriptor = nullptr;
-    const std::wstring sddl = quitEventSecurityDescriptor().toStdWString();
-    if (ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(), SDDL_REVISION_1,
-                                                            &descriptor, nullptr) == 0) {
-        // 退回默认描述符：对象会带上我们的完整性级别，于是 `--quit` 得用同样的
-        // 权限才叫得动它（脚本里会看到一条 warning），但守护进程照常跑。
-        descriptor = nullptr;
-    }
-    attributes.lpSecurityDescriptor = descriptor;
+    SECURITY_ATTRIBUTES attributes = makeObjectAttributes(&descriptor);
 
     SetLastError(ERROR_SUCCESS);
     HANDLE handle = CreateEventW(&attributes, FALSE, FALSE, name.c_str());
@@ -114,6 +124,19 @@ bool requestQuit(const QString &key, bool *running, QString *error)
 bool quitEventExists(const QString &key)
 {
     HANDLE handle = OpenEventW(SYNCHRONIZE, FALSE, quitEventName(key).toStdWString().c_str());
+    if (handle == nullptr) {
+        return false;
+    }
+    CloseHandle(handle);
+    return true;
+}
+
+bool instanceRunning(const QString &key)
+{
+    // 只要求 `SYNCHRONIZE`（一次“读”访问，不触发 no-write-up），所以提权实例
+    // 创建的互斥体也能被非提权的调用方看见。拿不到就当没在跑：真正的判据是
+    // 提权之后那次 `CreateMutexW`，这里只负责“要不要先提示用户”。
+    HANDLE handle = OpenMutexW(SYNCHRONIZE, FALSE, key.toStdWString().c_str());
     if (handle == nullptr) {
         return false;
     }
@@ -173,17 +196,26 @@ std::optional<SingleInstance> SingleInstance::acquire(const QString &key,
                                                      QString *error)
 {
     const std::wstring wide = key.toStdWString();
+    // 和退出事件用同一套描述符：互斥体也压到 Low 完整性，这样提权实例创建的
+    // 互斥体在非提权进程里也打得开（`CreateMutexW` 要的是写权限，默认描述符
+    // 会吃 no-write-up）。
+    PSECURITY_DESCRIPTOR descriptor = nullptr;
+    SECURITY_ATTRIBUTES attributes = makeObjectAttributes(&descriptor);
     SetLastError(ERROR_SUCCESS);
-    HANDLE handle = CreateMutexW(nullptr, FALSE, wide.c_str());
+    HANDLE handle = CreateMutexW(&attributes, FALSE, wide.c_str());
+    const DWORD last = GetLastError();
+    if (descriptor != nullptr) {
+        LocalFree(descriptor);
+    }
     if (handle == nullptr) {
         if (error != nullptr) {
-            *error = lastErrorMessage("CreateMutexW");
+            *error = QStringLiteral("CreateMutexW failed: %1").arg(winErrorMessage(last));
         }
         return std::nullopt;
     }
     SingleInstance instance;
     instance.m_handle = handle;
-    instance.m_alreadyRunning = GetLastError() == ERROR_ALREADY_EXISTS;
+    instance.m_alreadyRunning = last == ERROR_ALREADY_EXISTS;
     if (alreadyRunning != nullptr) {
         *alreadyRunning = instance.m_alreadyRunning;
     }

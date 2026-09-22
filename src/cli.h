@@ -30,6 +30,8 @@ struct CliOptions
     bool noColor = false;
     /// 即使另一个实例已占用同一配置文件也照常启动。
     bool allowMulti = false;
+    /// 不弹交互提示：已在运行的提示、是否注册开机自启的询问都跳过，按默认处理。
+    bool noPrompt = false;
     /// 不自动提权（测试与调试用）。
     bool noElevate = false;
     /// 保留控制台输出。

@@ -640,8 +640,10 @@ try {
     # --- 单实例 --------------------------------------------------------------
     Write-Host '--- 单实例 ---'
     $secondOut = Join-Path $WorkDir 'second.out'
+    # `--no-prompt`：交互式启动时会先弹「已经在运行」的提示框并等用户确认；
+    # 自动化里必须跳过它，否则 `-Wait` 会卡在对话框上。
     $second = Start-Process -FilePath $Exe `
-        -ArgumentList @('--config', $config, '--no-elevate', '--console') `
+        -ArgumentList @('--config', $config, '--no-elevate', '--console', '--no-prompt') `
         -RedirectStandardOutput $secondOut -RedirectStandardError "$secondOut.err" `
         -Wait -PassThru -NoNewWindow
     $secondText = (Get-Content $secondOut -Raw -ErrorAction SilentlyContinue) + (Get-Content "$secondOut.err" -Raw -ErrorAction SilentlyContinue)

@@ -13,6 +13,7 @@ private slots:
     void fnv1aIsStable();
     void instanceKeyNormalizesThePath();
     void secondAcquireSeesTheFirst();
+    void instanceRunningSeesTheMutex();
     void quitEventNameFollowsTheKey();
     void quitEventRoundTrip();
 };
@@ -55,6 +56,27 @@ void TestInstance::secondAcquireSeesTheFirst()
     auto third = platform::win::SingleInstance::acquire(key, &thirdAlready, &error);
     QVERIFY2(third.has_value(), qPrintable(error));
     QVERIFY(!thirdAlready);
+}
+
+void TestInstance::instanceRunningSeesTheMutex()
+{
+    // 用一个只属于本测试的 key，避免撞上真实的守护进程。
+    const QString key =
+        platform::win::instanceKey(QStringLiteral("\\\\.\\pipe\\flowkeyd-running-test"));
+    // 还没人持有：看不见。
+    QVERIFY(!platform::win::instanceRunning(key));
+
+    bool already = true;
+    QString error;
+    auto owner = platform::win::SingleInstance::acquire(key, &already, &error);
+    QVERIFY2(owner.has_value(), qPrintable(error));
+    QVERIFY(!already);
+    // 只要互斥体对象还在（哪怕只是本进程里的一份句柄）就应该看得见 —— 提权之前
+    // 那次「已经在运行」的检查靠的就是它。
+    QVERIFY(platform::win::instanceRunning(key));
+
+    owner.reset();
+    QVERIFY(!platform::win::instanceRunning(key));
 }
 
 void TestInstance::quitEventNameFollowsTheKey()

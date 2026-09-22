@@ -20,6 +20,7 @@
 #include "platform/win/autostart.h"
 #include "platform/win/console.h"
 #include "platform/win/elevate.h"
+#include "platform/win/ffi.h"
 #include "platform/win/hook.h"
 #include "platform/win/input.h"
 #include "platform/win/logging.h"
@@ -29,6 +30,7 @@
 
 #include <memory>
 #include <optional>
+#include <string>
 
 using namespace flowkeyd;
 
@@ -116,6 +118,59 @@ int reportConfigFailure(int argc, char *argv[], const QString &message)
     box.setTextInteractionFlags(Qt::TextSelectableByMouse);
     box.exec();
     return 1;
+}
+
+/// 「同一个配置文件已经有一个实例在跑」的提示框。
+///
+/// 用原生的 `MessageBoxW`，因此**不需要 Qt 应用对象** —— 这个提示必须在
+/// **提权之前**弹出来（双重启不该白弹一次 UAC，也不该动到那个实例）。
+/// 用户点“确定”之后调用方直接退出。
+void promptAlreadyRunning(const QString &configPath)
+{
+    const QString text =
+        QStringLiteral("flowkeyd 已经有一个实例在运行，本次启动将退出。\n\n"
+                       "配置文件：%1\n\n"
+                       "继续使用正在运行的那个实例即可；确实需要重启，"
+                       "请先用 --quit 把它停掉。")
+            .arg(QDir::toNativeSeparators(configPath));
+    const std::wstring title = QStringLiteral("flowkeyd 已在运行").toStdWString();
+    const std::wstring body = text.toStdWString();
+    MessageBoxW(nullptr,
+                body.c_str(),
+                title.c_str(),
+                MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND | MB_TOPMOST);
+}
+
+/// 询问用户是否注册 / 刷新开机自启的计划任务。返回 true 表示同意。
+///
+/// 同样用原生 `MessageBoxW`（这一段跑在 `QApplication` 构造之前）。
+bool confirmAutostartAction(win::AutostartState state,
+                            const QString &currentCommand,
+                            const QString &executable)
+{
+    const QString nativeExe = QDir::toNativeSeparators(executable);
+    QString text;
+    if (state == win::AutostartState::Absent) {
+        text = QStringLiteral("还没有设置开机自启。\n\n"
+                              "是否注册一个计划任务，在每次登录时以最高权限"
+                              "自动启动 flowkeyd？（提权启动不会弹 UAC）\n\n"
+                              "程序：%1")
+                   .arg(nativeExe);
+    } else {
+        text = QStringLiteral("开机自启的计划任务当前指向另一个程序：\n\n"
+                              "现在：%1\n"
+                              "本次：%2\n\n"
+                              "是否把它更新为本次运行的这个程序？")
+                   .arg(QDir::toNativeSeparators(currentCommand), nativeExe);
+    }
+    const std::wstring title = QStringLiteral("flowkeyd 开机自启").toStdWString();
+    const std::wstring body = text.toStdWString();
+    return MessageBoxW(nullptr,
+                       body.c_str(),
+                       title.c_str(),
+                       MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON1 | MB_SETFOREGROUND
+                           | MB_TOPMOST)
+        == IDYES;
 }
 
 } // namespace
@@ -293,6 +348,21 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    // 单实例：**在提权之前**先看一眼有没有同配置的实例在跑。有的话提示用户，
+    // 用户确认后直接退出 —— 双重启不该白弹一次 UAC，也不该动到那个实例。
+    // （真正的互斥体获取在提权之后仍然保留，用来兜住「两个进程同时启动」的竞态。）
+    if (compiled.settings.singleInstance && !options.allowMulti) {
+        if (win::instanceRunning(win::instanceKey(configPath))) {
+            win::logError(QStringLiteral(
+                              "another flowkeyd instance already owns %1 (use --allow-multi to override)")
+                              .arg(configPath));
+            if (!options.noPrompt) {
+                promptAlreadyRunning(configPath);
+            }
+            return 1;
+        }
+    }
+
     // 提权只发生在守护进程模式（不变量 11），且必须能降级。
     const bool wantsElevation = compiled.settings.elevate && !options.noElevate;
     if (wantsElevation && !options.elevated && !win::isElevated()) {
@@ -377,7 +447,14 @@ int main(int argc, char *argv[])
         spec.executable = win::currentExecutablePath();
         spec.workingDirectory = QFileInfo(spec.executable).absolutePath();
         spec.userId = win::currentUserAccount();
-        win::ensureAutostart(spec);
+        // 添加 / 修改计划任务要动系统状态，所以先问用户；`--no-prompt` 直接同意。
+        win::ensureAutostart(
+            spec, [&spec, &options](win::AutostartState state, const QString &currentCommand) {
+                if (options.noPrompt) {
+                    return true;
+                }
+                return confirmAutostartAction(state, currentCommand, spec.executable);
+            });
     }
 
     // 托盘模式下控制台属于自己时隐藏它（日志窗口就是控制界面）。

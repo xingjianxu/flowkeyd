@@ -107,6 +107,8 @@ std::optional<QString> parseCli(const QStringList &args, CliOptions *out)
             cli.noColor = true;
         } else if (name == QLatin1String("--allow-multi")) {
             cli.allowMulti = true;
+        } else if (name == QLatin1String("--no-prompt")) {
+            cli.noPrompt = true;
         } else if (name == QLatin1String("--no-elevate")) {
             cli.noElevate = true;
         } else if (name == QLatin1String("--console")) {
@@ -155,6 +157,8 @@ QString helpText()
         --log-file <PATH>   同时把日志追加写入文件
         --no-color          关闭 ANSI 颜色
         --allow-multi       跳过单实例检查
+        --no-prompt         不弹交互提示：已在运行的提示与是否注册开机自启的询问
+                            都跳过，按默认处理（脚本 / 自动化用）
     -h, --help              显示本帮助
     -V, --version           显示版本
 

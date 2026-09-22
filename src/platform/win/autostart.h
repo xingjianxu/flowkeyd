@@ -16,6 +16,7 @@
 #include <QByteArray>
 #include <QString>
 
+#include <functional>
 #include <optional>
 
 namespace flowkeyd::platform::win {
@@ -69,9 +70,13 @@ enum class AutostartState
 };
 
 /// 查询任务状态。调用本身失败（比如没有读权限）时返回 false 并填 `error`。
+///
+/// `currentCommand` 可选：任务存在时填它现在指向的 exe（读不出来时为空串），
+/// 供调用方在询问用户「要不要改到当前路径」时显示。
 bool queryAutostartTask(const QString &taskName,
                         const QString &executable,
                         AutostartState *state,
+                        QString *currentCommand,
                         QString *error);
 
 /// 创建 / 覆盖任务（需要管理员权限）。
@@ -80,10 +85,19 @@ bool registerAutostartTask(const AutostartSpec &spec, QString *error);
 /// 删除任务；任务本来就不存在时也算成功（需要管理员权限）。
 bool removeAutostartTask(const QString &taskName, QString *error);
 
-/// 启动时的策略：任务缺失、或指向的 exe 与 `spec.executable` 不是同一个，
-/// 就把它（重新）注册成 `spec.executable`；已经正确时什么都不做。
+/// 在需要注册 / 刷新自启任务时询问用户。
 ///
+/// 参数是当前状态与任务现在指向的 exe（`Absent` 时为空串）。返回 true 表示
+/// 同意注册 / 更新；false 表示用户拒绝，此时任务保持原样。
+using AutostartConfirm =
+    std::function<bool(AutostartState state, const QString &currentCommand)>;
+
+/// 启动时的策略：任务缺失、或指向的 exe 与 `spec.executable` 不是同一个，
+/// 就**先问一次 `confirm`**，同意之后才把它（重新）注册成 `spec.executable`；
+/// 已经正确时什么都不做。
+///
+/// `confirm` 为空表示不询问、直接注册（非交互场景，如 `--no-prompt`）。
 /// 注册失败只记一条 warning，绝不影响守护进程继续跑（没有自启的热键仍然可用）。
-void ensureAutostart(const AutostartSpec &spec);
+void ensureAutostart(const AutostartSpec &spec, const AutostartConfirm &confirm = {});
 
 } // namespace flowkeyd::platform::win

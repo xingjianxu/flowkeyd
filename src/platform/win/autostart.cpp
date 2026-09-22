@@ -370,10 +370,14 @@ bool sameExecutablePath(const QString &a, const QString &b)
 bool queryAutostartTask(const QString &taskName,
                         const QString &executable,
                         AutostartState *state,
+                        QString *currentCommand,
                         QString *error)
 {
     if (state != nullptr) {
         *state = AutostartState::Absent;
+    }
+    if (currentCommand != nullptr) {
+        currentCommand->clear();
     }
     bool exists = false;
     QString command;
@@ -382,6 +386,9 @@ bool queryAutostartTask(const QString &taskName,
     }
     if (!exists) {
         return true;
+    }
+    if (currentCommand != nullptr) {
+        *currentCommand = command;
     }
     if (state != nullptr) {
         *state = sameExecutablePath(command, executable) ? AutostartState::Matches
@@ -486,11 +493,12 @@ bool removeAutostartTask(const QString &taskName, QString *error)
     return false;
 }
 
-void ensureAutostart(const AutostartSpec &spec)
+void ensureAutostart(const AutostartSpec &spec, const AutostartConfirm &confirm)
 {
     AutostartState state = AutostartState::Absent;
+    QString currentCommand;
     QString error;
-    if (!queryAutostartTask(spec.taskName, spec.executable, &state, &error)) {
+    if (!queryAutostartTask(spec.taskName, spec.executable, &state, &currentCommand, &error)) {
         logWarn(QStringLiteral("could not read the logon autostart task `%1`: %2")
                     .arg(spec.taskName, error));
         return;
@@ -501,6 +509,13 @@ void ensureAutostart(const AutostartSpec &spec)
         return;
     }
     const bool wasAbsent = state == AutostartState::Absent;
+    // 添加 / 修改计划任务要动系统状态，所以先问用户。用户拒绝就保持原样。
+    if (confirm && !confirm(state, currentCommand)) {
+        logInfo(QStringLiteral("logon autostart task `%1` left unchanged: the user declined to %2 it")
+                    .arg(spec.taskName,
+                         wasAbsent ? QStringLiteral("register") : QStringLiteral("update")));
+        return;
+    }
     if (!registerAutostartTask(spec, &error)) {
         logWarn(QStringLiteral("could not register the logon autostart task `%1` (%2): %3")
                     .arg(spec.taskName,
