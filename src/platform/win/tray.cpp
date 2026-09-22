@@ -11,7 +11,8 @@ namespace flowkeyd::platform::win {
 Tray::Tray(QObject *parent) : QObject(parent)
 {
     m_icon = new QSystemTrayIcon(QApplication::style()->standardIcon(QStyle::SP_ComputerIcon), this);
-    m_icon->setToolTip(QStringLiteral("flowkeyd"));
+    m_buildVersion = QStringLiteral("unknown");
+    updateToolTip();
 
     m_menu = new QMenu();
     // 菜单文案是界面，用中文；日志与错误信息仍然保持英文（工作约定第 4 条）。
@@ -22,6 +23,11 @@ Tray::Tray(QObject *parent) : QObject(parent)
     m_suspendAction = m_menu->addAction(QStringLiteral("挂起快捷键(&S)"));
     m_reloadAction = m_menu->addAction(QStringLiteral("重载配置(&L)"));
     m_openConfigAction = m_menu->addAction(QStringLiteral("打开配置文件(&O)"));
+    m_menu->addSeparator();
+    // 构建版本：一个不可点的信息项（真实取值由启动时调 setBuildVersion 传进来，
+    // 见 core/version.h）。放在「退出」上面，和系统菜单里的「关于」条目一个位置。
+    m_versionAction = m_menu->addAction(QStringLiteral("版本 %1").arg(m_buildVersion));
+    m_versionAction->setEnabled(false);
     m_menu->addSeparator();
     m_quitAction = m_menu->addAction(QStringLiteral("退出(&Q)"));
 
@@ -46,9 +52,26 @@ void Tray::show()
 
 void Tray::setSuspended(bool suspended)
 {
-    m_icon->setToolTip(suspended ? QStringLiteral("flowkeyd（已挂起）") : QStringLiteral("flowkeyd"));
+    m_suspended = suspended;
     m_suspendAction->setText(suspended ? QStringLiteral("恢复快捷键(&R)")
                                        : QStringLiteral("挂起快捷键(&S)"));
+    updateToolTip();
+}
+
+void Tray::setBuildVersion(const QString &version)
+{
+    m_buildVersion = version;
+    m_versionAction->setText(QStringLiteral("版本 %1").arg(version));
+    updateToolTip();
+}
+
+void Tray::updateToolTip()
+{
+    QString tip = QStringLiteral("flowkeyd %1").arg(m_buildVersion);
+    if (m_suspended) {
+        tip += QStringLiteral("（已挂起）");
+    }
+    m_icon->setToolTip(tip);
 }
 
 void Tray::showMessage(const QString &title, const QString &body)

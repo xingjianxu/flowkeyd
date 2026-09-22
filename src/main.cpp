@@ -16,6 +16,7 @@
 #include "cli.h"
 #include "core/config.h"
 #include "core/keys.h"
+#include "core/version.h"
 #include "lua/lua_config.h"
 #include "platform/win/autostart.h"
 #include "platform/win/console.h"
@@ -193,8 +194,11 @@ int main(int argc, char *argv[])
         win::writeStdout(toConsole(app::helpText()));
         return 0;
     }
+    // 构建版本：项目版本号 + 本次构建的时间戳（取运行中这个 exe 的最后写入时间）。
+    // 托盘菜单、启动日志与 `--version` 都用它，见 core/version.h 里的机制说明。
+    const QString buildVersion = core::buildVersion(win::currentExecutablePath());
     if (options.showVersion) {
-        win::writeStdout(toConsole(app::versionText()));
+        win::writeStdout(toConsole(app::versionText(buildVersion)));
         return 0;
     }
     if (options.listKeys) {
@@ -406,7 +410,7 @@ int main(int argc, char *argv[])
         }
     }
 
-    win::logInfo(QStringLiteral("flowkeyd %1 starting").arg(QLatin1String(FLOWKEYD_VERSION)));
+    win::logInfo(QStringLiteral("flowkeyd %1 starting").arg(buildVersion));
     win::logInfo(QStringLiteral("configuration: %1").arg(QDir::toNativeSeparators(configPath)));
     win::logInfo(QStringLiteral("%1 hotkey(s), %2 remap(s), tick %3 ms")
                      .arg(compiled.bindings.size())
@@ -521,6 +525,7 @@ int main(int argc, char *argv[])
                      &platform::win::Tray::setSuspended);
     QObject::connect(&runtime, &app::Runtime::finished, &application, &QApplication::quit);
 
+    tray.setBuildVersion(buildVersion);
     tray.show();
     if (options.logWindow) {
         logWindow.show();

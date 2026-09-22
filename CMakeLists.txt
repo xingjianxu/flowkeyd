@@ -82,12 +82,17 @@ add_library(flowkeyd_core STATIC
     src/core/log_tail.h
     src/core/template.cpp
     src/core/template.h
+    src/core/version.cpp
+    src/core/version.h
     src/core/window_match.cpp
     src/core/window_match.h
 )
 
 target_include_directories(flowkeyd_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(flowkeyd_core PUBLIC Qt6::Core)
+# 版本号放在 core 上（PUBLIC），这样 exe、静态库与单测看到的是同一个值；
+# 版本字符串的组装在 src/core/version.cpp（见 AGENTS.md 第 2 节第 12 条）。
+target_compile_definitions(flowkeyd_core PUBLIC FLOWKEYD_VERSION="${PROJECT_VERSION}")
 flowkeyd_strict_warnings(flowkeyd_core)
 
 # ---------------------------------------------------------------------------
@@ -234,8 +239,6 @@ target_link_libraries(flowkeyd
 
 flowkeyd_strict_warnings(flowkeyd)
 
-target_compile_definitions(flowkeyd PRIVATE FLOWKEYD_VERSION="${PROJECT_VERSION}")
-
 # ---------------------------------------------------------------------------
 # 让构建产物自包含：`windeployqt` 把 Qt 与 MinGW 运行时的 DLL（以及 exe 用到的
 # QML 模块）拷到 exe 同目录，于是双击 build/<preset>/flowkeyd.exe 就能启动，
@@ -318,6 +321,7 @@ flowkeyd_add_test(tst_send_script)
 flowkeyd_add_test(tst_config)
 flowkeyd_add_test(tst_engine)
 flowkeyd_add_test(tst_template)
+flowkeyd_add_test(tst_version)
 flowkeyd_add_test(tst_lua LIBS flowkeyd_lua)
 flowkeyd_add_test(tst_autostart LIBS flowkeyd_platform)
 flowkeyd_add_test(tst_layout LIBS flowkeyd_platform)

@@ -14,9 +14,7 @@
 
 #include "lua/lua_include.h"
 
-#ifndef FLOWKEYD_VERSION
-#define FLOWKEYD_VERSION "0.0.0"
-#endif
+#include "core/version.h"
 
 namespace flowkeyd::app {
 
@@ -174,13 +172,14 @@ QString helpText()
     flowkeyd --quit
     flowkeyd --no-elevate --allow-multi --console
 )")
-        .arg(QLatin1String(FLOWKEYD_VERSION));
+        .arg(core::projectVersion());
 }
 
-QString versionText()
+QString versionText(const QString &buildVersion)
 {
-    return QStringLiteral("flowkeyd %1\n%2\n")
-        .arg(QLatin1String(FLOWKEYD_VERSION), QLatin1String(LUA_RELEASE));
+    // 第一行是「项目版本号 + 构建时间戳」，第二行是链接进来的 Lua 版本
+    // （见 AGENTS.md 第 8 节：出问题时能一眼看出是哪一份 Lua）。
+    return QStringLiteral("flowkeyd %1\n%2\n").arg(buildVersion, QLatin1String(LUA_RELEASE));
 }
 
 QStringList commandLineArguments()
