@@ -13,6 +13,9 @@ flowkeyd 是 **oskeyd**（Rust 参考实现）的 **Qt 6 / C++ 复刻版**：它
 ——例如一个电源选单（睡眠 / 关机 / 重启，按 `S`/`P`/`R` 选择、`Esc` 关闭）。
 同一套卡片还用来弹一个**快捷键帮助**：`Win+/` 列出当前全部绑定，可以直接输入筛选，
 `Enter`（或双击一行）就直接把那一行的动作跑起来。
+它还能按程序摆放窗口：`window_rule{...}` 让某个程序的窗口第一次出现时落到指定的
+虚拟桌面 / 显示器上（默认铺满那块显示器的工作区），并在之前断开的显示器重新接上时
+重新归位。
 
 ```lua
 hotkey{
@@ -22,6 +25,9 @@ hotkey{
 }
 
 remap{ from = "CapsLock", to = "Esc" }
+
+-- 按程序摆放窗口：第一次出现时放到第 2 个虚拟桌面的右屏并最大化
+window_rule{ process = "wezterm", desktop = 2, monitor = 2 }
 ```
 
 ## 与 oskeyd 的关系
@@ -306,8 +312,11 @@ flowkeyd [选项]
 
 ```console
 $ flowkeyd --check --config flowkeyd.lua.example
-D:\prj\flowkeyd\flowkeyd.lua.example: OK (37 hotkey(s), 3 remap(s))
+D:\prj\flowkeyd\flowkeyd.lua.example: OK (37 hotkey(s), 3 remap(s), 3 window rule(s))
 ```
+
+（`window rule(s)` 只在配置里真的写了 `window_rule` 时才出现，没有摆放规则的
+配置仍然输出老样子。）
 
 `--list` 的形状与 oskeyd 的 `print_bindings` 逐字形似（因此两边的输出可以对比）。
 
@@ -972,25 +981,31 @@ window_rule{
 $C = 'C:\Qt\Tools\CMake_64\bin\cmake.exe'
 & $C --build --preset debug
 & $C --build --preset release
-& ctest --test-dir build/windows-debug --output-on-failure     # 19 个测试目标
+& ctest --test-dir build/windows-debug --output-on-failure     # 22 个测试目标
 
 # 真实桌面后端（剪贴板 / 音量 / 窗口 / 虚拟桌面）
 $env:FLOWKEYD_ALLOW_INTERACTIVE_TESTS = '1'
 & build\windows-debug\tst_interactive.exe
 ```
 
-* **单元测试**（Qt Test，19 个目标）覆盖按键/和弦解析、发送脚本解析、模板展开、
-  配置校验（含 `menu` 的结构与条目动作、`help` 的标题）、Lua 脚本的求值与转换
+* **单元测试**（Qt Test，22 个目标）覆盖按键/和弦解析、发送脚本解析、模板展开、
+  配置校验（含 `menu` 的结构与条目动作、`help` 的标题、`window_rule` 的字段与
+  几何默认值）、Lua 脚本的求值与转换
   （两种写法、DSL 构造器、内联函数被拒绝、空动作列表、UTF-8 BOM、`menu`/`power`/
-  `help` 助手）、整个匹配状态机（优先级、吞键、重复、挂起、重映射 hold/tap）、
+  `help`/`window_rule` 助手）、整个匹配状态机（优先级、吞键、重复、挂起、
+  重映射 hold/tap）、
   选单与帮助窗口的几何/筛选/选中项/计数/危险动作的两次确认、日志尾随（增量、
   半行、被截断的多字节
   UTF-8）、跨 `SendInput` 的结构体布局（`INPUT` 必须是 40 字节）、
-  音量步进/钳位、窗口匹配、电源与虚拟桌面的纯逻辑表。
+  音量步进/钳位、窗口匹配、显示器选择与窗口摆放几何（`tst_placement`）、
+  电源与虚拟桌面的纯逻辑表。
 * **交互式测试**（`FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`，默认 skip）真的碰这台
   机器的剪贴板/音量/前台窗口：剪贴板往返、音量读写与钳位并恢复原值、
-  启动记事本→激活→最小化→恢复→关闭、`{selection}` 的 Ctrl+C 往返，
-  以及虚拟桌面的只读探测 + 一次可逆的切换（切走再切回来）。
+  启动记事本→激活→最小化→恢复→关闭、`{selection}` 的 Ctrl+C 往返、
+  虚拟桌面的只读探测 + 一次可逆的切换（切走再切回来），
+  以及 `window_rule` 的两条真机验证：把窗口移到另一个虚拟桌面再移回来
+  （用**已公开**的 `GetWindowDesktopId` 确认桌面 GUID 真的变了）、
+  把窗口摆到另一块显示器并最大化再还原。
   **电源动作一个都不会被自动化测试触碰**：关机/重启/注销/睡眠/休眠/锁定/关屏
   都不进测试（`tst_power_table` 只测纯逻辑表，不碰真实调用），
   只能由你自己按键或点选单验证。
