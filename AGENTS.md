@@ -3262,8 +3262,9 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > `flowkeyd.lua.example` 与第 10/11 节已同步。
 > 按工作约定第 11 条：常驻实例已 `--quit` → 构建 release → 从
 > `build\dist-release` 重新拉起（自启任务仍指向那个路径）。
-> 本次没有动钩子/引擎，`acceptance.ps1` 跑到的是同一份源码的同一个 exe；
-> 后续为了把版本号里的 git 修订刷成新提交而重新链接了一次（只改文档的提交），
+> 本次动了窗口后端（`platform/win/window`）与 `dispatcher`，所以按第 11 节第 3 条
+> 跑了 `acceptance.ps1`（见上）；它跑的是与提交内容一致的同一份源码；
+> 之后为了把版本号里的 git 修订刷成新提交又重新链接了一次（只动文档、不动代码），
 > 没有再跑一遍验收脚本。
 
 ---
