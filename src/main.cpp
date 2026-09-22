@@ -184,19 +184,20 @@ int main(int argc, char *argv[])
     // 用 GetCommandLineW 取参数，避免窄字符代码页把非 ASCII 的路径打乱。
     const QStringList args = app::commandLineArguments();
 
+    // 构建版本号 = 本次构建的时间戳（取运行中这个 exe 的最后写入时间）。
+    // `--help`、`--version`、启动日志与托盘菜单都用它，见 core/version.h。
+    const QString buildVersion = core::buildVersion(win::currentExecutablePath());
+
     app::CliOptions options;
     if (const auto error = app::parseCli(args, &options); error.has_value()) {
         win::writeStderr(toConsole(QStringLiteral("flowkeyd: %1\n\n").arg(*error)));
-        win::writeStderr(toConsole(app::helpText()));
+        win::writeStderr(toConsole(app::helpText(buildVersion)));
         return 2;
     }
     if (options.showHelp) {
-        win::writeStdout(toConsole(app::helpText()));
+        win::writeStdout(toConsole(app::helpText(buildVersion)));
         return 0;
     }
-    // 构建版本：项目版本号 + 本次构建的时间戳（取运行中这个 exe 的最后写入时间）。
-    // 托盘菜单、启动日志与 `--version` 都用它，见 core/version.h 里的机制说明。
-    const QString buildVersion = core::buildVersion(win::currentExecutablePath());
     if (options.showVersion) {
         win::writeStdout(toConsole(app::versionText(buildVersion)));
         return 0;

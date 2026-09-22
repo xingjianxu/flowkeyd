@@ -14,8 +14,6 @@
 
 #include "lua/lua_include.h"
 
-#include "core/version.h"
-
 namespace flowkeyd::app {
 
 namespace {
@@ -127,7 +125,7 @@ std::optional<QString> parseCli(const QStringList &args, CliOptions *out)
     return std::nullopt;
 }
 
-QString helpText()
+QString helpText(const QString &buildVersion)
 {
     return QStringLiteral(R"(flowkeyd %1 — 由 Lua 配置驱动的键盘钩子守护进程
 
@@ -172,12 +170,12 @@ QString helpText()
     flowkeyd --quit
     flowkeyd --no-elevate --allow-multi --console
 )")
-        .arg(core::projectVersion());
+        .arg(buildVersion);
 }
 
 QString versionText(const QString &buildVersion)
 {
-    // 第一行是「项目版本号 + 构建时间戳」，第二行是链接进来的 Lua 版本
+    // 第一行是构建版本号（构建的时间戳），第二行是链接进来的 Lua 版本
     // （见 AGENTS.md 第 8 节：出问题时能一眼看出是哪一份 Lua）。
     return QStringLiteral("flowkeyd %1\n%2\n").arg(buildVersion, QLatin1String(LUA_RELEASE));
 }

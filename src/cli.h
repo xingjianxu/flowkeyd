@@ -58,11 +58,10 @@ struct CliOptions
 /// 出错时返回一条中文错误信息（用户可见的 CLI 文案用中文）。
 std::optional<QString> parseCli(const QStringList &args, CliOptions *out);
 
-/// 中文帮助文本。
-QString helpText();
+/// 中文帮助文本。`buildVersion` 由 `core::buildVersion()` 给出（构建时间戳）。
+QString helpText(const QString &buildVersion);
 
 /// 版本文本：`flowkeyd <构建版本>` + 所链接的 Lua 版本（见 AGENTS.md 第 8 节）。
-/// `buildVersion` 由 `core::buildVersion()` 组装（项目版本号 + 构建时间戳）。
 QString versionText(const QString &buildVersion);
 
 /// 本进程的命令行参数（含程序名），来自 `GetCommandLineW`，因此不受代码页影响。

@@ -90,9 +90,6 @@ add_library(flowkeyd_core STATIC
 
 target_include_directories(flowkeyd_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(flowkeyd_core PUBLIC Qt6::Core)
-# 版本号放在 core 上（PUBLIC），这样 exe、静态库与单测看到的是同一个值；
-# 版本字符串的组装在 src/core/version.cpp（见 AGENTS.md 第 2 节第 12 条）。
-target_compile_definitions(flowkeyd_core PUBLIC FLOWKEYD_VERSION="${PROJECT_VERSION}")
 flowkeyd_strict_warnings(flowkeyd_core)
 
 # ---------------------------------------------------------------------------
