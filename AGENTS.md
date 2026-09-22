@@ -2945,9 +2945,11 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > `-- flowkeyd: source revision 42900ad`，`build/windows-debug/generated/flowkeyd_revision.h`
 > 就是它，`--version` → `flowkeyd 26-09-22-42900ad`。**提交 `a43340c` 之后两个
 > profile 都自动重新配置到了新哈希**（这正是 `CMAKE_CONFIGURE_DEPENDS` 那条要验的
-> 东西）：两份生成头都是 `a43340c`，`build/dist-release/flowkeyd.exe` 的
-> `--version` 是 `flowkeyd 26-09-22-a43340c`，常驻实例日志第一行也是
-> `flowkeyd 26-09-22-a43340c starting`；那之后只改文档，二进制不再重建。
+> 东西）：两份生成头都变成 `a43340c`，`build/dist-release/flowkeyd.exe` 的
+> `--version` 变成 `flowkeyd 26-09-22-a43340c`，重新拉起的常驻实例日志第一行是
+> `flowkeyd 26-09-22-a43340c starting` —— 这是快照：版本号里的 rev 永远是**构建
+> 当时的 HEAD**，所以这份记录自身那个（只改文档的）提交不会再出现在二进制里，
+> 收尾时是「提交 → 构建 → 重新拉起常驻」，让常驻跑的那份就对应 HEAD。
 > 托盘菜单用进程内 dump 验证（真实 `Tray` + `findChild`）：`版本 <日期>-<rev>`
 > 是 `enabled=0` 的信息项，悬停提示带构建版本与挂起状态。
 > `build/dist-release` 已是最新（release 的 `POST_BUILD` 自动产出，SHA-256 与
