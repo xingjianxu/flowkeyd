@@ -92,6 +92,23 @@ struct IVirtualDesktopManagerVtbl
     HRESULT(WINAPI *getWindowDesktopId)(void *, HWND, GUID *);
 };
 
+/// 未公开的 `IVirtualDesktop`：`IUnknown` + `IsViewVisible`（下标 3，没用到）+
+/// `GetID`（下标 4）。
+///
+/// `GetID` 只用来把**内部**的桌面对象与**已公开**的 `GetWindowDesktopId` 给出的
+/// GUID 对上号（`switchToWindowDesktop` 需要知道窗口在枚举结果里的下标，而
+/// `IVirtualDesktopManagerInternal` 没有「这个窗口在哪张桌面」这种查询）。
+/// 布局事实与 VD.ahk 的 `VD_getDesktopOfWindow` 一致（它也用下标 4）；
+/// `IsViewVisible` 仍写下标 3 的占位，免得后面有人误以为 3、4 之间还有别的方法。
+struct IVirtualDesktopVtbl
+{
+    HRESULT(WINAPI *queryInterface)(void *, const GUID *, void **);
+    ULONG(WINAPI *addRef)(void *);
+    ULONG(WINAPI *release)(void *);
+    void *isViewVisible;
+    HRESULT(WINAPI *getId)(void *, GUID *);
+};
+
 /// `Layout::Plain` 的 `IVirtualDesktopManagerInternal` vtable。
 struct ManagerPlainVtbl
 {
@@ -251,11 +268,19 @@ public:
     /// 切到第 `index` 个桌面（从 1 开始）。
     bool goTo(std::uint32_t index, QString *detail, QString *error) const;
 
+    /// 切到 `hwnd` 所在的那张桌面。
+    bool goToWindowDesktop(HWND hwnd, QString *detail, QString *error) const;
+
     /// 把窗口移到第 `index` 个桌面（从 1 开始）。
     bool moveWindowToDesktop(HWND hwnd, std::uint32_t index, QString *detail, QString *error) const;
 
     /// 已公开的 `IVirtualDesktopManager::GetWindowDesktopId`（只读）。
     std::optional<QString> windowDesktopId(HWND hwnd) const;
+
+    /// `hwnd` 所在桌面在 `desktops` 里的下标。
+    std::optional<std::size_t> desktopIndexOfWindow(HWND hwnd,
+                                                   const std::vector<ComPtr> &desktops,
+                                                   QString *error) const;
 
 private:
     bool currentDesktop(ComPtr *out, QString *error) const;
@@ -530,6 +555,82 @@ bool Session::goTo(std::uint32_t index, QString *detail, QString *error) const
     }
     if (detail != nullptr) {
         *detail = QStringLiteral("desktop %1/%2").arg(index).arg(count);
+    }
+    return true;
+}
+
+std::optional<std::size_t> Session::desktopIndexOfWindow(HWND hwnd,
+                                                        const std::vector<ComPtr> &desktops,
+                                                        QString *error) const
+{
+    const std::optional<QString> wanted = windowDesktopId(hwnd);
+    if (!wanted.has_value()) {
+        if (error != nullptr) {
+            *error = QStringLiteral("could not read the desktop id of the window");
+        }
+        return std::nullopt;
+    }
+
+    // 逐个问桌面的 GUID，有且只有一个能对上才算数。这同时是一道自检：万一
+    // `IVirtualDesktop::GetID` 的 vtable 下标在这台机器上不是 4（版本表选错、
+    // 或者系统换了布局），拿到的就是一堆对不上的 GUID，于是我们只是报错。
+    std::optional<std::size_t> found;
+    for (std::size_t index = 0; index < desktops.size(); ++index) {
+        GUID id{};
+        const HRESULT hr = vtableOf<IVirtualDesktopVtbl>(desktops[index].get())
+                               ->getId(desktops[index].get(), &id);
+        if (FAILED(hr)) {
+            if (error != nullptr) {
+                *error = hresultMessage(hr, "IVirtualDesktop::GetID");
+            }
+            return std::nullopt;
+        }
+        if (guidText(id) != *wanted) {
+            continue;
+        }
+        if (found.has_value()) {
+            if (error != nullptr) {
+                *error = QStringLiteral("two virtual desktops report the same id (%1); the shell's "
+                                        "IVirtualDesktop layout does not match this build")
+                             .arg(*wanted);
+            }
+            return std::nullopt;
+        }
+        found = index;
+    }
+    if (!found.has_value() && error != nullptr) {
+        *error = QStringLiteral("no virtual desktop has the id of the window (%1); the shell's "
+                                "IVirtualDesktop layout does not match this build")
+                     .arg(*wanted);
+    }
+    return found;
+}
+
+bool Session::goToWindowDesktop(HWND hwnd, QString *detail, QString *error) const
+{
+    std::vector<ComPtr> desktops;
+    if (!enumerateDesktops(&desktops, error)) {
+        return false;
+    }
+    const std::optional<std::size_t> index = desktopIndexOfWindow(hwnd, desktops, error);
+    if (!index.has_value()) {
+        return false;
+    }
+    ComPtr current;
+    if (!currentDesktop(&current, error)) {
+        return false;
+    }
+    if (desktops[*index].same(current)) {
+        if (detail != nullptr) {
+            *detail = QStringLiteral("already on desktop %1/%2").arg(*index + 1).arg(desktops.size());
+        }
+        return true;
+    }
+    if (!switchDesktop(desktops[*index], error)) {
+        return false;
+    }
+    if (detail != nullptr) {
+        *detail = QStringLiteral("desktop %1/%2").arg(*index + 1).arg(desktops.size());
     }
     return true;
 }
@@ -851,8 +952,15 @@ bool switchTo(std::uint32_t index, QString *detail, QString *error)
     return true;
 }
 
-bool moveWindowToDesktop(HWND hwnd, std::uint32_t index, QString *detail, QString *error)
+bool moveWindowToDesktop(HWND hwnd,
+                         std::uint32_t index,
+                         QString *detail,
+                         QString *error,
+                         bool *changed)
 {
+    if (changed != nullptr) {
+        *changed = false;
+    }
     if (hwnd == nullptr || IsWindow(hwnd) == 0) {
         if (error != nullptr) {
             *error = QStringLiteral("the window is gone");
@@ -862,6 +970,69 @@ bool moveWindowToDesktop(HWND hwnd, std::uint32_t index, QString *detail, QStrin
     if (index == 0) {
         if (error != nullptr) {
             *error = QStringLiteral("desktop numbers start at 1");
+        }
+        return false;
+    }
+    QString localDetail;
+    QString localError;
+    bool ok = false;
+    bool localChanged = false;
+    inSta([&]() {
+        Apartment apartment;
+        if (!apartment.enter(&localError)) {
+            return;
+        }
+        const WindowsVersion version = windowsVersion();
+        const ApiEntry &api = apiFor(version.build, version.revision);
+        Session session;
+        if (!session.open(api, version, &localError)) {
+            return;
+        }
+        const std::optional<QString> before = session.windowDesktopId(hwnd);
+        ok = session.moveWindowToDesktop(hwnd, index, &localDetail, &localError);
+        if (!ok) {
+            return;
+        }
+        // 未公开的 `MoveViewToDesktop` 返回 S_OK 也可能什么都没发生，而且它是
+        // **异步生效**的（shell 在自己的线程上搬），所以等一下再确认：移动前后的
+        // 桌面 GUID 都拿得到且不一样，才算是真搬动了。
+        std::optional<QString> after = before;
+        if (before.has_value()) {
+            for (int attempt = 0; attempt < 10; ++attempt) {
+                after = session.windowDesktopId(hwnd);
+                if (after.has_value() && *after != *before) {
+                    localChanged = true;
+                    break;
+                }
+                Sleep(25);
+            }
+        }
+        logDebug(QStringLiteral("window desktop id %1 -> %2")
+                     .arg(before.value_or(QStringLiteral("?")),
+                          after.value_or(QStringLiteral("?"))));
+    });
+    if (!ok) {
+        if (error != nullptr) {
+            *error = localError.isEmpty()
+                         ? QStringLiteral("could not move the window to desktop %1").arg(index)
+                         : localError;
+        }
+        return false;
+    }
+    if (detail != nullptr) {
+        *detail = localDetail;
+    }
+    if (changed != nullptr) {
+        *changed = localChanged;
+    }
+    return true;
+}
+
+bool switchToWindowDesktop(HWND hwnd, QString *detail, QString *error)
+{
+    if (hwnd == nullptr || IsWindow(hwnd) == 0) {
+        if (error != nullptr) {
+            *error = QStringLiteral("the window is gone");
         }
         return false;
     }
@@ -879,22 +1050,11 @@ bool moveWindowToDesktop(HWND hwnd, std::uint32_t index, QString *detail, QStrin
         if (!session.open(api, version, &localError)) {
             return;
         }
-        const std::optional<QString> before = session.windowDesktopId(hwnd);
-        ok = session.moveWindowToDesktop(hwnd, index, &localDetail, &localError);
-        if (ok) {
-            // 未公开的 `MoveViewToDesktop` 返回 S_OK 也可能什么都没发生；
-            // 用已公开的 `GetWindowDesktopId` 记一条 before -> after 便于诊断。
-            const std::optional<QString> after = session.windowDesktopId(hwnd);
-            logDebug(QStringLiteral("window desktop id %1 -> %2")
-                         .arg(before.value_or(QStringLiteral("?")),
-                              after.value_or(QStringLiteral("?"))));
-        }
+        ok = session.goToWindowDesktop(hwnd, &localDetail, &localError);
     });
     if (!ok) {
         if (error != nullptr) {
-            *error = localError.isEmpty()
-                         ? QStringLiteral("could not move the window to desktop %1").arg(index)
-                         : localError;
+            *error = localError;
         }
         return false;
     }

@@ -509,7 +509,14 @@ bool isPlaceableWindow(HWND hwnd)
 ///
 /// 只在三个时机被调用（窗口出现 / 显示器重新接入 / 启动），**之后不再干预**：
 /// 用户自己移动或缩放窗口不会被纠正。
-void placeWindowOnce(const std::shared_ptr<const core::Compiled> &config, HWND hwnd)
+///
+/// `followDesktop` 只对“窗口第一次出现”那一遍为真：规则**真的**把窗口搬到了别的
+/// 虚拟桌面时，把视图也切过去并重新激活它（`window_rule` 的语义是“这个程序属于
+/// 那张桌面”，而用户刚刚把它弄出来）。启动 / 显示器重新接入那两遍只是重新摆放
+/// 已经在位的窗口，跟着走只会把视图无谓地切来切去。
+void placeWindowOnce(const std::shared_ptr<const core::Compiled> &config,
+                     HWND hwnd,
+                     bool followDesktop)
 {
     if (!config || config->windowRules.empty()) {
         return;
@@ -532,10 +539,14 @@ void placeWindowOnce(const std::shared_ptr<const core::Compiled> &config, HWND h
     }
 
     QStringList done;
+    bool movedToAnotherDesktop = false;
     if (rule->desktop.has_value()) {
         QString detail;
         QString error;
-        if (!win::desktop::moveWindowToDesktop(hwnd, *rule->desktop, &detail, &error)) {
+        // `changed` 只在**真的**换了桌面时为真：窗口本来就在目标桌面上（例如一个已经
+        // 在第 3 个桌面的程序又开了一个窗口）不算“搬迁”，视图不该跟着走。
+        if (!win::desktop::moveWindowToDesktop(hwnd, *rule->desktop, &detail, &error,
+                                              &movedToAnotherDesktop)) {
             win::logWarn(QStringLiteral("window rule `%1`: %2: %3")
                              .arg(rule->name, core::rustDebug(title), error));
         } else {
@@ -576,6 +587,24 @@ void placeWindowOnce(const std::shared_ptr<const core::Compiled> &config, HWND h
                                      QString::number(rect.height),
                                      QString::number(rect.x),
                                      QString::number(rect.y)));
+            }
+        }
+    }
+
+    // 视图跟着窗口走：让用户跟着它到那张桌面，并且它要重新拿到前台（`SwitchDesktop`
+    // 本身会激活目标桌面上“上次用过”的那个窗口，不一定是它）。
+    if (followDesktop && movedToAnotherDesktop && rule->desktop.has_value()) {
+        QString detail;
+        QString error;
+        if (!win::desktop::switchTo(*rule->desktop, &detail, &error)) {
+            win::logWarn(QStringLiteral("window rule `%1`: could not follow %2: %3")
+                             .arg(rule->name, core::rustDebug(title), error));
+        } else {
+            done.append(QStringLiteral("view -> %1").arg(detail));
+            if (!win::window::raiseWindow(hwnd)) {
+                win::logWarn(QStringLiteral("window rule `%1`: could not activate %2 after "
+                                            "switching to its desktop")
+                                 .arg(rule->name, core::rustDebug(title)));
             }
         }
     }
@@ -912,7 +941,8 @@ void Dispatcher::applyPlacementRules(const std::shared_ptr<const core::Compiled>
         win::logDebug(QStringLiteral("window rules: checking %1 shown window(s)")
                           .arg(event.windows.size()));
         for (HWND hwnd : event.windows) {
-            placeWindowOnce(config, hwnd);
+            // 窗口第一次出现：规则把它搬到别的桌面时，视图也跟着过去。
+            placeWindowOnce(config, hwnd, true);
         }
         return;
     }
@@ -924,7 +954,8 @@ void Dispatcher::applyPlacementRules(const std::shared_ptr<const core::Compiled>
                      : QStringLiteral("re-applying after a monitor reconnected"))
             .arg(windows.size()));
     for (HWND hwnd : windows) {
-        placeWindowOnce(config, hwnd);
+        // 启动与显示器重新接入：只重新摆放，不动视图（见 `placeWindowOnce`）。
+        placeWindowOnce(config, hwnd, false);
     }
 }
 

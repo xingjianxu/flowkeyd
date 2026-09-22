@@ -1,6 +1,7 @@
 #include "platform/win/window.h"
 
 #include "core/window_match.h"
+#include "platform/win/desktop.h"
 #include "platform/win/dwm.h"
 #include "platform/win/logging.h"
 
@@ -130,6 +131,35 @@ private:
     bool m_active = false;
 };
 
+/// 窗口是不是在当前（用户看着的那张）虚拟桌面上。
+///
+/// 拿不到答案时（虚拟桌面后端不可用）返回 `true`，也就是按老行为处理：
+/// 探测失败不该改变动作的结果。
+bool isOnCurrentDesktop(HWND hwnd)
+{
+    QString error;
+    const std::optional<bool> onCurrent = desktop::isWindowOnCurrentDesktop(hwnd, &error);
+    if (!onCurrent.has_value()) {
+        logDebug(QStringLiteral("could not tell whether the window is on the current desktop: %1")
+                     .arg(error));
+        return true;
+    }
+    return *onCurrent;
+}
+
+/// 窗口是不是“用户现在真的在用的那一个”。
+///
+/// 只看 `GetForegroundWindow()` 是不够的：`window_rule` 把窗口搬到别的虚拟桌面
+/// （未公开的 `MoveViewToDesktop`）之后，**shell 仍然把它当作前台窗口**（本机 24H2
+/// 实测），于是它会看起来“已经激活”，而用户根本看不到它。
+bool isForegroundOnThisDesktop(HWND hwnd)
+{
+    if (GetForegroundWindow() != hwnd || IsIconic(hwnd) != 0) {
+        return false;
+    }
+    return isOnCurrentDesktop(hwnd);
+}
+
 } // namespace
 
 QString windowTitle(HWND hwnd)
@@ -203,18 +233,30 @@ std::vector<HWND> topLevelWindows()
 
 bool isActive(HWND hwnd)
 {
-    return GetForegroundWindow() == hwnd && IsIconic(hwnd) == 0;
+    return isForegroundOnThisDesktop(hwnd);
 }
 
 bool raiseWindow(HWND hwnd)
 {
+    // 窗口在别的虚拟桌面上时，`SetForegroundWindow` 是**不够**的：如果它正好是
+    // shell 记着的前台窗口（被 `MoveViewToDesktop` 搬走之后就是这样，本机实测），
+    // `SetForegroundWindow` 会返回 TRUE 却什么都不做。所以先把视图切到它那一张桌面。
+    if (!isOnCurrentDesktop(hwnd)) {
+        QString detail;
+        QString error;
+        if (!desktop::switchToWindowDesktop(hwnd, &detail, &error)) {
+            logWarn(QStringLiteral("could not switch to the desktop of the window: %1").arg(error));
+        } else {
+            logDebug(QStringLiteral("switched to the desktop of the window: %1").arg(detail));
+        }
+    }
     // 除非调用进程拥有前台锁，否则 `SetForegroundWindow` 会被拒绝，
     // 而钩子守护进程不能指望拥有它。三级递进尝试（照抄 oskeyd 的
     // `raise_window`）：
     // 1. `SetForegroundWindow`（常见情况下唯一需要的）。
     // 2. 附着到持有锁的那个线程的输入队列，再从那里重试。
     // 3. `BringWindowToTop` + `SetWindowPos(HWND_TOP)`，然后再重试一次。
-    if (GetForegroundWindow() == hwnd && IsIconic(hwnd) == 0) {
+    if (isActive(hwnd)) {
         return true;
     }
     if (SetForegroundWindow(hwnd) != 0) {
@@ -238,7 +280,7 @@ bool raiseWindow(HWND hwnd)
     if (attached) {
         AttachThreadInput(foregroundThread, thisThread, FALSE);
     }
-    return raised || GetForegroundWindow() == hwnd;
+    return raised || isActive(hwnd);
 }
 
 bool applyTo(HWND hwnd, core::WindowOp op, bool animate, QString *detail, QString *error)

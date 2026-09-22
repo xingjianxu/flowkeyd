@@ -54,6 +54,7 @@ private slots:
     void copySelectionCopiesTheFocusedSelection();
     void desktopBackendProbesAndSwitches();
     void moveWindowToAnotherDesktopAndBack();
+    void activatesAWindowThatIsOnAnotherDesktop();
     void placementMovesAWindowToAnotherMonitor();
 };
 
@@ -395,6 +396,122 @@ void TestInteractive::moveWindowToAnotherDesktopAndBack()
     const auto backId = platform::win::desktop::windowDesktopId(hwnd, &error);
     QVERIFY2(backId.has_value(), qPrintable(error));
     QCOMPARE(*backId, *beforeId);
+
+    (void)platform::win::window::applyTo(hwnd, core::WindowOp::Close, false, &detail, &error);
+}
+
+/// 跨桌面“唤醒”：窗口被搬到别的虚拟桌面之后，`window::isActive` 不能再被 shell
+/// 记着的“前台窗口”骗到，`window::raiseWindow` 必须能把视图切回去并让它拿到前台。
+///
+/// 这就是用户报的那个 bug：`window_rule` 把刚启动的 WPS 摆到第 3 个桌面，而 shell
+/// 仍然把那个窗口当前台窗口（实测），于是下一次按 `Win+3` 反而把它*收起*了 ——
+/// 用户看到的是一个既不在眼前、也没被激活的窗口。
+void TestInteractive::activatesAWindowThatIsOnAnotherDesktop()
+{
+    if (!interactiveEnabled()) {
+        QSKIP("set FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1 to run the interactive tests");
+    }
+    QString error;
+    platform::win::desktop::Snapshot snapshot;
+    QVERIFY2(platform::win::desktop::probe(&snapshot, &error), qPrintable(error));
+    if (snapshot.count < 2) {
+        QSKIP("only one virtual desktop exists; nothing to move a window to");
+    }
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString marker =
+        QStringLiteral("flowkeyd-desktop-%1").arg(QCoreApplication::applicationPid());
+    const QString file = dir.filePath(marker + QStringLiteral(".txt"));
+    {
+        QFile handle(file);
+        QVERIFY(handle.open(QIODevice::WriteOnly));
+        handle.write("desktop\n");
+    }
+    platform::win::RunCommandSpec spec;
+    spec.program = QStringLiteral("notepad.exe");
+    spec.args << QDir::toNativeSeparators(file);
+    QString detail;
+    QVERIFY2(platform::win::runCommand(spec, &detail, &error), qPrintable(error));
+
+    const core::WindowQuery query =
+        core::WindowQuery::make(std::optional<QString>(marker), std::nullopt);
+    HWND hwnd = nullptr;
+    for (int i = 0; i < 120 && hwnd == nullptr; ++i) {
+        hwnd = platform::win::window::find(query);
+        if (hwnd == nullptr) {
+            QThread::msleep(50);
+        }
+    }
+    QVERIFY2(hwnd != nullptr, "the launched Notepad window never appeared");
+
+    // 先让它拿到前台（模拟“用户刚启动它”），再搬到别的桌面 —— 也就是
+    // `window_rule` 在那个窗口刚出现时干的事。
+    QVERIFY2(platform::win::window::raiseWindow(hwnd), "could not activate the fresh window");
+    const std::uint32_t other = snapshot.current == 1 ? 2 : 1;
+    bool changed = false;
+    QVERIFY2(platform::win::desktop::moveWindowToDesktop(hwnd, other, &detail, &error, &changed),
+             qPrintable(error));
+    QVERIFY2(changed, "moveWindowToDesktop did not report a real desktop change");
+
+    // 把视图明确留在原来那张桌面：把**前台**窗口搬到别的桌面时 Windows 有时候会把
+    // 视图一起带过去，而这里要构造的是用户报的那个现场 —— 窗口在别的桌面上，视图
+    // 却还留在这儿（`window_rule` 搬走刚启动的 WPS 之后就是这样）。
+    QVERIFY2(platform::win::desktop::switchTo(snapshot.current, &detail, &error),
+             qPrintable(error));
+
+    bool left = false;
+    for (int i = 0; i < 60 && !left; ++i) {
+        const auto onCurrent = platform::win::desktop::isWindowOnCurrentDesktop(hwnd, &error);
+        QVERIFY2(onCurrent.has_value(), qPrintable(error));
+        left = !*onCurrent;
+        if (!left) {
+            QThread::msleep(50);
+        }
+    }
+    QVERIFY2(left, "the window did not leave the current desktop");
+
+    // 关键断言：它在别的桌面上，所以它**不是**“用户正在用的那个窗口”。
+    // （搬前台窗口时 shell 常常还把它当前台窗口，本机实测就是这样。）
+    qInfo().noquote() << "window on another desktop: shellForegroundIsIt"
+                      << (GetForegroundWindow() == hwnd);
+    QVERIFY2(!platform::win::window::isActive(hwnd),
+             "a window on another virtual desktop must not count as active");
+
+    // 把视图切回去并重新激活它。
+    QVERIFY2(platform::win::window::raiseWindow(hwnd), "raiseWindow failed across desktops");
+    bool backOnCurrent = false;
+    for (int i = 0; i < 60 && !backOnCurrent; ++i) {
+        const auto onCurrent = platform::win::desktop::isWindowOnCurrentDesktop(hwnd, &error);
+        QVERIFY2(onCurrent.has_value(), qPrintable(error));
+        backOnCurrent = *onCurrent;
+        if (!backOnCurrent) {
+            QThread::msleep(50);
+        }
+    }
+    QVERIFY2(backOnCurrent, "the view did not switch back to the desktop of the window");
+    QVERIFY2(GetForegroundWindow() == hwnd, "the window did not get the foreground");
+    QVERIFY2(platform::win::window::isActive(hwnd), "isActive is false right after raiseWindow");
+
+    // 已经在当前桌面上时，`switchToWindowDesktop` 是空操作。
+    QVERIFY2(platform::win::desktop::switchToWindowDesktop(hwnd, &detail, &error),
+             qPrintable(error));
+    QVERIFY2(detail.startsWith(QStringLiteral("already on ")), qPrintable(detail));
+
+    // 移回原来的桌面，并把视图也带回去（别把用户留在别的桌面上）。
+    bool movedAgain = true;
+    QVERIFY2(platform::win::desktop::moveWindowToDesktop(hwnd, snapshot.current, &detail, &error,
+                                                        &movedAgain),
+             qPrintable(error));
+    QVERIFY2(platform::win::desktop::switchTo(snapshot.current, &detail, &error), qPrintable(error));
+
+    // 搬到它已经在的那张桌面不是“搬迁” —— `window_rule` 靠这个布尔量决定要不要
+    // 让视图跟着走，所以这里必须为假。
+    bool changedBack = true;
+    QVERIFY2(platform::win::desktop::moveWindowToDesktop(hwnd, snapshot.current, &detail, &error,
+                                                        &changedBack),
+             qPrintable(error));
+    QVERIFY2(!changedBack, "moving a window to the desktop it already is on reported a change");
 
     (void)platform::win::window::applyTo(hwnd, core::WindowOp::Close, false, &detail, &error);
 }

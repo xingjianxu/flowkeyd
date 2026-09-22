@@ -285,6 +285,19 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
     `SetWindowPlacement`）、`platform/win/desktop::moveWindowToDesktop`
     （未公开的 `MoveViewToDesktop`）、`platform/win/hook`（`SetWinEventHook` +
     显示器轮询）与 `app/dispatcher`（真正执行）。细节与坑见第 10 节。
+14. **跨虚拟桌面的“唤起”与跟随（项目所有者 2026-09 拍板）。**
+    1. `window` 动作的 `activate`：目标窗口不在当前虚拟桌面上时不算“已经在前台”，
+       按下去就是**切到它所在的那张桌面并激活它**（视图跟着过去）；只有它已经在
+       当前桌面并且真的在前台时才是 `toggle` 的收起。
+    2. `window_rule` **真的**把窗口搬到了另一张桌面时，视图也跟着过去并重新激活
+       那个窗口（“总是跟随”，不限于“窗口正在前台”）。
+       **只在“窗口第一次出现”那一遍做**：启动 / 显示器重新接入那两遍只重新摆放
+       已经在位的窗口，跟着走会把视图无谓地切来切去。
+       “真的搬动”= 窗口的桌面 GUID 变了；窗口本来就在目标桌面上（同一个程序又开
+       一个窗口）不算，不切。
+    为什么这两条必须一起做：`MoveViewToDesktop` 把窗口搬走之后 shell 仍然把它当
+    作**前台窗口**，所以“是不是已经激活”的判定不带上虚拟桌面时，同一个快捷键会
+    去*收起*一个用户根本看不见的窗口 —— 见第 10 节。
 
 ---
 
@@ -390,8 +403,8 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `src/platform/win/hook.h/.cpp`            | 钩子回调、**钩子线程自己的 Win32 消息循环**、`SetTimer`、控制消息、重载；另外还负责 `window_rule` 的两个监听：`SetWinEventHook`（`EVENT_OBJECT_SHOW` / `DESTROY`，按 HWND 去重）与一个 350 ms 的显示器轮询定时器。**定时器 id 必须用 `SetTimer` 的返回值**，见第 10 节 |
 | `src/platform/win/audio.h/.cpp`           | Core Audio `IAudioEndpointVolume`，手写 COM vtable（**高风险**）                                                                                                                                                            |
 | `src/platform/win/clipboard.h/.cpp`       | 剪贴板读写（`CF_UNICODETEXT`）                                                                                                                                                                                              |
-| `src/platform/win/window.h/.cpp`          | 窗口查找（标题子串/可执行文件名）、激活/最小化/最大化/还原/关闭/置顶、前台锁绕行、启动回退、`TransitionGuard`（RAII 恢复动画开关）                                                                                          |
-| `src/platform/win/desktop.h/.cpp`         | 虚拟桌面切换与**窗口移动**：`CLSID_ImmersiveShell` → `IServiceProvider::QueryService` → 未公开的 `IVirtualDesktopManagerInternal`，按 `build.revision` 查表；`moveWindowToDesktop` 走 `MoveViewToDesktop`（vtable 下标 4，三种布局一致），并用**已公开**的 `IVirtualDesktopManager::GetWindowDesktopId` / `IsWindowOnCurrentVirtualDesktop` 做验证与诊断 |
+| `src/platform/win/window.h/.cpp`          | 窗口查找（标题子串/可执行文件名）、激活/最小化/最大化/还原/关闭/置顶、前台锁绕行、启动回退、`TransitionGuard`（RAII 恢复动画开关）。**“是否已经激活”还要看虚拟桌面**：被 `window_rule` 搬到别的桌面的窗口仍被 shell 当前台窗口（见第 2 节第 14 条），`raiseWindow` 在这时先显式切到它那一张桌面。                  |
+| `src/platform/win/desktop.h/.cpp`         | 虚拟桌面切换与**窗口移动**：`CLSID_ImmersiveShell` → `IServiceProvider::QueryService` → 未公开的 `IVirtualDesktopManagerInternal`，按 `build.revision` 查表；`moveWindowToDesktop` 走 `MoveViewToDesktop`（vtable 下标 4，三种布局一致，`changed` 出参报告“真的换了桌面吗”）、`switchToWindowDesktop` 把视图切到**某个窗口所在**的桌面（未公开的 `IVirtualDesktop::GetID` 下标 4 与已公开的 `GetWindowDesktopId` 逐个比对，对不上就只报错），并用**已公开**的 `IVirtualDesktopManager::GetWindowDesktopId` / `IsWindowOnCurrentVirtualDesktop` 做验证与诊断 |
 | `src/platform/win/power.h/.cpp`           | `powrprof!SetSuspendState`、`user32!ExitWindowsEx`、`LockWorkStation`、`WM_SYSCOMMAND`/`SC_MONITORPOWER` 广播，外加 `SeShutdownPrivilege`                                                                                   |
 | `src/platform/win/tray.h/.cpp`            | 托盘图标 + 气泡提示 + 右键菜单（查看日志/挂起/重载/打开配置/版本/退出）+ 悬停提示（构建版本 + 挂起状态）。图标是构造时传进来的应用图标（`app::applicationIcon()`，见 `app/app_icon.*`）；拿不到时退回系统图标，免得托盘上什么都没有 |
 | `src/platform/win/logging.h/.cpp`         | 控制台/文件日志器（英文、分级别、可选 ANSI 颜色），`--log-level`/`--log-file`/`--no-color`                                                                                                                                  |
@@ -400,7 +413,7 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `src/platform/win/autostart.h/.cpp`       | 开机自启的计划任务：`buildTaskXml`/`taskXmlCommand`/`decodeTaskOutput`/`sameExecutablePath` 是**纯函数**（可单测），`query/register/removeAutostartTask` 走隐藏的 `schtasks.exe /Create /XML`，`ensureAutostart(spec, confirm)` 是启动时的“缺失或指向别的 exe 就**先问用户、同意后**刷新成当前路径”策略（`confirm` 为空表示不问）。**不写任何安装目录**（见第 2 节第 10 条与第 10 节） |
 | `src/app/`                                | 组装层：把 core / lua / platform 串起来，并拥有 Qt 对象                                                                                                                                                                     |
 | `src/app/app_icon.h/.cpp`                 | 应用图标：把 qrc 里的 9 张 PNG 帧拼成一个多尺寸 `QIcon`（`applicationIcon()`），托盘、全部 QML 窗口与 Qt 消息框都用它。用 PNG 而不用 SVG 是为了不依赖 `Qt6Svg` 与 `imageformats/qsvg` 插件（见第 10 节） |
-| `src/app/dispatcher.h/.cpp`               | **动作工作线程**（`QThread`）：执行动作列表，含 `window` 的“先启动再激活”与默认开的 `toggle` 收起、`menu` 的窗口请求、`help` 的窗口请求 + 每一行的“执行目标”（绑定是 press+release 两串动作，`remap` 是直接注入目标按键）；还执行 `window_rule`（窗口出现 / 显示器重新接入 / 启动时各跑一次，`isPlaceableWindow()` 判“主窗口”） |
+| `src/app/dispatcher.h/.cpp`               | **动作工作线程**（`QThread`）：执行动作列表，含 `window` 的“先启动再激活”与默认开的 `toggle` 收起、`menu` 的窗口请求、`help` 的窗口请求 + 每一行的“执行目标”（绑定是 press+release 两串动作，`remap` 是直接注入目标按键）；还执行 `window_rule`（窗口出现 / 显示器重新接入 / 启动时各跑一次，`isPlaceableWindow()` 判“主窗口”；**只有“窗口出现”那一遍**会在规则真的搬迁窗口时把视图跟过去并重新激活，见第 2 节第 14 条） |
 | `src/app/runtime.h/.cpp`                  | 引擎 + 钩子 + 分发 + 托盘 + 弹窗的总装，`ControlCmd`（suspend/reload/quit）通道；还持有 `--quit` 的事件句柄并用 `QWinEventNotifier` 在 GUI 线程上监听（收到就走 `performShutdown`）                                                       |
 | `src/app/log_model.h/.cpp`                | 日志窗口的模型：尾随日志文件（增量、半行、被截断的多字节 UTF-8）、最多 1000 行、按级别配色、子串过滤                                                                                                                        |
 | `src/app/menu_model.h/.cpp`               | `menu` 选单的**纯逻辑**（`QAbstractListModel`，只用 QtCore）：卡片外框几何（宽高、标题、底部提示）、高亮移动（到边界回绕）、单字符选中、`Esc`/`Enter` 语义，以及给 QML 排版用的几个常量（`listTop`/`rowHeight`/`rowSpacing`/`rowInset`/`badgeSize`）。**行几何与鼠标命中不归它管**：列表是真正的 QML `ListView` + 标准 `ItemDelegate`（见第 2 节第 9 条与第 10 节），所以它没有 `rowRect`/`hitTest`，也**没有** `highlighted`/`hovered` 角色（那两个名字被标准委托占了）。悬停仍由模型持有（`hover`/`setHover`），因为「`Enter` 选光标下那一条」是选单的语义 |
@@ -656,6 +669,10 @@ flowkeyd 自己注入的按键带着 `"FLOW"` 标记，
     与虚拟桌面上；再用 `DisplaySwitch.exe /internal` → `/extend` 制造一次
     “显示器重新接入”，确认日志里出现 `monitor connected: ...; re-applying
     window rules` 且手工挪走的窗口被摆回。别忘了最后 `/extend` 恢复桌面。
+14. 跨桌面唤起（带了 `desktop` 的 `window_rule` 的程序）：按一下那个程序自己的
+    快捷键（如 `Win+3`），**视图应该切到它那一张桌面、窗口拿到前台**，一次到位；
+    再按一下才是收起（`toggle`）。日志里应有 `view -> desktop N/M`，
+    而启动 / 显示器重新接入那两遍**不应该**出现它。
 
 ---
 
@@ -2498,6 +2515,55 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   window rules` 与随后的 `window rule ... -> ...: maximized ...`。
   手工把窗口挪到另一块屏再 `/extend`，就能看到它被摆回去。
 
+#### 2026-09 修复：被 `window_rule` 搬到别的桌面的窗口会被“收起”而不是唤醒
+
+* **现象**（项目所有者报）：带 `window_rule` 的程序（`Win+3` → WPS）被唤起时
+  “会出现在指定的位置，但没有自动 active（也可能是没切到指定的虚拟桌面）”。
+* **根因（两条，必须一起治）**：
+  1. **前台窗口的假象。** `MoveViewToDesktop` 把窗口搬到别的桌面之后，**shell
+     仍然把它当作前台窗口**（本机 24H2 实测：`GetForegroundWindow()` 指向它、
+     而公开的 `IsWindowOnCurrentVirtualDesktop` 返回 FALSE）。旧的
+     `window::isActive()` 只看 `GetForegroundWindow()`，于是 `toggle` 判定
+     “已经激活” → 把用户根本看不见的窗口*最小化*。日志里的证据：
+     `` `wps` -> Minimize "...doc - WPS Office" (already active) ``。
+  2. **`SetForegroundWindow` 在这时候是空操作。** 窗口已经是 shell 的前台窗口时，
+     `SetForegroundWindow` / `AttachThreadInput` / `BringWindowToTop` +
+     `SetWindowPos` 四条路**全部返回 TRUE 却什么都不做**（本机实测，
+     `onCurrentDesktop` 始终是 0）—— 所以光修 `isActive` 还不够，必须**显式
+     `SwitchDesktop`**。
+* **修法**：`window::isActive()`（以及 `raiseWindow()` 的提前返回）把“就在当前
+  虚拟桌面上”一起算进去；`raiseWindow()` 发现窗口在别的桌面时先调
+  `desktop::switchToWindowDesktop()` 把视图切过去，再 `SetForegroundWindow`。
+  因此 `window::isActive()` 现在会做一次 COM 查询（`GetForegroundWindow() !=
+  hwnd` 时短路，不会白跑）。
+* **窗口→桌面对象的映射**：内部枚举只给 `IVirtualDesktop*`，而窗口那边只有**已
+  公开**的 `GetWindowDesktopId`（GUID）。把两者对上号要用未公开的
+  `IVirtualDesktop::GetID`（vtable 下标 4，照抄 VD.ahk 的 `VD_goToDesktopOfWindow`）。
+  **这个下标自带着自检**：拿每个枚举到的桌面问 GUID，与公开 API 给出的逐个比对，
+  **有且只有一个对上**才算成功；对不上（布局与版本表不符）时只报一条错误日志、
+  不去切一张可能是错的桌面。实测（build 26200.9457）：4 个桌面的 GUID 互不相同，
+  窗口所在那个能准确命中。
+* **“搬迁”与“视图跟随”**：`MoveViewToDesktop` 是**异步生效**的，所以
+  `moveWindowToDesktop` 的 `changed` 出参要等一下（最多 10×25 ms 读公开的
+  `GetWindowDesktopId`，拿不到就报 `false`）。`window_rule` 只在这一份布尔量为真
+  （**真的**换了桌面）且是“窗口第一次出现”那一遍时才 `switchTo` + `raiseWindow`。
+* **别指望“搬走前台窗口”会把视图带着走。** 实测两种结果都出现过：窗口在前台时
+  搬走*有时候*视图跟着走，不在前台时视图留在原处。所以不能把“跟随”建立在
+  Windows 自己的行为上。
+* **跨桌面唤醒的另一个坑（写测试时踩到的）**：如果目标窗口恰好是 shell 的
+  “前台窗口”但在另一张桌面上，`SetForegroundWindow` 是空操作（见上）；
+  反过来，如果它是*真*前台窗口，把它搬走有时会把视图也带走。所以交互式测试里
+  要先 `moveWindowToDesktop` 再显式 `switchTo(原桌面)` 把视图按住，
+  才能构造出用户报的那个现场。
+* **实验手法（值得收藏）**：用**已公开**的 `IVirtualDesktopManager`
+  （`IsWindowOnCurrentVirtualDesktop` / `GetWindowDesktopId`）从 PowerShell 的
+  Add-Type 里直接观察，就能把“切了桌面”和“把窗口搬走了”区分开——
+  靠**两个**已知在同一张桌面上的参照窗口（只搬走一个时另一个仍 `onCurrent=1`
+  就说明是“搬窗口”，两个都 `onCurrent=1` 就是“切了视图”）。
+  未公开的那半边（`QueryService` / `SwitchDesktop` / `GetID`）用
+  `Marshal.GetDelegateForFunctionPointer` 手搝 vtable 调用即可，不必注册 COM。
+  脚本在 `tmp/desk/`（不进版本库）。
+
 ### 领域坑清单（动手前先看这一遍）
 
 下面这些每一条都值得在动钩子/引擎/窗口/电源之前先读一遍：
@@ -2512,8 +2578,11 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 * `!`/`^`/`+`/`#` 是 AutoHotkey 前缀，`{!}` 才是字面量。
 * `keys::split_hold` 不能反转尾部（`^{c}` 展开后的释放顺序）。
 * `exact_modifiers = true` 与“修饰键作为和弦按键”的冲突。
-* `SetForegroundWindow` 除非持有前台锁否则被拒（递进式绕行 +
-  `AttachThreadInput` 配平）。
+* **`SetForegroundWindow` 除非持有前台锁否则被拒**（递进式绕行 +
+  `AttachThreadInput` 配平）。**而且它在“目标已经是 shell 的前台窗口，只是不在
+  当前虚拟桌面上”时是空操作**（返回 TRUE 却什么都不发生）：被
+  `MoveViewToDesktop` 搬走的窗口就是这个状态，只能先显式 `SwitchDesktop`
+  （见第 2 节第 14 条与第 10 节）。
 * 有属主的窗口（对话框/工具提示/弹出菜单）永远不是用户想要的那个窗口。
 * 终端窗口不能靠标题找（`process = "wezterm"`，窗口属于 `wezterm-gui.exe`）。
 * `run`/`window.launch` 走 `CreateProcess`、**不查 `App Paths`**、
@@ -2536,6 +2605,12 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   （三种布局一致），需要先用 `IApplicationViewCollection::GetViewForHwnd`
   把 `HWND` 换成 `IApplicationView*`；公开的 `MoveWindowToDesktop` 动不了
   别的进程的窗口。
+* **`GetForegroundWindow()` 不等于“用户看得见的窗口”**：窗口被搬到别的虚拟桌面
+  之后 shell 还把它当前台窗口，所以“是不是已经激活”必须再问一句公开的
+  `IVirtualDesktopManager::IsWindowOnCurrentVirtualDesktop`。
+* **`IVirtualDesktop::GetID` 在 vtable 下标 4**（先 `IsViewVisible`（3），
+  照抄 VD.ahk 的 `VD_goToDesktopOfWindow`），用来把窗口的
+  `GetWindowDesktopId` 对到内部枚举的桌面上；拿**有且只有一个匹配**当自检。
 
 #### 2026-09 新增：托盘右键与启动日志里的构建版本（build 时间戳）
 
@@ -3157,6 +3232,40 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > 按工作约定第 11 条：常驻实例已 `--quit` → 构建 release → 从
 > `build\dist-release` 重新拉起（它启动时会自己把计划任务刷新成这个路径）。
 
+> **2026-09 修复（`window_rule` 的窗口不会被跨桌面唤醒）的 DoD**：
+> `windows-debug` 与 `windows-release` 两边都是 `build exit 0`、零编译警告；
+> `ctest --test-dir build/windows-debug` **22 个测试目标全绿**（`tst_interactive`
+> 仍是 opt-in，ctest 里 skip）。
+> 新增的 opt-in 用例 `tst_interactive::activatesAWindowThatIsOnAnotherDesktop`
+> 单跑通过（`FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`，`-o <file>,txt` 才能看到
+> QtTest 输出）：诊断行确认了现场是
+> `window on another desktop: shellForegroundIsIt true`（也就是用户报的那个状态），
+> 断言过了四条 —— 跨桌面时 `window::isActive` 必须为假、`window::raiseWindow`
+> 必须把视图切回去并让它拿到前台、已回当前桌面时
+> `desktop::switchToWindowDesktop` 报 `already on desktop N/M`、
+> 搬到它已经在的那张桌面时 `changed` 为假。这也是 `IVirtualDesktop::GetID`
+> （下标 4）在本机能用的直接证据。
+> 端到端（`--no-elevate --allow-multi` 的一次性实例 + 一次性配置 + `SendInput`）：
+> 记事本一出现，日志除了 `desktop 3/4` 还多了一句 `view -> desktop 3/4`，
+> 从 PowerShell 用**已公开**的 `IsWindowOnCurrentVirtualDesktop` 看，视图真的跟着
+> 到了那张桌面（修前是 `onCurrentDesktop=0`）；再按一次同一个快捷键则是
+> `Minimize ... (already active)`（那时它已经真的在前台了，`toggle` 语义正确）。
+> `flowkeyd --check --config flowkeyd.lua.example` →
+> `OK (37 hotkey(s), 3 remap(s), 3 window rule(s))`、零警告；用户真实配置（不带
+> `--config`）→ `OK (24 hotkey(s), 0 remap(s), 3 window rule(s))`、零警告。
+> `scripts/acceptance.ps1`（只跑 release）**116 项、0 失败**
+> （`checks: 116, failures: 0`，与上次持平：本次没有给脚本加检查，端到端由上面
+> 那次注入验证与交互式单测覆盖；脚本本身没动）。
+> 行为变化（项目所有者拍板，见第 2 节第 14 条）：跨桌面唤起会**切桌面**；
+> `window_rule` 真的搬迁窗口时视图会跟着走（只在窗口第一次出现那一遍）。
+> README（`window` 动作、`window_rule`、已知限制、验证）、
+> `flowkeyd.lua.example` 与第 10/11 节已同步。
+> 按工作约定第 11 条：常驻实例已 `--quit` → 构建 release → 从
+> `build\dist-release` 重新拉起（自启任务仍指向那个路径）。
+> 本次没有动钩子/引擎，`acceptance.ps1` 跑到的是同一份源码的同一个 exe；
+> 后续为了把版本号里的 git 修订刷成新提交而重新链接了一次（只改文档的提交），
+> 没有再跑一遍验收脚本。
+
 ---
 
 ## 12. 本期不做的（有意留白）与后续工作
@@ -3266,6 +3375,11 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 * **新的 Windows 版本的虚拟桌面接口**：往 `platform/win/desktop` 的版本表里加
   一条（生效的 `build.revision`、两个 IID、vtable 布局），然后在真机上确认
   选中的条目、桌面数量与序号。
+* **新的虚拟桌面能力**（例如“把窗口钉到所有桌面”）：先在
+  `platform/win/desktop` 里手写那个接口的 vtable 结构体，字段下标以 VD.ahk /
+  MScholtes 的实现为参考，并尽量用**已公开**的 `GetWindowDesktopId` /
+  `IsWindowOnCurrentVirtualDesktop` 做一次可验证的交叉检查（`GetID` 就是这么做的：
+  只认“有且只有一个匹配”）。失败时只报错、不要去做可能是错的事。
 * **新的未公开 API**：在 `platform/win/nt` 里用 `GetProcAddress` 解析，
   使用前先用一次无害调用校验，并永远保留一个已公开的回退。
   已公开但不在静态链接集合里的库走同一条路（`dwmapi` 是范例）。
@@ -3330,6 +3444,8 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、
   `x`/`y`（相对目标显示器工作区左上角）、`width`/`height`、`name`、`enabled`。
   写了 `monitor` 且没写位置/大小时 `maximize` 默认 true；`maximize = true`
   与位置/大小互斥。触发时机：窗口首次出现、显示器重新接入、flowkeyd 启动。
+  **规则真的把窗口搬到另一张桌面时，只有“窗口首次出现”那一遍会让视图跟着切过去
+  并重新激活它**（见第 2 节第 14 条）。
 * 和弦语法：`~` 放行原始按键、`*` 忽略额外修饰键；`Numpad*` 与主键盘同名键不同。
 * 动作：`run`/`send`/`type`/`open`/`volume`/`media`/`clipboard`/`window`/
   `notify`/`menu`/`help`/`power`/`desktop`/`caps_lock`/`suspend`/`reload`/
@@ -3340,6 +3456,7 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、
 * **完全没有动作**的快捷键就是一个按键屏蔽器（会吞掉它匹配到的按键）。
 * `window` 的 `toggle`（默认**开**）只对 `op = "activate"` 有意义；
   `launch` 回退不套用它；显式 `toggle = false` 才关闭。
+  “已经激活”要同时满足：前台、未最小化、**就在当前虚拟桌面上**（见第 2 节第 14 条）。
 * `window` 的 `animate`（默认**关**）只对会改变窗口状态的 `op` 有意义，
   写在不产生过渡的 `op`（`close`/`toggle_topmost`）上要被 `--check` 拒绝。
 
@@ -3368,6 +3485,18 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、
 | `Ctrl+Alt+F4`          | `quit()`                                                                          |
 
 **没有** `remap{}`。`settings` 里只有 `log_level = "info"`。
+
+窗口摆放规则（`window_rule`，2026-09 新增）：
+
+| 程序     | desktop | monitor |
+| -------- | ------- | ------- |
+| `chrome` | 1       | 2       |
+| `code`   | 2       | 2       |
+| `wps`    | 3       | 2       |
+
+（`monitor = 2` 在本机是 `\\.\DISPLAY2`，也就是右边那块 1920x1080；
+没写位置/大小时默认最大化。`--check` → `OK (24 hotkey(s), 0 remap(s), 3 window rule(s))`、
+零警告。仅供用户自己手工验证行为，没有进 `acceptance.ps1`。）
 
 ---
 

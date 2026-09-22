@@ -116,7 +116,27 @@ bool switchTo(std::uint32_t index, QString *detail, QString *error);
 /// `IVirtualDesktopManager::MoveWindowToDesktop` 拒绝移动**别的进程**的窗口，
 /// 而 `window_rule` 要摆的正是别的进程。窗口已经在该桌面上时是一个空操作。
 /// 成功时 `detail` 是 `"desktop 2/4"`。
-bool moveWindowToDesktop(HWND hwnd, std::uint32_t index, QString *detail, QString *error);
+///
+/// `changed`（可空）回答「这次调用**真的**把它搬到另一个桌面了吗」：窗口本来就在
+/// 目标桌面上时是 `false`（`window_rule` 靠它决定要不要让视图跟着窗口走）。
+/// 只有拿得到移动前后的桌面 GUID 才能回答，拿不到时是 `false`。
+bool moveWindowToDesktop(HWND hwnd,
+                         std::uint32_t index,
+                         QString *detail,
+                         QString *error,
+                         bool *changed = nullptr);
+
+/// 把视图切到 `hwnd` 所在的那个虚拟桌面（它已经在当前桌面时是空操作）。
+///
+/// 为什么不能只靠 `SetForegroundWindow`：窗口被 `MoveViewToDesktop` 搬到别的桌面
+/// 之后，**shell 仍然把它当作前台窗口**（本机 24H2 实测），这时
+/// `SetForegroundWindow` 会老老实实返回 TRUE 却什么都不做 —— 视图永远留在原桌面，
+/// 用户按快捷键也看不到那个窗口。所以这里显式 `SwitchDesktop`。
+///
+/// 窗口与内部桌面对象的对应关系靠 `IVirtualDesktop::GetID`（vtable 下标 4）取得，
+/// 并与**已公开**的 `IVirtualDesktopManager::GetWindowDesktopId` 逐个比对：对不上
+/// （说明这套 vtable 布局与版本表不符）时只报错、不去切一张可能是错误的桌面。
+bool switchToWindowDesktop(HWND hwnd, QString *detail, QString *error);
 
 /// 窗口是不是在当前（前台）虚拟桌面上。
 ///
