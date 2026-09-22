@@ -170,6 +170,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\uninstall.ps1 -Remov
 
 **更新循环**（本机开发时）：`cmake --build --preset release` → `install.ps1`
 （想快点就 `-ExeOnly`）→ 完事，脚本自己会把旧实例停干净再启动新的。
+**约定：每次改完代码（每个任务收尾）都部署一次**，这样常驻实例始终等于最新构建；
+`build\dist-release\flowkeyd.exe` 与安装目录那份的 SHA-256 相同时（没重新链接）
+可以跳过 —— 部署会重启实例，快捷键会失灵几秒。
 
 脚本里的任务参数（这些默认值全是坑，改的时候别删）：
 

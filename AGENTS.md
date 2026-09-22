@@ -71,6 +71,30 @@
 >     一个都不许真的执行 —— 测试代码里不出现 `platform::win::power::execute()`
 >     （`tst_power_table` 只测纯逻辑表，不碰真实调用）。这些动作只有用户自己按
 >     快捷键、或点选单条目时才允许发生。细节见第 5 节与第 11 节。
+> 11. **每个任务收尾时，要把 release 产物往安装目录部署一份**（项目所有者 2026-09
+>    要求）：常驻实例必须跑在最新构建上，否则用户按快捷键用的还是旧行为。
+>    **这件事已经有现成的机制，不要另写脚本、也不要自己拼复制命令** ——
+>    `scripts\install.ps1` 就是干这个的：它停旧实例（`--quit`）→ 把
+>    `build\dist-release`（**只有 `flowkeyd.exe` 与它需要的 Qt/MinGW 运行时，
+>    不含任何构建系统文件或测试产物**）镜像到 `C:\Program Files\flowkeyd` →
+>    刷新计划任务 → 重新拉起 → 打印配置检查与日志尾部。
+>
+>    ```powershell
+>    # 常规（只换 exe，最快）：
+>    powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -ExeOnly
+>    # 这次动了 QML / vendor\lua / Qt 部署文件，或 dist-release 里多了/少了文件：
+>    #   去掉 -ExeOnly 做全量镜像（robocopy /MIR）
+>    ```
+>
+>    * 部署会先 `--quit` 掉常驻实例再拉起来（正在跑的 exe 是锁着的，绕不过去），
+>      期间快捷键失灵几秒。**所以先比对 SHA-256，没变就跳过**，别白白重启一次：
+>      `(Get-FileHash build\dist-release\flowkeyd.exe).Hash` 对
+>      `(Get-FileHash 'C:\Program Files\flowkeyd\flowkeyd.exe').Hash`。
+>      纯文档任务通常 `ninja: no work to do`，哈希不变 → 跳过。
+>    * 需要管理员（本机 agent 的 shell 是提权的，实测能跑；换机器先
+>      `Assert-Admin` 再动手）。
+>    * **只允许在两条 profile 都构建通过、debug 测试全绿之后部署**：
+>      装上去的那一份就是发布版本（见第 5 节与第 11 节）。
 
 ---
 
@@ -321,7 +345,7 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `src/qml/`                                | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`（三个文件都在开头写了 `pragma ComponentBehavior: Bound`）；配色一律用 `palette`，没有单独的 `Style.qml`；中文一律 `font.family: "Microsoft YaHei"`（默认族 `Segoe UI Variable` 没有中文字形，不管会回退到宋体，见第 10 节）。`HelpPopup.qml` 与 `MenuPopup.qml` 里除了卡片外框与按键徽标全是标准控件：帮助的筛选框是 `TextField`、列表是 `ListView` + Qt 自带 `ScrollBar` + `ItemDelegate`（列表只占行区域，不再需要表头/底部的遮罩）；选单的列表同样是 `ListView` + `ItemDelegate`（不滚动，所以没有滚动条；悬停与点击全部由委托提供） |
 | `tests/`                                  | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_log_tail`、`tst_audio`、`tst_interactive`（需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`，否则 skip）、`tst_menu_model`、`tst_help_model`、`tst_power_table`、`tst_desktop_table`、`tst_layout` |
 | `scripts/acceptance.ps1`                  | 桌面行为的验收脚本（注入按键 + 焦点捕捉窗口的外部观察，116 项检查：含弹窗滚轮/滚动条拖动/鼠标点选与点筛选框/鼠标点选单条目/`Enter` 与双击真的执行动作/危险动作两次确认）；需交互式桌面，**不属于 `ctest`**，见第 5 节与阶段 9 |
-| `scripts/install.ps1`                     | 装/更新常驻实例：停旧实例（`--quit`，兜底 `Stop-Process`）→ `robocopy /MIR build\dist-release → C:\Program Files\flowkeyd`（`-ExeOnly` 则只换 exe）→ 注册/刷新计划任务 `flowkeyd`（登录时 + 最高权限 + 15 秒延迟）→ `Start-ScheduledTask` → 校验进程与日志；需管理员；纯 ASCII |
+| `scripts/install.ps1`                     | 装/更新常驻实例：停旧实例（`--quit`，兜底 `Stop-Process`）→ `robocopy /MIR build\dist-release → C:\Program Files\flowkeyd`（`-ExeOnly` 则只换 exe）→ 注册/刷新计划任务 `flowkeyd`（登录时 + 最高权限 + 15 秒延迟）→ `Start-ScheduledTask` → 校验进程与日志；需管理员；纯 ASCII。**它同时是每个任务收尾时的部署入口**（工作约定第 11 条），不要再写第二份部署脚本 |
 | `scripts/uninstall.ps1`                   | 卸载的薄包装：`install.ps1 -Uninstall`（停实例 + 删任务，`-RemoveFiles` 连安装目录一起删）                                                                                                                              |
 
 ### CMake 目标划分（阶段 6 之后）
@@ -426,7 +450,20 @@ $C = 'C:\Qt\Tools\CMake_64\bin\cmake.exe'
 
 # release 构建已经顺手产出了发布目录（只有 exe + Qt/MinGW 运行时，拷走就能跑）
 dir build\dist-release
+
+# 任务收尾（上面全绿之后）：把 release 产物部署到安装目录一份（工作约定第 11 条）
+# 已有机制，直接用 install.ps1，不要另写部署脚本：
+#   -ExeOnly = 只换 flowkeyd.exe（最快）；动了 QML/vendor\lua/运行时文件时去掉它
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -ExeOnly
 ```
+
+**任务收尾要把 release 产物部署到安装目录一份**（工作约定第 11 条）。
+机制已经有了：`scripts\install.ps1` 负责「停旧实例 → 只镜像发布产物 → 刷新计划任务
+→ 重新拉起 → 校验」，`build\dist-release` 里也**只有** `flowkeyd.exe` 与它需要的
+Qt/MinGW 运行时（45 个条目，没有 `CMakeCache.txt`/`build.ninja`/`*.a`/`tst_*.exe`），
+所以「部署编译后的文件、不带无关文件」这件事不需要新脚本。
+只换 exe 的哈希没变（纯文档任务、`ninja: no work to do`）就跳过，别白白重启一次
+常驻实例。
 
 **debug 与 release 两个 profile 都必须编译通过，这是每个任务（包括纯文档任务）
 的硬性要求。** 理由：release 走的是完全不同的优化与链接路径
@@ -2349,6 +2386,12 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
    **发布目录 `build/dist-release/` 里只允许有 `flowkeyd.exe` 与它需要的
    运行时**：测试可执行文件、临时配置、诊断文件一律不许留在
    `build/windows-release` 或 `build/dist-release` 里（见工作约定第 2 条）。
+9. **把 release 产物部署到安装目录一份**（工作约定第 11 条）：
+   `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -ExeOnly`
+   （动了 QML / `vendor\lua` / Qt 部署文件，或 `dist-release` 里多了/少了文件时
+   去掉 `-ExeOnly` 做全量镜像）。**已有机制，不要另写部署脚本**；
+   只换 exe 的哈希没变就跳过。这是「用户日常按的快捷键真的跑在新构建上」的
+   唯一保证（前 8 条只保证构建与测试是绿的）。
 
 > **阶段 0/1 的实测结果（2026-09-20）**：`windows-debug` 与 `windows-release`
 > 两个 profile 都是 `build exit 0`、零警告（`-Wall -Wextra -Werror`），
@@ -2664,6 +2707,30 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 >   （物理 3840x2160），所以“弹窗在哪个屏上”取决于光标在哪块屏上。
 > 行为变化：新增 `--quit`；常驻实例改为由计划任务从
 > `C:\Program Files\flowkeyd` 启动（不再跑构建目录里那份）。
+
+> **2026-09 约定补充（任务收尾把 release 产物部署到安装目录）**：项目所有者要求
+> 「每次大模型执行完任务后，把编译后的文件（不带其他无关文件）部署到安装目录
+> 一份」，并预授权「如果已经有类似机制就不必再实现」。
+> **查实：这个机制已经存在，本次没有新增任何脚本** ——
+> `scripts\install.ps1` 就是「停旧实例（`--quit`）→ 只镜像 `build\dist-release`
+> → 刷新计划任务 → 重新拉起 → 校验」，而 `build\dist-release` 里只有
+> `flowkeyd.exe` 与它需要的 Qt/MinGW 运行时（本机 45 个条目，与安装目录逐条一致，
+> 没有 `CMakeCache.txt`/`build.ninja`/`*.a`/`tst_*.exe`），所以「只部署编译后的
+> 文件」不需要第二份脚本。
+> 本次只把它写成规则：工作约定新增第 11 条，第 5 节的 DoD 命令块与第 11 节
+> 新增第 9 条，并写清 `-ExeOnly`（只换 exe，最快）与全量镜像（`robocopy /MIR`）
+> 的取舍、以及「exe 哈希没变就跳过」的判据（部署会 `--quit` 再拉起常驻实例，
+> 快捷键会失灵几秒，不该白重启）。
+> 实测现状（2026-09）：`build\dist-release\flowkeyd.exe` 与
+> `C:\Program Files\flowkeyd\flowkeyd.exe` 的 SHA-256 相同
+> （`1C64E52E…87DCD`），安装目录 45 个条目 = `dist-release` 45 个条目；
+> 常驻实例（pid 6416）由计划任务 `flowkeyd` 从安装目录拉起（`RunLevel=Highest`、
+> `cwd=C:\Program Files\flowkeyd`），状态 `Running`。
+> 本次 DoD：只改本文件，debug 与 release 两个 profile 都是
+> `ninja: no work to do`（`build exit 0`）；`ctest --test-dir build/windows-debug`
+> **19 个测试目标全绿**；`flowkeyd --check --config flowkeyd.lua.example` →
+> `OK (37 hotkey(s), 3 remap(s))`、零警告。按新的第 9 条本任务也该部署，
+> 但 exe 哈希没变，所以按约定跳过。
 
 ---
 
