@@ -2484,6 +2484,10 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   submodule）时整段跳过，哈希留在 `unknown`。
   * **因此工作流是「先提交，再构建」**：构建时 HEAD 是哪个提交，版本号里就是哪个
     （工作区脏时显示的是最近一次提交）。收尾给常驻重建 release 时也是这个顺序。
+  * **提交之后的那次构建一定会重新配置 + 重新链接**（哈希变了，`version.cpp`
+    要重编、exe 要重链）—— 而 release 的 exe 正被常驻实例锁着，所以顺序必须是
+    「改代码 → 提交 → `--quit` 常驻 → 构建 release → 重新拉起常驻」。纯文档的提交
+    也会改分支 ref、触发重新配置；不想动二进制就别在提交之后再构建。
 * **为什么不用编译期常量**（CMake 构建时生成一个 `FLOWKEYD_BUILD_TIMESTAMP`）：
   那样每次 `cmake --build` 都要重新生成头文件 → 重新编译 → 重新链接 exe +
   跑两遍 `windeployqt`，于是「什么都没改」的构建不再是 `ninja: no work to do`
@@ -2937,10 +2941,13 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > （`tst_version` 4 项：日期推导、缺文件时退化、修订段形状、`buildVersion()` 的
 > 拼装，全部只碰临时文件）。`flowkeyd --check --config flowkeyd.lua.example` →
 > `OK (37 hotkey(s), 3 remap(s))`、零警告。
-> 实测（`build/windows-debug/flowkeyd.exe`，mtime 2026-09-22 19:22:52，构建时 HEAD
-> 是 `42900ad`）：配置输出里有 `-- flowkeyd: source revision 42900ad`，生成头
-> `build/windows-debug/generated/flowkeyd_revision.h` 里就是它，`--version` →
-> `flowkeyd 26-09-22-42900ad` + `Lua 5.5.1`，`--help` 表头同前缀。
+> 实测：提交前那次构建（HEAD `42900ad`）里，配置输出是
+> `-- flowkeyd: source revision 42900ad`，`build/windows-debug/generated/flowkeyd_revision.h`
+> 就是它，`--version` → `flowkeyd 26-09-22-42900ad`。**提交 `a43340c` 之后两个
+> profile 都自动重新配置到了新哈希**（这正是 `CMAKE_CONFIGURE_DEPENDS` 那条要验的
+> 东西）：两份生成头都是 `a43340c`，`build/dist-release/flowkeyd.exe` 的
+> `--version` 是 `flowkeyd 26-09-22-a43340c`，常驻实例日志第一行也是
+> `flowkeyd 26-09-22-a43340c starting`；那之后只改文档，二进制不再重建。
 > 托盘菜单用进程内 dump 验证（真实 `Tray` + `findChild`）：`版本 <日期>-<rev>`
 > 是 `enabled=0` 的信息项，悬停提示带构建版本与挂起状态。
 > `build/dist-release` 已是最新（release 的 `POST_BUILD` 自动产出，SHA-256 与
