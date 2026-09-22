@@ -256,15 +256,18 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
     两者都用**原生 `MessageBoxW`**（不需要 Qt 应用对象，因为它们跑在
     `QApplication` 构造之前）；`--no-prompt` 跳过这两个提示、按默认处理，
     供脚本与 `scripts/acceptance.ps1` 使用。细节与验过的路径见第 10 节。
-12. **构建版本号 = 构建的时间戳（项目所有者 2026-09 拍板，在 `core/version.*`）。**
-    版本号写成 `yyyyMMddHHmm`（例如 `202609221728`），显示在四处：托盘右键菜单里
-    一个**不可点**的*版本*信息项、守护进程启动日志的第一行
-    （`flowkeyd 202609221728 starting`）、`--version` 的第一行、以及 `--help` 的
-    表头。时间戳的来源是**运行中这个 exe 自己的最后写入时间**（＝它被链接到磁盘
-    的时刻），**不是**编译期常量 —— 为什么不能用编译期常量、PE 头的
-    `TimeDateStamp` 为什么也不行，见第 10 节的「构建版本号」那一节。取不到 exe 时
-    退化成占位词 `unknown`。整个版本字符串都在 `src/core/version.*`，以后要换成
-    git 描述之类的来源只改那里（它**不再**显示 CMake 的 `PROJECT_VERSION`）。
+12. **构建版本号 = `yy-MM-dd-<git 短修订>`（项目所有者 2026-09 拍板，`core/version.*`）。**
+    例如 `26-09-22-42900ad`。**日期** 取运行中这个 exe 自己的最后写入时间
+    （＝它被链接到磁盘的时刻，本地时间 `yy-MM-dd`）；**修订** 是构建时由 CMake
+    用 `git rev-parse --short HEAD` 取到、经 `cmake/version_revision.h.in` 写进
+    `build/<preset>/generated/flowkeyd_revision.h` 的编译期常量。显示在四处：
+    托盘右键菜单里一个**不可点**的*版本*信息项、守护进程启动日志的第一行、
+    `--version` 的第一行、以及 `--help` 的表头。日期不用编译期常量（那会让每次
+    构建都重新链接，见第 10 节），修订用编译期常量（只在提交 / 切分支时才变）。
+    **工作流是「先提交再构建」**：哈希就是构建时的 HEAD（工作区脏时显示最近一次
+    提交）；把 `.git/HEAD` 与当前分支 ref 登记成 configure 依赖就是为了提交后
+    重新构建能自动刷新它。取不到 exe 时日期段是 `unknown`，不在 git 仓库里时
+    修订段是 `unknown`。
 
 ---
 
@@ -352,7 +355,7 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `src/core/action.h/.cpp`                  | 声明式动作的表示 + 摘要文本（`--list` 与 `help()` 都用它）+ `isDestructive()`（帮助窗口要靠它决定“要不要再确认一次”）                                                                                                        |
 | `src/core/log_tail.h/.cpp`                | 日志文件的增量尾随（纯逻辑，可单测）：按字节读、末尾不完整的 UTF-8 序列不消费、半行留到下一轮、一次最多 1000 行                                                                                                            |
 | `src/core/window_match.h/.cpp`            | 窗口匹配与 `window` 动作决策的纯函数：标题/进程名子串、可执行文件名提取、`toggle` 边界、`animate` 是否有意义                                                                                                                |
-| `src/core/version.h/.cpp`                 | 构建版本号（纯逻辑、可单测）：`buildVersion(executablePath)` 与 `buildTimestampFromFile()`（取一个文件的最后写入时间，格式 `yyyyMMddHHmm`）、`unknownTimestamp()`。**版本号就是构建的时间戳**，机制与取舍见第 2 节第 12 条与第 10 节 |
+| `src/core/version.h/.cpp`                 | 构建版本号（纯逻辑、可单测）：`buildVersion(executablePath)`（拼成 `yy-MM-dd-<git 短修订>`）、`buildDateFromFile()`、`sourceRevision()`（编译进来的 `FLOWKEYD_GIT_REVISION`）、`unknownValue()`。修订来自 CMake 用 `cmake/version_revision.h.in` 生成的 `flowkeyd_revision.h`；机制与取舍见第 2 节第 12 条与第 10 节 |
 | `src/lua/lua_config.h/.cpp`               | **Lua 与 C++ 的唯一边界**：建 `lua_State`、注入 DSL、把脚本里的表转成 `core::Config`（逐条目、带上下文的错误）、UTF-8 BOM 剔除、`.toml` 明确拒绝                                                                            |
 | `src/lua/lua_prelude.lua`                 | 注入配置脚本的 DSL：`settings{}`/`hotkey{}`/`remap{}` + 动作构造器 + `flowkeyd` 表。**纯 Lua，改它不需要改 C++**（编进 qrc，见第 7 节）                                                                                     |
 | `src/platform/win/`                       | Win32 后端（每个文件都只做一件事，方便单独替换）                                                                                                                                                                            |
@@ -2454,22 +2457,33 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 
 #### 2026-09 新增：托盘右键与启动日志里的构建版本（build 时间戳）
 
-* **需求**：托盘右键能看到构建版本号，启动日志里也要有一行；**版本号先用构建的
-  时间戳表示**（项目所有者 2026-09 拍板，以后可能换成 git 描述之类）。
+* **需求**：托盘右键能看到构建版本号，启动日志里也要有一行。项目所有者 2026-09
+  先定成「构建的时间戳」，随后改成 **`yy-MM-dd-<git 短修订>`**（例如
+  `26-09-22-42900ad`）—— 日期告诉你这是哪天的构建，哈希告诉你源码是哪个提交。
 * **落地**：新文件 `src/core/version.{h,cpp}`（纯逻辑、只用 QtCore，编在
-  `flowkeyd_core` 里）只提供三个东西：`buildVersion(executablePath)`、
-  `buildTimestampFromFile(path)`（格式 `yyyyMMddHHmm`）与 `unknownTimestamp()`；
+  `flowkeyd_core` 里）提供 `buildVersion(executablePath)`（拼成 `yy-MM-dd-<rev>`）、
+  `buildDateFromFile(path)`、`sourceRevision()` 与 `unknownValue()`；
   `app::helpText()/versionText()`、`Tray::setBuildVersion()` 与启动日志都只消费
-  这一个字符串。`tst_version` 用 `QFile::setFileTime` 钉一个已知时间再读回来
-  （期望值 `202103040506`），把格式与时间戳推导都覆盖住了（不用碰真实 exe）。
-  * **第一版曾写成 `0.1.0 (build 2026-09-22 17:18:05)`**，还为此把 CMake 的
-    `PROJECT_VERSION` 经 `FLOWKEYD_VERSION` 定义到 `flowkeyd_core` 的 PUBLIC 上。
-    项目所有者随后明确：**版本号直接用 `yyyyMMddHHmm` 这个构建时间戳命名即可** ——
-    于是 `FLOWKEYD_VERSION` / `projectVersion()` / `formatBuildVersion()` 全删了，
-    显示的就是那 12 位数字。要再改格式（带上秒、或换 git 描述）改
-    `buildTimestampFromFile()` 的格式串即可。
-* **时间戳取“正在运行的这个 exe 的最后写入时间”**，也就是它被链接到磁盘的那一刻；
-  因此每次重新构建它都会跟着变，而且**不需要任何构建脚本**。
+  `buildVersion()` 那一个字符串。`tst_version` 用 `QFile::setFileTime` 钉一个已知
+  时间再读回来（期望值 `21-03-04`），并用正则盯住「日期段 `yy-MM-dd`、修订段是小写
+  十六进制」——不用碰真实 exe。
+  * **格式改过两次**：先是 `0.1.0 (build 2026-09-22 17:18:05)`，再是
+    `yyyyMMddHHmm`（纯时间戳），最后按项目所有者要求定成
+    **`yy-MM-dd-<git 短修订>`**。前两版为此引入的 `FLOWKEYD_VERSION` /
+    `projectVersion()` / `formatBuildVersion()` 都已经删掉，要再改格式只动
+    `core/version.*`。
+* **日期取“正在运行的这个 exe 的最后写入时间”**（本地时间 `yy-MM-dd`），也就是它
+  被链接到磁盘的那一刻；因此每次重新构建它都会跟着变，而且**不需要任何构建脚本**。
+* **git 修订是编译期常量，但只在提交 / 切分支时才变**：CMake 在配置时跑
+  `git rev-parse --short HEAD`，经 `cmake/version_revision.h.in` 写进
+  `build/<preset>/generated/flowkeyd_revision.h`（**只给 `core/version.cpp` 包含**，
+  所以它变了只重编那一个文件）。为了让「提交之后再构建」能自动刷新它，CMake 把
+  `.git/HEAD` 与**当前分支的 ref 文件**登记成了 `CMAKE_CONFIGURE_DEPENDS` ——
+  只登记 HEAD 不够（同一分支上提交时 HEAD 文件本身不变），登记 `.git/index` 又太
+  敏感（`git status` 刷新索引也会触发重新配置）。`.git` 是文件（worktree /
+  submodule）时整段跳过，哈希留在 `unknown`。
+  * **因此工作流是「先提交，再构建」**：构建时 HEAD 是哪个提交，版本号里就是哪个
+    （工作区脏时显示的是最近一次提交）。收尾给常驻重建 release 时也是这个顺序。
 * **为什么不用编译期常量**（CMake 构建时生成一个 `FLOWKEYD_BUILD_TIMESTAMP`）：
   那样每次 `cmake --build` 都要重新生成头文件 → 重新编译 → 重新链接 exe +
   跑两遍 `windeployqt`，于是「什么都没改」的构建不再是 `ninja: no work to do`
@@ -2482,12 +2496,12 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   1970-01-17），不是链接时间 —— 所以只能读文件时间。（诊断脚本
   `tmp/peinfo.ps1`，`tmp/` 不进版本库。）
 * **显示位置**：`src/platform/win/tray.cpp` 在「退出」上面加了一个
-  **`setEnabled(false)` 的信息项**（`版本 202609221728`），悬停提示也带上构建
+  **`setEnabled(false)` 的信息项**（`版本 26-09-22-42900ad`），悬停提示也带上构建
   版本（后面再跟挂起状态）；`main.cpp` 一拿到命令行就把 `core::buildVersion(
   win::currentExecutablePath())` 算好，一路传给 `--help` / `--version` 的文案、
   日志第一行与 `Tray::setBuildVersion()`。`--version` 的第一行就是它
-  （`flowkeyd 202609221728` + `Lua 5.5.1`），`--help` 表头也是
-  （`flowkeyd 202609221728 — 由 Lua 配置驱动的……`）。
+  （`flowkeyd 26-09-22-42900ad` + `Lua 5.5.1`），`--help` 表头也是
+  （`flowkeyd 26-09-22-42900ad — 由 Lua 配置驱动的……`）。
 * **怎么验证托盘那一项**：托盘菜单点击进不了自动化（见第 5 节），但菜单文本可以
   在进程内断言 —— 一个临时小程序构造真实的 `Tray`，用
   `tray.findChild<QSystemTrayIcon*>()->contextMenu()->actions()` 把每一项的
@@ -2495,15 +2509,15 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   控制台**，中文会被代码页弄乱）。当时看到的：
 
   ```
-  buildVersion=202609221726
-  tooltip=flowkeyd 202609221726
+  buildVersion=26-09-22-42900ad
+  tooltip=flowkeyd 26-09-22-42900ad
   enabled=1 text=查看日志(&V)
   enabled=1 text=挂起快捷键(&S)
   enabled=1 text=重载配置(&L)
   enabled=1 text=打开配置文件(&O)
-  enabled=0 text=版本 202609221726
+  enabled=0 text=版本 26-09-22-42900ad
   enabled=1 text=退出(&Q)
-  tooltip=flowkeyd 202609221726（已挂起）
+  tooltip=flowkeyd 26-09-22-42900ad（已挂起）
   ```
 * **改“停常驻 → 重建 → 重新拉起”的脚本一定要 fail fast，而且检查要轮询。**
   本次写第一个版本时脚本中段因为一个行接续错误只报了一条 parse error 就
@@ -2915,24 +2929,27 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > 已同步。
 
 > **2026-09 新增（构建版本号：托盘右键 + 启动日志 + `--help`）的 DoD**：
+> 版本号最终是 **`yy-MM-dd-<git 短修订>`**（格式改过两次：`0.1.0 (build …)` →
+> `yyyyMMddHHmm` → 现在这个，项目所有者逐次拍板）。
 > `windows-debug` 与 `windows-release` 两边都是 `build exit 0`、零编译警告
 > （release 里那两句 `dxcompiler.dll` 是 `windeployqt` 自己的提示）；
 > `ctest --test-dir build/windows-debug` **21 个测试目标全绿**
-> （新增 `tst_version` 4 项：时间戳推导、缺时间戳时退化成 `unknown`、
-> `buildVersion()` 就是那个时间戳且匹配 `^[0-9]{12}$`，全部只碰临时文件）。
-> `flowkeyd --check --config flowkeyd.lua.example` → `OK (37 hotkey(s), 3 remap(s))`、
-> 零警告。**版本号最终是 `yyyyMMddHHmm` 的构建时间戳**（第一版写成
-> `0.1.0 (build …)`，项目所有者随后要求直接用时间戳，已改）。实测（正在跑的
-> `build/dist-release/flowkeyd.exe`，mtime `2026-09-22 17:28:09`）：
-> `--version` → `flowkeyd 202609221728` + `Lua 5.5.1`，`--help` 表头 →
-> `flowkeyd 202609221728 — 由 Lua 配置驱动的键盘钩子守护进程`，守护进程启动日志
-> 第一行 → `flowkeyd 202609221728 starting`。托盘菜单用进程内 dump 验证
-> （真实 `Tray` + `findChild`）：`版本 202609221726`（那个临时工具自己的 mtime）
+> （`tst_version` 4 项：日期推导、缺文件时退化、修订段形状、`buildVersion()` 的
+> 拼装，全部只碰临时文件）。`flowkeyd --check --config flowkeyd.lua.example` →
+> `OK (37 hotkey(s), 3 remap(s))`、零警告。
+> 实测（`build/windows-debug/flowkeyd.exe`，mtime 2026-09-22 19:22:52，构建时 HEAD
+> 是 `42900ad`）：配置输出里有 `-- flowkeyd: source revision 42900ad`，生成头
+> `build/windows-debug/generated/flowkeyd_revision.h` 里就是它，`--version` →
+> `flowkeyd 26-09-22-42900ad` + `Lua 5.5.1`，`--help` 表头同前缀。
+> 托盘菜单用进程内 dump 验证（真实 `Tray` + `findChild`）：`版本 <日期>-<rev>`
 > 是 `enabled=0` 的信息项，悬停提示带构建版本与挂起状态。
 > `build/dist-release` 已是最新（release 的 `POST_BUILD` 自动产出，SHA-256 与
 > `build/windows-release/flowkeyd.exe` 相同，`tst_*` 计数为 0），常驻实例已按
-> 工作约定第 11 条 `--quit` → 重建 → 从 `dist-release` 重新拉起（pid 与日志第一行
-> 都是新的），自启任务仍指向 `build\dist-release\flowkeyd.exe`。
+> 工作约定第 11 条 `--quit` → 重建 → 从 `dist-release` 重新拉起，自启任务仍指向
+> `build\dist-release\flowkeyd.exe`。
+> **注意版本号里的哈希就是构建时的 HEAD**：本次的文档改动本身会成为一个提交，
+> 所以最终发布的那份 exe 内嵌的是**那个提交**的哈希，不要去追这份记录里写的例子
+> （它是构建当时的 HEAD）。要让它显示最新提交就先提交再构建。
 > 本次没有改钩子/引擎/分发/窗口后端，所以按第 11 节第 3 条没有重跑
 > `scripts/acceptance.ps1`（托盘那一项本来也进不了那个脚本）。
 
@@ -3047,9 +3064,10 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 * **新的日志窗口行为**：尾随逻辑在 `app/log_model`（纯逻辑、可单测），
   渲染在 `LogWindow.qml`。加命令行参数就改 `cli.cpp` 并更新 README 的
   命令行表格。
-* **构建版本号的来源**：全部在 `src/core/version.*`（现在就是运行中 exe 的最后
-  写入时间，格式 `yyyyMMddHHmm`）。要换成 git 描述之类的来源就改
-  `buildVersion()` / `buildTimestampFromFile()`，显示侧（托盘、启动日志、
+* **构建版本号的来源**：全部在 `src/core/version.*`（日期来自运行中 exe 的最后
+  写入时间，修订来自 CMake 生成的 `FLOWKEYD_GIT_REVISION`，见
+  `cmake/version_revision.h.in`）。要换成别的来源就改 `buildVersion()` /
+  `buildDateFromFile()` / `sourceRevision()`，显示侧（托盘、启动日志、
   `--version`、`--help`）不用动。
 
 ---

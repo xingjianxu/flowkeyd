@@ -1,0 +1,7 @@
+// 由 CMake 生成（见 CMakeLists.txt 里「版本号的 git 短修订」那一段）。
+// 只被 src/core/version.cpp 包含，所以它变了只需要重编那一个文件。
+#pragma once
+
+// `git rev-parse --short HEAD` 的结果，例如 `42900ad`；构建时拿不到 git
+// （不在仓库里、或者机器上没装）时是 `unknown`。
+#define FLOWKEYD_GIT_REVISION "@FLOWKEYD_GIT_REVISION@"

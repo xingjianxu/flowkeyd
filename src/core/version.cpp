@@ -3,6 +3,13 @@
 #include <QDateTime>
 #include <QFileInfo>
 
+#include "flowkeyd_revision.h"
+
+// 生成头文件缺失时（例如有人绕开了 CMake 的配置步骤）也要能编过。
+#ifndef FLOWKEYD_GIT_REVISION
+#define FLOWKEYD_GIT_REVISION "unknown"
+#endif
+
 namespace flowkeyd::core {
 
 namespace {
@@ -14,12 +21,12 @@ QString unknown()
 
 } // namespace
 
-QString unknownTimestamp()
+QString unknownValue()
 {
     return unknown();
 }
 
-QString buildTimestampFromFile(const QString &path)
+QString buildDateFromFile(const QString &path)
 {
     if (path.isEmpty()) {
         return unknown();
@@ -32,13 +39,18 @@ QString buildTimestampFromFile(const QString &path)
     if (!modified.isValid()) {
         return unknown();
     }
-    // 版本号就是它：紧凑、可直接当字符串比较，`yyyyMMddHHmm` 例如 202609221718。
-    return modified.toString(QStringLiteral("yyyyMMddHHmm"));
+    return modified.toString(QStringLiteral("yy-MM-dd"));
+}
+
+QString sourceRevision()
+{
+    const QString revision = QStringLiteral(FLOWKEYD_GIT_REVISION);
+    return revision.isEmpty() ? unknown() : revision;
 }
 
 QString buildVersion(const QString &executablePath)
 {
-    return buildTimestampFromFile(executablePath);
+    return buildDateFromFile(executablePath) + QLatin1Char('-') + sourceRevision();
 }
 
 } // namespace flowkeyd::core

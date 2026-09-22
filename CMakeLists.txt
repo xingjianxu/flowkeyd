@@ -66,6 +66,54 @@ function(flowkeyd_strict_warnings target)
 endfunction()
 
 # ---------------------------------------------------------------------------
+# 版本号的 git 短修订（见 AGENTS.md 第 2 节第 12 条）：构建时用
+# `git rev-parse --short HEAD` 取一次，写进一个只给 src/core/version.cpp 用的
+# 生成头文件。`CMAKE_CONFIGURE_DEPENDS` 把 .git 的 HEAD 与当前分支的 ref 登记成
+# configure 依赖，所以提交 / 切分支之后重新构建会自动刷新它；而「没提交、没改
+# 源文件」的构建仍然是 `ninja: no work to do`（不要改成每次构建都生成：那会逼着
+# exe 反复重链接，见 src/core/version.h 里的说明）。
+# 拿不到 git（不在仓库里、或机器上没装）时留成 `unknown`。
+# ---------------------------------------------------------------------------
+set(FLOWKEYD_GIT_REVISION "unknown")
+find_package(Git QUIET)
+if(GIT_FOUND)
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" rev-parse --short HEAD
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        OUTPUT_VARIABLE _flowkeyd_git_revision
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        RESULT_VARIABLE _flowkeyd_git_status
+        ERROR_QUIET)
+    if(_flowkeyd_git_status EQUAL 0 AND NOT _flowkeyd_git_revision STREQUAL "")
+        set(FLOWKEYD_GIT_REVISION "${_flowkeyd_git_revision}")
+    endif()
+endif()
+
+# .git 在正常克隆里是目录；worktree / submodule 里可能是文件，那就跳过。
+set(_flowkeyd_git_meta "${CMAKE_CURRENT_SOURCE_DIR}/.git/HEAD")
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git/HEAD")
+    file(READ "${CMAKE_CURRENT_SOURCE_DIR}/.git/HEAD" _flowkeyd_head)
+    if(_flowkeyd_head MATCHES "^ref: *(.+)$")
+        string(STRIP "${CMAKE_MATCH_1}" _flowkeyd_head_ref)
+        list(APPEND _flowkeyd_git_meta "${CMAKE_CURRENT_SOURCE_DIR}/.git/${_flowkeyd_head_ref}")
+    endif()
+endif()
+foreach(_flowkeyd_dep IN LISTS _flowkeyd_git_meta)
+    if(EXISTS "${_flowkeyd_dep}")
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_flowkeyd_dep}")
+    endif()
+endforeach()
+unset(_flowkeyd_dep)
+unset(_flowkeyd_head)
+unset(_flowkeyd_head_ref)
+
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/version_revision.h.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/flowkeyd_revision.h"
+    @ONLY)
+message(STATUS "flowkeyd: source revision ${FLOWKEYD_GIT_REVISION}")
+
+# ---------------------------------------------------------------------------
 # 纯逻辑层：不碰 Win32、不碰 Qt GUI，只用 QtCore。
 # 因此它可以被 Qt Test 直接链接，也能在没有桌面会话时跑 --check/--list-keys。
 # ---------------------------------------------------------------------------
@@ -89,6 +137,8 @@ add_library(flowkeyd_core STATIC
 )
 
 target_include_directories(flowkeyd_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+# 生成头 `flowkeyd_revision.h` 只有 core/version.cpp 用，所以是 PRIVATE。
+target_include_directories(flowkeyd_core PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_link_libraries(flowkeyd_core PUBLIC Qt6::Core)
 flowkeyd_strict_warnings(flowkeyd_core)
 
