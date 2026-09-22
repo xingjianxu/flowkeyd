@@ -18,13 +18,19 @@
       "name": "windows-debug",
       "displayName": "windows-debug (Ninja + MinGW + Qt 6.11.2)",
       "inherits": "windows",
-      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "FLOWKEYD_BUILD_TESTS": "ON"
+      }
     },
     {
       "name": "windows-release",
       "displayName": "windows-release (RelWithDebInfo)",
       "inherits": "windows",
-      "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" }
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "FLOWKEYD_BUILD_TESTS": "OFF"
+      }
     }
   ],
   "buildPresets": [
@@ -35,11 +41,6 @@
     {
       "name": "debug",
       "configurePreset": "windows-debug",
-      "output": { "outputOnFailure": true }
-    },
-    {
-      "name": "release",
-      "configurePreset": "windows-release",
       "output": { "outputOnFailure": true }
     }
   ]

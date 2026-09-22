@@ -84,19 +84,30 @@ $C = 'C:\Qt\Tools\CMake_64\bin\cmake.exe'
 & $C --build --preset debug
 & $C --build --preset release
 
-# 单元测试：两个 profile 都要能编译通过，测试只跑 release 那一份
-& ctest --test-dir build/windows-release --output-on-failure
+# 单元测试：只在 debug 里构建和运行（release 是发布 profile，不含测试目标）
+& ctest --test-dir build/windows-debug --output-on-failure
 ```
 
-产物分别在 `build/windows-debug/flowkeyd.exe` 与 `build/windows-release/flowkeyd.exe`。
+两条 profile 的分工是固定的：
+
+| 目录                    | 用途       | 里面有什么                                                          |
+| ----------------------- | ---------- | ------------------------------------------------------------------- |
+| `build/windows-debug`   | 开发       | 全部测试目标（`tst_*.exe`）+ 已部署的 Qt 运行时，随手就能跑         |
+| `build/windows-release` | 构建树     | 只是编译产物；**这里出现 `tst_*.exe` 就是 bug**                     |
+| `build/dist-release`    | **发布**   | 只有 `flowkeyd.exe` 与它需要的 Qt/MinGW 运行时 —— 拷走就能跑        |
+
+`build/dist-release/` 是 release 构建时**自动**产出的（不用另跑命令）：它里面的
+`flowkeyd.exe` 与 `build/windows-release/flowkeyd.exe` 是同一个二进制，只是旁边
+没有 `CMakeCache.txt`/`build.ninja`/`*.a` 这些构建系统文件。**要交付或换机器，
+就整个拷 `build\dist-release\`**：目标机器不需要装 Qt。
 `CMakePresets.json` 里写死了本机的 Qt / MinGW / Ninja 路径，换机器时改那里。
 
 **构建产物是自包含的**：每次链接完 `flowkeyd` 之后会自动跑一次 `windeployqt`，
 把 Qt 与 MinGW 的运行时 DLL、以及 exe 用到的 QML 模块（`QtQuick`、
-`QtQuick.Controls.FluentWinUI3`……）拷到 exe 同目录。所以
-**直接双击 `build\windows-release\flowkeyd.exe` 就能启动**，不需要把 Qt 的
-`bin` 加进 `PATH`，也不需要额外跑部署脚本。
-（想做成发布包/换目录分发时，仍然用 `cmake --install`：那套规则走的是
+`QtQuick.Controls.FluentWinUI3`……）拷到产物目录。所以
+**直接双击 `build\dist-release\flowkeyd.exe`（或用构建树里那一份）就能启动**，
+不需要把 Qt 的 `bin` 加进 `PATH`，也不需要额外跑部署脚本。
+（想走标准的安装规则时仍然可以用 `cmake --install`：那套规则走的是
 `qt_generate_deploy_app_script`；见 `CMakeLists.txt` 末段。）
 
 > 双击启动等价于**不带任何参数**启动：它没有控制台，日志只进
@@ -784,11 +795,11 @@ remap{
 $C = 'C:\Qt\Tools\CMake_64\bin\cmake.exe'
 & $C --build --preset debug
 & $C --build --preset release
-& ctest --test-dir build/windows-release --output-on-failure     # 19 个测试目标
+& ctest --test-dir build/windows-debug --output-on-failure     # 19 个测试目标
 
 # 真实桌面后端（剪贴板 / 音量 / 窗口 / 虚拟桌面）
 $env:FLOWKEYD_ALLOW_INTERACTIVE_TESTS = '1'
-& build\windows-release\tst_interactive.exe
+& build\windows-debug\tst_interactive.exe
 ```
 
 * **单元测试**（Qt Test，19 个目标）覆盖按键/和弦解析、发送脚本解析、模板展开、

@@ -22,7 +22,29 @@ find_package(Qt6 6.8 REQUIRED COMPONENTS
 
 qt_standard_project_setup(REQUIRES 6.8)
 
-enable_testing()
+# ---------------------------------------------------------------------------
+# 两条 profile 的分工（见 AGENTS.md 第 5 节）：
+#   * windows-debug   —— 开发用：构建单测（含 tst_interactive），构建完自动把
+#                        Qt/MinGW 运行时部署到构建目录，可以直接双击/命令行跑。
+#   * windows-release —— 发布用：**不构建任何测试目标**，除了把运行时部署到
+#                        构建目录，还会额外产出一个干净的发布目录
+#                        build/dist-release（只有 exe 与它需要的运行时）。
+# 这样 build/windows-release 里不会出现 tst_*.exe，发布永远以
+# build/dist-release 为准（可以直接拷到别的机器上运行）。
+# ---------------------------------------------------------------------------
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    set(FLOWKEYD_IS_DEBUG_PROFILE ON)
+else()
+    set(FLOWKEYD_IS_DEBUG_PROFILE OFF)
+endif()
+
+option(FLOWKEYD_BUILD_TESTS
+    "Build the Qt Test unit test targets (debug profile only; see AGENTS.md 5)"
+    ${FLOWKEYD_IS_DEBUG_PROFILE})
+
+if(FLOWKEYD_BUILD_TESTS)
+    enable_testing()
+endif()
 
 # 跑 exe / 单测时需要的 DLL 目录（Qt 自己的，以及 MinGW 的 libstdc++/libgcc）。
 get_target_property(_flowkeyd_qt_core_location Qt6::Core IMPORTED_LOCATION)
@@ -228,6 +250,27 @@ if(WIN32 AND TARGET Qt6::windeployqt)
         VERBATIM)
 endif()
 
+# ---------------------------------------------------------------------------
+# release profile 额外产出一个**干净的发布目录** build/dist-release：
+# 里面只有 flowkeyd.exe 与它需要的 Qt / MinGW 运行时（DLL、QML 模块、插件），
+# 没有构建系统文件、没有单测，可以直接拷贝到别的机器上运行。
+# 注意这是“额外”产出：build/windows-release 自己仍然部署了一份运行时，方便
+# 开发期直接跑；发布一律以 build/dist-release 为准（见 AGENTS.md 第 5 节）。
+# ---------------------------------------------------------------------------
+if(WIN32 AND TARGET Qt6::windeployqt AND NOT FLOWKEYD_IS_DEBUG_PROFILE)
+    set(FLOWKEYD_DIST_DIR "${CMAKE_SOURCE_DIR}/build/dist-release")
+    add_custom_command(TARGET flowkeyd POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${FLOWKEYD_DIST_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:flowkeyd>" "${FLOWKEYD_DIST_DIR}/flowkeyd.exe"
+        COMMAND Qt6::windeployqt
+            --no-translations
+            --qmldir "${CMAKE_CURRENT_SOURCE_DIR}/src/qml"
+            "${FLOWKEYD_DIST_DIR}/flowkeyd.exe"
+        COMMENT "windeployqt: staging the clean release into build/dist-release"
+        VERBATIM)
+endif()
+
 install(TARGETS flowkeyd
     BUNDLE  DESTINATION .
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
@@ -242,8 +285,13 @@ qt_generate_deploy_app_script(
 install(SCRIPT ${deploy_script})
 
 # ---------------------------------------------------------------------------
-# 单元测试
+# 单元测试（只在 debug profile 里构建与运行，见 AGENTS.md 第 5 节）
 # ---------------------------------------------------------------------------
+if(NOT FLOWKEYD_BUILD_TESTS)
+    message(STATUS "flowkeyd: unit tests are disabled in this profile (FLOWKEYD_BUILD_TESTS=OFF)")
+    return()
+endif()
+
 function(flowkeyd_add_test name)
     cmake_parse_arguments(ARG "" "" "LIBS" ${ARGN})
     qt_add_executable(${name} tests/${name}.cpp)

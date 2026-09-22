@@ -15,10 +15,18 @@
 > 1. 每个任务结束后都要更新本文件，把新得到的经验和新出现的要求写进去，
 >    这样下一个 agent 不必重新发现一遍。
 > 2. 每个任务结束后**编译 debug 与 release 两个 profile**（两条优化路径的警告
->    都要挡住），但**单元测试只在 release 上跑**
->    （`ctest --test-dir build/windows-release`，见第 5 节的命令行），
->    `scripts/acceptance.ps1` 同理只用 release 的产物。
->    **release 构建 + release 测试全绿才算完成**；纯文档任务同样适用。
+>    都要挡住）。**单元测试只在 debug profile 上构建和运行**
+>    （`ctest --test-dir build/windows-debug`，见第 5 节的命令行）；
+>    `scripts/acceptance.ps1` 仍然只用 release 的产物（它跑的就是发布出去的那个
+>    exe）。**release 构建 + debug 测试全绿才算完成**；纯文档任务同样适用。
+>
+>    两条 profile 的分工是固定的：**debug = 开发**（构建全部测试目标、部署好
+>    运行时、可以随便跑），**release = 发布**（不构建任何测试目标）。
+>    **发布版本是 `build/dist-release/`**（release 构建时自动产出）：里面只有
+>    `flowkeyd.exe` 与它需要的 Qt/MinGW 运行时，**直接拷到别的机器上就能跑**。
+>    `build/windows-debug` 里出现 `tst_*.exe` 是正常的，
+>    `build/windows-release` 或 `build/dist-release` 里出现测试产物、构建系统文件
+>    （`*.a`、`CMakeCache.txt`、临时脚本……）就算 bug。
 > 3. 目标平台是 **Windows**；可以使用未公开的 Win32 API。
 > 4. **代码注释、本文件、README 与示例配置一律用中文。**
 >    **日志与错误信息保持英文**（配置校验信息、`--check` 输出也一样）：
@@ -132,8 +140,11 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
    但必须在提交信息里给出理由。
    `QUICK_START_DEPS`：JSON、CLI 解析、字符串工具都自己写或用 Qt 自带的；
    不要引入 `sol2`、`nlohmann::json`、`CLI11`、`spdlog` 之类“顺手”的库。
-8. **构建：CMake Presets + Ninja，debug 与 release 双 profile 都必须编译通过；
-   单元测试与验收脚本只跑 release**（见工作约定第 2 条）。
+8. **构建：CMake Presets + Ninja，debug 与 release 双 profile 都必须编译通过。
+   两条 profile 分工固定**：debug 里构建单测（`FLOWKEYD_BUILD_TESTS=ON`），
+   release 里不构建单测、只产出干净的发布目录 `build/dist-release`。
+   单元测试只在 debug 上跑，验收脚本只跑 release 的产品 exe
+   （见工作约定第 2 条）。
 9. **帮助窗口的界面用 Qt 自带的标准控件，不自绘。**
    （2026-09，项目所有者拍板：“不能用 qt 自带的列表控件实现么？不要自己绘制”，
    随后又要求“上部的搜索栏要用标准的 input 控件实现、鼠标能点选并执行列表项”。）
@@ -308,14 +319,24 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 > 模型层只有 QtCore，这样 `tst_menu_model`/`tst_help_model` 能在没有桌面的情况下跑。
 
 `flowkeyd_add_test(name [LIBS …])` 负责把 Qt/MinGW 的 DLL 目录写进 test 的 `PATH`。
+**测试目标只在这个函数被调用时创建，而整段（连 `enable_testing()`）都包在
+`FLOWKEYD_BUILD_TESTS` 里**：debug preset 给 `ON`、release preset 给 `OFF`
+（`CMakeLists.txt` 里的默认值跟着 `CMAKE_BUILD_TYPE` 走）。所以 release 的
+构建树里根本不会出现 `tst_*.exe`。
 
-**exe 自己的产物目录是自包含的**：`flowkeyd` 上挂了一条 `POST_BUILD` 的
+**exe 的产物目录是自包含的**：`flowkeyd` 上挂了一条 `POST_BUILD` 的
 `windeployqt`（`Qt6::windeployqt`），它把 Qt 与 MinGW 运行时的 DLL + exe 用到的
 QML 模块（`--qmldir src/qml`）拷到 exe 同目录，所以双击
-`build/windows-release/flowkeyd.exe` 就能启动，不必手动改 `PATH`。
-只对 `flowkeyd` 做，**不给测试可执行文件做**（那 19 个 `tst_*` 靠 ctest 注入 `PATH`，
+`build/windows-release/flowkeyd.exe`（或 debug 那一份）就能启动，不必手动改 `PATH`。
+只对 `flowkeyd` 做，**不给测试可执行文件做**（那些 `tst_*` 靠 ctest 注入 `PATH`，
 而且每个都部署一次会让构建慢得多）。大小参考：release 目录里 Qt 侧大约 120 MB
 （含 19.7 MB 的 `opengl32sw.dll`，刻意保留 —— 不想为了省 20 MB 去赌软件回退）。
+
+**release profile 还会额外产出一个干净的发布目录**：另一条 `POST_BUILD` 把
+`flowkeyd.exe` 与它的运行时（同一条 `windeployqt`，只换个落点）放进
+`build/dist-release/`。那个目录里**只有运行需要的东西**，可以直接整个拷到别的
+机器上跑；发布版本以它为准（`build/windows-release` 是构建树，里面还有
+`CMakeCache.txt`/`build.ninja`/`*.a` 之类的东西）。debug profile 不产出它。
 
 **分层铁律**：`src/core/`、`src/lua/`（除 `lua_config.cpp` 里对 Lua C API 的
 调用之外）与 `src/app/{menu,help}_model.*`、`src/app/popup_layout.*`
@@ -333,7 +354,9 @@ QML 模块（`--qmldir src/qml`）拷到 exe 同目录，所以双击
 第 1 阶段要产出 `CMakePresets.json`，包含（名字可微调，但要写进本文件）：
 
 ```jsonc
-// 要点：Ninja + GCC 13.1 + Qt 6.11.2，两条 profile，产物分别在 build/debug、build/release
+// 要点：Ninja + GCC 13.1 + Qt 6.11.2；两条 profile（windows-debug /
+// windows-release），release 会额外把干净的发布目录写到 build/dist-release
+// （见第 4 节末与第 5 节）。
 {
   "version": 6,
   "configurePresets": [
@@ -346,16 +369,17 @@ QML 模块（`--qmldir src/qml`）拷到 exe 同目录，所以双击
         "CMAKE_CXX_COMPILER": "C:/Qt/Tools/mingw1310_64/bin/g++.exe",
         "CMAKE_MAKE_PROGRAM": "C:/Qt/Tools/Ninja/ninja.exe"
       } },
-    { "name": "windows-debug",   "inherits": "windows", "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" } },
-    { "name": "windows-release", "inherits": "windows", "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" } }
+    { "name": "windows-debug",   "inherits": "windows", "cacheVariables": {
+      "CMAKE_BUILD_TYPE": "Debug", "FLOWKEYD_BUILD_TESTS": "ON" } },
+    { "name": "windows-release", "inherits": "windows", "cacheVariables": {
+      "CMAKE_BUILD_TYPE": "RelWithDebInfo", "FLOWKEYD_BUILD_TESTS": "OFF" } }
   ],
   "buildPresets": [
     { "name": "debug",   "configurePreset": "windows-debug" },
     { "name": "release", "configurePreset": "windows-release" }
   ],
   "testPresets": [
-    { "name": "debug",   "configurePreset": "windows-debug",   "output": { "outputOnFailure": true } },
-    { "name": "release", "configurePreset": "windows-release", "output": { "outputOnFailure": true } }
+    { "name": "debug", "configurePreset": "windows-debug", "output": { "outputOnFailure": true } }
   ]
 }
 ```
@@ -378,8 +402,11 @@ $C = 'C:\Qt\Tools\CMake_64\bin\cmake.exe'
 & $C --build --preset debug
 & $C --build --preset release
 
-# 单元测试：只跑 release 那一份（见工作约定第 2 条）
-& ctest --test-dir build/windows-release --output-on-failure
+# 单元测试：只跑 debug 那一份（release 里根本不构建测试目标，见工作约定第 2 条）
+& ctest --test-dir build/windows-debug --output-on-failure
+
+# release 构建已经顺手产出了发布目录（只有 exe + Qt/MinGW 运行时，拷走就能跑）
+dir build\dist-release
 ```
 
 **debug 与 release 两个 profile 都必须编译通过，这是每个任务（包括纯文档任务）
@@ -387,10 +414,21 @@ $C = 'C:\Qt\Tools\CMake_64\bin\cmake.exe'
 （`-O2` + LTO 若开启），只编译 debug 会漏掉只在一侧出现的警告；反过来，
 debug 构建也是发现未初始化变量、迭代器失效这类问题的便宜手段。
 
-**但测试只在 release 上跑**（项目所有者 2026-09 拍板）：`ctest --test-dir
-build/windows-release` 全绿就够了，不需要再跑 `build/windows-debug` 那一遍；
-`scripts/acceptance.ps1` 同理只跑 `-Exe build\windows-release\flowkeyd.exe`
-（脚本的 `-Exe` 默认值就是它）。**零警告、零失败。**
+**但单元测试只在 debug 上跑**（项目所有者 2026-09 二次拍板；此前是「只在
+release 上跑」）：release 是**发布 profile**，`FLOWKEYD_BUILD_TESTS=OFF`，
+里面**不构建任何测试目标**，所以 `build/windows-release` 里不会出现 `tst_*.exe`、
+测试用的 `*_autogen`、`CTestTestfile.cmake`、测试日志这些东西。测试一律
+`ctest --test-dir build/windows-debug`；`scripts/acceptance.ps1` 仍然只跑
+release 的产物（`-Exe build\windows-release\flowkeyd.exe`，脚本的默认值），
+因为它验证的是真正要发布的那个 exe —— 它与 `build/dist-release/flowkeyd.exe`
+是同一个二进制（release 构建时拷过去的）。**零警告、零失败。**
+
+**发布版本以 `build/dist-release/` 为准**，它在 release 构建时自动产出
+（`POST_BUILD` 里的 `windeployqt`）：里面只有 `flowkeyd.exe`、Qt6/MinGW 的 DLL、
+QML 模块与插件，没有 `CMakeCache.txt`/`build.ninja`/`*.a`。**这就是可以直接
+拷贝到别的机器上运行的发布包**：目标机器不需要装 Qt，把整个目录拷过去、
+双击 `flowkeyd.exe` 即可。调试期想用构建树里的那一份也行
+（`build/windows-release/flowkeyd.exe`），那条部署命令没有去掉。
 
 因为 Qt 项目是编译型 + 链接型，**改动 `vendor/lua` 的构建参数、Win32 声明、
 QML 模块注册之后，两条 profile 都要重新全量构建一次**。
@@ -416,6 +454,7 @@ QML 模块注册之后，两条 profile 都要重新全量构建一次**。
 > `windeployqt`，见第 4 节末），所以上面这些命令**不再需要手动把 Qt 的 `bin`
 > 加进 `PATH`**；直接 `build/windows-release/flowkeyd.exe --check` 就行。
 > 双击 `flowkeyd.exe` 也能启动（不带参数 = 守护进程 + 默认配置 + 弹一次 UAC）。
+> 要交付/换机器就用 `build/dist-release/`（同一个 exe，旁边只有运行所需的文件）。
 
 ### 桌面行为怎么验证（每次动到钩子/引擎/分发/窗口后端都要过一遍）
 
@@ -1253,9 +1292,10 @@ Totals: 8 passed, 0 failed
 `KEYEVENTF_EXTENDEDKEY`，否则测的就是主键盘的 Enter）；重映射的
 hold/tap；挂起/重载/退出。
 
-> **修订（2026-09）**：DoD 现在只在 **release** 上跑 `ctest` 与
-> `acceptance.ps1`（工作约定第 2 条），下面的“debug 与 release 各一遍”
-> 只是当年的记录；另外测试里不再执行任何真实电源动作（第 10 条）。
+> **修订（2026-09）**：DoD 现在只在 **debug** 上跑 `ctest`，
+> `acceptance.ps1` 只跑 **release** 的产物（工作约定第 2 条），
+> 下面的“debug 与 release 各一遍”只是当年的记录；
+> 另外测试里不再执行任何真实电源动作（第 10 条）。
 
 **状态：已完成（2026-09）。**
 
@@ -1784,7 +1824,8 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   （`cannot open output file flowkeyd.exe: Permission denied`）。**这时只能请用户
   自己从托盘菜单点“退出”再重新 `Start-Process -Verb RunAs`**；
   debug 目录没被占用，验证可以先用 `build\windows-debug\flowkeyd.exe` 做，
-  但 `ctest`/`acceptance.ps1` 的 DoD 仍然必须在 release 上跑完。
+  但 `acceptance.ps1` 的 DoD 仍然必须在 release 的产物上跑完
+  （`ctest` 现在跑 debug，见工作约定第 2 条）。
 
 #### 2026-09 重写：帮助窗口改用 Qt 自带的列表（`ListView` + `ScrollBar`）
 
@@ -2136,9 +2177,9 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 
 1. `cmake --build --preset debug` 与 `cmake --build --preset release` **都绿**
    （零新增警告；warning 当错误处理，直到项目所有者另有要求）。
-   **两条 profile 都要构建，但只在 release 上跑测试**（见下一条）。
-2. `ctest --test-dir build/windows-release --output-on-failure` **全绿**
-   （不再跑 `build/windows-debug` 那一遍，见工作约定第 2 条）；
+   **两条 profile 都要构建，但单元测试只在 debug 上跑**（见下一条）。
+2. `ctest --test-dir build/windows-debug --output-on-failure` **全绿**
+   （测试目标只在 debug profile 里构建；release 是发布 profile，见工作约定第 2 条）；
    新增/修改的逻辑都有对应测试（`core/`、`lua/`、模型层这些可测的部分）。
 3. 如果动了钩子/引擎/分发/窗口后端：跑 **`scripts\acceptance.ps1`**
    （只跑 `-Exe build\windows-release\flowkeyd.exe` 那一份，见第 5 节），
@@ -2153,12 +2194,16 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 6. 用户可见行为有变化时更新 `README.md`，有新经验时更新本文件。
 7. `git commit`：提交信息里说明**为什么**（尤其是引入新依赖时）。
 8. 仓库里不留垃圾：`tmp/`、`build/`、临时配置文件都在 `.gitignore` 里。
+   **发布目录 `build/dist-release/` 里只允许有 `flowkeyd.exe` 与它需要的
+   运行时**：测试可执行文件、临时配置、诊断文件一律不许留在
+   `build/windows-release` 或 `build/dist-release` 里（见工作约定第 2 条）。
 
 > **阶段 0/1 的实测结果（2026-09-20）**：`windows-debug` 与 `windows-release`
 > 两个 profile 都是 `build exit 0`、零警告（`-Wall -Wextra -Werror`），
 > 6 个测试目标在两边都是 `100% tests passed`。
-> 跑 `ctest` 时请用第 5 节的命令行（`ctest --test-dir build/windows-release`；
-> 当年两个 profile 都跑，现在只跑 release，见工作约定第 2 条）；
+> 跑 `ctest` 时请用第 5 节的命令行（现在是 `ctest --test-dir build/windows-debug`；
+> 当年两个 profile 都跑，后来改成只跑 release，2026-09 又改成只跑 debug，
+> 见工作约定第 2 条）；
 > 每个测试实际是 `cmake/RunQTest.cmake` 包的一层，它会把 QtTest 的输出
 > `cat` 出来（原因见第 10 节）。
 > `--check` / `--list` 在阶段 2 之后就绪（现在打的是真实结果）。
@@ -2390,6 +2435,36 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > `font.family`（行高、卡片宽度、行距、滚动条位置都没变，脚本用的坐标不受影响），
 > 按第 5 节不属于“必须重跑验收”的改动。解锁后想确认的话直接跑一遍即可
 > （预期仍然 **116 项 / 0 失败**）。
+
+> **2026-09 约定变更（测试改用 debug profile + 新增发布目录 `build/dist-release`）**：
+> 项目所有者拍板：**release 目录必须是「可以直接拷贝到其他机器运行的发布版本」，
+> 测试用的 exe 一律走 debug 产出目录**。落地方式：
+> `CMakeLists.txt` 新增 `FLOWKEYD_BUILD_TESTS`（debug preset `ON` / release preset
+> `OFF`，默认跟着 `CMAKE_BUILD_TYPE`），整段单测（含 `enable_testing()`）都包在
+> 它里面 —— release 构建树里因此不再有 `tst_*.exe`、测试用的 `*_autogen`、
+> `CTestTestfile.cmake`；release profile 另加一条 `POST_BUILD`，把 exe 与它的
+> `windeployqt` 运行时放进**干净的 `build/dist-release/`**（只有 exe + Qt/MinGW
+> 运行时 + QML 模块，45 个条目，没有任何构建系统文件）。
+> `CMakePresets.json` 去掉了 `testPresets.release`（release 里没有测试，留着只会
+> 让人把「0 个测试」误当成「全绿」）。
+> 本次 DoD：两个 profile 都是 `build exit 0`、零编译警告（release configure 会打印
+> `flowkeyd: unit tests are disabled in this profile (FLOWKEYD_BUILD_TESTS=OFF)`）；
+> `ctest --test-dir build/windows-debug` **19 个测试目标全绿**；
+> `build/windows-release` 里 `tst_*` 计数为 0。
+> `build/dist-release/flowkeyd.exe` 与 `build/windows-release/flowkeyd.exe`
+> **SHA-256 完全相同**；把 `dist-release` 整份拷到别处、并把 `PATH` 清成
+> `C:\Windows\System32;C:\Windows` 之后，`--version`、`--check --config
+> flowkeyd.lua.example`（`OK (37 hotkey(s), 3 remap(s))`、零警告）与 `--list-keys`
+> 都正常，守护进程也能装钩子、被 `taskkill`（**不带** `/F`）干净停掉
+> （日志末尾 `keyboard hook removed`）。
+> 存量清理：把旧 `build/windows-release` 里遗留的 19 个 `tst_*.exe` 与它们的
+> `.manifest`/`*_autogen`、`CTestTestfile.cmake`、`Testing/`、改名留下的
+> `flowkeyd.exe.locked` 全都删掉了（目录条目从 129 降到 69）。
+> `scripts/acceptance.ps1` 的默认 `-Exe` 仍然指向 `build/windows-release`，无需改动
+> （它与 dist 里的是同一个二进制）；本次改动不涉及钩子/引擎/分发/窗口后端，
+> 所以按第 11 节第 3 条没有重跑验收脚本。
+> **本节里所有「ctest 只跑 windows-release」的历史记录都早于这次变更**，
+> 保留它们只是为了记录当时的做法。
 
 > 提醒：Qt 的编译单元很多，`--preset` 的构建目录是分开的
 > （`build/windows-debug` / `build/windows-release`），所以
