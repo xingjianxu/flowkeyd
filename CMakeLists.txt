@@ -131,6 +131,8 @@ flowkeyd_strict_warnings(flowkeyd_models)
 add_library(flowkeyd_platform STATIC
     src/platform/win/audio.cpp
     src/platform/win/audio.h
+    src/platform/win/autostart.cpp
+    src/platform/win/autostart.h
     src/platform/win/clipboard.cpp
     src/platform/win/clipboard.h
     src/platform/win/console.cpp
@@ -317,6 +319,7 @@ flowkeyd_add_test(tst_config)
 flowkeyd_add_test(tst_engine)
 flowkeyd_add_test(tst_template)
 flowkeyd_add_test(tst_lua LIBS flowkeyd_lua)
+flowkeyd_add_test(tst_autostart LIBS flowkeyd_platform)
 flowkeyd_add_test(tst_layout LIBS flowkeyd_platform)
 flowkeyd_add_test(tst_input LIBS flowkeyd_platform)
 flowkeyd_add_test(tst_command_line LIBS flowkeyd_platform)

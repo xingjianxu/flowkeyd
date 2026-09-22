@@ -17,6 +17,7 @@
 #include "core/config.h"
 #include "core/keys.h"
 #include "lua/lua_config.h"
+#include "platform/win/autostart.h"
 #include "platform/win/console.h"
 #include "platform/win/elevate.h"
 #include "platform/win/hook.h"
@@ -144,6 +145,22 @@ int main(int argc, char *argv[])
     if (options.listKeys) {
         win::writeStdout(core::allKeyNames().join(QStringLiteral("\r\n")) + QStringLiteral("\r\n"));
         return 0;
+    }
+    // `--remove-autostart`：删掉「登录自启」计划任务。它不读配置、不装钩子，
+    // 但要管理员权限才能真正删任务（所以不在「离线命令」那一类）。
+    // 和 `--quit` 一起用时先删任务、再请实例退出，否则它下次启动会把任务注册回来。
+    if (options.removeAutostart) {
+        QString error;
+        if (!win::removeAutostartTask(win::autostartTaskName(), &error)) {
+            win::writeStderr(toConsole(QStringLiteral("flowkeyd: %1\n").arg(error)));
+            return 1;
+        }
+        win::writeStdout(toConsole(
+            QStringLiteral("flowkeyd: logon autostart task `%1` removed\n")
+                .arg(win::autostartTaskName())));
+        if (!options.quit) {
+            return 0;
+        }
     }
     // `--quit`：请正在运行的实例干净退出。它自己不装钩子、不提权，也不读配置
     // （只看配置文件路径对不对得上）；等对方真的把钩子卸掉再返回，脚本才能接着
@@ -341,6 +358,27 @@ int main(int argc, char *argv[])
                      .arg(boolText(compiled.settings.swallow),
                           boolText(compiled.settings.exactModifiers),
                           boolText(compiled.settings.releaseModifiers)));
+
+    // 开机自启：每次启动都检查一次计划任务，缺失、或指向的 exe 不是当前这一个，
+    // 就把它注册 / 刷新成当前路径（守护进程跑到哪儿，自启就指向哪儿）。
+    //
+    // 只在「真正的常驻实例」上做：开发 / 测试实例（`--no-elevate` 或
+    // `--allow-multi`）与未提权的进程都跳过，免得把用户真实的开机自启劫持到
+    // 构建目录（计划任务指向失效路径是**完全静默**的失败，见 AGENTS.md 第 10 节）。
+    if (options.noAutostart) {
+        win::logDebug(QStringLiteral("autostart task not managed: --no-autostart"));
+    } else if (options.noElevate || options.allowMulti) {
+        win::logDebug(QStringLiteral("autostart task not managed: development instance "
+                                     "(--no-elevate or --allow-multi)"));
+    } else if (!win::isElevated()) {
+        win::logDebug(QStringLiteral("autostart task not managed: not running elevated"));
+    } else {
+        win::AutostartSpec spec;
+        spec.executable = win::currentExecutablePath();
+        spec.workingDirectory = QFileInfo(spec.executable).absolutePath();
+        spec.userId = win::currentUserAccount();
+        win::ensureAutostart(spec);
+    }
 
     // 托盘模式下控制台属于自己时隐藏它（日志窗口就是控制界面）。
     if (!options.console && win::consoleIsOwned() == 1 && win::hideConsoleWindow()) {

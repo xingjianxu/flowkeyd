@@ -140,9 +140,14 @@ flowkeyd 不会去动它（`--console` 可以强制保留输出）。右键菜�
 
 ### 开机自启与更新（任务计划程序）
 
-`scripts\install.ps1` 把 release 产物装到 `C:\Program Files\flowkeyd`，并注册一个
-**登录时触发**的计划任务（*使用最高权限运行*）。之后每次登录、以及每次机器重启，
-flowkeyd 都会以管理员权限起来，**不弹 UAC**。
+flowkeyd **自己**会注册一个**登录时触发**的计划任务（*使用最高权限运行*）：
+每次启动时它检查这个任务，**不存在、或指向的 exe 与当前正在运行的这个不是同一个，
+就用当前路径重新注册一次**。之后每次登录、以及每次机器重启，flowkeyd 都会以管理员
+权限起来，**不弹 UAC**。
+
+**没有安装目录**：自启跟着你运行的那个 `flowkeyd.exe` 走。把 exe 放到
+`D:\Tools\flowkeyd\flowkeyd.exe` 并运行一次，任务就指向那里；换到别处再运行一次，
+任务自己会更新；直接运行 `build\dist-release\flowkeyd.exe` 也一样在哪儿生效。
 
 为什么必须是计划任务，而不是 `shell:startup` 快捷方式或 `HKCU\...\Run`：
 
@@ -155,24 +160,18 @@ flowkeyd 都会以管理员权限起来，**不弹 UAC**。
   按键，也没有托盘图标。
 
 ```powershell
-# 安装 / 更新（需要管理员；会先停掉当前实例、拷贝、注册任务、再启动）
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1
-
-# 只换 flowkeyd.exe 的快路径（Qt 运行时已经在安装目录里了）
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -ExeOnly
-
-# 只注册 / 检查，不启动
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -NoStart
-
-# 卸载（-RemoveFiles 连安装目录一起删；用户配置与日志不动）
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\uninstall.ps1 -RemoveFiles
+# 删掉自启（需要管理员）。先停实例，否则它下次启动会把任务注册回来。
+& D:\Tools\flowkeyd\flowkeyd.exe --quit
+& D:\Tools\flowkeyd\flowkeyd.exe --remove-autostart
 ```
 
-**更新循环**（本机开发时）：`cmake --build --preset release` → `install.ps1`
-（想快点就 `-ExeOnly`）→ 完事，脚本自己会把旧实例停干净再启动新的。
-**约定：每次改完代码（每个任务收尾）都部署一次**，这样常驻实例始终等于最新构建；
-`build\dist-release\flowkeyd.exe` 与安装目录那份的 SHA-256 相同时（没重新链接）
-可以跳过 —— 部署会重启实例，快捷键会失灵几秒。
+**更新循环**（不用任何脚本）：`cmake --build --preset release` 会把干净的发布包
+写到 `build\dist-release\`。常驻实例如果正从那里跑（它会锁住那个 exe），先
+`--quit`、构建、再重新启动一次，任务会自动指向新路径。构建产物也可以整个拷到
+别的机器上直接运行。
+
+`--no-autostart` 可以临时关掉自启管理；开发 / 测试实例（`--no-elevate`、
+`--allow-multi`、或没有提权的进程）本来就**不会**动这个任务。
 
 脚本里的任务参数（这些默认值全是坑，改的时候别删）：
 
@@ -183,7 +182,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\uninstall.ps1 -Remov
 | `ExecutionTimeLimit` | `PT0S`（不限） | **默认是 72 小时** —— 三天后任务计划程序会亲手把守护进程停掉 |
 | 「只在交流电时启动 / 掉电就停」 | 关 | 默认是开 |
 | 多个实例 | 忽略新实例 | 加上 flowkeyd 自己的单实例互斥体，双保险 |
-| 工作目录 | 安装目录 | `--config` 的相对路径与 `{cwd}` 模板看它 |
+| 工作目录 | exe 所在目录 | `--config` 的相对路径与 `{cwd}` 模板看它 |
 | 允许按需启动 | 开 | 更新后不用重启系统，`Start-ScheduledTask flowkeyd` 就能起 |
 | 失败后重启 | 1 分钟一次，最多 3 次 | COM 那几块（Core Audio / 虚拟桌面 vtable）崩了能自己回来；**正常退出（退出码 0）不会触发重启**，所以托盘/`quit` 动作退出后不会被拉起来 |
 
@@ -192,15 +191,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\uninstall.ps1 -Remov
 （*上次运行结果*）、看 `%USERPROFILE%\.config\flowkeyd\flowkeyd.log`、
 再手动跑一次 `Start-ScheduledTask -TaskName flowkeyd`。
 
-任务指向的是**稳定的安装目录**，不是 `build\...`：任务里的路径一旦失效就是上面那种
-静默失败，而构建目录会被清理、被重命名、还会被正在运行的实例锁住。装到
-`C:\Program Files\flowkeyd` 之后，更新永远只是「换掉那个文件」，
-任务本身不需要重新注册（构建目录也不会再被常驻实例占用）。
+自启任务的路径**跟着当前运行的 exe 走**：一旦那个路径失效（你把 exe 删了或移走了），
+表现就是上面那种静默失败；下次手动启动一次 flowkeyd，自检会把它刷新回来。
+另外，开发 / 测试实例（`--no-elevate`、`--allow-multi`、或没有提权的进程）**不会**
+碰这个任务，免得临时实例把真实的自启劫持到构建目录。
 
-想立刻关掉正在运行的实例（安装脚本自己也用它）：
+想立刻关掉正在运行的实例：
 
 ```powershell
-& 'C:\Program Files\flowkeyd\flowkeyd.exe' --quit
+& 'D:\Tools\flowkeyd\flowkeyd.exe' --quit   # 换成你自己的 exe 路径
 ```
 
 `--quit` 按**配置文件路径**匹配实例（`--config` 可选），最多等 10 秒；
@@ -219,18 +218,16 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\uninstall.ps1 -Remov
 本机那份配置已经搬到 `%USERPROFILE%\.config\flowkeyd\config.lua`（绑定一个字
 都没改），`flowkeyd --check` 通过：24 个快捷键、0 个重映射、零警告。
 
-2026-09 起本机也**有**自启了：flowkeyd 装在 `C:\Program Files\flowkeyd`，
-由计划任务 `flowkeyd`（登录时 + 最高权限 + 15 秒延迟）拉起；构建目录里那一份
-只是开发用，不再被常驻实例锁住。
+2026-09 起本机也**有**自启了：常驻实例从
+`D:\prj\flowkeyd\build\dist-release\flowkeyd.exe` 运行，由计划任务 `flowkeyd`
+（登录时 + 最高权限 + 15 秒延迟）拉起 —— 任务由程序自己注册，指向的就是那个路径。
 
 ```powershell
-# 装 / 更新（管理员；先停旧实例，再拷贝、注册、启动）
-powershell -NoProfile -ExecutionPolicy Bypass -File D:\prj\flowkeyd\scripts\install.ps1
-
 # 干净退出（不提权也行）
-& 'C:\Program Files\flowkeyd\flowkeyd.exe' --quit
+& 'D:\prj\flowkeyd\build\dist-release\flowkeyd.exe' --quit
 
-# 手动启动/查看任务
+# 手动启动 / 查看任务（重新启动时会自动把任务刷新成这个路径）
+Start-Process 'D:\prj\flowkeyd\build\dist-release\flowkeyd.exe'
 Start-ScheduledTask -TaskName flowkeyd
 Get-ScheduledTask -TaskName flowkeyd
 
@@ -238,7 +235,8 @@ Get-ScheduledTask -TaskName flowkeyd
 Start-Process -Verb RunAs -FilePath 'D:\prj\oskeyd\target\release\oskeyd.exe'
 ```
 
-回滚前记得先 `uninstall.ps1`（否则两边同时常驻会抢同一批快捷键）。
+回滚前先 `--quit` 并 `--remove-autostart`（否则两边同时常驻会抢同一批快捷键，
+而任何一次手动启动都会把自启任务重新注册回来）。
 
 ## 命令行
 
@@ -256,6 +254,8 @@ flowkeyd [选项]
     --list-keys         打印所有可接受的按键名
     --quit              请正在运行的实例干净退出（按配置文件路径匹配，最多等 10 秒；
                         没找到在跑的实例时返回 1；不会装钩子，也不需要管理员）
+    --no-autostart      不要注册 / 刷新「登录时自启」的计划任务（开发测试用）
+    --remove-autostart  删除那个计划任务后退出（需要管理员权限）
     --log-window        启动时直接打开日志窗口
     --parent-pid <PID>  兼容参数，本项目忽略（日志窗口在进程内）
     --log-level <LVL>   trace|debug|info|warn|error|off
@@ -279,7 +279,7 @@ D:\prj\flowkeyd\flowkeyd.lua.example: OK (37 hotkey(s), 3 remap(s))
 永远不会弹 UAC，也绝不安装钩子——为一个只读的校验弹窗很没道理。
 `--quit` 同样不装钩子、不提权（它只去通知一个已经在跑的实例，
 见[开机自启与更新](#开机自启与更新任务计划程序)），但它会去碰另一个进程，
-所以不算离线命令。
+所以不算离线命令。`--remove-autostart` 也不在离线命令里：它要管理员权限才能删任务。
 
 守护进程模式（不带任何离线命令）下配置读不出来或校验不过时，flowkeyd 除了把
 错误写进 `stderr`，还会弹一个 Qt 标准消息框（标题 `flowkeyd 配置错误`，错误文本
@@ -973,7 +973,7 @@ $env:FLOWKEYD_ALLOW_INTERACTIVE_TESTS = '1'
 * 守护进程**一直把日志文件开着写**，所以用 .NET 默认共享模式读它会报“文件正由
   另一进程使用”（`[System.IO.File]::ReadAllLines` / `ReadAllText`）：它们要的是
   `FileShare.Read`，与写句柄不兼容。用 `Get-Content -Encoding UTF8`，或者自己用
-  `FileShare.ReadWrite` 打开。`scripts\install.ps1` 里就是这么读的。
+  `FileShare.ReadWrite` 打开。
 * `menu` 与 `help` 的配色跟随系统 `palette`（比 oskeyd 的固定深色好），
   但**字体固定为微软雅黑**（不跟随系统字体），条目左侧还没有图标，动画也比较朴素。
 * 帮助窗口里 `Enter`/双击会**真的执行**那一行的动作（重映射那一行会真的注入
@@ -997,8 +997,8 @@ $env:FLOWKEYD_ALLOW_INTERACTIVE_TESTS = '1'
 * **计划任务的失败是静默的**：任务里的 exe 路径失效、单实例冲突、任务被禁用……
   表现都只是“没有托盘图标、快捷键不生效”，不会弹任何东西。排查看任务计划程序
   里 `flowkeyd` 那一条的*上次运行结果*，再看日志文件。
-  `scripts\install.ps1` 用的是稳定的安装目录（`C:\Program Files\flowkeyd`），
-  所以正常更新不会碰到这个问题。
+  自启任务指向当前运行的 exe（见[开机自启与更新](#开机自启与更新任务计划程序)），
+  所以手动启动一次 flowkeyd 就会把失效的路径刷新回来。
 * **没有 `--simulate` / `--selftest` / `--probe`。** 引擎与钩子的行为靠
   `scripts/acceptance.ps1`（注入按键的外部观察）与 Qt Test 单测来验证，
   但那三个开关仍然是明确的待办（见[路线图](#路线图)）：

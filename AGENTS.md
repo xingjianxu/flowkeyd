@@ -50,10 +50,14 @@
 >    （会因代码页变乱码）：要么写成脚本文件，要么只用 ASCII 的模式串。
 > 9. **接管已经完成（2026-09，第 10 阶段）：现在该常驻的是 flowkeyd。**
 >    用户日常绑定的提供者就是它，所以**不要**再去拉起别的实现。
->    2026-09 起常驻实例是**计划任务** `flowkeyd`（登录时 + 最高权限）拉起的
->    `C:\Program Files\flowkeyd\flowkeyd.exe`：装/更新一律
->    `scripts\install.ps1`，停止用 `flowkeyd.exe --quit`（不要 `taskkill /F`，
->    会留幽灵托盘图标），别再把常驻起在构建目录里 —— 那会把 release 产物锁住。
+>    2026-09 起常驻实例由**计划任务** `flowkeyd`（登录时 + 最高权限 + 15 秒延迟）
+>    拉起，任务指向**当前正在运行的 `flowkeyd.exe` 路径**：守护进程每次启动都会
+>    检查并（重新）注册它（见第 2 节第 10 条、第 4 节的 `autostart` 与第 10 节）。
+>    停止用 `flowkeyd.exe --quit`（不要 `taskkill /F`，会留幽灵托盘图标）；
+>    删除自启用 `flowkeyd.exe --remove-autostart`（先 `--quit`）。
+>    **`scripts\install.ps1` / `scripts\uninstall.ps1` 已经删除** —— 自启的注册、
+>    刷新与删除现在全在程序自己身上，**不要**再去写部署脚本、也不要再把常驻指向
+>    某个预设目录（如 `C:\Program Files\flowkeyd`）：任务跟着 exe 走。
 >    细节见第 10 节与 `README.md` 的「开机自启与更新」。
 >
 >    **注意（2026-09 实测）**：这台机器上 agent 的 `powershell.exe` **是提权的**
@@ -71,30 +75,31 @@
 >     一个都不许真的执行 —— 测试代码里不出现 `platform::win::power::execute()`
 >     （`tst_power_table` 只测纯逻辑表，不碰真实调用）。这些动作只有用户自己按
 >     快捷键、或点选单条目时才允许发生。细节见第 5 节与第 11 节。
-> 11. **每个任务收尾时，要把 release 产物往安装目录部署一份**（项目所有者 2026-09
->    要求）：常驻实例必须跑在最新构建上，否则用户按快捷键用的还是旧行为。
->    **这件事已经有现成的机制，不要另写脚本、也不要自己拼复制命令** ——
->    `scripts\install.ps1` 就是干这个的：它停旧实例（`--quit`）→ 把
->    `build\dist-release`（**只有 `flowkeyd.exe` 与它需要的 Qt/MinGW 运行时，
->    不含任何构建系统文件或测试产物**）镜像到 `C:\Program Files\flowkeyd` →
->    刷新计划任务 → 重新拉起 → 打印配置检查与日志尾部。
+> 11. **每个任务收尾时，release 产物必须是最新的**（项目所有者 2026-09 要求）：
+>    常驻实例必须跑在最新构建上，否则用户按快捷键用的还是旧行为。
+>    **`cmake --build --preset release` 会自动把干净的发布包写到
+>    `build/dist-release/`**（只有 `flowkeyd.exe` 与它需要的 Qt/MinGW 运行时，
+>    不含任何构建系统文件或测试产物）。**不再需要往 `C:\Program Files\flowkeyd`
+>    之类的安装目录部署任何东西** —— 那是旧方案，`install.ps1` 已经删掉；
+>    新的自启任务指向的就是当前运行的 exe。
+>
+>    因为常驻实例会锁住 `build/dist-release/flowkeyd.exe`，收尾（在两条 profile
+>    都构建通过、debug 测试全绿之后）按这个顺序做：
 >
 >    ```powershell
->    # 常规（只换 exe，最快）：
->    powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -ExeOnly
->    # 这次动了 QML / vendor\lua / Qt 部署文件，或 dist-release 里多了/少了文件：
->    #   去掉 -ExeOnly 做全量镜像（robocopy /MIR）
+>    # 1) 停常驻（快捷键会失灵几秒）2) 构建 release 3) 从 dist-release 重新拉起
+>    #    重新拉起时守护进程会自动把计划任务刷新成这个路径
+>    & build\dist-release\flowkeyd.exe --quit
+>    & 'C:\Qt\Tools\CMake_64\bin\cmake.exe' --build --preset release
+>    Start-Process build\dist-release\flowkeyd.exe
 >    ```
 >
->    * 部署会先 `--quit` 掉常驻实例再拉起来（正在跑的 exe 是锁着的，绕不过去），
->      期间快捷键失灵几秒。**所以先比对 SHA-256，没变就跳过**，别白白重启一次：
->      `(Get-FileHash build\dist-release\flowkeyd.exe).Hash` 对
->      `(Get-FileHash 'C:\Program Files\flowkeyd\flowkeyd.exe').Hash`。
->      纯文档任务通常 `ninja: no work to do`，哈希不变 → 跳过。
->    * 需要管理员（本机 agent 的 shell 是提权的，实测能跑；换机器先
->      `Assert-Admin` 再动手）。
->    * **只允许在两条 profile 都构建通过、debug 测试全绿之后部署**：
->      装上去的那一份就是发布版本（见第 5 节与第 11 节）。
+>    * 只有在常驻实例确实是从 `build/dist-release` 跑的时候才需要先 `--quit`。
+>      它跑在别的路径（用户自己拷走的拷贝）时，构建不会被锁，**不要**去动用户的
+>      实例，只要保证 `build/dist-release` 是最新的就行。
+>    * 纯文档任务通常 `ninja: no work to do`：什么都不用做。
+>    * 需要管理员权限的只有**提权启动**（新实例会注册计划任务），本机 agent 的
+>      shell 是提权的，实测能直接跑。
 
 ---
 
@@ -126,7 +131,7 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | 日志文件   | `%USERPROFILE%\.config\flowkeyd\flowkeyd.log`                                                                 |
 | 注入标记   | `dwExtraInfo` 里的 `"FLOW"`                                                                                   |
 | 互斥体     | `Local\flowkeyd-<配置路径散列>`                                                                               |
-| 开机自启   | 计划任务 `flowkeyd`（登录时 + 最高权限 + 15 秒延迟）→ `C:\Program Files\flowkeyd\flowkeyd.exe`；装/更新/卸载走 `scripts\install.ps1`，停止走 `--quit`（见第 2 节第 10 条与第 10 节） |
+| 开机自启   | 计划任务 `flowkeyd`（登录时 + 最高权限 + 15 秒延迟）指向**当前运行的 `flowkeyd.exe` 路径**：守护进程每次启动自动检查/注册（`--no-autostart` 跳过、`--remove-autostart` 删除），见第 2 节第 10 条与第 10 节 |
 | 日志窗口   | **进程内的 QML 窗口**（FluentWinUI3），尾随同一个日志文件                                                     |
 | 选单/帮助  | **QML 窗口**（FluentWinUI3），跑在 Qt GUI 线程上                                                              |
 | 示例配置   | `flowkeyd.lua.example`                                                                                        |
@@ -221,15 +226,21 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
      属性，不会自动往下传；QML 的 `font` 值类型也只有 `family`，没有族列表）。
      默认族 `Segoe UI Variable` 没有中文字形，不管的话中文会回退到宋体
      —— 见第 10 节。
-10. **开机自启：计划任务 + 稳定的安装目录**（项目所有者 2026-09 拍板，
-    推翻了之前的“不做自启”）。任务 `flowkeyd` 在登录时以
-    **最高权限**启动 `C:\Program Files\flowkeyd\flowkeyd.exe`（这样提权但不弹
-    UAC）；更新只换那个目录里的文件，**任务里的路径永不改变**
-    （指向 `build\…` 的话，构建目录一被清理/改名，自启就会**静默**失效，
-    而且正在跑的实例会把 release 产物锁住）。安装、更新、卸载走
-    `scripts\install.ps1` / `scripts\uninstall.ps1`；脚本自己用 `--quit`
-    把旧实例干净停掉。细节与任务的每个参数见 `README.md` 的「开机自启与更新」，
-    踩过的坑见第 10 节。
+10. **开机自启：计划任务指向当前运行的 exe**（项目所有者 2026-09 拍板；先做过
+    “安装目录”方案，后来改成自注册，见第 10 节）。任务 `flowkeyd` 在登录时以
+    **最高权限**启动一个 exe（这样提权但不弹 UAC），而那个路径由守护进程**每次
+    启动时自己检查/刷新**：任务缺失、或指向的 exe 与当前运行的这一个不同，就用
+    当前路径重新注册（`platform/win/autostart`，内部走 `schtasks /Create /XML`）。
+    因此**没有安装目录、也没有部署脚本**：把 exe 拷到哪儿就在哪儿生效，
+    `scripts\install.ps1` / `scripts\uninstall.ps1` 已删除。
+    * 开发/测试实例跳过：`--no-elevate`、`--allow-multi`、未提权、以及显式的
+      `--no-autostart` 都不会去碰计划任务 —— 否则临时实例会把用户的开机自启
+      劫持到一个会被清理的构建目录（计划任务指向失效路径是**完全静默**的失败）。
+    * 删除自启用 `--remove-autostart`（需管理员；先 `--quit` 停常驻，否则它下次
+      启动会把任务注册回来）。
+    * 任务的每个参数（`PT15S` 延迟、`ExecutionTimeLimit=PT0S`、电池两项、
+      `InteractiveToken`、`IgnoreNew`、`RestartOnFailure`）与当年 `install.ps1`
+      的 XML 逐字段一致，为什么见第 10 节与 `README.md` 的「开机自启与更新」。
 
 ---
 
@@ -334,6 +345,7 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `src/platform/win/logging.h/.cpp`         | 控制台/文件日志器（英文、分级别、可选 ANSI 颜色），`--log-level`/`--log-file`/`--no-color`                                                                                                                                  |
 | `src/platform/win/single_instance.h/.cpp` | 按配置路径散列命名的互斥体（含提权重启后的重试）；**`--quit` 的命名事件通道**：`quitEventName`/`createQuitEvent`（带 Low 完整性标签的 SDDL，让不提权的调用方也能 `SetEvent`）/`requestQuit`/`quitEventExists` |
 | `src/platform/win/elevate.h/.cpp`         | `ShellExecuteW("runas")` 自提权 + UAC 被拒时降级继续 + `--elevated` 标记 + 命令行/工作目录转发（`quote_arg`）                                                                                                               |
+| `src/platform/win/autostart.h/.cpp`       | 开机自启的计划任务：`buildTaskXml`/`taskXmlCommand`/`decodeTaskOutput`/`sameExecutablePath` 是**纯函数**（可单测），`query/register/removeAutostartTask` 走隐藏的 `schtasks.exe /Create /XML`，`ensureAutostart` 是启动时的“缺失或指向别的 exe 就刷新成当前路径”策略。**不写任何安装目录**（见第 2 节第 10 条与第 10 节） |
 | `src/app/`                                | 组装层：把 core / lua / platform 串起来，并拥有 Qt 对象                                                                                                                                                                     |
 | `src/app/dispatcher.h/.cpp`               | **动作工作线程**（`QThread`）：执行动作列表，含 `window` 的“先启动再激活”与默认开的 `toggle` 收起、`menu` 的窗口请求、`help` 的窗口请求 + 每一行的“执行目标”（绑定是 press+release 两串动作，`remap` 是直接注入目标按键） |
 | `src/app/runtime.h/.cpp`                  | 引擎 + 钩子 + 分发 + 托盘 + 弹窗的总装，`ControlCmd`（suspend/reload/quit）通道；还持有 `--quit` 的事件句柄并用 `QWinEventNotifier` 在 GUI 线程上监听（收到就走 `performShutdown`）                                                       |
@@ -343,10 +355,11 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `src/app/popup_layout.h/.cpp`             | 两个弹窗共用的几何类型（`PopupRect`/`PopupPoint`）与纯函数 `centrePopup()`（先在工作区居中、再夹进屏幕；**可单测**） |
 | `src/app/popup_host.h/.cpp`               | 把上面的模型挂到 QML 窗口上；抢前台（`requestActivate` + `win::window::raiseWindow` 的前台锁绕行）；在 Qt GUI 线程上创建/复用窗口；用户选完（或按 `Enter`/双击帮助里的一行）把活儿回投工作线程；`helpRun()` 负责把**可见行下标**换算成条目下标，并且**先把窗口藏起来再执行**（**GUI 线程亲和**） |
 | `src/qml/`                                | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`（三个文件都在开头写了 `pragma ComponentBehavior: Bound`）；配色一律用 `palette`，没有单独的 `Style.qml`；中文一律 `font.family: "Microsoft YaHei"`（默认族 `Segoe UI Variable` 没有中文字形，不管会回退到宋体，见第 10 节）。`HelpPopup.qml` 与 `MenuPopup.qml` 里除了卡片外框与按键徽标全是标准控件：帮助的筛选框是 `TextField`、列表是 `ListView` + Qt 自带 `ScrollBar` + `ItemDelegate`（列表只占行区域，不再需要表头/底部的遮罩）；选单的列表同样是 `ListView` + `ItemDelegate`（不滚动，所以没有滚动条；悬停与点击全部由委托提供） |
-| `tests/`                                  | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_log_tail`、`tst_audio`、`tst_interactive`（需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`，否则 skip）、`tst_menu_model`、`tst_help_model`、`tst_power_table`、`tst_desktop_table`、`tst_layout` |
-| `scripts/acceptance.ps1`                  | 桌面行为的验收脚本（注入按键 + 焦点捕捉窗口的外部观察，116 项检查：含弹窗滚轮/滚动条拖动/鼠标点选与点筛选框/鼠标点选单条目/`Enter` 与双击真的执行动作/危险动作两次确认）；需交互式桌面，**不属于 `ctest`**，见第 5 节与阶段 9 |
-| `scripts/install.ps1`                     | 装/更新常驻实例：停旧实例（`--quit`，兜底 `Stop-Process`）→ `robocopy /MIR build\dist-release → C:\Program Files\flowkeyd`（`-ExeOnly` 则只换 exe）→ 注册/刷新计划任务 `flowkeyd`（登录时 + 最高权限 + 15 秒延迟）→ `Start-ScheduledTask` → 校验进程与日志；需管理员；纯 ASCII。**它同时是每个任务收尾时的部署入口**（工作约定第 11 条），不要再写第二份部署脚本 |
-| `scripts/uninstall.ps1`                   | 卸载的薄包装：`install.ps1 -Uninstall`（停实例 + 删任务，`-RemoveFiles` 连安装目录一起删）                                                                                                                              |
+| `tests/`                                  | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_log_tail`、`tst_audio`、`tst_autostart`（自启的纯逻辑：XML 渲染/解析、输出解码、路径比较；**不碰真实计划任务**）、`tst_interactive`（需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`，否则 skip）、`tst_menu_model`、`tst_help_model`、`tst_power_table`、`tst_desktop_table`、`tst_layout` |
+| `scripts/acceptance.ps1`                  | 桌面行为的验收脚本（注入按键 + 焦点捕捉窗口的外部观察，116 项检查：含弹窗滚轮/滚动条拖动/鼠标点选与点筛选框/鼠标点选单条目/`Enter` 与双击真的执行动作/危险动作两次确认）；需交互式桌面，**不属于 `ctest`**，见第 5 节与阶段 9。它用 `--no-elevate` 起临时守护进程，所以**不会**碰真实的自启计划任务 |
+
+> `scripts/install.ps1` / `scripts/uninstall.ps1` **已删除**（2026-09）：自启的注册、
+> 刷新与删除现在全在 `src/platform/win/autostart.*` 里，由守护进程自己在启动时做。
 
 ### CMake 目标划分（阶段 6 之后）
 
@@ -451,19 +464,23 @@ $C = 'C:\Qt\Tools\CMake_64\bin\cmake.exe'
 # release 构建已经顺手产出了发布目录（只有 exe + Qt/MinGW 运行时，拷走就能跑）
 dir build\dist-release
 
-# 任务收尾（上面全绿之后）：把 release 产物部署到安装目录一份（工作约定第 11 条）
-# 已有机制，直接用 install.ps1，不要另写部署脚本：
-#   -ExeOnly = 只换 flowkeyd.exe（最快）；动了 QML/vendor\lua/运行时文件时去掉它
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -ExeOnly
+# 任务收尾（上面全绿之后，见工作约定第 11 条）：
+#   * build\dist-release 已经是最新发布包（release 构建的 POST_BUILD 自动产出），
+#     不需要往任何安装目录部署；
+#   * 常驻实例若正在从 build\dist-release 跑（会锁住那个 exe），先 --quit、
+#     构建、再重新拉起，让它跑在新构建上，启动时会自动把计划任务刷新成这个路径。
+& build\dist-release\flowkeyd.exe --quit
+& $C --build --preset release
+Start-Process build\dist-release\flowkeyd.exe
 ```
 
-**任务收尾要把 release 产物部署到安装目录一份**（工作约定第 11 条）。
-机制已经有了：`scripts\install.ps1` 负责「停旧实例 → 只镜像发布产物 → 刷新计划任务
-→ 重新拉起 → 校验」，`build\dist-release` 里也**只有** `flowkeyd.exe` 与它需要的
-Qt/MinGW 运行时（45 个条目，没有 `CMakeCache.txt`/`build.ninja`/`*.a`/`tst_*.exe`），
-所以「部署编译后的文件、不带无关文件」这件事不需要新脚本。
-只换 exe 的哈希没变（纯文档任务、`ninja: no work to do`）就跳过，别白白重启一次
-常驻实例。
+**任务收尾只需要保证 `build/dist-release/` 是最新发布包**（工作约定第 11 条）：
+release 构建的 `POST_BUILD` 会自动把干净的发布产物写到那里（只有 `flowkeyd.exe`
+与它需要的 Qt/MinGW 运行时，没有 `CMakeCache.txt`/`build.ninja`/`*.a`/`tst_*.exe`），
+所以「部署编译后的文件、不带无关文件」不需要任何脚本。**旧的“镜像到
+`C:\Program Files\flowkeyd`”方案已经删掉**（`install.ps1` 不复存在）。
+常驻实例从 `build/dist-release` 跑的时候，重建前要先 `--quit`（正在跑的 exe 锁着），
+构建完再拉起；`ninja: no work to do` 的纯文档任务什么都不用做。
 
 **debug 与 release 两个 profile 都必须编译通过，这是每个任务（包括纯文档任务）
 的硬性要求。** 理由：release 走的是完全不同的优化与链接路径
@@ -506,13 +523,15 @@ QML 模块注册之后，两条 profile 都要重新全量构建一次**。
 **离线命令（绝不允许提权）**：`--check` / `--list` / `--list-keys`。
 提权判断必须在这些命令 `return` 之后。`--quit` 也不提权（它只去通知一个
 已经在跑的实例），但它会碰另一个进程，所以不算离线命令（第 14 节）。
+`--remove-autostart` 也不在离线命令里：它要管理员权限才能删计划任务。
 
-**常驻实例与开发实例是分开的**：日常那个由计划任务拉起、跑的是安装目录里的
-拷贝（`C:\Program Files\flowkeyd\flowkeyd.exe`，见第 2 节第 10 条）；
-开发/冒烟一律用 `build/...` 里的一次性实例 + `--allow-multi` + 一次性配置。
+**常驻实例与开发实例是分开的**：日常那个由计划任务拉起，任务指向**上一次
+以“常驻方式”启动的那个 exe 路径**（守护进程启动时自注册 / 刷新，见第 2 节第 10 条）；
+开发 / 冒烟一律用 `build/...` 里的一次性实例 + `--no-elevate --allow-multi`
++ 一次性配置 —— 这两个开关也保证它**不会**去碰那个真实的自启任务。
 两者的单实例锁按**配置文件路径**分开，互不影响。
-要重新链接 release 的 exe 不再需要请用户先退出，因为它已经没在跑构建目录里的
-那份（这是自启改造顺带解决的）。
+常驻实例会锁住它自己那个 exe；从 `build/dist-release` 跑的时候就按工作约定
+第 11 条先 `--quit` 再重建。
 
 > 从 2026-09 起，构建目录里就已经有 Qt 与 MinGW 的运行时 DLL（构建后自动跑
 > `windeployqt`，见第 4 节末），所以上面这些命令**不再需要手动把 Qt 的 `bin`
@@ -784,7 +803,7 @@ flowkeyd 自己注入的按键带着 `"FLOW"` 标记，
 | 7 虚拟桌面 + 电源 | **已完成** | `platform/win/desktop|power` + dispatcher 接线；`tst_desktop_table`/`tst_power_table` 全绿；真实 COM 探测/切换与关屏由 `tst_interactive` 验证 |
 | 8 示例配置 + README | **已完成** | 覆盖全特性的 `flowkeyd.lua.example`（37 hotkey / 3 remap，`--check` 零警告）；`README.md` 已写全 |
 | 9 验收（无 e2e 的替代） | **已完成** | `scripts/acceptance.ps1`（77 项检查：68 项原样 + 9 项弹窗滚轮回归，需交互式桌面）+ `FLOWKEYD_ACCEPT_INJECTED` 测试后门；debug 跑 3 遍、release 跑 2 遍全绿 |
-| 10 接管 | **已完成** | 真实配置已迁到 `.config\flowkeyd\config.lua`（24 hotkey / 0 remap，零警告）；**2026-09 起常驻也有了自启**：计划任务 `flowkeyd` → `C:\Program Files\flowkeyd\flowkeyd.exe`（见第 2 节第 10 条） |
+| 10 接管 | **已完成** | 真实配置已迁到 `.config\flowkeyd\config.lua`（24 hotkey / 0 remap，零警告）；**2026-09 起常驻也有了自启**：计划任务 `flowkeyd` 指向**当前运行的 `flowkeyd.exe`**（由守护进程启动时自注册，不再有安装目录/部署脚本，见第 2 节第 10 条） |
 
 ### 阶段 0：仓库与构建骨架
 
@@ -1450,15 +1469,15 @@ checks: 68, failures: 0
    标记：那个标记会让 `flowkeyd --check` 之类离线命令也弹 UAC
    （离线命令本不该弹 UAC —— 不变量 11）。
 
-> **2026-09 后续：自启补上了。** 用户改主意，要求“开机自启 + 经常更新的场景下也
-> 别出问题”。落地方式：**计划任务（登录时 + 最高权限）指向
-> `C:\Program Files\flowkeyd\flowkeyd.exe`**，装/更新/卸载走
-> `scripts\install.ps1` / `scripts\uninstall.ps1`，停实例走新的 `--quit`。
-> 为什么不指向构建目录、为什么不用启动文件夹/服务、任务的每个参数为什么是那样，
+> **2026-09 后续：自启补上了，后来又改成自注册。** 用户改主意，要求“开机自启 +
+> 经常更新的场景下也别出问题”。第一版是**计划任务（登录时 + 最高权限）指向
+> `C:\Program Files\flowkeyd\flowkeyd.exe`**，装/更新/卸载走 `install.ps1` /
+> `uninstall.ps1`；**那一版已经删掉**（项目所有者 2026-09 再改）：现在没有
+> 安装目录、也没有部署脚本，**任务由守护进程自己在每次启动时注册 / 刷新，指向
+> 当前正在运行的 exe 路径**（实现见 `src/platform/win/autostart.*`，剥离自启用
+> `--no-autostart`，删除用 `--remove-autostart`）。为什么用计划任务（而不是启动
+> 文件夹 / 服务）、为什么开发实例要跳过、任务的每个参数为什么是那样，
 > 见第 2 节第 10 条、第 10 节「开机自启」那几条与 `README.md` 的「开机自启与更新」。
-> **阶段 10 当时那份“剩下要用户做的一件事”已经作废**：现在一条
-> `scripts\install.ps1` 就把“停旧实例 + 安装 + 注册任务 + 启动”全做完，
-> 而且因为跑的是安装目录里的那份拷贝，**构建目录再也不会被常驻实例锁住**。
 > 下面那段历史记录保留，只为说明当时的处境。
 
 **剩下要用户做的一件事**：agent 的 shell 没有提权，启动提权进程会弹 UAC 而
@@ -1479,6 +1498,15 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 小键盘 `-`/`+`/`*`、`Ctrl+Alt+F4/F5/F12`。
 `Ctrl+Alt+F12`（挂起）与 `Ctrl+Alt+F4`（退出）是安全的自检项；
 **`Win+X` 选单里千万别按到睡眠/关机/重启**。
+
+> **2026-09 自注册改造的实测（已归档）**：把常驻从 `C:\Program Files\flowkeyd`
+> 迁到 `build\dist-release`：旧的 `build\dist-release\flowkeyd.exe` 一启动就把
+> 计划任务 `flowkeyd` 重写成指向自己（日志：`logon autostart task `flowkeyd`
+> updated: D:\prj\flowkeyd\build\dist-release\flowkeyd.exe starts at every logon
+> with the highest privileges`）；`--remove-autostart` 删得掉、再启动又自己回来；
+> 用 `--no-elevate --allow-multi` 起的开发实例只记一条 `autostart task not managed`
+> 并且**没有**改任务。旧的安装目录 `C:\Program Files\flowkeyd` 已删除。
+> 验收脚本 116/0（它用 `--no-elevate` 起临时守护进程，不会被自启逻辑打扰）。
 
 ---
 
@@ -2127,22 +2155,21 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   「第 0 行中线 y=60」。**改行距/`listTop` 必须同时改 `acceptance.ps1` 里
   那两处坐标**。
 
-#### 2026-09 坑：提权常驻实例锁住 release 的 exe 时可以用改名绕过
+#### 2026-09 坑：正在跑的实例锁住它的 exe 时可以用改名绕过
 
-* 常驻的提权实例（用户用 `Start-Process -Verb RunAs` 起的那一个）会锁住
-  `build\windows-release\flowkeyd.exe`，而 agent 的 shell 既 `taskkill /PID`
-  （不带 `/F`）又 `taskkill /F` 都是“拒绝访问”，release 的全量构建会卡在
-  最后一个链接步骤（`cannot open output file flowkeyd.exe: Permission denied`）。
-* **2026-09 实测可行的绕路**：运行中的 exe 允许改名（内核映像是按区域映射的，
-  文件本身可以 `Move-Item`）。把被锁的那个改成
-  `build\windows-release\flowkeyd.exe.locked`（在 `.gitignore` 的 `/build*/`
-  里，不污染仓库），链接就能照常跑，`windeployqt` 也不会因为已加载的 Qt DLL
-  而失败（实测）。
+* 常驻实例会锁住**它自己那个** `flowkeyd.exe`（自注册方案下通常是
+  `build\dist-release\flowkeyd.exe`），release 全量构建会卡在最后一个链接步骤
+  （`cannot open output file flowkeyd.exe: Permission denied`）。
+* **常规解法是 `--quit`**（本机 agent 的 shell 是提权的，能停提权实例；
+  见工作约定第 5/11 条）：停 → 构建 → 从 `build\dist-release` 重新拉起
+  （启动时会自动把计划任务刷新成这个路径）。
+* **改名只是“停不掉时”的降级手段**：运行中的 exe 允许改名（内核映像按区域映射，
+  文件本身可以 `Move-Item`）。把它改成 `flowkeyd.exe.locked`（在 `.gitignore`
+  的 `/build*/` 里，不污染仓库），链接就能照常跑，`windeployqt` 也不会因为已加载
+  的 Qt DLL 而失败（实测）。
   * 副作用：常驻实例继续以旧二进制运行（它的映像文件换了名字），而
-    `flowkeyd.exe.locked` 只有用户从托盘“退出”之后才能删。
+    `flowkeyd.exe.locked` 只有停掉实例之后才能删。
   * **还是要告知用户**：常驻实例现在跑的是旧构建，要重新启动一次。
-  正确的长期做法仍然是用户的托盘“退出” + 重新 `Start-Process -Verb RunAs`
-  （见第 15 节第 6 条），改名只是“用户不在跟前”时的降级手段。
 
 #### 2026-09 修复：和弦不能是两个普通键 + 启动时的配置错误弹窗
 
@@ -2211,7 +2238,7 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   不跟随系统字体设置；配色仍然跟随系统 `palette`。README 的「选单与电源」
   「已知限制」两节已同步。
 
-#### 2026-09 新增：开机自启（计划任务 + 稳定安装目录 + `--quit`）
+#### 2026-09 新增：开机自启（计划任务 + 自注册 + `--quit` / `--remove-autostart`）
 
 * **为什么只能是计划任务。** 自启要同时满足两件事：**提权**（否则电源动作、
   驱动提权窗口都没了）与**不弹 UAC**。`shell:startup` 快捷方式与
@@ -2231,20 +2258,27 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   * 登录触发器要加 **15 秒延迟**：启动得太早 explorer 还没就绪，托盘图标就
     拿不到（本版本没处理 `TaskbarCreated`，explorer 重启后也不会自己补上）。
   * `MultipleInstancesPolicy=IgnoreNew` + flowkeyd 自己的单实例互斥体，双保险。
-  * `WorkingDirectory` 要写安装目录：`--config` 的相对路径与模板里的 `{cwd}`
+  * `WorkingDirectory` 写 exe 所在目录：`--config` 的相对路径与模板里的 `{cwd}`
     都看它。
   * `RestartOnFailure`（PT1M x3）值得留：崩了能自己回来，而**正常退出
     （退出码 0）不会触发重启**，所以托盘/`quit`/`--quit` 退出后不会被拉起来。
-  * 完整 XML 在 `scripts/install.ps1` 的 `New-TaskXml()`，注册用
-    `Register-ScheduledTask -Xml … -Force`（`Register-ScheduledTask` 不在时
-    回退 `schtasks /Create /XML`）。
-* **任务里只能放稳定路径，更新只能换文件、不能换路径。** 任务失败是**完全
-  静默**的：路径失效、exe 被删、单实例冲突……表现都只是“没托盘图标、快捷键
-  不生效”，不会弹任何东西。所以任务指向 `C:\Program Files\flowkeyd\flowkeyd.exe`，
-  而不是 `build\dist-release\...`（那个目录会被清理/改名，还会被正在跑的实例
-  锁住 —— 见第 15 节第 6 条，本次一并解决了）。`install.ps1` 用
-  `robocopy /MIR` 把 `build\dist-release` 镜像过去，需要快的时候 `-ExeOnly`
-  只换那个 38 MB 的 exe（首次全量约 145 MB / 1378 个文件）。
+  * 完整 XML 在 `src/platform/win/autostart.cpp` 的 `buildTaskXml()`（纯函数、
+    有单测），注册走隐藏的 `schtasks.exe /Create /TN flowkeyd /XML <临时文件> /F`
+    （XML 以 UTF-16LE + BOM 写到 `%TEMP%`，用完就删）。**不用 Task Scheduler 的
+    COM 接口**：那要手写十来个 vtable（本仓库风险最高的做法，见第 3 节），
+    而 `schtasks` 是系统自带的稳定入口。查询用 `schtasks /Query /TN ... /XML`
+    再解析 `<Command>`（纯函数 `taskXmlCommand`）。
+* **任务指向“当前运行的 exe”，因此没有安装目录这回事。** 项目所有者 2026-09 拍板：
+  把 exe 拷到哪儿就在哪儿生效，不要预设目录（旧方案是镜像到
+  `C:\Program Files\flowkeyd`，已删除）。代价是任务可能指向 `build\dist-release`
+  这类会被清理 / 重建的目录，而且正在跑的实例会锁住那个 exe；用两条规则兜住：
+  * 每次启动都自检：任务缺失、或指向的 exe 与当前运行的这一个不同，就重新注册
+    （所以“把 exe 换个地方再跑一次”就能自愈）；
+  * **开发 / 测试实例（`--no-elevate`、`--allow-multi`、未提权、`--no-autostart`）
+    绝不碰任务** —— 否则验收脚本（它用 `--no-elevate` 起临时实例）会把用户真实的
+    开机自启劫持到 `build\windows-release`。
+  计划任务指向失效路径是**完全静默**的失败（没托盘图标、快捷键不生效，不弹任何
+  东西），这也是为什么上面那两条不能省。
 * **`--quit`：给“从外面干净停掉守护进程”开一条通道。** 之前只有
   `taskkill /PID`（日志窗口开着时会被 `WM_CLOSE` 吃掉 / 不带 `/F` 无效）与
   `taskkill /F`（留幽灵托盘图标）两条烂路。做法：
@@ -2267,17 +2301,20 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
     `runas /trustlevel` 之类都不如这个可靠（任务本身就能拿到 medium IL 的现场）。
 * **守护进程一直把日志文件开着写**，所以 `[System.IO.File]::ReadAllLines` /
   `ReadAllText` 会报“文件正由另一进程使用”：它们要的是 `FileShare.Read`，
-  与写句柄不兼容（`Get-Content` 用的是 ReadWrite，所以没事）。
-  `install.ps1` 里用 `FileShare.ReadWrite` 的 `FileStream` 读日志。
+  与写句柄不兼容。读它要用 `FileShare.ReadWrite` 的 `FileStream`
+  （`Get-Content` 默认就是 ReadWrite，所以没事）。
   （这也是早期那些“怎么读日志都拿到 0 行”的怪现象的来源。）
 * **PowerShell 的数组 splatting 不能用来转发命名参数。**
   `& script.ps1 @arrayOfDashNames` 会报
   `找不到接受实际参数"-TaskName"的位置形式参数`（而且报的还是**里面**那一个
   调用，非常误导）。转发命名参数一律用**哈希表 splatting**：
   `$splat = @{ TaskName = $x }; & script.ps1 @splat`。
-* **`C:\Program Files` 里那份拷贝不能被“touch”。** 正在跑的 exe 是锁着的：
-  `(Get-Item exe).LastWriteTime = ...` 都会报“文件正由另一进程使用” ——
-  想造一个“安装目录已过期”的现场，必须先停实例。
+  （这条是 `install.ps1` 时代踩到的；脚本虽然删了，但写验证脚本时还是会碰到。）
+* **正在跑的 exe 写不得、也删不得，但可以改名。** 提权常驻实例会锁住它自己那份
+  `flowkeyd.exe`，于是 release 全量构建卡在链接（`cannot open output file`）。
+  现在的常规解法是 `--quit` 停实例；实在停不下来时可以把被锁的 exe
+  `Move-Item` 成 `*.locked`（内核映像按区域映射，运行中的文件可以改名），
+  链接就能照常跑（见本节后面的“改名绕路”）。
 * **`QCoreApplication::applicationDirPath()` 在没有 `QApplication` 时会警告并
   返回空串**（`QCoreApplication::applicationDirPath: Please instantiate the
   QApplication object first`）。它在 `core::configPathCandidates()` / 
@@ -2386,12 +2423,13 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
    **发布目录 `build/dist-release/` 里只允许有 `flowkeyd.exe` 与它需要的
    运行时**：测试可执行文件、临时配置、诊断文件一律不许留在
    `build/windows-release` 或 `build/dist-release` 里（见工作约定第 2 条）。
-9. **把 release 产物部署到安装目录一份**（工作约定第 11 条）：
-   `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -ExeOnly`
-   （动了 QML / `vendor\lua` / Qt 部署文件，或 `dist-release` 里多了/少了文件时
-   去掉 `-ExeOnly` 做全量镜像）。**已有机制，不要另写部署脚本**；
-   只换 exe 的哈希没变就跳过。这是「用户日常按的快捷键真的跑在新构建上」的
-   唯一保证（前 8 条只保证构建与测试是绿的）。
+9. **保证 `build/dist-release/` 是最新发布包**（工作约定第 11 条）：release 构建的
+   `POST_BUILD` 已经自动把干净的发布产物写到那里（只有 `flowkeyd.exe` 与它需要的
+   Qt/MinGW 运行时），**不需要再往任何安装目录部署、也没有部署脚本**。
+   常驻实例若正在从 `build/dist-release` 跑（会锁住那个 exe），按工作约定第 11 条
+   先 `--quit` → 构建 → 重新拉起；`ninja: no work to do` 的纯文档任务什么都不用做。
+   这是「用户日常按的快捷键真的跑在新构建上」的唯一保证
+   （前 8 条只保证构建与测试是绿的）。
 
 > **阶段 0/1 的实测结果（2026-09-20）**：`windows-debug` 与 `windows-release`
 > 两个 profile 都是 `build exit 0`、零警告（`-Wall -Wextra -Werror`），
@@ -2705,32 +2743,31 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 >   修完连跑两次 116/0。
 > * 顺带查实了一条与产品无关的环境事实：这台机器是 **两块 1920x1080@200%**
 >   （物理 3840x2160），所以“弹窗在哪个屏上”取决于光标在哪块屏上。
-> 行为变化：新增 `--quit`；常驻实例改为由计划任务从
-> `C:\Program Files\flowkeyd` 启动（不再跑构建目录里那份）。
+> 行为变化：新增 `--quit`；常驻实例改为由计划任务启动（当时是安装目录；
+> 2026-09 后续又改成“任务指向当前运行的 exe”，见本节后面的记录）。
 
-> **2026-09 约定补充（任务收尾把 release 产物部署到安装目录）**：项目所有者要求
-> 「每次大模型执行完任务后，把编译后的文件（不带其他无关文件）部署到安装目录
-> 一份」，并预授权「如果已经有类似机制就不必再实现」。
-> **查实：这个机制已经存在，本次没有新增任何脚本** ——
-> `scripts\install.ps1` 就是「停旧实例（`--quit`）→ 只镜像 `build\dist-release`
-> → 刷新计划任务 → 重新拉起 → 校验」，而 `build\dist-release` 里只有
-> `flowkeyd.exe` 与它需要的 Qt/MinGW 运行时（本机 45 个条目，与安装目录逐条一致，
-> 没有 `CMakeCache.txt`/`build.ninja`/`*.a`/`tst_*.exe`），所以「只部署编译后的
-> 文件」不需要第二份脚本。
-> 本次只把它写成规则：工作约定新增第 11 条，第 5 节的 DoD 命令块与第 11 节
-> 新增第 9 条，并写清 `-ExeOnly`（只换 exe，最快）与全量镜像（`robocopy /MIR`）
-> 的取舍、以及「exe 哈希没变就跳过」的判据（部署会 `--quit` 再拉起常驻实例，
-> 快捷键会失灵几秒，不该白重启）。
-> 实测现状（2026-09）：`build\dist-release\flowkeyd.exe` 与
-> `C:\Program Files\flowkeyd\flowkeyd.exe` 的 SHA-256 相同
-> （`1C64E52E…87DCD`），安装目录 45 个条目 = `dist-release` 45 个条目；
-> 常驻实例（pid 6416）由计划任务 `flowkeyd` 从安装目录拉起（`RunLevel=Highest`、
-> `cwd=C:\Program Files\flowkeyd`），状态 `Running`。
-> 本次 DoD：只改本文件，debug 与 release 两个 profile 都是
-> `ninja: no work to do`（`build exit 0`）；`ctest --test-dir build/windows-debug`
-> **19 个测试目标全绿**；`flowkeyd --check --config flowkeyd.lua.example` →
-> `OK (37 hotkey(s), 3 remap(s))`、零警告。按新的第 9 条本任务也该部署，
-> 但 exe 哈希没变，所以按约定跳过。
+> **2026-09 约定补充（任务收尾只要保证 `build/dist-release` 最新）**：项目所有者
+> 要求「每个任务收尾把编译后的文件（不带无关文件）部署到 `build/dist-release` 即可，
+> 不要再部署到 `C:\Program Files\flowkeyd`」。查实后这个机制**本来就有**
+> （release 构建的 `POST_BUILD` 自动 `windeployqt` 到 `build/dist-release`），
+> 所以**不需要任何部署脚本**：工作约定第 11 条与第 11 节第 9 条改写成
+> 「先 `--quit` 常驻 → 构建 release → 从 dist-release 重新拉起」，
+> `scripts/install.ps1` / `scripts/uninstall.ps1` **已删除**。
+> （历史：更早的版本是 `install.ps1` 把 `build\dist-release` 镜像到
+> `C:\Program Files\flowkeyd` 并注册任务；那个安装目录与脚本都作废了。）
+>
+> **2026-09 自注册改造的 DoD**：`windows-debug` 与 `windows-release` 都是
+> `build exit 0`、零编译警告；`ctest --test-dir build/windows-debug`
+> **20 个测试目标全绿**（新增 `tst_autostart` 11 项：XML 渲染/解析、UTF-16 输出
+> 解码、路径归一、延迟渲染）；`flowkeyd --check --config flowkeyd.lua.example`
+> → `OK (37 hotkey(s), 3 remap(s))`、零警告。实测：daemon 启动时自己把计划任务
+> 重写成当前 exe（日志 `logon autostart task `flowkeyd` updated: ...`），
+> `--remove-autostart` 删得掉且幂等，再启动又自己回来；`--no-elevate --allow-multi`
+> 的开发实例只记 `autostart task not managed` 且不动任务；旧安装目录
+> `C:\Program Files\flowkeyd` 已删除；`scripts/acceptance.ps1` **116/0**
+> （它用 `--no-elevate` 起临时守护进程，所以不会被自启逻辑打扰）。
+> 常驻实例现在从 `build\dist-release\flowkeyd.exe` 跑，任务指向它。
+> 本次只有新的 `tst_autostart` 不碰真实计划任务（纯函数断言），其他测试未变。
 
 ---
 
@@ -2861,10 +2898,12 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 | 示例配置   | `flowkeyd.lua.example`                        |
 
 CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、
-`--check`、`--list`、`--list-keys`、`--quit`、`--log-window`、`--log-level`、
-`--log-file`、`--no-color`、`--allow-multi`、`-h/--help`、`-V/--version`。
+`--check`、`--list`、`--list-keys`、`--quit`、`--no-autostart`、
+`--remove-autostart`、`--log-window`、`--log-level`、`--log-file`、`--no-color`、
+`--allow-multi`、`-h/--help`、`-V/--version`。
 `--parent-pid` 与 `--simulate`/`--selftest`/`--probe` 见第 12 节；
-`--quit`（请正在跑的实例干净退出）见第 2 节第 10 条与第 5 节。
+`--quit`（请正在跑的实例干净退出）见第 2 节第 10 条与第 5 节；
+`--no-autostart` / `--remove-autostart`（自启任务的跳过与删除）见第 2 节第 10 条。
 
 ### 配置语义要点（容易做漏的）
 
@@ -2948,11 +2987,16 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、
    每次 release 全量构建前要请用户从托盘菜单点一下“退出”。
    可选的长期解法：把常驻实例改从一份**拷贝**（比如 `%LOCALAPPDATA%\flowkeyd\`）
    启动，构建目录就不再被占用 —— 但那需要用户改一下启动习惯。
-   → **已解决（2026-09，自启落地时）**：常驻现在跑的是安装目录里的
-   `C:\Program Files\flowkeyd\flowkeyd.exe`（由计划任务拉起的拷贝），
-   构建目录不再被占用；停实例用 `--quit`（不再需要 `taskkill`），
-   `scripts\install.ps1` 自己就是“停→拷→注册→启”。
+   → **已解决（2026-09）**：常驻不再从构建目录跑（旧方案是安装目录的拷贝），
+   停实例用 `--quit`（不再需要 `taskkill`），自启任务由守护进程自己注册 / 刷新。
    当年的“改名绕路”（把被锁的 exe `Move-Item` 成 `*.locked`）仍然有效，
-   但已经用不上了。
+   但只在“停不掉时”当降级手段（见第 10 节）。
    → **附带更正**：本机 agent 的 shell **是提权的**（与这段原始的假设不同），
-   所以旧构建里的那个实例也能 `Stop-Process`。仍然优先用 `--quit`。
+   所以提权实例也能 `Stop-Process`。仍然优先用 `--quit`。
+7. **自启任务指向“当前运行的 exe”，所以它跟着用户跑到哪里。** 项目所有者
+   2026-09 拍板了这个方向（去掉安装目录 + 部署脚本），并选了「每次启动自检 +
+   开发实例跳过」。需要知道的代价：
+   * 常驻从 `build\dist-release` 跑时，重建前必须先 `--quit`（exe 被锁）；
+   * 若用户把 exe 放在一个会被清理 / 移动的目录，任务会**静默**失效，
+     直到下次手动启动一次（自检会把它刷新回来）。
+   这两条都已经写进工作约定第 11 条与第 10 节的“开机自启”一节。

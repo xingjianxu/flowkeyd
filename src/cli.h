@@ -21,6 +21,10 @@ struct CliOptions
     bool listKeys = false;
     /// 请正在运行的实例干净退出（按配置文件路径匹配）。
     bool quit = false;
+    /// 不自动注册 / 刷新「登录时以最高权限启动」的计划任务。
+    bool noAutostart = false;
+    /// 删除那个计划任务后退出（需要管理员权限）。
+    bool removeAutostart = false;
     std::optional<QString> logLevel;
     std::optional<QString> logFile;
     bool noColor = false;
@@ -44,6 +48,7 @@ struct CliOptions
     ///
     /// `--quit` 不在其中：它不装钩子、不提权，但确实要去碰另一个正在跑的实例
     /// （所以由 main 单独处理，见 AGENTS.md 第 10 节）。
+    /// `--remove-autostart` 也不在：它要管理员权限才能删任务。
     bool isOfflineCommand() const { return showHelp || showVersion || listKeys || check || list; }
 };
 

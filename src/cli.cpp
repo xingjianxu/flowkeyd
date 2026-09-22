@@ -74,6 +74,10 @@ std::optional<QString> parseCli(const QStringList &args, CliOptions *out)
             cli.listKeys = true;
         } else if (name == QLatin1String("--quit")) {
             cli.quit = true;
+        } else if (name == QLatin1String("--no-autostart")) {
+            cli.noAutostart = true;
+        } else if (name == QLatin1String("--remove-autostart")) {
+            cli.removeAutostart = true;
         } else if (name == QLatin1String("--log-level")) {
             const auto value = takeValue();
             if (!value.has_value()) {
@@ -142,6 +146,9 @@ QString helpText()
         --list-keys         打印所有可接受的按键名并退出
         --quit              请正在运行的实例干净退出（按配置文件路径匹配，
                             最多等 10 秒；没找到在跑的实例时返回 1）
+        --no-autostart      不要注册 / 刷新「登录时以最高权限启动」的计划任务
+                            （开发实例与 --allow-multi / --no-elevate 本来就跳过）
+        --remove-autostart  删除那个计划任务后退出（需要管理员权限）
         --log-window        启动时直接打开日志窗口
         --parent-pid <PID>  兼容参数，本项目忽略
         --log-level <LVL>   trace|debug|info|warn|error|off
