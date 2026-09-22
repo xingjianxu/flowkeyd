@@ -353,6 +353,9 @@ for i = 1, 4 do
 end
 
 remap{ from = "CapsLock", to = "Esc" }
+
+-- 按程序摆放窗口：第一次出现时放到第 2 个虚拟桌面、第 2 块显示器上并最大化
+window_rule{ process = "wezterm", desktop = 2, monitor = 2 }
 ```
 
 ```lua
@@ -361,6 +364,7 @@ return {
   settings = { swallow = true },
   hotkeys = { { keys = "Ctrl+Alt+T", action = run("wt.exe") } },
   remaps = { { from = "CapsLock", to = "Esc" } },
+  window_rules = { { process = "wezterm", desktop = 2, monitor = 2 } },
 }
 ```
 
@@ -390,7 +394,7 @@ return {
 
 | 构造器                                        | 等价于                                                              |
 | --------------------------------------------- | ------------------------------------------------------------------- |
-| `settings{...}`、`hotkey{...}`、`remap{...}`  | 三个注册入口                                                        |
+| `settings{...}`、`hotkey{...}`、`remap{...}`、`window_rule{...}` | 四个注册入口                            |
 | `run(p[, args][, opts])`                      | `{ type = "run", program = p, args = args, ... }`                   |
 | `send(keys[, opts])`、`type_text(text[, opts])` | `{ type = "send", keys = keys, ... }`、`{ type = "type", text = text, ... }` |
 | `open(target[, opts])`、`notify(title[, body])` | `{ type = "open", target = target, ... }`、`{ type = "notify", ... }` |
@@ -839,6 +843,60 @@ remap{
 `to = "Esc"` 表示 Escape 键，与 AutoHotkey 的 `CapsLock::Esc` 完全一致；
 `to = "hello"` 是一个脚本，会输入五个字母。
 
+### `window_rule{ ... }`
+
+按程序摆放窗口：某个程序的窗口**第一次出现**时，把它放到指定的虚拟桌面 /
+显示器上。
+
+```lua
+window_rule{
+  name = "wezterm",      -- 可选，日志与 `--list` 里的名字
+  process = "wezterm",   -- 可执行文件名子串（与 `window` 动作的 process 一致）
+  title = "项目",        -- 可选，窗口标题子串；两个都给时都要满足
+  desktop = 2,           -- 可选，虚拟桌面序号（1 起，Task View 顺序）
+  monitor = 2,           -- 可选：2 / "primary" / "DISPLAY2"
+  -- 下面这些不写时的默认是「铺满目标显示器的工作区」
+  maximize = false,      -- 可选
+  x = 0, y = 0,          -- 可选，相对目标显示器工作区左上角（像素）
+  width = 1280, height = 800,  -- 可选，像素
+  enabled = true,        -- 可选
+}
+```
+
+* `process` / `title` 至少要写一个：前者匹配可执行文件名（写 `wezterm` 能匹配
+  `wezterm-gui.exe`），后者匹配窗口标题，都是大小写无关子串。拿不到属主进程名
+  （访问被拒）时 `process` 不算匹配。
+* `desktop` 是 1 起的虚拟桌面序号（Task View 从左到右）。
+* `monitor` 有三种写法：
+  * `2` —— 1 起的序号，按显示器排列「先左后右、再上后下」；
+  * `"primary"` —— 主显示器；
+  * `"DISPLAY2"` —— `EnumDisplayMonitors` 的设备名（也可写全名 `\\.\DISPLAY2`）。
+
+  找不到匹配的显示器时只记一条 warning，窗口留在原处（例如笔记本没插外接屏时）。
+* **默认最大化。** 只写了 `monitor`（而没写位置 / 大小）时，窗口会铺满那块显示器的
+  **工作区**（扣掉任务栏）。只写 `desktop` 时窗口的大小与位置保持不动；
+  `maximize = true` 与 `x`/`y`/`width`/`height` 不能同时写。
+* `x`/`y` 是相对**目标显示器工作区左上角**的偏移，`width`/`height` 是像素；
+  没给的项保持窗口原来的大小 / 居中。窗口比工作区还大时对齐工作区左上角，
+  保证标题栏可见。
+* 同一个窗口只处理一次：已经摆放过的窗口再次显示（从托盘还原、最小化后还原）
+  不会再摆一次。规则按书写顺序匹配，**先写的赢**；两条规则匹配同一批窗口时
+  `--check` 会给一条 warning。
+
+**触发时机只有三个**：
+
+1. 窗口第一次出现；
+2. 之前断开的显示器重新接上（设备名从无到有）；
+3. flowkeyd 启动时，对当前已经存在的窗口过一遍。
+
+之后**不再干预**：你自己移动 / 缩放窗口不会被纠正，直到下次显示器重新接入
+或者重启 flowkeyd。被当成“主窗口”的条件是：可见、没有属主、不是工具窗口
+（`WS_EX_TOOLWINDOW`）、有标题、尺寸非零 —— 应用的内部辅助窗口不会被误摆。
+
+`desktop` 走的是 shell 内部的 `MoveViewToDesktop`（已公开的
+`IVirtualDesktopManager::MoveWindowToDesktop` 拒绝移动别的进程的窗口）。
+窗口会先在当前桌面上出现一瞬间，然后被移到目标桌面。
+
 ## 工作原理
 
 ```
@@ -1053,6 +1111,16 @@ $env:FLOWKEYD_ALLOW_INTERACTIVE_TESTS = '1'
   本机（build 26200.9457）验证过的是“plain”布局；新的 Windows 版本如果又改了
   接口，切换会以一条带 HRESULT 的日志失败。公开的 `IVirtualDesktopManager`
   做不到这件事——它只能查询和移动窗口。
+* `window_rule` 的 `desktop` 用的是同一个未公开接口的 `MoveViewToDesktop`
+  （公开的 `IVirtualDesktopManager::MoveWindowToDesktop` 拒绝移动**别的进程**
+  的窗口），因此它与 `desktop` 动作共享同一张版本表与同样的风险。另外两点：
+  窗口会先在当前桌面上出现一瞬间、然后被移走；判断“这是不是主窗口”用的是
+  可见 / 无属主 / 非工具窗口 / 有标题 / 尺寸非零这套启发式，偶尔会漏掉一个
+  标题设置得很晚的窗口（`process` 匹配不受影响）。
+* `window_rule` 只在**窗口第一次出现、显示器重新接入、以及 flowkeyd 启动时**
+  生效；之后你手动移动 / 缩放窗口不会被纠正。它也不管已经开着的窗口 ——
+  想重新归位就按一下 `reload`（会重新读配置，但不会重摆已有窗口）或重启
+  flowkeyd。
 
 ## 路线图
 

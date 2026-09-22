@@ -15,14 +15,16 @@
 --
 -- 配置的两种写法，可以混用：
 --
---   1) 命令式（本文件用的就是这种）：调用 hotkey{} / remap{} / settings{}
+--   1) 命令式（本文件用的就是这种）：调用 hotkey{} / remap{} / settings{} /
+--      window_rule{}
 --         for i = 1, 3 do hotkey{ keys = "Win+F" .. i, action = desktop(i) } end
 --
 --   2) 声明式：直接 return 一张表，字段里的条目排在脚本体注册的条目之后
 --         return {
---           settings = { swallow = true },
---           hotkeys  = { { keys = "Ctrl+Alt+T", action = run("wt.exe") } },
---           remaps   = { { from = "CapsLock", to = "Esc" } },
+--           settings     = { swallow = true },
+--           hotkeys      = { { keys = "Ctrl+Alt+T", action = run("wt.exe") } },
+--           remaps       = { { from = "CapsLock", to = "Esc" } },
+--           window_rules = { { process = "wezterm", monitor = 2 } },
 --         }
 --
 -- 动作可以是表、动作构造器（`run()` / `send()` / `volume()` …），或者简写字符串
@@ -467,6 +469,54 @@ hotkey{
   name = "quit",
   keys = "Ctrl+Alt+F4",
   action = quit(),
+}
+
+-- =============================================================================
+-- 窗口摆放规则（window_rule）
+-- =============================================================================
+-- 某个程序的窗口**第一次出现**时，把它放到指定的虚拟桌面 / 显示器上。
+-- 触发时机只有三个：窗口第一次出现、之前断开的显示器重新接上、flowkeyd 启动时；
+-- 之后不再干预（你自己移动 / 缩放窗口不会被纠正）。
+--
+-- process / title   至少写一个：前者匹配可执行文件名（写 `wezterm` 能匹配
+--                   `wezterm-gui.exe`），后者匹配窗口标题，都是大小写无关子串。
+-- desktop           可选，虚拟桌面序号（1 起，Task View 从左到右）。
+-- monitor           可选：`2`（1 起，按显示器排列「先左后右、再上后下」）、
+--                   `"primary"`、`"DISPLAY2"`（设备名，也可写全名 `\\.\DISPLAY2`）。
+-- maximize          可选；**默认：写了 monitor、又没写位置 / 大小时为 true**，
+--                   即铺满目标显示器的工作区（扣掉任务栏）。
+-- x / y             可选，相对目标显示器工作区左上角的偏移（像素）。
+-- width / height    可选，像素。maximize = true 不能与它们同时写。
+-- enabled           可选，false 表示忽略这条。
+--
+-- 只写 desktop 时窗口的大小 / 位置保持不动（不会因为“默认最大化”而突然变大）。
+-- 规则按书写顺序匹配，先写的赢。
+
+window_rule{
+  name = "wezterm-right",
+  process = "wezterm",
+  desktop = 2,
+  monitor = 2,
+}
+
+-- 指定大小与位置：相对目标显示器工作区的左上角。不写 monitor 时默认放在
+-- 窗口当前所在的那块显示器上。
+window_rule{
+  name = "code-primary",
+  process = "code",
+  monitor = "primary",
+  maximize = false,
+  x = 0,
+  y = 0,
+  width = 1280,
+  height = 800,
+}
+
+-- 只按标题匹配也行（两个都给时都要满足）。
+window_rule{
+  name = "steam-on-second",
+  title = "Steam",
+  monitor = "DISPLAY2",
 }
 
 -- =============================================================================

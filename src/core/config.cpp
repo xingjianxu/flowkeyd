@@ -133,6 +133,62 @@ RepeatSpec RepeatSpec::makeConfig(std::optional<std::uint32_t> intervalMs,
 }
 
 // ---------------------------------------------------------------------------
+// window_rule
+// ---------------------------------------------------------------------------
+
+QString MonitorRef::describe() const
+{
+    switch (kind) {
+    case Kind::Index:
+        return QStringLiteral("monitor %1").arg(index);
+    case Kind::Primary:
+        return QStringLiteral("primary monitor");
+    case Kind::Device:
+        return QStringLiteral("monitor %1").arg(rustDebug(device));
+    }
+    return QStringLiteral("monitor");
+}
+
+QString WindowRule::summary() const
+{
+    QStringList parts;
+    if (process.has_value()) {
+        parts.append(QStringLiteral("process %1").arg(rustDebug(*process)));
+    }
+    if (title.has_value()) {
+        parts.append(QStringLiteral("title %1").arg(rustDebug(*title)));
+    }
+    if (desktop.has_value()) {
+        parts.append(QStringLiteral("desktop %1").arg(*desktop));
+    }
+    if (monitor.has_value()) {
+        parts.append(monitor->describe());
+    }
+    if (applyGeometry) {
+        if (maximize) {
+            parts.append(QStringLiteral("maximize"));
+        } else {
+            if (width.has_value() || height.has_value()) {
+                parts.append(QStringLiteral("size %1x%2")
+                                 .arg(width.has_value() ? QString::number(*width)
+                                                       : QStringLiteral("?"),
+                                      height.has_value() ? QString::number(*height)
+                                                         : QStringLiteral("?")));
+            }
+            if (x.has_value() || y.has_value()) {
+                parts.append(QStringLiteral("at %1,%2")
+                                 .arg(x.has_value() ? QString::number(*x) : QStringLiteral("?"),
+                                      y.has_value() ? QString::number(*y) : QStringLiteral("?")));
+            }
+        }
+    }
+    if (parts.isEmpty()) {
+        return QStringLiteral("(no-op)");
+    }
+    return parts.join(QStringLiteral(", "));
+}
+
+// ---------------------------------------------------------------------------
 // ActionSpec
 // ---------------------------------------------------------------------------
 
@@ -190,6 +246,7 @@ std::optional<ConfigError> compile(const Config &config,
 {
     std::vector<Binding> bindings;
     std::vector<CompiledRemap> remaps;
+    std::vector<WindowRule> windowRules;
 
     if (config.settings.tickMs == 0 || config.settings.tickMs > 1000) {
         errors.append(QStringLiteral("settings.tick_ms must be between 1 and 1000 (got %1)")
@@ -393,6 +450,86 @@ std::optional<ConfigError> compile(const Config &config,
         remaps.push_back(std::move(remap));
     }
 
+    for (std::size_t i = 0; i < config.windowRules.size(); ++i) {
+        const WindowRuleDef &def = config.windowRules.at(i);
+        const QString label = def.name.has_value()
+                                  ? QStringLiteral("window rule #%1 (`%2`)").arg(i + 1).arg(*def.name)
+                                  : QStringLiteral("window rule #%1").arg(i + 1);
+        if (!def.enabled) {
+            warnings.append(QStringLiteral("%1: disabled").arg(label));
+            continue;
+        }
+        const bool hasTitle = def.title.has_value() && !def.title->trimmed().isEmpty();
+        const bool hasProcess = def.process.has_value() && !def.process->trimmed().isEmpty();
+        if (!hasTitle && !hasProcess) {
+            errors.append(QStringLiteral("%1: needs `process` or `title` to know which windows it "
+                                         "applies to")
+                              .arg(label));
+            continue;
+        }
+        const bool hasGeometry =
+            def.x.has_value() || def.y.has_value() || def.width.has_value() || def.height.has_value();
+        if (def.maximize.value_or(false) && hasGeometry) {
+            errors.append(QStringLiteral("%1: `maximize = true` cannot be combined with "
+                                         "`x`/`y`/`width`/`height`; drop one of them")
+                              .arg(label));
+            continue;
+        }
+        if (def.desktop.has_value() && *def.desktop == 0) {
+            errors.append(QStringLiteral(
+                              "%1: `desktop` must be 1 or greater (desktops are numbered from 1)")
+                              .arg(label));
+            continue;
+        }
+        if (def.monitor.has_value() && def.monitor->kind == MonitorRef::Kind::Index
+            && def.monitor->index == 0) {
+            errors.append(QStringLiteral("%1: `monitor` must be 1 or greater (monitors are numbered "
+                                         "from 1, left to right)")
+                              .arg(label));
+            continue;
+        }
+        if (def.monitor.has_value() && def.monitor->kind == MonitorRef::Kind::Device
+            && def.monitor->device.trimmed().isEmpty()) {
+            errors.append(QStringLiteral("%1: `monitor` device name must not be empty").arg(label));
+            continue;
+        }
+        if ((def.width.has_value() && *def.width == 0)
+            || (def.height.has_value() && *def.height == 0)) {
+            errors.append(QStringLiteral("%1: `width`/`height` must be greater than 0").arg(label));
+            continue;
+        }
+
+        WindowRule rule;
+        rule.name = def.name.value_or(QStringLiteral("window rule #%1").arg(i + 1));
+        rule.title = hasTitle ? def.title : std::nullopt;
+        rule.process = hasProcess ? def.process : std::nullopt;
+        rule.desktop = def.desktop;
+        rule.monitor = def.monitor;
+        rule.maximize = def.maximize.value_or(def.monitor.has_value() && !hasGeometry);
+        rule.applyGeometry = def.monitor.has_value() || hasGeometry || rule.maximize;
+        rule.x = def.x;
+        rule.y = def.y;
+        rule.width = def.width;
+        rule.height = def.height;
+        if (!rule.desktop.has_value() && !rule.applyGeometry) {
+            warnings.append(QStringLiteral("%1: only matches windows and does nothing").arg(label));
+            continue;
+        }
+        windowRules.push_back(std::move(rule));
+    }
+
+    // 两条规则匹配同一批窗口时先写的赢；这种重复几乎总是笔误。
+    for (std::size_t i = 0; i < windowRules.size(); ++i) {
+        for (std::size_t j = i + 1; j < windowRules.size(); ++j) {
+            if (windowRules[i].title == windowRules[j].title
+                && windowRules[i].process == windowRules[j].process) {
+                warnings.append(QStringLiteral("`%1` and `%2` match the same windows; the first "
+                                               "match wins")
+                                    .arg(windowRules[i].name, windowRules[j].name));
+            }
+        }
+    }
+
     // 报告被重复声明的和弦：引擎会静默地选第一个。
     // 这里用 `sameKey`，因为通用修饰键 VK（`Shift`）与具体 VK（`LShift`）
     // 实际上会匹配同一次按键。
@@ -418,6 +555,7 @@ std::optional<ConfigError> compile(const Config &config,
     out->settings = config.settings;
     out->bindings = std::move(bindings);
     out->remaps = std::move(remaps);
+    out->windowRules = std::move(windowRules);
     out->source = path;
     out->warnings = warnings;
     return std::nullopt;

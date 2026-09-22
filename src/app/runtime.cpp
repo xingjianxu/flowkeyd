@@ -48,11 +48,18 @@ bool Runtime::start(const QString &configPath,
     m_dispatcher->moveToThread(m_workerThread);
     m_workerThread->start();
 
+    const std::shared_ptr<const core::Compiled> startupConfig = config;
     const bool started = m_hook->start(
         std::move(config),
         [this](const std::shared_ptr<const core::Compiled> &current, const core::Trigger &trigger) {
             if (m_dispatcher != nullptr) {
                 m_dispatcher->submit(current, trigger);
+            }
+        },
+        [this](const std::shared_ptr<const core::Compiled> &current,
+               const win::PlacementEvent &event) {
+            if (m_dispatcher != nullptr) {
+                m_dispatcher->submitPlacement(current, event);
             }
         },
         error);
@@ -65,6 +72,14 @@ bool Runtime::start(const QString &configPath,
         return false;
     }
     m_started = true;
+
+    // 启动时按 `window_rule` 把已有窗口归位一次（用户要求）。工作线程已经起来，
+    // 所以这里只是投一个队列任务。
+    if (m_dispatcher != nullptr && m_hook != nullptr) {
+        win::PlacementEvent event;
+        event.kind = win::PlacementEvent::Kind::Startup;
+        m_dispatcher->submitPlacement(startupConfig, event);
+    }
 
     // `--quit` 通道：另一个进程（install.ps1）用它请我们走干净退出路径，
     // 而不是 `taskkill /F`。事件在 GUI 线程上监听，所以退出走的还是

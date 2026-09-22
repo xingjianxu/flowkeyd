@@ -110,4 +110,26 @@ bool probe(Snapshot *out, QString *error);
 /// 切换本身由 shell 完成；这个函数只保证请求已经送达，不等动画结束。
 bool switchTo(std::uint32_t index, QString *detail, QString *error);
 
+/// 把窗口移到第 `index` 个虚拟桌面（从 1 开始，Task View 顺序）。
+///
+/// 走未公开的 `IVirtualDesktopManagerInternal::MoveViewToDesktop`：公开的
+/// `IVirtualDesktopManager::MoveWindowToDesktop` 拒绝移动**别的进程**的窗口，
+/// 而 `window_rule` 要摆的正是别的进程。窗口已经在该桌面上时是一个空操作。
+/// 成功时 `detail` 是 `"desktop 2/4"`。
+bool moveWindowToDesktop(HWND hwnd, std::uint32_t index, QString *detail, QString *error);
+
+/// 窗口是不是在当前（前台）虚拟桌面上。
+///
+/// 用**已公开**的 `IVirtualDesktopManager::IsWindowOnCurrentVirtualDesktop`
+/// （`CLSID_VirtualDesktopManager`），与版本表无关，因此最适合拿来做验证
+/// （`tst_interactive` 就是用它确认 `moveWindowToDesktop` 真的生效了）。
+/// 失败时返回 `std::nullopt`（`error` 里是英文原因）。
+std::optional<bool> isWindowOnCurrentDesktop(HWND hwnd, QString *error);
+
+/// 窗口所在虚拟桌面的 GUID（`{xxxxxxxx-...}`）。
+///
+/// 同样用已公开的 `IVirtualDesktopManager::GetWindowDesktopId`：`window_rule`
+/// 移动窗口前后对比它，就能知道未公开的 `MoveViewToDesktop` 到底有没有生效。
+std::optional<QString> windowDesktopId(HWND hwnd, QString *error);
+
 } // namespace flowkeyd::platform::win::desktop

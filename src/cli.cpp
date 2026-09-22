@@ -159,10 +159,11 @@ QString helpText(const QString &buildVersion)
     -V, --version           显示版本
 
 配置:
-    配置文件是一段真正的 Lua 脚本：用 settings{...}、hotkey{...}、remap{...}
-    注册，或者 return { settings = ..., hotkeys = ..., remaps = ... }。
-    flowkeyd.lua.example 是有文档的完整参考。注意 `repeat` 是 Lua 关键字，
-    重复参数要写成 `repeatable`；Windows 路径用长字符串 [[C:\tools\app.exe]]。
+    配置文件是一段真正的 Lua 脚本：用 settings{...}、hotkey{...}、remap{...}、
+    window_rule{...} 注册，或者 return { settings = ..., hotkeys = ..., remaps = ...,
+    window_rules = ... }。flowkeyd.lua.example 是有文档的完整参考。
+    注意 `repeat` 是 Lua 关键字，重复参数要写成 `repeatable`；Windows 路径用
+    长字符串 [[C:\tools\app.exe]]。
 
 示例:
     flowkeyd --config C:\tools\config.lua

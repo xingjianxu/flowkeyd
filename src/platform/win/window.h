@@ -16,11 +16,23 @@
 
 #include <QString>
 
+#include <optional>
+#include <vector>
+
 namespace flowkeyd::platform::win::window {
 
 /// 定位查询描述的窗口；没有任何匹配时返回 nullptr。
 /// 查询意为“前台窗口”而没有前台窗口时同样返回 nullptr。
 HWND find(const core::WindowQuery &query);
+
+/// 拥有这个窗口的可执行文件的**小写文件名**（`wezterm-gui.exe`）。
+/// 拿不到（进程已退出、访问被拒）时返回 `std::nullopt`。
+/// `window_rule` 的匹配用它。
+std::optional<QString> processName(HWND hwnd);
+
+/// 当前所有可见、没有属主的顶层窗口（按 `EnumWindows` 的 Z 序）。
+/// flowkeyd 启动 / 显示器重新接入时，`window_rule` 就是遍历这批窗口。
+std::vector<HWND> topLevelWindows();
 
 /// 窗口的可见标题（取不到时返回 `"<untitled>"` / `"<invalid window>"`）。
 QString windowTitle(HWND hwnd);

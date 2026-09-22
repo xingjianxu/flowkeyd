@@ -162,6 +162,45 @@ HWND find(const core::WindowQuery &query)
     return finder.minimized;
 }
 
+std::optional<QString> processName(HWND hwnd)
+{
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hwnd, &pid);
+    if (pid == 0) {
+        return std::nullopt;
+    }
+    return processImageName(pid);
+}
+
+namespace {
+
+struct Collector
+{
+    std::vector<HWND> *out = nullptr;
+};
+
+BOOL CALLBACK collectWindowProc(HWND hwnd, LPARAM param)
+{
+    auto *collector = reinterpret_cast<Collector *>(param);
+    // 与 `find` 同一套前置过滤：不可见的、有属主的（对话框/工具提示/弹出菜单）
+    // 都不是 `window_rule` 想摆放的“主窗口”。
+    if (IsWindowVisible(hwnd) == 0 || GetWindow(hwnd, GW_OWNER) != nullptr) {
+        return TRUE;
+    }
+    collector->out->push_back(hwnd);
+    return TRUE;
+}
+
+} // namespace
+
+std::vector<HWND> topLevelWindows()
+{
+    std::vector<HWND> out;
+    Collector collector{&out};
+    EnumWindows(collectWindowProc, reinterpret_cast<LPARAM>(&collector));
+    return out;
+}
+
 bool isActive(HWND hwnd)
 {
     return GetForegroundWindow() == hwnd && IsIconic(hwnd) == 0;

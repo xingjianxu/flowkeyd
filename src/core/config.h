@@ -177,12 +177,60 @@ struct RemapDef
     bool enabled = true;
 };
 
+/// `window_rule{...}` 里的目标显示器。
+///
+/// 三种写法：
+///   * `monitor = 2`         —— 1 起，按「先左后右、再上后下」的排列顺序；
+///   * `monitor = "primary"` —— 主显示器；
+///   * `monitor = "DISPLAY2"` —— `EnumDisplayMonitors` 的设备名（可写全名
+///     `\\.\DISPLAY2`，比较时会剥掉 `\\.\` 前缀并忽略大小写）。
+struct MonitorRef
+{
+    enum class Kind { Index, Primary, Device };
+
+    Kind kind = Kind::Index;
+    /// `Kind::Index`：1 起的序号。
+    std::uint32_t index = 1;
+    /// `Kind::Device`：设备名。
+    QString device;
+
+    /// 供日志与摘要使用的可读形式。
+    QString describe() const;
+};
+
+/// 一条 `window_rule{...}`：某个程序的窗口出现时放到哪个虚拟桌面 / 显示器。
+///
+/// 触发时机只有三个：窗口第一次出现、之前断开的显示器重新接上、以及 flowkeyd
+/// 启动时对已有窗口过一遍。**之后不再干预**：用户自己移动/缩放窗口不会被纠正。
+struct WindowRuleDef
+{
+    std::optional<QString> name;
+    /// 窗口标题的大小写无关子串。
+    std::optional<QString> title;
+    /// 可执行文件名的大小写无关子串（与 `window` 动作的 `process` 一致）。
+    std::optional<QString> process;
+    /// 目标虚拟桌面序号（1 起，Task View 顺序）。
+    std::optional<std::uint32_t> desktop;
+    /// 目标显示器；不写就是窗口当前所在的那一个。
+    std::optional<MonitorRef> monitor;
+    /// 是否铺满目标显示器的工作区。默认：给了 `monitor`、又没写位置/大小时为 true。
+    std::optional<bool> maximize;
+    /// 相对目标显示器工作区左上角的偏移（像素）。
+    std::optional<std::int32_t> x;
+    std::optional<std::int32_t> y;
+    /// 窗口大小（像素）。
+    std::optional<std::uint32_t> width;
+    std::optional<std::uint32_t> height;
+    bool enabled = true;
+};
+
 /// 一个配置脚本收集到的原始内容（尚未校验）。
 struct Config
 {
     Settings settings;
     std::vector<HotkeyDef> hotkeys;
     std::vector<RemapDef> remaps;
+    std::vector<WindowRuleDef> windowRules;
 };
 
 // ---------------------------------------------------------------------------
@@ -221,6 +269,30 @@ struct CompiledRemap
     bool swallow = true;
 };
 
+/// 编译后的 `window_rule`。
+///
+/// `applyGeometry` 区分「这条规则只挪虚拟桌面」与「还要摆到某个显示器上」：
+/// 只写 `desktop` 时窗口的大小/位置保持不动，不会因为默认最大化而突然被放大。
+struct WindowRule
+{
+    QString name;
+    std::optional<QString> title;
+    std::optional<QString> process;
+    std::optional<std::uint32_t> desktop;
+    std::optional<MonitorRef> monitor;
+    /// 是否调整窗口的几何（写了 `monitor` / `maximize` / `x` / `y` / `width` / `height`）。
+    bool applyGeometry = false;
+    /// 铺满目标显示器的工作区（`applyGeometry` 为 false 时无意义）。
+    bool maximize = false;
+    std::optional<std::int32_t> x;
+    std::optional<std::int32_t> y;
+    std::optional<std::uint32_t> width;
+    std::optional<std::uint32_t> height;
+
+    /// 一行人类可读的摘要（`--list` 与日志用）。
+    QString summary() const;
+};
+
 /// 完全校验通过、可直接交给引擎的配置。
 ///
 /// **与 Lua 完全无关**：钩子回调与工作线程永远碰不到 `lua_State`
@@ -230,6 +302,7 @@ struct Compiled
     Settings settings;
     std::vector<Binding> bindings;
     std::vector<CompiledRemap> remaps;
+    std::vector<WindowRule> windowRules;
     QString source;
     /// 值得告知用户的非致命问题。
     QStringList warnings;

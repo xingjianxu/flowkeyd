@@ -156,6 +156,8 @@ add_library(flowkeyd_core STATIC
     src/core/keys.h
     src/core/log_tail.cpp
     src/core/log_tail.h
+    src/core/placement.cpp
+    src/core/placement.h
     src/core/template.cpp
     src/core/template.h
     src/core/version.cpp
@@ -231,6 +233,8 @@ add_library(flowkeyd_platform STATIC
     src/platform/win/input.h
     src/platform/win/logging.cpp
     src/platform/win/logging.h
+    src/platform/win/monitor.cpp
+    src/platform/win/monitor.h
     src/platform/win/nt.cpp
     src/platform/win/nt.h
     src/platform/win/process.cpp
@@ -457,6 +461,7 @@ flowkeyd_add_test(tst_command_line LIBS flowkeyd_platform)
 flowkeyd_add_test(tst_instance LIBS flowkeyd_platform)
 flowkeyd_add_test(tst_log_tail)
 flowkeyd_add_test(tst_window_match)
+flowkeyd_add_test(tst_placement)
 flowkeyd_add_test(tst_audio LIBS flowkeyd_platform)
 flowkeyd_add_test(tst_interactive LIBS flowkeyd_platform)
 flowkeyd_add_test(tst_menu_model LIBS flowkeyd_models)

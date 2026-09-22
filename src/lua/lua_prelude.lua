@@ -1,11 +1,13 @@
 -- flowkeyd 配置脚本的 DSL 预置环境。
 --
 -- 本文件由 src/lua/lua_config.cpp 注入到每个配置脚本的全局环境里；
--- 最上面的 `...` 是 C++ 传进来的注册表（settings / hotkeys / remaps 三个列表）。
+-- 最上面的 `...` 是 C++ 传进来的注册表（settings / hotkeys / remaps /
+-- window_rules 四个列表）。
 --
 -- 两种写法可以混用：
---   * 命令式：hotkey{...} / remap{...} / settings{...}
---   * 声明式：return { settings = {...}, hotkeys = {...}, remaps = {...} }
+--   * 命令式：hotkey{...} / remap{...} / window_rule{...} / settings{...}
+--   * 声明式：return { settings = {...}, hotkeys = {...}, remaps = {...},
+--                      window_rules = {...} }
 -- 返回值里的条目排在脚本体注册的条目之后（快捷键按注册顺序匹配，先者优先）。
 --
 -- 动作一律是「表」或「简写字符串」，不接受 Lua 函数：钩子回调与工作线程
@@ -74,6 +76,16 @@ end
 -- 注册一个重映射：remap{ from = "CapsLock", to = "Esc" }
 function remap(t)
   state.remaps[#state.remaps + 1] = registration(t, "remap")
+end
+
+-- 注册一条窗口摆放规则：某个程序的窗口出现时放到哪个虚拟桌面 / 显示器。
+--   window_rule{ process = "wezterm", desktop = 2, monitor = 2 }
+--   window_rule{ process = "code", monitor = "primary", maximize = false,
+--                x = 0, y = 0, width = 1280, height = 800 }
+-- 触发时机只有三个：窗口第一次出现、断开的显示器重新接上、flowkeyd 启动时；
+-- 之后不再干预（用户自己移动/缩放窗口不会被纠正）。
+function window_rule(t)
+  state.window_rules[#state.window_rules + 1] = registration(t, "window_rule")
 end
 
 -- 注册一组全局设置。可以多次调用，后写的键覆盖先写的。
@@ -280,6 +292,7 @@ flowkeyd = {
   settings = settings,
   hotkey = hotkey,
   remap = remap,
+  window_rule = window_rule,
   run = run,
   send = send,
   type_text = type_text,

@@ -35,6 +35,9 @@ private slots:
     void menuProblemsAreReportedAtLoadTime();
     void helpTitleMustNotBeEmpty();
     void windowToggleAndAnimateValidation();
+    void windowRulesCompile();
+    void windowRuleGeometryDefaults();
+    void windowRuleProblemsAreReported();
     void settingsValidation();
     void evaluationErrorsAreReported();
     void legacyTomlIsReportedInsteadOfParsed();
@@ -449,6 +452,132 @@ void TestConfig::windowToggleAndAnimateValidation()
     QVERIFY(error.has_value());
     QVERIFY2(error->toString().contains(QStringLiteral("`launch` needs")),
              qPrintable(error->toString()));
+}
+
+void TestConfig::windowRulesCompile()
+{
+    Config config;
+    WindowRuleDef def;
+    def.name = QStringLiteral("wezterm");
+    def.process = QStringLiteral("wezterm");
+    def.desktop = 2;
+    MonitorRef ref;
+    ref.kind = MonitorRef::Kind::Index;
+    ref.index = 2;
+    def.monitor = ref;
+    config.windowRules.push_back(def);
+
+    const auto compiled = compileOrDie(config);
+    QCOMPARE(compiled->windowRules.size(), std::size_t(1));
+    const WindowRule &rule = compiled->windowRules.at(0);
+    QCOMPARE(rule.name, QStringLiteral("wezterm"));
+    QCOMPARE(rule.desktop, std::optional<std::uint32_t>(2));
+    QVERIFY(rule.applyGeometry);
+    QVERIFY(rule.maximize);
+    QVERIFY(compiled->warnings.isEmpty());
+}
+
+void TestConfig::windowRuleGeometryDefaults()
+{
+    // 只写 desktop：不碰窗口几何（否则“挪到另一个桌面”会顺手把窗口最大化）。
+    Config desktopOnly;
+    WindowRuleDef onlyDesktop;
+    onlyDesktop.process = QStringLiteral("chrome");
+    onlyDesktop.desktop = 3;
+    desktopOnly.windowRules.push_back(onlyDesktop);
+    auto compiled = compileOrDie(desktopOnly);
+    QVERIFY(!compiled->windowRules.at(0).applyGeometry);
+    QVERIFY(!compiled->windowRules.at(0).maximize);
+
+    // 只写 monitor：默认最大化。
+    Config monitorOnly;
+    WindowRuleDef onlyMonitor;
+    onlyMonitor.process = QStringLiteral("code");
+    onlyMonitor.monitor = MonitorRef{};
+    monitorOnly.windowRules.push_back(onlyMonitor);
+    compiled = compileOrDie(monitorOnly);
+    QVERIFY(compiled->windowRules.at(0).applyGeometry);
+    QVERIFY(compiled->windowRules.at(0).maximize);
+
+    // monitor + 大小：不再最大化，按给定大小摆放。
+    Config sized;
+    WindowRuleDef sizedRule;
+    sizedRule.process = QStringLiteral("code");
+    sizedRule.monitor = MonitorRef{};
+    sizedRule.width = 1280;
+    sizedRule.height = 800;
+    sized.windowRules.push_back(sizedRule);
+    compiled = compileOrDie(sized);
+    QVERIFY(compiled->windowRules.at(0).applyGeometry);
+    QVERIFY(!compiled->windowRules.at(0).maximize);
+    QCOMPARE(compiled->windowRules.at(0).width, std::optional<std::uint32_t>(1280));
+}
+
+namespace {
+
+/// 编译一条 window_rule，返回错误渲染文本（成功时为空串）。
+QString windowRuleError(const WindowRuleDef &def)
+{
+    Config config;
+    config.windowRules.push_back(def);
+    const auto error = compileConfig(config);
+    return error.has_value() ? error->toString() : QString();
+}
+
+} // namespace
+
+void TestConfig::windowRuleProblemsAreReported()
+{
+    WindowRuleDef noMatch;
+    noMatch.desktop = 2;
+    QVERIFY2(windowRuleError(noMatch).contains(QStringLiteral("needs `process` or `title`")),
+             qPrintable(windowRuleError(noMatch)));
+
+    WindowRuleDef conflict;
+    conflict.process = QStringLiteral("code");
+    conflict.monitor = MonitorRef{};
+    conflict.maximize = true;
+    conflict.width = 1280;
+    QVERIFY2(windowRuleError(conflict).contains(QStringLiteral("maximize = true")),
+             qPrintable(windowRuleError(conflict)));
+
+    WindowRuleDef zeroDesktop;
+    zeroDesktop.process = QStringLiteral("code");
+    zeroDesktop.desktop = 0;
+    QVERIFY2(windowRuleError(zeroDesktop).contains(QStringLiteral("`desktop` must be 1")),
+             qPrintable(windowRuleError(zeroDesktop)));
+
+    WindowRuleDef zeroMonitor;
+    zeroMonitor.process = QStringLiteral("code");
+    MonitorRef zero;
+    zero.index = 0;
+    zeroMonitor.monitor = zero;
+    QVERIFY2(windowRuleError(zeroMonitor).contains(QStringLiteral("`monitor` must be 1")),
+             qPrintable(windowRuleError(zeroMonitor)));
+
+    WindowRuleDef zeroSize;
+    zeroSize.process = QStringLiteral("code");
+    zeroSize.monitor = MonitorRef{};
+    zeroSize.width = 0;
+    QVERIFY2(windowRuleError(zeroSize).contains(QStringLiteral("greater than 0")),
+             qPrintable(windowRuleError(zeroSize)));
+
+    // 两条规则匹配同一批窗口：先写的赢，但要有 warning。
+    Config duplicates;
+    WindowRuleDef first;
+    first.process = QStringLiteral("code");
+    first.desktop = 1;
+    WindowRuleDef second;
+    second.process = QStringLiteral("code");
+    second.desktop = 2;
+    duplicates.windowRules.push_back(first);
+    duplicates.windowRules.push_back(second);
+    const auto compiled = compileOrDie(duplicates);
+    QCOMPARE(compiled->windowRules.size(), std::size_t(2));
+    QVERIFY(std::any_of(compiled->warnings.begin(), compiled->warnings.end(),
+                        [](const QString &warning) {
+                            return warning.contains(QStringLiteral("first"));
+                        }));
 }
 
 void TestConfig::settingsValidation()

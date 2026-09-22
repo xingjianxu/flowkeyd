@@ -268,6 +268,23 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
     提交）；把 `.git/HEAD` 与当前分支 ref 登记成 configure 依赖就是为了提交后
     重新构建能自动刷新它。取不到 exe 时日期段是 `unknown`，不在 git 仓库里时
     修订段是 `unknown`。
+13. **窗口摆放规则 `window_rule{...}`（项目所有者 2026-09 要求）**：用 Lua 配置
+    控制“某个程序启动时出现在哪个 workspace 和 monitor”，并且**断开的显示器
+    重新接上时按配置重新归位**。构造器叫 `window_rule`（声明式字段是
+    `window_rules`），字段：`process` / `title`（至少一个）、`desktop`、`monitor`、
+    `maximize`、`x`/`y`、`width`/`height`、`enabled`。项目所有者拍板的几条：
+    * `monitor` 只支持**序号**（1 起，左→右、上→下）、`"primary"`、**设备名**
+      （`"DISPLAY2"` / `"\\.\DISPLAY2"`）；**不支持按分辨率匹配**。
+    * **默认最大化**（写了 `monitor` 又没写位置/大小时铺满那块显示器的工作区），
+      但位置与大小可配（`x`/`y` 相对目标工作区左上角，`width`/`height` 像素）。
+      `maximize = true` 与位置/大小互斥。只写 `desktop` 时**不动窗口几何**。
+    * 触发时机只有三个：**窗口第一次出现**、**显示器重新接入**、**flowkeyd
+      启动时**。之后不再干预（用户自己移动/缩放窗口不会被纠正）。
+    * “主窗口”的判据：可见、无属主、非 `WS_EX_TOOLWINDOW`、有标题、尺寸非零。
+    实现分散在 `core/placement`（纯几何/匹配）、`platform/win/monitor`（枚举与
+    `SetWindowPlacement`）、`platform/win/desktop::moveWindowToDesktop`
+    （未公开的 `MoveViewToDesktop`）、`platform/win/hook`（`SetWinEventHook` +
+    显示器轮询）与 `app/dispatcher`（真正执行）。细节与坑见第 10 节。
 
 ---
 
@@ -360,6 +377,7 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `src/core/action.h/.cpp`                  | 声明式动作的表示 + 摘要文本（`--list` 与 `help()` 都用它）+ `isDestructive()`（帮助窗口要靠它决定“要不要再确认一次”）                                                                                                        |
 | `src/core/log_tail.h/.cpp`                | 日志文件的增量尾随（纯逻辑，可单测）：按字节读、末尾不完整的 UTF-8 序列不消费、半行留到下一轮、一次最多 1000 行                                                                                                            |
 | `src/core/window_match.h/.cpp`            | 窗口匹配与 `window` 动作决策的纯函数：标题/进程名子串、可执行文件名提取、`toggle` 边界、`animate` 是否有意义                                                                                                                |
+| `src/core/placement.h/.cpp`               | `window_rule` 的**纯逻辑**（只用 QtCore、可单测）：显示器排序与选择（序号 / `primary` / 设备名）、「显示器重新接入」检测（设备名从无到有）、摆放几何（最大化 / 居中 / 指定位置与大小 / 夹进工作区）、规则匹配。见第 2 节第 13 条 |
 | `src/core/version.h/.cpp`                 | 构建版本号（纯逻辑、可单测）：`buildVersion(executablePath)`（拼成 `yy-MM-dd-<git 短修订>`）、`buildDateFromFile()`、`sourceRevision()`（编译进来的 `FLOWKEYD_GIT_REVISION`）、`unknownValue()`。修订来自 CMake 用 `cmake/version_revision.h.in` 生成的 `flowkeyd_revision.h`；机制与取舍见第 2 节第 12 条与第 10 节 |
 | `src/lua/lua_config.h/.cpp`               | **Lua 与 C++ 的唯一边界**：建 `lua_State`、注入 DSL、把脚本里的表转成 `core::Config`（逐条目、带上下文的错误）、UTF-8 BOM 剔除、`.toml` 明确拒绝                                                                            |
 | `src/lua/lua_prelude.lua`                 | 注入配置脚本的 DSL：`settings{}`/`hotkey{}`/`remap{}` + 动作构造器 + `flowkeyd` 表。**纯 Lua，改它不需要改 C++**（编进 qrc，见第 7 节）                                                                                     |
@@ -367,12 +385,13 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `src/platform/win/ffi.h/.cpp`             | 全部 Win32 声明、结构体与常量（`INPUT` 的 40 字节布局有 `static_assert` 盯着）                                                                                                                                              |
 | `src/platform/win/nt.h/.cpp`              | 未公开的 `win32u.dll` 导出，运行时解析并校验                                                                                                                                                                                |
 | `src/platform/win/dwm.h/.cpp`             | **运行时解析**的 `dwmapi!DwmSetWindowAttribute`：按窗口关掉过渡动画（`window` 的 `animate`）；拿不到 dwmapi 时只是保留动画，动作不失败                                                                                      |
+| `src/platform/win/monitor.h/.cpp`         | 显示器枚举（`EnumDisplayMonitors` → `core::MonitorDescription`）、窗口当前在哪块屏、`applyPlacement`（`SetWindowPlacement` + `SetWindowPos`，带 `SWP_NOACTIVATE`，最大化时先还原再最大化）。**几何判断不在这一层** |
 | `src/platform/win/input.h/.cpp`           | 按键注入（`SendInput`/`NtUserSendInput`）、按键状态、`ModifierGuard`（含菜单遮断标记）、`FLOWKEYD_ACCEPT_INJECTED` 测试后门（见第 5 节与阶段 9）                                                                                |
-| `src/platform/win/hook.h/.cpp`            | 钩子回调、**钩子线程自己的 Win32 消息循环**、`SetTimer`、控制消息、重载                                                                                                                                                     |
+| `src/platform/win/hook.h/.cpp`            | 钩子回调、**钩子线程自己的 Win32 消息循环**、`SetTimer`、控制消息、重载；另外还负责 `window_rule` 的两个监听：`SetWinEventHook`（`EVENT_OBJECT_SHOW` / `DESTROY`，按 HWND 去重）与一个 350 ms 的显示器轮询定时器。**定时器 id 必须用 `SetTimer` 的返回值**，见第 10 节 |
 | `src/platform/win/audio.h/.cpp`           | Core Audio `IAudioEndpointVolume`，手写 COM vtable（**高风险**）                                                                                                                                                            |
 | `src/platform/win/clipboard.h/.cpp`       | 剪贴板读写（`CF_UNICODETEXT`）                                                                                                                                                                                              |
 | `src/platform/win/window.h/.cpp`          | 窗口查找（标题子串/可执行文件名）、激活/最小化/最大化/还原/关闭/置顶、前台锁绕行、启动回退、`TransitionGuard`（RAII 恢复动画开关）                                                                                          |
-| `src/platform/win/desktop.h/.cpp`         | 虚拟桌面切换：`CLSID_ImmersiveShell` → `IServiceProvider::QueryService` → 未公开的 `IVirtualDesktopManagerInternal`，按 `build.revision` 查表                                                                               |
+| `src/platform/win/desktop.h/.cpp`         | 虚拟桌面切换与**窗口移动**：`CLSID_ImmersiveShell` → `IServiceProvider::QueryService` → 未公开的 `IVirtualDesktopManagerInternal`，按 `build.revision` 查表；`moveWindowToDesktop` 走 `MoveViewToDesktop`（vtable 下标 4，三种布局一致），并用**已公开**的 `IVirtualDesktopManager::GetWindowDesktopId` / `IsWindowOnCurrentVirtualDesktop` 做验证与诊断 |
 | `src/platform/win/power.h/.cpp`           | `powrprof!SetSuspendState`、`user32!ExitWindowsEx`、`LockWorkStation`、`WM_SYSCOMMAND`/`SC_MONITORPOWER` 广播，外加 `SeShutdownPrivilege`                                                                                   |
 | `src/platform/win/tray.h/.cpp`            | 托盘图标 + 气泡提示 + 右键菜单（查看日志/挂起/重载/打开配置/版本/退出）+ 悬停提示（构建版本 + 挂起状态）。图标是构造时传进来的应用图标（`app::applicationIcon()`，见 `app/app_icon.*`）；拿不到时退回系统图标，免得托盘上什么都没有 |
 | `src/platform/win/logging.h/.cpp`         | 控制台/文件日志器（英文、分级别、可选 ANSI 颜色），`--log-level`/`--log-file`/`--no-color`                                                                                                                                  |
@@ -381,7 +400,7 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `src/platform/win/autostart.h/.cpp`       | 开机自启的计划任务：`buildTaskXml`/`taskXmlCommand`/`decodeTaskOutput`/`sameExecutablePath` 是**纯函数**（可单测），`query/register/removeAutostartTask` 走隐藏的 `schtasks.exe /Create /XML`，`ensureAutostart(spec, confirm)` 是启动时的“缺失或指向别的 exe 就**先问用户、同意后**刷新成当前路径”策略（`confirm` 为空表示不问）。**不写任何安装目录**（见第 2 节第 10 条与第 10 节） |
 | `src/app/`                                | 组装层：把 core / lua / platform 串起来，并拥有 Qt 对象                                                                                                                                                                     |
 | `src/app/app_icon.h/.cpp`                 | 应用图标：把 qrc 里的 9 张 PNG 帧拼成一个多尺寸 `QIcon`（`applicationIcon()`），托盘、全部 QML 窗口与 Qt 消息框都用它。用 PNG 而不用 SVG 是为了不依赖 `Qt6Svg` 与 `imageformats/qsvg` 插件（见第 10 节） |
-| `src/app/dispatcher.h/.cpp`               | **动作工作线程**（`QThread`）：执行动作列表，含 `window` 的“先启动再激活”与默认开的 `toggle` 收起、`menu` 的窗口请求、`help` 的窗口请求 + 每一行的“执行目标”（绑定是 press+release 两串动作，`remap` 是直接注入目标按键） |
+| `src/app/dispatcher.h/.cpp`               | **动作工作线程**（`QThread`）：执行动作列表，含 `window` 的“先启动再激活”与默认开的 `toggle` 收起、`menu` 的窗口请求、`help` 的窗口请求 + 每一行的“执行目标”（绑定是 press+release 两串动作，`remap` 是直接注入目标按键）；还执行 `window_rule`（窗口出现 / 显示器重新接入 / 启动时各跑一次，`isPlaceableWindow()` 判“主窗口”） |
 | `src/app/runtime.h/.cpp`                  | 引擎 + 钩子 + 分发 + 托盘 + 弹窗的总装，`ControlCmd`（suspend/reload/quit）通道；还持有 `--quit` 的事件句柄并用 `QWinEventNotifier` 在 GUI 线程上监听（收到就走 `performShutdown`）                                                       |
 | `src/app/log_model.h/.cpp`                | 日志窗口的模型：尾随日志文件（增量、半行、被截断的多字节 UTF-8）、最多 1000 行、按级别配色、子串过滤                                                                                                                        |
 | `src/app/menu_model.h/.cpp`               | `menu` 选单的**纯逻辑**（`QAbstractListModel`，只用 QtCore）：卡片外框几何（宽高、标题、底部提示）、高亮移动（到边界回绕）、单字符选中、`Esc`/`Enter` 语义，以及给 QML 排版用的几个常量（`listTop`/`rowHeight`/`rowSpacing`/`rowInset`/`badgeSize`）。**行几何与鼠标命中不归它管**：列表是真正的 QML `ListView` + 标准 `ItemDelegate`（见第 2 节第 9 条与第 10 节），所以它没有 `rowRect`/`hitTest`，也**没有** `highlighted`/`hovered` 角色（那两个名字被标准委托占了）。悬停仍由模型持有（`hover`/`setHover`），因为「`Enter` 选光标下那一条」是选单的语义 |
@@ -389,7 +408,7 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `src/app/popup_layout.h/.cpp`             | 两个弹窗共用的几何类型（`PopupRect`/`PopupPoint`）与纯函数 `centrePopup()`（先在工作区居中、再夹进屏幕；**可单测**） |
 | `src/app/popup_host.h/.cpp`               | 把上面的模型挂到 QML 窗口上；抢前台（`requestActivate` + `win::window::raiseWindow` 的前台锁绕行）；在 Qt GUI 线程上创建/复用窗口；用户选完（或按 `Enter`/双击帮助里的一行）把活儿回投工作线程；`helpRun()` 负责把**可见行下标**换算成条目下标，并且**先把窗口藏起来再执行**（**GUI 线程亲和**） |
 | `src/qml/`                                | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`（三个文件都在开头写了 `pragma ComponentBehavior: Bound`）；配色一律用 `palette`，没有单独的 `Style.qml`；中文一律 `font.family: "Microsoft YaHei"`（默认族 `Segoe UI Variable` 没有中文字形，不管会回退到宋体，见第 10 节）。`HelpPopup.qml` 与 `MenuPopup.qml` 里除了卡片外框与按键徽标全是标准控件：帮助的筛选框是 `TextField`、列表是 `ListView` + Qt 自带 `ScrollBar` + `ItemDelegate`（列表只占行区域，不再需要表头/底部的遮罩）；选单的列表同样是 `ListView` + `ItemDelegate`（不滚动，所以没有滚动条；悬停与点击全部由委托提供） |
-| `tests/`                                  | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_log_tail`、`tst_audio`、`tst_autostart`（自启的纯逻辑：XML 渲染/解析、输出解码、路径比较；**不碰真实计划任务**）、`tst_interactive`（需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`，否则 skip）、`tst_menu_model`、`tst_help_model`、`tst_power_table`、`tst_desktop_table`、`tst_layout`、`tst_version`（构建时间戳与版本字符串的纯逻辑；只碰临时文件） |
+| `tests/`                                  | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_log_tail`、`tst_audio`、`tst_autostart`（自启的纯逻辑：XML 渲染/解析、输出解码、路径比较；**不碰真实计划任务**）、`tst_interactive`（需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`，否则 skip）、`tst_menu_model`、`tst_help_model`、`tst_power_table`、`tst_desktop_table`、`tst_placement`（`window_rule` 的纯逻辑：显示器排序/选择、重连检测、摆放几何、匹配与摘要）、`tst_layout`、`tst_version`（构建时间戳与版本字符串的纯逻辑；只碰临时文件） |
 | `scripts/acceptance.ps1`                  | 桌面行为的验收脚本（注入按键 + 焦点捕捉窗口的外部观察，116 项检查：含弹窗滚轮/滚动条拖动/鼠标点选与点筛选框/鼠标点选单条目/`Enter` 与双击真的执行动作/危险动作两次确认）；需交互式桌面，**不属于 `ctest`**，见第 5 节与阶段 9。它用 `--no-elevate` 起临时守护进程，所以**不会**碰真实的自启计划任务 |
 
 > `scripts/install.ps1` / `scripts/uninstall.ps1` **已删除**（2026-09）：自启的注册、
@@ -632,6 +651,11 @@ flowkeyd 自己注入的按键带着 `"FLOW"` 标记，
 11. `window` 动作：启动 → 激活 → 再按一次收起（`toggle` 默认开）→ 再按恢复。
 12. 按顺序做完以上之后，**检查没有任何按键卡在按下状态**（乱按几下、
     看是否有键一直“粘住”）。
+13. `window_rule`：用一次性配置写一条规则（`process` + `monitor` + 可选的
+    `desktop`），启动一个匹配的窗口，确认它出现在指定的显示器上（默认最大化）
+    与虚拟桌面上；再用 `DisplaySwitch.exe /internal` → `/extend` 制造一次
+    “显示器重新接入”，确认日志里出现 `monitor connected: ...; re-applying
+    window rules` 且手工挪走的窗口被摆回。别忘了最后 `/extend` 恢复桌面。
 
 ---
 
@@ -2429,6 +2453,51 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   起点**（多显示器下尤其如此）；弹窗“跟着光标走”是对的 UX，错的是“坐标算一次
   就管到底”的测试写法。
 
+#### 2026-09 新增：`window_rule`（窗口摆放规则）
+
+* **`SetTimer(nullptr, id, …)` 会忽略 `id` 并返回一个新的定时器 id**，`WM_TIMER`
+  的 `wParam` 就是那个新 id（本机实测 30661/30662 这种），不是传进去的 1/2。
+  **这是 flowkeyd 一个一直没被发现的老 bug**：钩子线程原来写
+  `SetTimer(nullptr, 1, tick_ms, …)` 再比较 `message.wParam == 1`，于是
+  `Engine::tick()` **从来没被调用过** —— 长按重复（`repeatable = true` /
+  `trigger = "repeat"`）实际上一直是坏的（单测直接调 `Engine::tick()`，
+  所以没暴露）。现在把返回值存进 `m_tickTimerId` / `m_placementTimerId`
+  再比较，`KillTimer` 也用返回值。
+* **`MoveViewToDesktop` 在 24H2 上就是 vtable 下标 4**，三种布局的签名一致
+  （不带 `HMONITOR`），所以 `moveWindowToDesktop` 可以直接调。但**已公开的**
+  `IVirtualDesktopManager::MoveWindowToDesktop` 拒绝移动**别的进程**的窗口 ——
+  必须用内部接口 + `IApplicationViewCollection::GetViewForHwnd`
+  （IID/SID 都是 `{1841C6D7-4F9D-42C0-AF41-8747538F10E5}`，`GetViewForHwnd`
+  在 vtable 下标 6）。
+* **`MoveViewToDesktop` 返回 S_OK 不等于窗口真的换了桌面。** 验证要用
+  **已公开**的 `IVirtualDesktopManager::GetWindowDesktopId`
+  （`CLSID_VirtualDesktopManager` `{AA509086-…}`，IID `{A5CD92FF-…}`，
+  `GetWindowDesktopId` 下标 4）：`tst_interactive` 就是比较移动前后的 GUID。
+  `IsWindowOnCurrentVirtualDesktop`（下标 3）也能用，但 shell 是**异步**移动的，
+  要轮询等它生效（第一次写测试时只等了固定时间，看起来像“移动失败”）。
+* **按 `process` 匹配会一次命中一堆应用的内部窗口。** 实测记事本启动时会有
+  `Non Client Input Sink Window`（工具窗口）与 `NotepadTextBox`（无标题）这类
+  顶层窗口。所以“主窗口”的判据是：可见 + 无属主 + **非 `WS_EX_TOOLWINDOW`** +
+  **有标题** + **尺寸非零**。`window::topLevelWindows()` 与钩子的
+  `noteWindowEvent` 也套同一套过滤（标题只能在真正摆放时判：窗口刚 show 时
+  标题可能还没写）。
+* **`SetWindowPlacement` 是跨显示器摆放的关键。** `SetWindowPos` 对最大化的
+  窗口无效，所以顺序是：`IsZoomed` 就先 `SW_RESTORE`，然后写
+  `WINDOWPLACEMENT.rcNormalPosition`（屏幕坐标）并设 `showCmd`（最大化 /
+  正常 / 保持最小化），最后对非最大化的情况再补一次 `SetWindowPos`
+  （`SWP_NOACTIVATE`）。最小化的窗口只更新“还原位置”，不会被弹出来。
+  实测 `SetWindowPlacement` 不会抢焦点；代码里仍然在检测到焦点被抢走时
+  还回去。
+* **显示器“重新接入”的判据是设备名从无到有**，不是拓扑任何变化
+  （分辨率/排列变化不算）。轮询（350 ms）比较 `EnumDisplayMonitors` 的设备名
+  集合；这比 `WM_DISPLAYCHANGE`（需要一个顶层窗口来收广播）简单得多，
+  而且不需要额外的窗口类。
+* **挂起期间不做摆放**（`m_suspended`），与“挂起之后所有绑定都不触发”一致。
+* **验证手法**：`DisplaySwitch.exe /internal` 再 `/extend` 可以真的制造一次
+  “显示器断开→重新接入”，日志里会看到 `monitor connected: DISPLAY2; re-applying
+  window rules` 与随后的 `window rule ... -> ...: maximized ...`。
+  手工把窗口挪到另一块屏再 `/extend`，就能看到它被摆回去。
+
 ### 领域坑清单（动手前先看这一遍）
 
 下面这些每一条都值得在动钩子/引擎/窗口/电源之前先读一遍：
@@ -2461,6 +2530,12 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 * 提权后的进程会把它启动的子进程一起提权（写进 README 的已知限制）。
 * 中文错误文案不可断言（`FormatMessageW` 是本地化的）——
   这也是我们**日志与校验信息保持英文**的实际原因。
+* **`SetTimer(nullptr, id, …)` 的 `id` 会被忽略**，`WM_TIMER.wParam` 是返回值，
+  不是传进去的 id（见第 10 节：这里踩出了一个老 bug）。
+* **`IVirtualDesktopManagerInternal::MoveViewToDesktop` 在 vtable 下标 4**
+  （三种布局一致），需要先用 `IApplicationViewCollection::GetViewForHwnd`
+  把 `HWND` 换成 `IApplicationView*`；公开的 `MoveWindowToDesktop` 动不了
+  别的进程的窗口。
 
 #### 2026-09 新增：托盘右键与启动日志里的构建版本（build 时间戳）
 
@@ -3049,6 +3124,39 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > 按工作约定第 11 条：常驻实例已 `--quit` → 构建 release → 从
 > `build\dist-release` 重新拉起（它启动时会自己把计划任务刷新成这个路径）。
 
+> **2026-09 新增（`window_rule`：按程序摆放窗口到指定 workspace / monitor）的 DoD**：
+> `windows-debug` 与 `windows-release` 两边都是 `build exit 0`、零编译警告
+> （release 里那两句 `dxcompiler.dll` 是 `windeployqt` 自己的提示）；
+> `ctest --test-dir build/windows-debug` **22 个测试目标全绿**
+> （新增 `tst_placement` 14 项：显示器排序/选择、重连检测、摆放几何、匹配与摘要；
+> `tst_config` 新增 `windowRulesCompile` / `windowRuleGeometryDefaults` /
+> `windowRuleProblemsAreReported`；`tst_lua` 新增 `windowRulesAreConverted`）；
+> `tst_interactive`（`FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`）**9 项全绿**，其中两个是
+> 新增的：`moveWindowToAnotherDesktopAndBack`（用**已公开**的
+> `GetWindowDesktopId` 确认窗口的桌面 GUID 真的变了、再移回来）与
+> `placementMovesAWindowToAnotherMonitor`（跨屏 + 最大化 + 还原成普通窗口）。
+> `flowkeyd --check --config flowkeyd.lua.example` →
+> `OK (37 hotkey(s), 3 remap(s), 3 window rule(s))`、零警告；
+> 用户真实配置（不带 `--config`）→ `OK (24 hotkey(s), 0 remap(s))`、零警告。
+> `scripts/acceptance.ps1`（只跑 release）**116 项、0 失败**。
+> 手工端到端（`--no-elevate --allow-multi` 的一次性实例 + 一次性配置）：
+> * 记事本启动后日志里出现
+>   `window rule `notepad-right` -> "..." [Notepad]: desktop 2/4, maximized 3840x2160 at 3840,0`，
+>   `GetWindowPlacement` 确认它在第 2 块屏、`WS_MAXIMIZE` 置位；
+> * 应用内部窗口（`Non Client Input Sink Window` / 无标题的 `NotepadTextBox`）
+>   被 `WS_EX_TOOLWINDOW` / “有标题”这两条过滤挡掉；
+> * `DisplaySwitch.exe /internal` 再 `/extend` 真的制造了一次重连，日志里出现
+>   `monitor connected: DISPLAY2; re-applying window rules`，随后把手工挪到
+>   另一块屏的记事本重新摆回第 2 块屏并最大化。
+> **顺带修了一个老 bug（行为变化）**：`SetTimer(nullptr, id, …)` 会忽略 `id`，
+> 所以钩子线程原来 `wParam == 1` 的比较从来不成立，`Engine::tick()` 从未被调用，
+> 长按重复（`repeatable = true` / `trigger = "repeat"`）实际上一直是坏的。
+> 现在用 `SetTimer` 的返回值比较，长按重复真的会重复了（见第 10 节）。
+> 本次没有给 `acceptance.ps1` 加摆放检查（它的 116 项保持原样）：端到端由
+> 交互式单测 + 上面那次手工 `DisplaySwitch` 验证覆盖。
+> 按工作约定第 11 条：常驻实例已 `--quit` → 构建 release → 从
+> `build\dist-release` 重新拉起（它启动时会自己把计划任务刷新成这个路径）。
+
 ---
 
 ## 12. 本期不做的（有意留白）与后续工作
@@ -3145,6 +3253,11 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   （`--check` 会立刻告诉你它能不能过校验）→ README 表格。
   **字段名不要用 Lua 关键字**（`repeat`、`end`、`for`、`local`、`function`、
   `then`、`until`……）；需要的话给它一个 Lua 友好的别名。
+* **新的窗口摆放字段**：`core/config` 加字段 → `lua_config.cpp` 的
+  `convertWindowRule` 加白名单与读取 → `lua_prelude.lua` 的 `window_rule` 注释 →
+  `core/placement` 里影响几何/匹配 → `app/dispatcher` 的 `placeWindowOnce` →
+  README 的 `window_rule` 一节与 `flowkeyd.lua.example` → `tst_placement` /
+  `tst_config` / `tst_lua`。
 * **新的窗口条件**：`core/window_match`（纯逻辑）+ `platform/win/window` 的
   枚举适配 + `launch_then_activate` 回退 + 手工冒烟清单里加一条用例。
 * **新按键或别名**：扩展 `core/keys` 的键表并加一个往返用例
@@ -3212,6 +3325,11 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、
   **互相矛盾的组合要被 `--check` 拒绝。**
 * `remap{}`：`from`（键或和弦）、`to`（键名或发送脚本）、
   `mode`（`hold` 默认 / `tap`）、`swallow`、`name`。
+* `window_rule{}`：`process` / `title`（至少一个）、`desktop`（1 起）、
+  `monitor`（序号 / `"primary"` / 设备名 `"DISPLAY2"`）、`maximize`、
+  `x`/`y`（相对目标显示器工作区左上角）、`width`/`height`、`name`、`enabled`。
+  写了 `monitor` 且没写位置/大小时 `maximize` 默认 true；`maximize = true`
+  与位置/大小互斥。触发时机：窗口首次出现、显示器重新接入、flowkeyd 启动。
 * 和弦语法：`~` 放行原始按键、`*` 忽略额外修饰键；`Numpad*` 与主键盘同名键不同。
 * 动作：`run`/`send`/`type`/`open`/`volume`/`media`/`clipboard`/`window`/
   `notify`/`menu`/`help`/`power`/`desktop`/`caps_lock`/`suspend`/`reload`/

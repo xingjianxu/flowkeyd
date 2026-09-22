@@ -84,6 +84,7 @@ private slots:
     void longStringsKeepWindowsPathsIntact();
     void bomIsStrippedBeforeLuaSeesIt();
     void legacyTomlIsRejected();
+    void windowRulesAreConverted();
 };
 
 void TestLua::imperativeAndDeclarativeStylesAgree()
@@ -441,6 +442,58 @@ void TestLua::legacyTomlIsRejected()
     const auto error = core::loadConfig(lua::makeLuaEvaluator(), path, &out);
     QVERIFY(error.has_value());
     QCOMPARE(error->kind, core::ConfigError::Kind::LegacyToml);
+}
+
+void TestLua::windowRulesAreConverted()
+{
+    // 命令式与声明式都要能用。
+    const auto imperative = parse(R"(
+        window_rule{ name = "term", process = "wezterm", desktop = 2, monitor = 2 }
+    )");
+    QVERIFY(imperative.has_value());
+    QCOMPARE(imperative->windowRules.size(), std::size_t(1));
+    QCOMPARE(imperative->windowRules[0].name, QStringLiteral("term"));
+    QCOMPARE(imperative->windowRules[0].process.value_or(QString()), QStringLiteral("wezterm"));
+    QCOMPARE(imperative->windowRules[0].desktop, std::optional<std::uint32_t>(2));
+    QVERIFY(imperative->windowRules[0].monitor.has_value());
+    QCOMPARE(imperative->windowRules[0].monitor->kind, core::MonitorRef::Kind::Index);
+    QCOMPARE(imperative->windowRules[0].monitor->index, std::uint32_t(2));
+    QVERIFY(imperative->windowRules[0].applyGeometry);
+    QVERIFY(imperative->windowRules[0].maximize);
+
+    const auto declarative = parse(R"(
+        return {
+          window_rules = {
+            { process = "code", monitor = "primary", width = 1280, height = 800 },
+            { title = "Steam", monitor = "DISPLAY2", maximize = false, x = 0, y = 0 },
+          },
+        }
+    )");
+    QVERIFY(declarative.has_value());
+    QCOMPARE(declarative->windowRules.size(), std::size_t(2));
+    const core::WindowRule &primary = declarative->windowRules[0];
+    QCOMPARE(primary.monitor->kind, core::MonitorRef::Kind::Primary);
+    QVERIFY(!primary.maximize);
+    QCOMPARE(primary.width, std::optional<std::uint32_t>(1280));
+    const core::WindowRule &device = declarative->windowRules[1];
+    QCOMPARE(device.monitor->kind, core::MonitorRef::Kind::Device);
+    QCOMPARE(device.monitor->device, QStringLiteral("DISPLAY2"));
+    QVERIFY(device.applyGeometry);
+    QVERIFY(!device.maximize);
+
+    // 未如字段要报错，而且带条目名。
+    const QString unknown = failure(R"(window_rule{ name = "x", process = "a", togle = true })");
+    QVERIFY2(unknown.contains(QStringLiteral("unknown field `togle`")), qPrintable(unknown));
+    QVERIFY2(unknown.contains(QStringLiteral("window_rule #1")), qPrintable(unknown));
+
+    // monitor 只接受数字 / "primary" / 设备名。
+    const QString badMonitor = failure(R"(window_rule{ process = "a", monitor = true })");
+    QVERIFY2(badMonitor.contains(QStringLiteral("monitor")), qPrintable(badMonitor));
+
+    // 写了 monitor 但没写位置/大小：默认最大化（在 compile() 里定）。
+    const auto maximizeDefault = parse(R"(window_rule{ process = "a", monitor = "primary" })");
+    QVERIFY(maximizeDefault.has_value());
+    QVERIFY(maximizeDefault->windowRules[0].maximize);
 }
 
 QTEST_MAIN(TestLua)

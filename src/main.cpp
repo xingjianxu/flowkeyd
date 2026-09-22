@@ -72,9 +72,10 @@ QString boolText(bool value)
 QString renderBindings(const core::Compiled &compiled)
 {
     QString out;
-    out += QStringLiteral("%1 hotkey(s), %2 remap(s) from %3\n")
+    out += QStringLiteral("%1 hotkey(s), %2 remap(s), %3 window rule(s) from %4\n")
                .arg(compiled.bindings.size())
                .arg(compiled.remaps.size())
+               .arg(compiled.windowRules.size())
                .arg(compiled.source);
     for (const core::Binding &binding : compiled.bindings) {
         QStringList chords;
@@ -96,6 +97,9 @@ QString renderBindings(const core::Compiled &compiled)
                    .arg(remap.from.render().leftJustified(24), remap.name)
                    .arg(remap.press.size())
                    .arg(remap.release.size());
+    }
+    for (const core::WindowRule &rule : compiled.windowRules) {
+        out += QStringLiteral("  window rule `%1`: %2\n").arg(rule.name, rule.summary());
     }
     for (const QString &warning : compiled.warnings) {
         out += QStringLiteral("  warning: %1\n").arg(warning);
@@ -289,10 +293,15 @@ int main(int argc, char *argv[])
                          QDir::toNativeSeparators(core::preferredConfigPath()))));
         }
         if (options.check) {
-            win::writeStdout(toConsole(QStringLiteral("%1: OK (%2 hotkey(s), %3 remap(s))\n")
-                                           .arg(QDir::toNativeSeparators(path))
-                                           .arg(compiled.bindings.size())
-                                           .arg(compiled.remaps.size())));
+            QString summary = QStringLiteral("%1: OK (%2 hotkey(s), %3 remap(s)")
+                                  .arg(QDir::toNativeSeparators(path))
+                                  .arg(compiled.bindings.size())
+                                  .arg(compiled.remaps.size());
+            if (!compiled.windowRules.empty()) {
+                summary += QStringLiteral(", %1 window rule(s)").arg(compiled.windowRules.size());
+            }
+            summary += QStringLiteral(")\n");
+            win::writeStdout(toConsole(summary));
             return 0;
         }
         win::writeStdout(toConsole(renderBindings(compiled)));
@@ -417,9 +426,10 @@ int main(int argc, char *argv[])
 
     win::logInfo(QStringLiteral("flowkeyd %1 starting").arg(buildVersion));
     win::logInfo(QStringLiteral("configuration: %1").arg(QDir::toNativeSeparators(configPath)));
-    win::logInfo(QStringLiteral("%1 hotkey(s), %2 remap(s), tick %3 ms")
+    win::logInfo(QStringLiteral("%1 hotkey(s), %2 remap(s), %3 window rule(s), tick %4 ms")
                      .arg(compiled.bindings.size())
                      .arg(compiled.remaps.size())
+                     .arg(compiled.windowRules.size())
                      .arg(compiled.settings.tickMs));
     win::logInfo(QStringLiteral("key injection: %1, logging at %2")
                      .arg(win::inputBackendName(),

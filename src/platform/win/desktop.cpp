@@ -24,6 +24,16 @@ const GUID kIidServiceProvider = {
 /// `SID_IVirtualDesktopManagerInternal`：`QueryService` 用它请求虚拟桌面管理器。
 const GUID kSidManagerInternal = {
     0xC5E0CDCA, 0x7B6E, 0x41B2, {0x9F, 0xC4, 0xD9, 0x39, 0x75, 0xCC, 0x46, 0x7B}};
+/// `IID_IApplicationViewCollection`（`QueryService` 的 SID 与 IID 是同一个 GUID）：
+/// 把 `HWND` 换成 shell 侧的 `IApplicationView*`，`MoveViewToDesktop` 要的就是它。
+const GUID kIidApplicationViewCollection = {
+    0x1841C6D7, 0x4F9D, 0x42C0, {0xAF, 0x41, 0x87, 0x47, 0x53, 0x8F, 0x10, 0xE5}};
+/// `CLSID_VirtualDesktopManager` —— **已公开**的那个管理器（只能动自己进程的窗口）。
+const GUID kClsidVirtualDesktopManager = {
+    0xAA509086, 0x5CA9, 0x4C25, {0x8F, 0x95, 0x58, 0x9D, 0x3C, 0x07, 0xB4, 0x8A}};
+/// `IID_IVirtualDesktopManager`
+const GUID kIidVirtualDesktopManager = {
+    0xA5CD92FF, 0x29BE, 0x454C, {0x8D, 0x04, 0xD8, 0x28, 0x79, 0xFB, 0x3F, 0x1B}};
 
 // --- 手写 vtable -----------------------------------------------------------
 //
@@ -57,6 +67,31 @@ struct IObjectArrayVtbl
     HRESULT(WINAPI *getAt)(void *, UINT, const GUID *, void **);
 };
 
+/// `IApplicationViewCollection`：`IUnknown` + 三个未用到的 `GetViews*` +
+/// `GetViewForHwnd`（vtable 下标 6）。
+struct IApplicationViewCollectionVtbl
+{
+    HRESULT(WINAPI *queryInterface)(void *, const GUID *, void **);
+    ULONG(WINAPI *addRef)(void *);
+    ULONG(WINAPI *release)(void *);
+    void *getViews;
+    void *getViewsByZOrder;
+    void *getViewsByAppUserModelId;
+    HRESULT(WINAPI *getViewForHwnd)(void *, HWND, void **);
+};
+
+/// **已公开**的 `IVirtualDesktopManager`：`IUnknown` +
+/// `IsWindowOnCurrentVirtualDesktop`（下标 3）+ `GetWindowDesktopId`（下标 4）。
+/// 只用它做只读查询。
+struct IVirtualDesktopManagerVtbl
+{
+    HRESULT(WINAPI *queryInterface)(void *, const GUID *, void **);
+    ULONG(WINAPI *addRef)(void *);
+    ULONG(WINAPI *release)(void *);
+    HRESULT(WINAPI *isWindowOnCurrentVirtualDesktop)(void *, HWND, BOOL *);
+    HRESULT(WINAPI *getWindowDesktopId)(void *, HWND, GUID *);
+};
+
 /// `Layout::Plain` 的 `IVirtualDesktopManagerInternal` vtable。
 struct ManagerPlainVtbl
 {
@@ -64,7 +99,9 @@ struct ManagerPlainVtbl
     ULONG(WINAPI *addRef)(void *);
     ULONG(WINAPI *release)(void *);
     void *index3;
-    void *index4;
+    /// 4 `MoveViewToDesktop(IApplicationView*, IVirtualDesktop*)`：
+    /// 三种布局的签名一致（不带 `HMONITOR`），所以下标 4 可以统一调用。
+    HRESULT(WINAPI *moveViewToDesktop)(void *, void *, void *);
     void *index5;
     HRESULT(WINAPI *getCurrentDesktop)(void *, void **);
     HRESULT(WINAPI *getDesktops)(void *, void **);
@@ -80,7 +117,7 @@ struct ManagerMonitorVtbl
     ULONG(WINAPI *addRef)(void *);
     ULONG(WINAPI *release)(void *);
     void *index3;
-    void *index4;
+    HRESULT(WINAPI *moveViewToDesktop)(void *, void *, void *);
     void *index5;
     HRESULT(WINAPI *getCurrentDesktop)(void *, void *, void **);
     HRESULT(WINAPI *getDesktops)(void *, void *, void **);
@@ -96,7 +133,7 @@ struct ManagerMonitorShiftedVtbl
     ULONG(WINAPI *addRef)(void *);
     ULONG(WINAPI *release)(void *);
     void *index3;
-    void *index4;
+    HRESULT(WINAPI *moveViewToDesktop)(void *, void *, void *);
     void *index5;
     HRESULT(WINAPI *getCurrentDesktop)(void *, void *, void **);
     void *index7;
@@ -214,6 +251,12 @@ public:
     /// 切到第 `index` 个桌面（从 1 开始）。
     bool goTo(std::uint32_t index, QString *detail, QString *error) const;
 
+    /// 把窗口移到第 `index` 个桌面（从 1 开始）。
+    bool moveWindowToDesktop(HWND hwnd, std::uint32_t index, QString *detail, QString *error) const;
+
+    /// 已公开的 `IVirtualDesktopManager::GetWindowDesktopId`（只读）。
+    std::optional<QString> windowDesktopId(HWND hwnd) const;
+
 private:
     bool currentDesktop(ComPtr *out, QString *error) const;
     bool getDesktops(ComPtr *out, QString *error) const;
@@ -221,6 +264,10 @@ private:
 
     const ApiEntry *m_api = nullptr;
     ComPtr m_manager;
+    /// 把 `HWND` 换成 `IApplicationView*` 的集合；拿不到时移动窗口不可用。
+    ComPtr m_viewCollection;
+    /// 已公开的 `IVirtualDesktopManager`；只用来读窗口在哪个桌面。
+    ComPtr m_publicManager;
 };
 
 bool Session::open(const ApiEntry &api, const WindowsVersion &version, QString *error)
@@ -261,6 +308,31 @@ bool Session::open(const ApiEntry &api, const WindowsVersion &version, QString *
     }
     m_manager = ComPtr(manager);
     m_api = &api;
+
+    // 移动窗口用的视图集合。拿不到时不让整个 Session 失败：切换桌面仍然可用，
+    // 只是 `window_rule` 的 `desktop` 会报一条 warning。
+    void *views = nullptr;
+    hr = vtableOf<IServiceProviderVtbl>(provider)->queryService(
+        provider, &kIidApplicationViewCollection, &kIidApplicationViewCollection, &views);
+    if (FAILED(hr) || views == nullptr) {
+        logWarn(QStringLiteral("IApplicationViewCollection is unavailable (%1); window rules "
+                               "cannot move windows between desktops")
+                    .arg(hresultText(hr)));
+    } else {
+        m_viewCollection = ComPtr(views);
+    }
+
+    // 已公开的那个管理器：只用来读窗口当前在哪个桌面（验证与诊断）。
+    void *publicManager = nullptr;
+    hr = CoCreateInstance(
+        kClsidVirtualDesktopManager, nullptr, CLSCTX_ALL, kIidVirtualDesktopManager, &publicManager);
+    if (SUCCEEDED(hr) && publicManager != nullptr) {
+        m_publicManager = ComPtr(publicManager);
+    } else {
+        logWarn(QStringLiteral("IVirtualDesktopManager is unavailable (%1); cannot verify "
+                               "window moves between desktops")
+                    .arg(hresultText(hr)));
+    }
     return true;
 }
 
@@ -460,6 +532,83 @@ bool Session::goTo(std::uint32_t index, QString *detail, QString *error) const
         *detail = QStringLiteral("desktop %1/%2").arg(index).arg(count);
     }
     return true;
+}
+
+bool Session::moveWindowToDesktop(HWND hwnd,
+                                  std::uint32_t index,
+                                  QString *detail,
+                                  QString *error) const
+{
+    if (m_viewCollection.get() == nullptr) {
+        if (error != nullptr) {
+            *error = QStringLiteral("the shell's IApplicationViewCollection is not available; "
+                                    "cannot move windows between desktops");
+        }
+        return false;
+    }
+    std::vector<ComPtr> desktops;
+    if (!enumerateDesktops(&desktops, error)) {
+        return false;
+    }
+    if (index == 0 || index > desktops.size()) {
+        if (error != nullptr) {
+            *error = QStringLiteral("desktop %1 does not exist (%2 desktop(s) on this machine)")
+                         .arg(index)
+                         .arg(desktops.size());
+        }
+        return false;
+    }
+
+    void *view = nullptr;
+    HRESULT hr = vtableOf<IApplicationViewCollectionVtbl>(m_viewCollection.get())
+                     ->getViewForHwnd(m_viewCollection.get(), hwnd, &view);
+    if (FAILED(hr) || view == nullptr) {
+        if (error != nullptr) {
+            *error = QStringLiteral("IApplicationViewCollection::GetViewForHwnd failed: %1")
+                         .arg(hresultText(hr));
+        }
+        return false;
+    }
+    ComPtr viewGuard(view);
+
+    void *object = m_manager.get();
+    void *desktop = desktops[static_cast<std::size_t>(index) - 1].get();
+    hr = E_FAIL;
+    switch (m_api->layout) {
+    case Layout::Plain:
+        hr = vtableOf<ManagerPlainVtbl>(object)->moveViewToDesktop(object, view, desktop);
+        break;
+    case Layout::Monitor:
+        hr = vtableOf<ManagerMonitorVtbl>(object)->moveViewToDesktop(object, view, desktop);
+        break;
+    case Layout::MonitorShifted:
+        hr = vtableOf<ManagerMonitorShiftedVtbl>(object)->moveViewToDesktop(object, view, desktop);
+        break;
+    }
+    if (FAILED(hr)) {
+        if (error != nullptr) {
+            *error = hresultMessage(hr, "IVirtualDesktopManagerInternal::MoveViewToDesktop");
+        }
+        return false;
+    }
+    if (detail != nullptr) {
+        *detail = QStringLiteral("desktop %1/%2").arg(index).arg(desktops.size());
+    }
+    return true;
+}
+
+std::optional<QString> Session::windowDesktopId(HWND hwnd) const
+{
+    if (m_publicManager.get() == nullptr) {
+        return std::nullopt;
+    }
+    GUID id{};
+    const HRESULT hr = vtableOf<IVirtualDesktopManagerVtbl>(m_publicManager.get())
+                           ->getWindowDesktopId(m_publicManager.get(), hwnd, &id);
+    if (FAILED(hr)) {
+        return std::nullopt;
+    }
+    return guidText(id);
 }
 
 // --- 系统版本 --------------------------------------------------------------
@@ -700,6 +849,130 @@ bool switchTo(std::uint32_t index, QString *detail, QString *error)
         *detail = localDetail;
     }
     return true;
+}
+
+bool moveWindowToDesktop(HWND hwnd, std::uint32_t index, QString *detail, QString *error)
+{
+    if (hwnd == nullptr || IsWindow(hwnd) == 0) {
+        if (error != nullptr) {
+            *error = QStringLiteral("the window is gone");
+        }
+        return false;
+    }
+    if (index == 0) {
+        if (error != nullptr) {
+            *error = QStringLiteral("desktop numbers start at 1");
+        }
+        return false;
+    }
+    QString localDetail;
+    QString localError;
+    bool ok = false;
+    inSta([&]() {
+        Apartment apartment;
+        if (!apartment.enter(&localError)) {
+            return;
+        }
+        const WindowsVersion version = windowsVersion();
+        const ApiEntry &api = apiFor(version.build, version.revision);
+        Session session;
+        if (!session.open(api, version, &localError)) {
+            return;
+        }
+        const std::optional<QString> before = session.windowDesktopId(hwnd);
+        ok = session.moveWindowToDesktop(hwnd, index, &localDetail, &localError);
+        if (ok) {
+            // 未公开的 `MoveViewToDesktop` 返回 S_OK 也可能什么都没发生；
+            // 用已公开的 `GetWindowDesktopId` 记一条 before -> after 便于诊断。
+            const std::optional<QString> after = session.windowDesktopId(hwnd);
+            logDebug(QStringLiteral("window desktop id %1 -> %2")
+                         .arg(before.value_or(QStringLiteral("?")),
+                              after.value_or(QStringLiteral("?"))));
+        }
+    });
+    if (!ok) {
+        if (error != nullptr) {
+            *error = localError.isEmpty()
+                         ? QStringLiteral("could not move the window to desktop %1").arg(index)
+                         : localError;
+        }
+        return false;
+    }
+    if (detail != nullptr) {
+        *detail = localDetail;
+    }
+    return true;
+}
+
+std::optional<bool> isWindowOnCurrentDesktop(HWND hwnd, QString *error)
+{
+    if (hwnd == nullptr || IsWindow(hwnd) == 0) {
+        if (error != nullptr) {
+            *error = QStringLiteral("the window is gone");
+        }
+        return std::nullopt;
+    }
+    std::optional<bool> result;
+    QString localError;
+    inSta([&]() {
+        Apartment apartment;
+        if (!apartment.enter(&localError)) {
+            return;
+        }
+        void *manager = nullptr;
+        const HRESULT hr = CoCreateInstance(
+            kClsidVirtualDesktopManager, nullptr, CLSCTX_ALL, kIidVirtualDesktopManager, &manager);
+        if (FAILED(hr) || manager == nullptr) {
+            localError = hresultMessage(hr, "CoCreateInstance(CLSID_VirtualDesktopManager)");
+            return;
+        }
+        ComPtr guard(manager);
+        BOOL onCurrent = FALSE;
+        const HRESULT query = vtableOf<IVirtualDesktopManagerVtbl>(manager)
+                                  ->isWindowOnCurrentVirtualDesktop(manager, hwnd, &onCurrent);
+        if (FAILED(query)) {
+            localError = hresultMessage(
+                query, "IVirtualDesktopManager::IsWindowOnCurrentVirtualDesktop");
+            return;
+        }
+        result = onCurrent != FALSE;
+    });
+    if (!result.has_value() && error != nullptr) {
+        *error = localError;
+    }
+    return result;
+}
+
+std::optional<QString> windowDesktopId(HWND hwnd, QString *error)
+{
+    if (hwnd == nullptr || IsWindow(hwnd) == 0) {
+        if (error != nullptr) {
+            *error = QStringLiteral("the window is gone");
+        }
+        return std::nullopt;
+    }
+    std::optional<QString> result;
+    QString localError;
+    inSta([&]() {
+        Apartment apartment;
+        if (!apartment.enter(&localError)) {
+            return;
+        }
+        const WindowsVersion version = windowsVersion();
+        const ApiEntry &api = apiFor(version.build, version.revision);
+        Session session;
+        if (!session.open(api, version, &localError)) {
+            return;
+        }
+        result = session.windowDesktopId(hwnd);
+        if (!result.has_value()) {
+            localError = QStringLiteral("could not read the desktop id of the window");
+        }
+    });
+    if (!result.has_value() && error != nullptr) {
+        *error = localError;
+    }
+    return result;
 }
 
 } // namespace flowkeyd::platform::win::desktop

@@ -276,6 +276,15 @@ std::optional<quint8> optU8(lua_State *L, int index, const char *field)
     return static_cast<quint8>(*value);
 }
 
+std::optional<qint32> optI32(lua_State *L, int index, const char *field)
+{
+    const auto value = optInteger(L, index, field, -2147483648LL, 2147483647LL, QStringLiteral("i32"));
+    if (!value.has_value()) {
+        return std::nullopt;
+    }
+    return static_cast<qint32>(*value);
+}
+
 // ---------------------------------------------------------------------------
 // 枚举字段
 // ---------------------------------------------------------------------------
@@ -418,6 +427,7 @@ core::Action convertAction(lua_State *L, int index);
 core::RepeatSpec convertRepeatSpec(lua_State *L, int index);
 core::LaunchSpec convertLaunchSpec(lua_State *L, int index);
 core::MenuItemDef convertMenuItem(lua_State *L, int index);
+core::MonitorRef convertMonitorRef(lua_State *L, int index);
 
 std::optional<core::ActionSpec> optActionSpec(lua_State *L, int index, const char *field)
 {
@@ -784,6 +794,61 @@ core::RemapDef convertRemap(lua_State *L, int index)
     return remap;
 }
 
+core::MonitorRef convertMonitorRef(lua_State *L, int index)
+{
+    core::MonitorRef ref;
+    if (lua_type(L, index) == LUA_TNUMBER && lua_isinteger(L, index)) {
+        const qint64 value = static_cast<qint64>(lua_tointeger(L, index));
+        if (value < 1 || value > 4294967295LL) {
+            fail(QStringLiteral("invalid value: integer `%1`, expected a monitor number >= 1")
+                     .arg(value));
+        }
+        ref.kind = core::MonitorRef::Kind::Index;
+        ref.index = static_cast<quint32>(value);
+        return ref;
+    }
+    if (lua_type(L, index) == LUA_TSTRING) {
+        const QString text = rawStringAt(L, index).trimmed();
+        if (text.isEmpty()) {
+            fail(QStringLiteral("`monitor` must not be empty"));
+        }
+        if (text.compare(QLatin1String("primary"), Qt::CaseInsensitive) == 0) {
+            ref.kind = core::MonitorRef::Kind::Primary;
+            return ref;
+        }
+        ref.kind = core::MonitorRef::Kind::Device;
+        ref.device = text;
+        return ref;
+    }
+    fail(QStringLiteral("invalid type: %1, expected a monitor number, \"primary\" or a device "
+                        "name like \"DISPLAY2\"")
+             .arg(luaTypeName(lua_type(L, index))));
+}
+
+core::WindowRuleDef convertWindowRule(lua_State *L, int index)
+{
+    checkFields(L, index,
+                {"name", "title", "process", "desktop", "monitor", "maximize", "x", "y",
+                 "width", "height", "enabled"});
+    core::WindowRuleDef rule;
+    rule.name = optString(L, index, "name");
+    rule.title = optString(L, index, "title");
+    rule.process = optString(L, index, "process");
+    rule.desktop = optU32(L, index, "desktop");
+    rule.maximize = optBool(L, index, "maximize");
+    rule.x = optI32(L, index, "x");
+    rule.y = optI32(L, index, "y");
+    rule.width = optU32(L, index, "width");
+    rule.height = optU32(L, index, "height");
+    rule.enabled = optBool(L, index, "enabled").value_or(true);
+    int monitor = 0;
+    if (pushField(L, index, "monitor", &monitor)) {
+        rule.monitor = convertMonitorRef(L, monitor);
+        lua_pop(L, 1);
+    }
+    return rule;
+}
+
 // ---------------------------------------------------------------------------
 // 混合表检查
 // ---------------------------------------------------------------------------
@@ -915,9 +980,10 @@ std::optional<core::ConfigError> evaluate(const QString &text, const QString &pa
     } guard{L};
     luaL_openlibs(L);
 
-    // DSL 注册表：settings / hotkeys / remaps 三个列表，只作为参数传给预置脚本。
-    lua_createtable(L, 0, 3);
-    for (const char *name : {"settings", "hotkeys", "remaps"}) {
+    // DSL 注册表：settings / hotkeys / remaps / window_rules 四个列表，
+    // 只作为参数传给预置脚本。
+    lua_createtable(L, 0, 4);
+    for (const char *name : {"settings", "hotkeys", "remaps", "window_rules"}) {
         lua_newtable(L);
         lua_setfield(L, -2, name);
     }
@@ -1042,6 +1108,14 @@ std::optional<core::ConfigError> evaluate(const QString &text, const QString &pa
             errors.append(QStringLiteral("%1: %2").arg(label, error.message));
         }
     });
+    convertEntries("window_rules", "window_rule",
+                   [&](int tableIndex, std::size_t, const QString &label) {
+                       try {
+                           config.windowRules.push_back(convertWindowRule(L, tableIndex));
+                       } catch (const ConvError &error) {
+                           errors.append(QStringLiteral("%1: %2").arg(label, error.message));
+                       }
+                   });
 
     // ---- 脚本 `return` 的那张表（排在脚本体注册的条目之后） ----
     if (returnedIndex != 0 && !lua_isnil(L, returnedIndex)) {
@@ -1059,7 +1133,7 @@ std::optional<core::ConfigError> evaluate(const QString &text, const QString &pa
                 if (lua_type(L, -2) != LUA_TSTRING) {
                     errors.append(QStringLiteral(
                                       "the returned table only takes the named fields `settings`, "
-                                      "`hotkeys` and `remaps`, found a %1 key")
+                                      "`hotkeys`, `remaps` and `window_rules`, found a %1 key")
                                       .arg(luaTypeName(lua_type(L, -2))));
                     lua_settop(L, loopBase + 1);
                     continue;
@@ -1068,31 +1142,34 @@ std::optional<core::ConfigError> evaluate(const QString &text, const QString &pa
                 const int valueIndex = lua_gettop(L);
                 if (key == QLatin1String("settings")) {
                     // 已经在上面处理过了。
-                } else if (key == QLatin1String("hotkeys") || key == QLatin1String("remaps")) {
+                } else if (key == QLatin1String("hotkeys") || key == QLatin1String("remaps")
+                           || key == QLatin1String("window_rules")) {
                     const bool isHotkeys = key == QLatin1String("hotkeys");
+                    const bool isRemaps = key == QLatin1String("remaps");
                     const QString what =
                         QStringLiteral("the returned `%1`").arg(key);
                     try {
                         const QVector<int> tables = readTableList(L, valueIndex, what);
                         for (int tableIndex : tables) {
                             const std::size_t position =
-                                isHotkeys ? config.hotkeys.size() : config.remaps.size();
-                            const QString label =
-                                entryLabel(L, tableIndex, position, isHotkeys ? "hotkey" : "remap");
+                                isHotkeys ? config.hotkeys.size()
+                                          : (isRemaps ? config.remaps.size()
+                                                      : config.windowRules.size());
+                            const QString label = entryLabel(
+                                L, tableIndex, position,
+                                isHotkeys ? "hotkey" : (isRemaps ? "remap" : "window_rule"));
                             QVector<const void *> seen;
                             checkMixedTables(L, tableIndex, label, &seen, &errors);
-                            if (isHotkeys) {
-                                try {
+                            try {
+                                if (isHotkeys) {
                                     config.hotkeys.push_back(convertHotkey(L, tableIndex));
-                                } catch (const ConvError &error) {
-                                    errors.append(QStringLiteral("%1: %2").arg(label, error.message));
-                                }
-                            } else {
-                                try {
+                                } else if (isRemaps) {
                                     config.remaps.push_back(convertRemap(L, tableIndex));
-                                } catch (const ConvError &error) {
-                                    errors.append(QStringLiteral("%1: %2").arg(label, error.message));
+                                } else {
+                                    config.windowRules.push_back(convertWindowRule(L, tableIndex));
                                 }
+                            } catch (const ConvError &error) {
+                                errors.append(QStringLiteral("%1: %2").arg(label, error.message));
                             }
                         }
                     } catch (const ConvError &error) {
@@ -1101,7 +1178,7 @@ std::optional<core::ConfigError> evaluate(const QString &text, const QString &pa
                 } else {
                     errors.append(QStringLiteral(
                                       "unknown field `%1` in the returned table, expected `settings`, "
-                                      "`hotkeys` or `remaps`")
+                                      "`hotkeys`, `remaps` or `window_rules`")
                                       .arg(key));
                 }
                 lua_settop(L, loopBase + 1);

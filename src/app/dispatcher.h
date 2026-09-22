@@ -9,6 +9,7 @@
 
 #include "core/config.h"
 #include "core/engine.h"
+#include "platform/win/hook.h"
 
 #include <QObject>
 #include <QString>
@@ -42,11 +43,17 @@ public:
                        QString name,
                        std::vector<core::Action> actions);
 
+    /// 线程安全：窗口出现 / 显示器重新接入 / 启动时按 `window_rule` 归位。
+    void submitPlacement(std::shared_ptr<const core::Compiled> config,
+                         platform::win::PlacementEvent event);
+
 private:
     void execute(const std::shared_ptr<const core::Compiled> &config, const core::Trigger &trigger);
     void runActions(const std::shared_ptr<const core::Compiled> &config,
                     const QString &name,
                     const std::vector<core::Action> &actions);
+    void applyPlacementRules(const std::shared_ptr<const core::Compiled> &config,
+                             const platform::win::PlacementEvent &event);
 
     Runtime *m_runtime = nullptr;
 };

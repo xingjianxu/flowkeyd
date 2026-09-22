@@ -3,6 +3,7 @@
 #include "app/popup_host.h"
 #include "app/runtime.h"
 #include "core/keys.h"
+#include "core/placement.h"
 #include "core/template.h"
 #include "core/window_match.h"
 #include "platform/win/audio.h"
@@ -11,6 +12,7 @@
 #include "platform/win/hook.h"
 #include "platform/win/input.h"
 #include "platform/win/logging.h"
+#include "platform/win/monitor.h"
 #include "platform/win/power.h"
 #include "platform/win/process.h"
 #include "platform/win/window.h"
@@ -452,6 +454,139 @@ void executeWindowAction(ExpandContext &ctx,
     win::logError(QStringLiteral("`%1` window: %2").arg(hotkey, win::window::missing(query)));
 }
 
+/// `window_rule` 里第一条命中这个窗口的规则。
+const core::WindowRule *firstWindowRule(const core::Compiled &config,
+                                        const QString &title,
+                                        const std::optional<QString> &process)
+{
+    for (const core::WindowRule &rule : config.windowRules) {
+        if (core::windowMatchesRule(rule, title, process)) {
+            return &rule;
+        }
+    }
+    return nullptr;
+}
+
+/// 窗口类名，只用于日志诊断。
+QString windowClassName(HWND hwnd)
+{
+    wchar_t buffer[256];
+    const int length = GetClassNameW(hwnd, buffer, static_cast<int>(std::size(buffer)));
+    if (length <= 0) {
+        return QStringLiteral("<unknown>");
+    }
+    return QString::fromWCharArray(buffer, length);
+}
+
+/// 这个窗口是不是 `window_rule` 该摆的“主窗口”。
+///
+/// 与 `window` 动作的前置过滤一致（可见、没有属主），再多三条：**工具窗口**
+/// （`WS_EX_TOOLWINDOW`，不出现在任务栏）、**0 尺寸**窗口、以及**没有标题**的
+/// 窗口（很多应用会拿它当消息汇 / 渲染宿主）。按 `process` 匹配时这些会一大堆，
+/// 真正的主窗口至少会写个标题。
+bool isPlaceableWindow(HWND hwnd)
+{
+    if (IsWindow(hwnd) == 0 || IsWindowVisible(hwnd) == 0) {
+        return false;
+    }
+    if (GetWindow(hwnd, GW_OWNER) != nullptr) {
+        return false;
+    }
+    if ((GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) != 0) {
+        return false;
+    }
+    if (GetWindowTextLengthW(hwnd) <= 0) {
+        return false;
+    }
+    RECT rect{};
+    if (GetWindowRect(hwnd, &rect) == 0) {
+        return false;
+    }
+    return rect.right > rect.left && rect.bottom > rect.top;
+}
+
+/// 按 `window_rule` 摆放一个窗口。
+///
+/// 只在三个时机被调用（窗口出现 / 显示器重新接入 / 启动），**之后不再干预**：
+/// 用户自己移动或缩放窗口不会被纠正。
+void placeWindowOnce(const std::shared_ptr<const core::Compiled> &config, HWND hwnd)
+{
+    if (!config || config->windowRules.empty()) {
+        return;
+    }
+    if (!isPlaceableWindow(hwnd)) {
+        return;
+    }
+    // 不碰 flowkeyd 自己的窗口（选单 / 帮助 / 日志）。
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hwnd, &pid);
+    if (pid == GetCurrentProcessId()) {
+        return;
+    }
+
+    const QString title = win::window::windowTitle(hwnd);
+    const std::optional<QString> process = win::window::processName(hwnd);
+    const core::WindowRule *rule = firstWindowRule(*config, title, process);
+    if (rule == nullptr) {
+        return;
+    }
+
+    QStringList done;
+    if (rule->desktop.has_value()) {
+        QString detail;
+        QString error;
+        if (!win::desktop::moveWindowToDesktop(hwnd, *rule->desktop, &detail, &error)) {
+            win::logWarn(QStringLiteral("window rule `%1`: %2: %3")
+                             .arg(rule->name, core::rustDebug(title), error));
+        } else {
+            done.append(detail);
+        }
+    }
+
+    if (rule->applyGeometry) {
+        const std::vector<core::MonitorDescription> monitors =
+            core::sortedMonitors(win::monitor::list());
+        std::optional<std::size_t> index;
+        if (rule->monitor.has_value()) {
+            index = core::selectMonitor(monitors, *rule->monitor);
+        } else {
+            index = win::monitor::indexForWindow(monitors, hwnd);
+        }
+        if (!index.has_value()) {
+            win::logWarn(QStringLiteral("window rule `%1`: no monitor matches %2; leaving %3 where it is")
+                             .arg(rule->name,
+                                  rule->monitor.has_value()
+                                      ? rule->monitor->describe()
+                                      : QStringLiteral("the current monitor"),
+                                  core::rustDebug(title)));
+        } else {
+            const core::Rect current =
+                win::monitor::windowRect(hwnd).value_or(core::Rect{0, 0, 800, 600});
+            const core::Rect rect = core::placementRect(current, monitors[*index], rule->maximize,
+                                                        rule->x, rule->y, rule->width, rule->height);
+            QString error;
+            if (!win::monitor::applyPlacement(hwnd, rect, rule->maximize, &error)) {
+                win::logWarn(QStringLiteral("window rule `%1`: %2: %3")
+                                 .arg(rule->name, core::rustDebug(title), error));
+            } else {
+                done.append(QStringLiteral("%1 %2x%3 at %4,%5")
+                                .arg(rule->maximize ? QStringLiteral("maximized")
+                                                    : QStringLiteral("placed"),
+                                     QString::number(rect.width),
+                                     QString::number(rect.height),
+                                     QString::number(rect.x),
+                                     QString::number(rect.y)));
+            }
+        }
+    }
+
+    if (!done.isEmpty()) {
+        win::logInfo(QStringLiteral("window rule `%1` -> %2 [%3]: %4")
+                         .arg(rule->name, core::rustDebug(title), windowClassName(hwnd),
+                              done.join(QStringLiteral(", "))));
+    }
+}
+
 void executeClipboardAction(ExpandContext &ctx,
                             const core::Action &action,
                             const QString &hotkey)
@@ -754,6 +889,43 @@ void Dispatcher::submitActions(std::shared_ptr<const core::Compiled> config,
             runActions(config, name, actions);
         },
         Qt::QueuedConnection);
+}
+
+void Dispatcher::submitPlacement(std::shared_ptr<const core::Compiled> config,
+                                 win::PlacementEvent event)
+{
+    QMetaObject::invokeMethod(
+        this,
+        [this, config = std::move(config), event = std::move(event)]() {
+            applyPlacementRules(config, event);
+        },
+        Qt::QueuedConnection);
+}
+
+void Dispatcher::applyPlacementRules(const std::shared_ptr<const core::Compiled> &config,
+                                     const win::PlacementEvent &event)
+{
+    if (!config || config->windowRules.empty()) {
+        return;
+    }
+    if (event.kind == win::PlacementEvent::Kind::WindowsShown) {
+        win::logDebug(QStringLiteral("window rules: checking %1 shown window(s)")
+                          .arg(event.windows.size()));
+        for (HWND hwnd : event.windows) {
+            placeWindowOnce(config, hwnd);
+        }
+        return;
+    }
+    const std::vector<HWND> windows = win::window::topLevelWindows();
+    win::logInfo(
+        QStringLiteral("window rules: %1 (%2 window(s) to check)")
+            .arg(event.kind == win::PlacementEvent::Kind::Startup
+                     ? QStringLiteral("applying at startup")
+                     : QStringLiteral("re-applying after a monitor reconnected"))
+            .arg(windows.size()));
+    for (HWND hwnd : windows) {
+        placeWindowOnce(config, hwnd);
+    }
 }
 
 void Dispatcher::execute(const std::shared_ptr<const core::Compiled> &config,

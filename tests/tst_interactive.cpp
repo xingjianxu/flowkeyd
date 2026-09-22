@@ -21,12 +21,14 @@
 
 #include "core/action.h"
 #include "core/keys.h"
+#include "core/placement.h"
 #include "platform/win/audio.h"
 #include "platform/win/clipboard.h"
 #include "platform/win/desktop.h"
 #include "platform/win/dwm.h"
 #include "platform/win/ffi.h"
 #include "platform/win/input.h"
+#include "platform/win/monitor.h"
 #include "platform/win/process.h"
 #include "platform/win/window.h"
 
@@ -51,6 +53,8 @@ private slots:
     void windowBackendLaunchesActivatesAndCloses();
     void copySelectionCopiesTheFocusedSelection();
     void desktopBackendProbesAndSwitches();
+    void moveWindowToAnotherDesktopAndBack();
+    void placementMovesAWindowToAnotherMonitor();
 };
 
 void TestInteractive::clipboardRoundTrip()
@@ -292,6 +296,188 @@ void TestInteractive::desktopBackendProbesAndSwitches()
 
     // 切回原来的桌面，别把用户留在别处。
     QVERIFY2(platform::win::desktop::switchTo(snapshot.current, &detail, &error), qPrintable(error));
+}
+
+/// `window_rule` 的虚拟桌面部分：把一个真实窗口移到另一个桌面，再移回来。
+///
+/// 用**已公开**的 `IsWindowOnCurrentVirtualDesktop` 从外面确认它真的走了 ——
+/// `MoveViewToDesktop` 是未公开接口，只有这个才能证明 vtable 下标没选错。
+void TestInteractive::moveWindowToAnotherDesktopAndBack()
+{
+    if (!interactiveEnabled()) {
+        QSKIP("set FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1 to run the interactive tests");
+    }
+    QString error;
+    platform::win::desktop::Snapshot snapshot;
+    QVERIFY2(platform::win::desktop::probe(&snapshot, &error), qPrintable(error));
+    if (snapshot.count < 2) {
+        QSKIP("only one virtual desktop exists; nothing to move a window to");
+    }
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString marker =
+        QStringLiteral("flowkeyd-place-%1").arg(QCoreApplication::applicationPid());
+    const QString file = dir.filePath(marker + QStringLiteral(".txt"));
+    {
+        QFile handle(file);
+        QVERIFY(handle.open(QIODevice::WriteOnly));
+        handle.write("place\n");
+    }
+    platform::win::RunCommandSpec spec;
+    spec.program = QStringLiteral("notepad.exe");
+    spec.args << QDir::toNativeSeparators(file);
+    QString detail;
+    QVERIFY2(platform::win::runCommand(spec, &detail, &error), qPrintable(error));
+
+    const core::WindowQuery query =
+        core::WindowQuery::make(std::optional<QString>(marker), std::nullopt);
+    HWND hwnd = nullptr;
+    for (int i = 0; i < 120 && hwnd == nullptr; ++i) {
+        hwnd = platform::win::window::find(query);
+        if (hwnd == nullptr) {
+            QThread::msleep(50);
+        }
+    }
+    QVERIFY2(hwnd != nullptr, "the launched Notepad window never appeared");
+
+    const auto before = platform::win::desktop::isWindowOnCurrentDesktop(hwnd, &error);
+    QVERIFY2(before.has_value(), qPrintable(error));
+    QVERIFY2(*before, "the freshly launched window is not on the current desktop");
+    const auto beforeId = platform::win::desktop::windowDesktopId(hwnd, &error);
+    QVERIFY2(beforeId.has_value(), qPrintable(error));
+
+    const std::uint32_t other = snapshot.current == 1 ? 2 : 1;
+    QVERIFY2(platform::win::desktop::moveWindowToDesktop(hwnd, other, &detail, &error),
+             qPrintable(error));
+    QVERIFY(!detail.isEmpty());
+
+    // 未公开的 `MoveViewToDesktop` 返回 S_OK 也可能什么都没发生：用已公开的
+    // `GetWindowDesktopId` 确认桌面的 GUID 真的换了。
+    std::optional<QString> afterId;
+    for (int i = 0; i < 60; ++i) {
+        afterId = platform::win::desktop::windowDesktopId(hwnd, &error);
+        QVERIFY2(afterId.has_value(), qPrintable(error));
+        if (*afterId != *beforeId) {
+            break;
+        }
+        QThread::msleep(50);
+    }
+    QVERIFY2(afterId.has_value() && *afterId != *beforeId,
+             "the window's desktop id did not change after moveWindowToDesktop");
+
+    bool left = false;
+    for (int i = 0; i < 60 && !left; ++i) {
+        const auto onCurrent = platform::win::desktop::isWindowOnCurrentDesktop(hwnd, &error);
+        QVERIFY2(onCurrent.has_value(), qPrintable(error));
+        left = !*onCurrent;
+        if (!left) {
+            QThread::msleep(50);
+        }
+    }
+    QVERIFY2(left, "the window did not leave the current desktop");
+
+    // 移回当前桌面：别给用户留下一个跑到别的桌面上的窗口。
+    QVERIFY2(platform::win::desktop::moveWindowToDesktop(hwnd, snapshot.current, &detail, &error),
+             qPrintable(error));
+    bool back = false;
+    for (int i = 0; i < 60 && !back; ++i) {
+        const auto onCurrent = platform::win::desktop::isWindowOnCurrentDesktop(hwnd, &error);
+        QVERIFY2(onCurrent.has_value(), qPrintable(error));
+        back = *onCurrent;
+        if (!back) {
+            QThread::msleep(50);
+        }
+    }
+    QVERIFY2(back, "the window did not come back to the current desktop");
+
+    // 移回来之后 GUID 也应该回到原值。
+    const auto backId = platform::win::desktop::windowDesktopId(hwnd, &error);
+    QVERIFY2(backId.has_value(), qPrintable(error));
+    QCOMPARE(*backId, *beforeId);
+
+    (void)platform::win::window::applyTo(hwnd, core::WindowOp::Close, false, &detail, &error);
+}
+
+/// `window_rule` 的显示器部分：把窗口摆到另一块显示器并最大化，再还原。
+void TestInteractive::placementMovesAWindowToAnotherMonitor()
+{
+    if (!interactiveEnabled()) {
+        QSKIP("set FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1 to run the interactive tests");
+    }
+    const std::vector<core::MonitorDescription> monitors =
+        core::sortedMonitors(platform::win::monitor::list());
+    if (monitors.size() < 2) {
+        QSKIP("only one monitor is connected; nothing to move a window to");
+    }
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString marker =
+        QStringLiteral("flowkeyd-mon-%1").arg(QCoreApplication::applicationPid());
+    const QString file = dir.filePath(marker + QStringLiteral(".txt"));
+    {
+        QFile handle(file);
+        QVERIFY(handle.open(QIODevice::WriteOnly));
+        handle.write("monitor\n");
+    }
+    platform::win::RunCommandSpec spec;
+    spec.program = QStringLiteral("notepad.exe");
+    spec.args << QDir::toNativeSeparators(file);
+    QString detail;
+    QString error;
+    QVERIFY2(platform::win::runCommand(spec, &detail, &error), qPrintable(error));
+
+    const core::WindowQuery query =
+        core::WindowQuery::make(std::optional<QString>(marker), std::nullopt);
+    HWND hwnd = nullptr;
+    for (int i = 0; i < 120 && hwnd == nullptr; ++i) {
+        hwnd = platform::win::window::find(query);
+        if (hwnd == nullptr) {
+            QThread::msleep(50);
+        }
+    }
+    QVERIFY2(hwnd != nullptr, "the launched Notepad window never appeared");
+
+    // 挑一块和窗口当前所在不同的显示器。
+    const auto currentIndex = platform::win::monitor::indexForWindow(monitors, hwnd);
+    QVERIFY(currentIndex.has_value());
+    const std::size_t targetIndex = *currentIndex == 0 ? monitors.size() - 1 : 0;
+    const core::MonitorDescription &target = monitors[targetIndex];
+
+    const core::Rect current =
+        platform::win::monitor::windowRect(hwnd).value_or(core::Rect{0, 0, 800, 600});
+    const core::Rect maximized = core::placementRect(current, target, true, std::nullopt,
+                                                     std::nullopt, std::nullopt, std::nullopt);
+    QCOMPARE(maximized.width, target.work.width);
+    QVERIFY2(platform::win::monitor::applyPlacement(hwnd, maximized, true, &error),
+             qPrintable(error));
+
+    bool placed = false;
+    for (int i = 0; i < 60 && !placed; ++i) {
+        const auto index = platform::win::monitor::indexForWindow(monitors, hwnd);
+        placed = index.has_value() && *index == targetIndex && IsZoomed(hwnd) != 0;
+        if (!placed) {
+            QThread::msleep(50);
+        }
+    }
+    QVERIFY2(placed, "the window did not end up maximized on the target monitor");
+
+    // 还原成普通窗口：仍应在目标显示器上，但不再是最大化。
+    const core::Rect restored{target.work.x + 40, target.work.y + 40, 800, 600};
+    QVERIFY2(platform::win::monitor::applyPlacement(hwnd, restored, false, &error),
+             qPrintable(error));
+    bool normal = false;
+    for (int i = 0; i < 60 && !normal; ++i) {
+        const auto index = platform::win::monitor::indexForWindow(monitors, hwnd);
+        normal = index.has_value() && *index == targetIndex && IsZoomed(hwnd) == 0;
+        if (!normal) {
+            QThread::msleep(50);
+        }
+    }
+    QVERIFY2(normal, "the window did not go back to a normal window on the target monitor");
+
+    (void)platform::win::window::applyTo(hwnd, core::WindowOp::Close, false, &detail, &error);
 }
 
 QTEST_MAIN(TestInteractive)
