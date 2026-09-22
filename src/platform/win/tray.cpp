@@ -8,9 +8,14 @@
 
 namespace flowkeyd::platform::win {
 
-Tray::Tray(QObject *parent) : QObject(parent)
+Tray::Tray(const QIcon &icon, QObject *parent) : QObject(parent)
 {
-    m_icon = new QSystemTrayIcon(QApplication::style()->standardIcon(QStyle::SP_ComputerIcon), this);
+    m_icon = new QSystemTrayIcon(icon, this);
+    if (m_icon->icon().isNull()) {
+        // 应用图标的资源没能加载（正常不会发生）：退回系统图标，
+        // 总比托盘上什么都没有强。
+        m_icon->setIcon(QApplication::style()->standardIcon(QStyle::SP_ComputerIcon));
+    }
     m_buildVersion = QStringLiteral("unknown");
     updateToolTip();
 

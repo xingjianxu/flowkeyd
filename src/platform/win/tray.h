@@ -7,6 +7,7 @@
 // 悬停提示显示构建版本与挂起状态，气泡提示用于 `notify` 动作与错误报告。
 #pragma once
 
+#include <QIcon>
 #include <QObject>
 #include <QString>
 
@@ -21,7 +22,9 @@ class Tray : public QObject
     Q_OBJECT
 
 public:
-    explicit Tray(QObject *parent = nullptr);
+    /// `icon` 是托盘图标（应用图标，见 `app/app_icon.h`）；传空 QIcon 时退回
+    /// 系统图标，不会留下一个看不见的托盘图标。
+    explicit Tray(const QIcon &icon, QObject *parent = nullptr);
 
     void show();
     /// 悬停提示与「挂起/恢复」菜单项跟着引擎状态走。

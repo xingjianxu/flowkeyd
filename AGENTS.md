@@ -345,6 +345,11 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `cmake/VendorLua.cmake`                   | 把 `vendor/lua` 编成静态库 `lua_static`（排除 `lua.c`/`luac.c`/`onelua.c`/`ltests.c`，定义 `LUA_USE_WINDOWS`）                                                                                                              |
 | `flowkeyd.lua.example`                    | 有文档、覆盖全部特性的参考配置（中文注释、无警告），`--check` 就是拿它跑的                                                                                                                                                  |
 | `README.md`                               | 用户文档（中文，含完整配置/动作/schema 说明），是配置 schema 的权威定义                                                                                                                                                      |
+| `logo.svg`                                | **应用图标的美术源**（仓库根目录，唯一的真源）。它不被任何构建步骤读取，只在改图标时被 `tools/icon_gen` 光栅化（见第 10 节）                                                                                                |
+| `assets/flowkeyd.ico`                     | **exe 的 Windows 图标资源**（9 帧：16–64 为 DIB，128/256 为 PNG），由 windres 通过配置时生成的 `assets/flowkeyd.rc.in` 嵌进 exe。改了 `logo.svg` 要重新生成：`cmake --build --preset debug --target icons`。**要提交** |
+| `assets/icons/flowkeyd-<n>.png`           | 运行时 `QIcon` 的 9 个尺寸（16/20/24/32/40/48/64/128/256），编在 exe 自己的 qrc 里（`:/icons/…`，见 `src/app/app_icon.*`）。**要提交**                                        |
+| `assets/flowkeyd.rc.in`                   | 图标资源的 .rc 模板（`*.rc` 在 `.gitignore` 里，所以模板后缀是 `.in`）：CMake 在配置时把它展开成 `build/<preset>/generated/flowkeyd.rc`，`.ico` 写**绝对路径**（windres 不把 `ICON` 的相对路径当相对 .rc 文件）。纯 ASCII |
+| `tools/icon_gen/main.cpp`                 | 一次性工具（`flowkeyd_icon_gen` + `icons` 目标，`EXCLUDE_FROM_ALL`，需要 Qt6::Svg）：把 `logo.svg` 光栅化成上面那两个产物。两条 profile 的正常构建都不碰它（见第 10 节）
 | `src/main.cpp`                            | `AttachConsole` + CLI 分发 + 日志初始化 + **提权之前的单实例预检（“已在运行”原生提示框）** + 开机自启的确认框 + 组装 Runtime + Qt 事件循环                                                                                                                                               |
 | `src/cli.h/.cpp`                          | 参数解析 + 中文帮助文本（手写，不用 CLI11）；`--quit` 走单独的早期分支：不装钩子、不提权，也不在 `isOfflineCommand()` 里（它确实要去碰另一个进程）；`helpText()`/`versionText()` 都接收 `core::buildVersion()` 给出的构建版本号                                                                                                                                                                                 |
 | `src/core/`                               | **纯逻辑层：不碰 Win32、不碰 Qt GUI**（只用 QtCore 的类型），因此能被 Qt Test 直接测                                                                                                                                        |
@@ -369,12 +374,13 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `src/platform/win/window.h/.cpp`          | 窗口查找（标题子串/可执行文件名）、激活/最小化/最大化/还原/关闭/置顶、前台锁绕行、启动回退、`TransitionGuard`（RAII 恢复动画开关）                                                                                          |
 | `src/platform/win/desktop.h/.cpp`         | 虚拟桌面切换：`CLSID_ImmersiveShell` → `IServiceProvider::QueryService` → 未公开的 `IVirtualDesktopManagerInternal`，按 `build.revision` 查表                                                                               |
 | `src/platform/win/power.h/.cpp`           | `powrprof!SetSuspendState`、`user32!ExitWindowsEx`、`LockWorkStation`、`WM_SYSCOMMAND`/`SC_MONITORPOWER` 广播，外加 `SeShutdownPrivilege`                                                                                   |
-| `src/platform/win/tray.h/.cpp`            | 托盘图标 + 气泡提示 + 右键菜单（查看日志/挂起/重载/打开配置/版本/退出）+ 悬停提示（构建版本 + 挂起状态）                                                                                                                                                |
+| `src/platform/win/tray.h/.cpp`            | 托盘图标 + 气泡提示 + 右键菜单（查看日志/挂起/重载/打开配置/版本/退出）+ 悬停提示（构建版本 + 挂起状态）。图标是构造时传进来的应用图标（`app::applicationIcon()`，见 `app/app_icon.*`）；拿不到时退回系统图标，免得托盘上什么都没有 |
 | `src/platform/win/logging.h/.cpp`         | 控制台/文件日志器（英文、分级别、可选 ANSI 颜色），`--log-level`/`--log-file`/`--no-color`                                                                                                                                  |
 | `src/platform/win/single_instance.h/.cpp` | 按配置路径散列命名的互斥体（含提权重启后的重试）；`instanceRunning`（`OpenMutexW`，不获取所有权，**提权之前**的「已在运行」检查）；**`--quit` 的命名事件通道**：`quitEventName`/`createQuitEvent`（带 Low 完整性标签的 SDDL，让不提权的调用方也能 `SetEvent`）/`requestQuit`/`quitEventExists` |
 | `src/platform/win/elevate.h/.cpp`         | `ShellExecuteW("runas")` 自提权 + UAC 被拒时降级继续 + `--elevated` 标记 + 命令行/工作目录转发（`quote_arg`）                                                                                                               |
 | `src/platform/win/autostart.h/.cpp`       | 开机自启的计划任务：`buildTaskXml`/`taskXmlCommand`/`decodeTaskOutput`/`sameExecutablePath` 是**纯函数**（可单测），`query/register/removeAutostartTask` 走隐藏的 `schtasks.exe /Create /XML`，`ensureAutostart(spec, confirm)` 是启动时的“缺失或指向别的 exe 就**先问用户、同意后**刷新成当前路径”策略（`confirm` 为空表示不问）。**不写任何安装目录**（见第 2 节第 10 条与第 10 节） |
 | `src/app/`                                | 组装层：把 core / lua / platform 串起来，并拥有 Qt 对象                                                                                                                                                                     |
+| `src/app/app_icon.h/.cpp`                 | 应用图标：把 qrc 里的 9 张 PNG 帧拼成一个多尺寸 `QIcon`（`applicationIcon()`），托盘、全部 QML 窗口与 Qt 消息框都用它。用 PNG 而不用 SVG 是为了不依赖 `Qt6Svg` 与 `imageformats/qsvg` 插件（见第 10 节） |
 | `src/app/dispatcher.h/.cpp`               | **动作工作线程**（`QThread`）：执行动作列表，含 `window` 的“先启动再激活”与默认开的 `toggle` 收起、`menu` 的窗口请求、`help` 的窗口请求 + 每一行的“执行目标”（绑定是 press+release 两串动作，`remap` 是直接注入目标按键） |
 | `src/app/runtime.h/.cpp`                  | 引擎 + 钩子 + 分发 + 托盘 + 弹窗的总装，`ControlCmd`（suspend/reload/quit）通道；还持有 `--quit` 的事件句柄并用 `QWinEventNotifier` 在 GUI 线程上监听（收到就走 `performShutdown`）                                                       |
 | `src/app/log_model.h/.cpp`                | 日志窗口的模型：尾随日志文件（增量、半行、被截断的多字节 UTF-8）、最多 1000 行、按级别配色、子串过滤                                                                                                                        |
@@ -397,7 +403,8 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `flowkeyd_lua`     | `src/lua/*` + 编成 qrc 的 `lua_prelude.lua`                        | exe + `tst_lua`           |
 | `flowkeyd_models`  | `src/app/{menu,help}_model.*` + `src/app/popup_layout.*`（纯逻辑，只用 QtCore） | exe + `tst_menu_model`/`tst_help_model` |
 | `flowkeyd_platform`| `src/platform/win/*`（不碰 Qt GUI的 Win32 后端）                    | exe + 平台层单测           |
-| `flowkeyd`         | `src/main.cpp`、`src/cli.*`、`src/app/*`、`src/platform/win/tray.*`、QML | ——                        |
+| `flowkeyd`         | `src/main.cpp`、`src/cli.*`、`src/app/*`、`src/platform/win/tray.*`、QML、**图标 qrc（`:/icons`）+ 图标 .rc** | ——                        |
+| `flowkeyd_icon_gen`| `tools/icon_gen/main.cpp`（把 `logo.svg` 光栅化成 `assets/` 下的 .ico 与 PNG；**`EXCLUDE_FROM_ALL`**，只由 `icons` 目标手工构建） | ——（不进任何产物）        |
 
 > `src/app/popup_host.*` 用 QML/QtQuick，所以**不进** `flowkeyd_models`，留在 exe 里；
 > 模型层只有 QtCore，这样 `tst_menu_model`/`tst_help_model` 能在没有桌面的情况下跑。
@@ -2537,6 +2544,65 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   `Get-Process` 仍可能看得到它。可靠的判据是 stdio 里那句
   `flowkeyd: <path> exited`（退出码 0）加稍后为空。
 
+#### 2026-09 新增：应用图标（`logo.svg` → exe 资源 + 托盘）
+
+* **需求**（项目所有者）：把仓库根目录的 `logo.svg` 用到两处：**exe 的图标**
+  （资源管理器 / 任务栏 / 快捷方式看到的）与**系统托盘里的图标**。
+  此前托盘用的是 `QStyle::SP_ComputerIcon` 那个系统图标。
+* **两处用的是两份不同的东西**，别混：
+  1. **exe 图标**只认 Windows 资源——`.ico` 经 `windres` 嵌进 PE（`IMAGERESOURCE`）。
+     Qt 那套 `QIcon`/qrc 对资源管理器**毫无影响**（双击 exe 看到的还是默认图标）。
+     实现在 `assets/flowkeyd.ico` + `CMakeLists.txt` 里配置时生成的 `flowkeyd.rc`
+     （模板 `assets/flowkeyd.rc.in`）：`enable_language(RC)` 后把生成的 .rc 当作
+     `qt_add_executable` 的一个源文件，windres 就会把它编进去并链接。
+  2. **托盘图标**是 `QSystemTrayIcon` 拿的 `QIcon`，来自 exe **自己的 qrc**
+     （`qt_add_resources(flowkeyd "app_icons" …)` + `src/app/app_icon.cpp` 把 9 张
+     PNG 拼成一个多尺寸 `QIcon`）。同一个 `QIcon` 也给了 `QApplication::setWindowIcon()`，
+     于是日志/选单/帮助窗口与配置错误的消息框都跟着它。
+* **`.rc` 里写的是绝对路径**：windres 解析 `ICON "..."` 的相对路径既不是相对 .rc
+  文件、也不保证相对源码目录（取决于生成器给的工作目录），相对路径会在某些构建
+  目录下突然找不到图标。所以 CMake 用 `configure_file` 把 `.ico` 的绝对路径填进
+  模板，生成到 `build/<preset>/generated/flowkeyd.rc`。
+  * `.gitignore` 里有 `*.rc`（Qt Creator 的模板就会生成同名文件），所以**模板叫
+    `assets/flowkeyd.rc.in`**，而且只有生成的 .rc 才是被忽略的那个。
+  * `.rc` 刻意保持**纯 ASCII**（连注释也英文）：windres 的预处理器对非 ASCII 注释
+    没有明确保证（与“.cmd/.bat 必须纯 ASCII”同源），中文说明放在 CMakeLists.txt。
+* **运行时用 PNG 而不是 SVG**（本项目没有链 `Qt6::Svg`）：PNG 是 QtGui 内建的格式，
+  而 SVG 要走 `imageformats/qsvg` 插件（它又需要 `Qt6Svg.dll`）。那个插件确实是
+  windeployqt 自己拷的（本机 `build/windows-release/imageformats/` 里就有），但那是
+  靠扫依赖“猜”出来的：少一个插件，图标就**静默**变成空白，而且在构建目录里看不出来。
+  用 PNG 就没有这条路。
+* **多尺寸帧是必要的**：只放一张 256 的图，托盘在 200% 缩放下要靠 Qt 缩图，边缘会糊。
+  所以 `tools/icon_gen` 一次生成 16/20/24/32/40/48/64/128/256 九张，
+  `QIcon::addFile` 逐张加进去（Qt 自己按需要的尺寸挑）。
+* **`logo.svg` 不在构建时被读**：构建时光栅化会把 `Qt6::Svg` 与 windeployqt 的
+  插件依赖变成必需项，而且会让每次构建都依赖那个工具。改成“一次性生成 + 产物提交”：
+  `tools/icon_gen` 是 `EXCLUDE_FROM_ALL` 的 `flowkeyd_icon_gen`，配一个
+  `icons` 目标：
+
+  ```powershell
+  cmake --build --preset debug --target icons
+  ```
+
+  * 目标里用 `cmake -E env "PATH=<Qt bin>;<MinGW bin>;..."` 跑那个工具：它自己
+    **不是**部署过的目标（只有 `flowkeyd` 挂 windeployqt），所以需要 Qt 的 DLL
+    在 PATH 上。
+  * `find_package(Qt6 QUIET COMPONENTS Svg)` 是单独一次查找：没装 QtSvg 时只是少
+    了这个手工工具（并且不生成 `icons` 目标），两个 profile 的正常构建不受影响。
+  * 它自己的 `AUTOMOC/AUTOUIC` 关掉了（纯 C++，没有 `Q_OBJECT`），免得白编一个空
+    的 `mocs_compilation.cpp`（与 `lua_static` 那条同理）。
+* **ICO 格式的两个坑**：
+  * 帧可以是 DIB（BITMAPINFOHEADER + XOR 位图 + AND 掩码）或 PNG。本工具小尺寸
+    （≤64）用 DIB、大尺寸（128/256）用 PNG：纯 DIB 的话 256 光栅要 256 KB 以上。
+  * DIB 帧里 `biHeight` 要写 **2×高度**（XOR + AND 两块），AND 掩码即使 32 位色
+    也必须写（按 4 字节对齐、全 0），而且两块都是**自下而上**。写错了不会报错，
+    只是图标在资源管理器里花掉。
+* **怎么确认 exe 里真的嵌进去了**（不用启动程序）：
+  `[System.Drawing.Icon]::ExtractAssociatedIcon(exe)` 能拿到图标就说明 PE 里有；
+  再把它 `ToBitmap().Save(png)` 出来看一眼，就能确认不是空壳。
+  验证 qrc 那一半靠 `flowkeyd --list` 不行（托盘图标只有真跑起来才画），
+  本次是构建 + 单元测试全绿，托盘效果由项目所有者自己看一眼。
+
 ---
 
 ## 11. 完成定义（DoD）细则
@@ -2962,6 +3028,27 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > 本次没有改钩子/引擎/分发/窗口后端，所以按第 11 节第 3 条没有重跑
 > `scripts/acceptance.ps1`（托盘那一项本来也进不了那个脚本）。
 
+> **2026-09 新增（应用图标：exe 资源 + 托盘）的 DoD**：`windows-debug` 与
+> `windows-release` 都是 `build exit 0`（release 里那两句 `dxcompiler.dll` 仍是
+> `windeployqt` 自己的提示）；`ctest --test-dir build/windows-debug`
+> **21 个测试目标全绿**（本次没有新增可单测的纯逻辑，所以数量不变）；
+> `flowkeyd --check --config flowkeyd.lua.example` → `OK (37 hotkey(s), 3 remap(s))`、
+> 零警告。
+> 图标本身：`logo.svg` → `assets/flowkeyd.ico`（9 帧：16/20/24/32/40/48 为 DIB，
+> 128/256 为 PNG，共 56 KB）与 `assets/icons/flowkeyd-<n>.png`（9 张），
+> `cmake --build --preset debug --target icons` 可重现（跑两次 `assets/flowkeyd.ico`
+> 的 SHA-256 完全相同：`77AED5F5…`）。release 构建里 windres 编出了
+> `CMakeFiles/flowkeyd.dir/generated/flowkeyd.rc.obj` 并正常链接到 exe；
+> `[System.Drawing.Icon]::ExtractAssociatedIcon(build\dist-release\flowkeyd.exe)`
+> 返回 32x32 并 `ToBitmap()` 出来就是 logo（`tmp/exe-icon.png`，非空壳），
+> `assets/flowkeyd.ico` 的 9 个目录项也被独立解析过一遍（尺寸/偏移都对）。
+> **托盘图标没有做功能验证**（项目所有者要求：编译完他自己看）——所以第 11 节
+> 第 3 条那套验收脚本本次没跑；若托盘图标没显示，先查
+> `build/windows-release/imageformats/` 与 qrc 的 `:/icons/…` 是否在
+> （`src/app/app_icon.cpp` 对缺失文件会退到系统图标，不会报错）。
+> 按工作约定第 11 条：常驻实例已 `--quit` → 构建 release → 从
+> `build\dist-release` 重新拉起（它启动时会自己把计划任务刷新成这个路径）。
+
 ---
 
 ## 12. 本期不做的（有意留白）与后续工作
@@ -3003,8 +3090,9 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
     `TextField`，所以中文/输入法已经能用了；缺的只是模糊匹配与分组）。
 13. **日志窗口的增强**：`--follow`/`--grep` 之类的参数、把 `INFO` 与 `DEBUG`
     分色渲染（现在只按级别上色）。
-14. **托盘图标跟随 explorer 重启**（处理 `TaskbarCreated`）并使用真正的
-    应用图标（现在只能用系统图标）。
+14. **托盘图标跟随 explorer 重启**（处理 `TaskbarCreated`）。
+    （真正的应用图标本期已经做了：`logo.svg` → `assets/` 下的 .ico 与 PNG，
+    见第 10 节“应用图标”那一段。）
 
 ---
 
@@ -3070,6 +3158,14 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   已公开但不在静态链接集合里的库走同一条路（`dwmapi` 是范例）。
 * **新的动作后端**：在 `src/platform/win/` 下新建模块，从 `dispatcher` 调用，
   并（如果以后补了 `--selftest`）加一项检查。
+* **换图标**：改仓库根目录的 `logo.svg`（唯一的真源），然后
+  `cmake --build --preset debug --target icons` 重新生成 `assets/flowkeyd.ico`
+  与 `assets/icons/flowkeyd-<n>.png`（**两者都要提交**）；尺寸列表写在
+  `tools/icon_gen/main.cpp`（`kSizes`）、`CMakeLists.txt` 的 `qt_add_resources`
+  与 `src/app/app_icon.cpp` 里，**三处要一起改**。只想改 exe 图标或只想改托盘图标
+  是不可能的：两份产物用的是同一张源图（exe 那边走 windres、托盘那边走 qrc，
+  见第 10 节“应用图标”）。新图标如果不再是正方形，还要看一眼 `renderFrame()`
+  的铺满策略（现在是 KeepAspectRatio）。
 * **新的日志窗口行为**：尾随逻辑在 `app/log_model`（纯逻辑、可单测），
   渲染在 `LogWindow.qml`。加命令行参数就改 `cli.cpp` 并更新 README 的
   命令行表格。

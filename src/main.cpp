@@ -6,10 +6,12 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QGuiApplication>
+#include <QIcon>
 #include <QMessageBox>
 #include <QQmlApplicationEngine>
 #include <QQuickStyle>
 
+#include "app/app_icon.h"
 #include "app/log_window.h"
 #include "app/popup_host.h"
 #include "app/runtime.h"
@@ -111,6 +113,8 @@ int reportConfigFailure(int argc, char *argv[], const QString &message)
 {
     win::writeStderr(toConsole(QStringLiteral("flowkeyd: %1\n").arg(message)));
     QApplication application(argc, argv);
+    // 消息框的标题栏也用应用图标，不然它会在任务栏里光秃秃的。
+    QApplication::setWindowIcon(app::applicationIcon());
     QMessageBox box(QMessageBox::Critical,
                     QStringLiteral("flowkeyd 配置错误"),
                     QStringLiteral("flowkeyd 无法启动：配置文件有错误。\n\n%1").arg(message),
@@ -469,6 +473,11 @@ int main(int argc, char *argv[])
 
     QApplication application(argc, argv);
 
+    // 应用图标：QML 窗口（日志/选单/帮助）与消息框都跟着它，托盘也用它。
+    // exe 在资源管理器/任务栏里显示的那一份是 windres 嵌的资源，见 CMakeLists.txt。
+    const QIcon appIcon = app::applicationIcon();
+    QApplication::setWindowIcon(appIcon);
+
     // 日志窗口是普通窗口；关掉它绝不能退出应用（见 AGENTS.md 第 7 节第 20 条）。
     QGuiApplication::setQuitOnLastWindowClosed(false);
 
@@ -478,7 +487,7 @@ int main(int argc, char *argv[])
     QQmlApplicationEngine engine;
 
     app::LogWindow logWindow(&engine, win::logFilePath());
-    platform::win::Tray tray;
+    platform::win::Tray tray(appIcon);
 
     // `menu` / `help` 的窗口：必须在 GUI 线程上创建，所以放在这里，
     // 由 Runtime 转发（动作跑在工作线程上）。

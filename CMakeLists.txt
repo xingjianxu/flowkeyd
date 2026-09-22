@@ -22,6 +22,11 @@ find_package(Qt6 6.8 REQUIRED COMPONENTS
 
 qt_standard_project_setup(REQUIRES 6.8)
 
+# 图标生成工具（`tools/icon_gen`）需要 Qt6::Svg 把 logo.svg 光栅化，但**发布的 exe
+# 不需要它**（运行时只用已经生成好的 PNG 帧，见 src/app/app_icon.cpp）。所以这里是
+# 一次 QUIET 的补充查找：机器上没装 QtSvg 时只是少了那个手工工具，正常构建不受影响。
+find_package(Qt6 QUIET COMPONENTS Svg)
+
 # ---------------------------------------------------------------------------
 # 两条 profile 的分工（见 AGENTS.md 第 5 节）：
 #   * windows-debug   —— 开发用：构建单测（含 tst_interactive），构建完自动把
@@ -112,6 +117,29 @@ configure_file(
     "${CMAKE_CURRENT_BINARY_DIR}/generated/flowkeyd_revision.h"
     @ONLY)
 message(STATUS "flowkeyd: source revision ${FLOWKEYD_GIT_REVISION}")
+
+# ---------------------------------------------------------------------------
+# 应用图标（见 AGENTS.md 第 10 节）：
+#   * exe 的 Windows 图标资源 = assets/flowkeyd.ico，由 windres 通过一个在配置时
+#     生成的 .rc 嵌进二进制（任务栏 / 资源管理器 / 快捷方式看到的就是它）。
+#     .rc 里写**绝对路径**是因为 windres 解析 `ICON` 的相对路径不是相对 .rc 文件；
+#     生成的 .rc 落在 build/<preset>/generated/ 里，不进版本库（`*.rc` 也在
+#     .gitignore 里）。
+#   * 运行时图标 = assets/icons/*.png，编在 exe 自己的 qrc 里（src/app/app_icon.cpp
+#     把它们拼成一个多尺寸 QIcon，托盘与弹窗都用它）。
+# 两份产物都由 `logo.svg` 生成：`cmake --build --preset debug --target icons`。
+# ---------------------------------------------------------------------------
+if(WIN32)
+    enable_language(RC)
+    set(FLOWKEYD_APP_ICON_ICO "${CMAKE_CURRENT_SOURCE_DIR}/assets/flowkeyd.ico")
+    configure_file(
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/flowkeyd.rc.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/flowkeyd.rc"
+        @ONLY)
+    set(FLOWKEYD_APP_ICON_RC "${CMAKE_CURRENT_BINARY_DIR}/generated/flowkeyd.rc")
+else()
+    set(FLOWKEYD_APP_ICON_RC "")
+endif()
 
 # ---------------------------------------------------------------------------
 # 纯逻辑层：不碰 Win32、不碰 Qt GUI，只用 QtCore。
@@ -247,6 +275,8 @@ qt_add_executable(flowkeyd
     src/main.cpp
     src/cli.cpp
     src/cli.h
+    src/app/app_icon.cpp
+    src/app/app_icon.h
     src/app/dispatcher.cpp
     src/app/dispatcher.h
     src/app/log_model.cpp
@@ -259,6 +289,23 @@ qt_add_executable(flowkeyd
     src/app/runtime.h
     src/platform/win/tray.cpp
     src/platform/win/tray.h
+    # Windows 图标资源（配置时生成，见上面那一节；非 Windows 上是空串）。
+    ${FLOWKEYD_APP_ICON_RC}
+)
+
+qt_add_resources(flowkeyd "app_icons"
+    PREFIX "/icons"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/assets/icons"
+    FILES
+        assets/icons/flowkeyd-16.png
+        assets/icons/flowkeyd-20.png
+        assets/icons/flowkeyd-24.png
+        assets/icons/flowkeyd-32.png
+        assets/icons/flowkeyd-40.png
+        assets/icons/flowkeyd-48.png
+        assets/icons/flowkeyd-64.png
+        assets/icons/flowkeyd-128.png
+        assets/icons/flowkeyd-256.png
 )
 
 qt_add_qml_module(flowkeyd
@@ -335,6 +382,39 @@ qt_generate_deploy_app_script(
     NO_UNSUPPORTED_PLATFORM_ERROR
 )
 install(SCRIPT ${deploy_script})
+
+# ---------------------------------------------------------------------------
+# 图标生成工具：把 logo.svg 光栅化成 assets/flowkeyd.ico（exe 资源）与
+# assets/icons/*.png（运行时 QIcon）。**EXCLUDE_FROM_ALL**，所以两条 profile 的
+# 正常构建根本不碰它，也不会把它需要的 Qt6::Svg 拖进任何产物；改了 logo.svg 之后
+# 手工跑一次：
+#
+#     cmake --build --preset debug --target icons
+#
+# 生成结果在 assets/ 下，是**要提交**的（别把 logo.svg 当成构建时输入：构建时
+# 光栅化会把 Qt6::Svg 与 windeployqt 的插件都变成必需项，见 AGENTS.md 第 10 节）。
+# ---------------------------------------------------------------------------
+if(WIN32 AND TARGET Qt6::Svg)
+    add_executable(flowkeyd_icon_gen EXCLUDE_FROM_ALL
+        tools/icon_gen/main.cpp
+    )
+    # 纯 C++，没有 Q_OBJECT / .ui：关掉 AUTOMOC/AUTOUIC，免得白编一个空的
+    # mocs_compilation.cpp（与 lua_static 上那一条同理，见 AGENTS.md 第 10 节）。
+    set_target_properties(flowkeyd_icon_gen PROPERTIES AUTOMOC OFF AUTOUIC OFF)
+    target_link_libraries(flowkeyd_icon_gen PRIVATE Qt6::Gui Qt6::Svg)
+    flowkeyd_strict_warnings(flowkeyd_icon_gen)
+    add_custom_target(icons
+        COMMAND ${CMAKE_COMMAND} -E env
+            "PATH=${FLOWKEYD_QT_BIN_DIR};${FLOWKEYD_MINGW_BIN_DIR};$ENV{PATH}"
+            "$<TARGET_FILE:flowkeyd_icon_gen>"
+            "${CMAKE_CURRENT_SOURCE_DIR}/logo.svg"
+            "${CMAKE_CURRENT_SOURCE_DIR}/assets"
+        DEPENDS flowkeyd_icon_gen
+        COMMENT "icon_gen: rendering logo.svg into assets/flowkeyd.ico + assets/icons/*.png"
+        VERBATIM)
+else()
+    message(STATUS "flowkeyd: Qt6::Svg not found; the `icons` regeneration target is unavailable")
+endif()
 
 # ---------------------------------------------------------------------------
 # 单元测试（只在 debug profile 里构建与运行，见 AGENTS.md 第 5 节）

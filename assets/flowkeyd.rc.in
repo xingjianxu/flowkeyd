@@ -1,0 +1,13 @@
+// flowkeyd 的 Windows 图标资源（模板，由 CMake 在配置时展开）。
+//
+// CMake 把 @FLOWKEYD_APP_ICON_ICO@ 换成 assets/flowkeyd.ico 的绝对路径，
+// 生成 build/<preset>/generated/flowkeyd.rc，再交给 windres 编进 exe。
+// 改 logo.svg 之后要重新生成 .ico：cmake --build --preset debug --target icons
+//
+// 为什么这里用绝对路径：windres 解析 `ICON "..."` 的相对路径既不是相对本文件，
+// 也不保证是相对源码目录（取决于生成器给的工作目录），所以相对路径会在某些
+// 构建目录下突然找不到图标。
+//
+// 这个文件刻意保持纯 ASCII：windres 的预处理器对非 ASCII 注释没有明确保证
+// （与 AGENTS.md 里「.cmd/.bat 必须纯 ASCII」同源）。中文说明在 CMakeLists.txt。
+IDI_FLOWKEYD ICON "@FLOWKEYD_APP_ICON_ICO@"
