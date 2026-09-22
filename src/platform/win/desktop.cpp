@@ -274,6 +274,10 @@ public:
     /// 把窗口移到第 `index` 个桌面（从 1 开始）。
     bool moveWindowToDesktop(HWND hwnd, std::uint32_t index, QString *detail, QString *error) const;
 
+    /// 等窗口的桌面 GUID 发生变化（`MoveViewToDesktop` 异步生效）。
+    /// 只有拿得到移动前后的 GUID 才能回答。
+    bool waitForDesktopChange(HWND hwnd, const std::optional<QString> &before) const;
+
     /// 已公开的 `IVirtualDesktopManager::GetWindowDesktopId`（只读）。
     std::optional<QString> windowDesktopId(HWND hwnd) const;
 
@@ -570,6 +574,14 @@ std::optional<std::size_t> Session::desktopIndexOfWindow(HWND hwnd,
         }
         return std::nullopt;
     }
+    if (*wanted == guidText(GUID{})) {
+        // 某些窗口（打包应用/辅助窗口）不属于任何虚拟桌面，`GetWindowDesktopId`
+        // 就给一个全零 GUID。这不是 vtable 布局的问题，别报成那样。
+        if (error != nullptr) {
+            *error = QStringLiteral("the window is not on any virtual desktop");
+        }
+        return std::nullopt;
+    }
 
     // 逐个问桌面的 GUID，有且只有一个能对上才算数。这同时是一道自检：万一
     // `IVirtualDesktop::GetID` 的 vtable 下标在这台机器上不是 4（版本表选错、
@@ -710,6 +722,18 @@ std::optional<QString> Session::windowDesktopId(HWND hwnd) const
         return std::nullopt;
     }
     return guidText(id);
+}
+
+bool Session::waitForDesktopChange(HWND hwnd, const std::optional<QString> &before) const
+{
+    for (int attempt = 0; attempt < 10; ++attempt) {
+        const std::optional<QString> after = windowDesktopId(hwnd);
+        if (after.has_value() && *after != *before) {
+            return true;
+        }
+        Sleep(25);
+    }
+    return false;
 }
 
 // --- 系统版本 --------------------------------------------------------------
@@ -994,22 +1018,14 @@ bool moveWindowToDesktop(HWND hwnd,
             return;
         }
         // 未公开的 `MoveViewToDesktop` 返回 S_OK 也可能什么都没发生，而且它是
-        // **异步生效**的（shell 在自己的线程上搬），所以等一下再确认：移动前后的
-        // 桌面 GUID 都拿得到且不一样，才算是真搬动了。
-        std::optional<QString> after = before;
-        if (before.has_value()) {
-            for (int attempt = 0; attempt < 10; ++attempt) {
-                after = session.windowDesktopId(hwnd);
-                if (after.has_value() && *after != *before) {
-                    localChanged = true;
-                    break;
-                }
-                Sleep(25);
-            }
+        // **异步生效**的（shell 在自己的线程上搬）。只有调用方真的关心「到底搬动了没有」
+        // （`window_rule` 靠它决定要不要让视图跟着走）时才等，否则不要白拖时间。
+        if (changed != nullptr && before.has_value()) {
+            localChanged = session.waitForDesktopChange(hwnd, before);
         }
         logDebug(QStringLiteral("window desktop id %1 -> %2")
                      .arg(before.value_or(QStringLiteral("?")),
-                          after.value_or(QStringLiteral("?"))));
+                          session.windowDesktopId(hwnd).value_or(QStringLiteral("?"))));
     });
     if (!ok) {
         if (error != nullptr) {
@@ -1094,6 +1110,19 @@ std::optional<bool> isWindowOnCurrentDesktop(HWND hwnd, QString *error)
             localError = hresultMessage(
                 query, "IVirtualDesktopManager::IsWindowOnCurrentVirtualDesktop");
             return;
+        }
+        if (onCurrent == FALSE) {
+            // 某些窗口（打包应用的宿主、刚创建还没被 shell 登记的窗口）不属于任何虚拟
+            // 桌面，`GetWindowDesktopId` 就给一个全零 GUID，这里也一律报 FALSE。这种事
+            // 我们“不知道它在哪”，不是“它在别的桌面上”——返回 `nullopt` 让调用方
+            // 按老行为处理（`window::isActive` 就不会因此把窗口当成“没在眼前”）。
+            GUID id{};
+            if (SUCCEEDED(vtableOf<IVirtualDesktopManagerVtbl>(manager)
+                              ->getWindowDesktopId(manager, hwnd, &id))
+                && guidText(id) == guidText(GUID{})) {
+                localError = QStringLiteral("the window is not on any virtual desktop");
+                return;
+            }
         }
         result = onCurrent != FALSE;
     });

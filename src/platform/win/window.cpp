@@ -245,7 +245,8 @@ bool raiseWindow(HWND hwnd)
         QString detail;
         QString error;
         if (!desktop::switchToWindowDesktop(hwnd, &detail, &error)) {
-            logWarn(QStringLiteral("could not switch to the desktop of the window: %1").arg(error));
+            logWarn(QStringLiteral("could not switch to the desktop of %1: %2")
+                        .arg(core::rustDebug(windowTitle(hwnd)), error));
         } else {
             logDebug(QStringLiteral("switched to the desktop of the window: %1").arg(detail));
         }

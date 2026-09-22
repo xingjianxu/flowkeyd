@@ -2564,6 +2564,35 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   `Marshal.GetDelegateForFunctionPointer` 手搝 vtable 调用即可，不必注册 COM。
   脚本在 `tmp/desk/`（不进版本库）。
 
+#### 2026-09 实测：本机的记事本变成了带标签页的 Store 应用（交互式测试的载体得换）
+
+* **现象**：`tst_interactive::windowBackendLaunchesActivatesAndCloses` 在
+  “`Close` 之后窗口消失”这条上挂（`gone` 一直是 false），偶尔还会在“激活之后
+  `isActive`”那条上挂。
+* **根因**：本机的记事本是 **`Microsoft.WindowsNotepad` 11.2607（Store 应用）**，
+  单实例 + 标签页 + **会话恢复**：
+  * `notepad.exe`（System32 里那个 360 KB 的壳）启动的是它，给文件参数只是
+    **给一个既有窗口加标签页**；会话恢复甚至会让窗口标题停在别的文件上——
+    实测 `find` 拿到的窗口标题是上一次运行留下的 `flowkeyd-mon-<pid>.txt`；
+  * `WM_CLOSE` 会因为别的标签页 / 恢复的会话弹确认框，窗口因此不会消失；
+  * 前台在多个窗口/标签页之间切换时，`GetForegroundWindow()` 可能指向同进程的
+    另一个窗口，于是 `isActive` 那条断言也会偶发失败。
+* **不是本仓库的回归**：把修复前的提交（`ee38ac6`）用 `git worktree` 单独构建
+  跑同一条用例，一样在 `gone` 上挂（同一个断言）。另一方面，`Stop-Process -Force`
+  掉记事本会在它自己的 `LocalState\TabState\` 里留下垃圾标签页，越跑越脏。
+* **做法**：`tst_interactive` 里凡是“窗口后端”的断言，改用**测试进程自己的顶层
+  窗口**（`tests/tst_interactive.cpp` 里的 `TestWindow`：自己 `RegisterClassExW`
+  + `CreateWindowExW`，标题可控、进程独占、`WM_CLOSE` 就是 `DestroyWindow`；
+  等消息用只抽自己窗口消息的 `pump()`，不碰 Qt 的事件循环）。记事本只剩两个用途：
+  1. 覆盖“启动一个真程序 + 按标题找到它的窗口”（`runCommand` + `find`）；
+  2. `copySelectionCopiesTheFocusedSelection` 需要一个真能 Ctrl+C 的编辑器。
+  两者都不再断言“窗口能被关掉”。
+* **顺带发现的一条产品事实**：**刚创建、还没被 shell 登记的窗口**
+  `GetWindowDesktopId` 会给全零 GUID，而 `IsWindowOnCurrentVirtualDesktop` 也报
+  FALSE。所以 `desktop::isWindowOnCurrentDesktop` 现在把“不属于任何虚拟桌面”当成
+  `std::nullopt`（不知道），而不是“在别的桌面上”——否则 `window::isActive` 会把
+  一个就在眼前、刚创建的好窗口判成“没在眼前”（`toggle` 就永远收不起它）。
+
 ### 领域坑清单（动手前先看这一遍）
 
 下面这些每一条都值得在动钩子/引擎/窗口/电源之前先读一遍：
@@ -3236,36 +3265,39 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > `windows-debug` 与 `windows-release` 两边都是 `build exit 0`、零编译警告；
 > `ctest --test-dir build/windows-debug` **22 个测试目标全绿**（`tst_interactive`
 > 仍是 opt-in，ctest 里 skip）。
-> 新增的 opt-in 用例 `tst_interactive::activatesAWindowThatIsOnAnotherDesktop`
-> 单跑通过（`FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`，`-o <file>,txt` 才能看到
-> QtTest 输出）：诊断行确认了现场是
-> `window on another desktop: shellForegroundIsIt true`（也就是用户报的那个状态），
-> 断言过了四条 —— 跨桌面时 `window::isActive` 必须为假、`window::raiseWindow`
-> 必须把视图切回去并让它拿到前台、已回当前桌面时
+> `tst_interactive` 本身（`FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`，`-o <file>,txt`
+> 才看得到 QtTest 输出）**10 项全绿**（连跑三遍）。
+> 新增的 opt-in 用例 `activatesAWindowThatIsOnAnotherDesktop` 通过，诊断行确认了
+> 现场是 `window on another desktop: shellForegroundIsIt true`（也就是用户报的
+> 那个状态）；断言过了四条 —— 跨桌面时 `window::isActive` 必须为假、
+> `window::raiseWindow` 必须把视图切回去并让它拿到前台、已回当前桌面时
 > `desktop::switchToWindowDesktop` 报 `already on desktop N/M`、
 > 搬到它已经在的那张桌面时 `changed` 为假。这也是 `IVirtualDesktop::GetID`
 > （下标 4）在本机能用的直接证据。
+> **顺手把交互式用例的“窗口载体”换成了测试自己的窗口**（`TestWindow`）：本机的
+> 记事本已经变成单实例、带标签页与会话恢复的 Store 应用，拿它当载体的那些断言
+> （尤其是“`Close` 之后窗口消失”）在本机已经不可靠，而且**在修复前的提交上一样
+> 会挂**（用 `git worktree` 建 `ee38ac6` 实测，不是回归）—— 细节见第 10 节。
 > 端到端（`--no-elevate --allow-multi` 的一次性实例 + 一次性配置 + `SendInput`）：
 > 记事本一出现，日志除了 `desktop 3/4` 还多了一句 `view -> desktop 3/4`，
 > 从 PowerShell 用**已公开**的 `IsWindowOnCurrentVirtualDesktop` 看，视图真的跟着
 > 到了那张桌面（修前是 `onCurrentDesktop=0`）；再按一次同一个快捷键则是
 > `Minimize ... (already active)`（那时它已经真的在前台了，`toggle` 语义正确）。
+> debug 与 release 两份 exe 都跑过这条端到端。
 > `flowkeyd --check --config flowkeyd.lua.example` →
 > `OK (37 hotkey(s), 3 remap(s), 3 window rule(s))`、零警告；用户真实配置（不带
 > `--config`）→ `OK (24 hotkey(s), 0 remap(s), 3 window rule(s))`、零警告。
-> `scripts/acceptance.ps1`（只跑 release）**116 项、0 失败**
-> （`checks: 116, failures: 0`，与上次持平：本次没有给脚本加检查，端到端由上面
-> 那次注入验证与交互式单测覆盖；脚本本身没动）。
+> `scripts/acceptance.ps1`（只跑 release，先把常驻 `--quit` 掉、跑完再拉起）
+> **116 项、0 失败**（`checks: 116, failures: 0`，与上次持平：脚本本身没动）。
 > 行为变化（项目所有者拍板，见第 2 节第 14 条）：跨桌面唤起会**切桌面**；
 > `window_rule` 真的搬迁窗口时视图会跟着走（只在窗口第一次出现那一遍）。
 > README（`window` 动作、`window_rule`、已知限制、验证）、
 > `flowkeyd.lua.example` 与第 10/11 节已同步。
 > 按工作约定第 11 条：常驻实例已 `--quit` → 构建 release → 从
-> `build\dist-release` 重新拉起（自启任务仍指向那个路径）。
-> 本次动了窗口后端（`platform/win/window`）与 `dispatcher`，所以按第 11 节第 3 条
-> 跑了 `acceptance.ps1`（见上）；它跑的是与提交内容一致的同一份源码；
-> 之后为了把版本号里的 git 修订刷成新提交又重新链接了一次（只动文档、不动代码），
-> 没有再跑一遍验收脚本。
+> `build\dist-release` 重新拉起（自启任务仍指向那个路径），版本号里的 git 修订
+> 就是最终提交（「提交 → 构建 → 重新拉起」的顺序）。
+> 另外顺手清理了 `build/windows-release` 里那批从“release 还构建测试”的年代
+> 留下的 `CMakeFiles/tst_*.dir` 目录（构建树里不再有 `tst_*`）。
 
 ---
 

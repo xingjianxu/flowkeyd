@@ -41,6 +41,86 @@ bool interactiveEnabled()
     return !qEnvironmentVariable("FLOWKEYD_ALLOW_INTERACTIVE_TESTS").isEmpty();
 }
 
+/// 测试自己的一个普通顶层窗口。
+///
+/// “窗口后端”的那些断言本来都拿 `notepad.exe` 当载体，但本机的记事本已经变成
+/// **单实例、带标签页与会话恢复**的 Store 应用（`Microsoft.WindowsNotepad` 11.26xx）：
+/// `notepad file` 有时只是给一个既有窗口加一个标签页（标题会随手切来切去，`find`
+/// 可能拿到别人的窗口），而 `WM_CLOSE` 会因为别的标签页 / 恢复的会话弹确认框，
+/// 于是“关闭之后窗口消失”永远等不到结果。**同一个失败在修复前的提交上一样能复现**
+/// （用 `git worktree` 建 `ee38ac6` 跑过，见 AGENTS 第 10 节），所以不是产品回归。
+///
+/// 于是这里的窗口自己建：标题可控、线程/进程独占、`WM_CLOSE` 就是销毁自己。
+/// 记事本仍然用来覆盖“启动一个真程序 + 按标题找到它的窗口”那条路径。
+class TestWindow
+{
+public:
+    explicit TestWindow(const QString &title);
+    ~TestWindow();
+    TestWindow(const TestWindow &) = delete;
+    TestWindow &operator=(const TestWindow &) = delete;
+
+    HWND hwnd() const { return m_hwnd; }
+    /// 只抽这个窗口自己的消息（`WM_CLOSE` 靠消息队列投递）。
+    /// 不碰 Qt 自己的消息，免得把事件循环的水搅浑。
+    void pump();
+
+private:
+    HWND m_hwnd = nullptr;
+};
+
+LRESULT CALLBACK testWindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
+{
+    if (message == WM_CLOSE) {
+        DestroyWindow(hwnd);
+        return 0;
+    }
+    return DefWindowProcW(hwnd, message, wparam, lparam);
+}
+
+void registerTestWindowClass()
+{
+    static bool registered = false;
+    if (registered) {
+        return;
+    }
+    WNDCLASSEXW cls{};
+    cls.cbSize = sizeof(cls);
+    cls.lpfnWndProc = testWindowProc;
+    cls.hInstance = GetModuleHandleW(nullptr);
+    cls.lpszClassName = L"FlowkeydInteractiveTestWindow";
+    RegisterClassExW(&cls);
+    registered = true;
+}
+
+TestWindow::TestWindow(const QString &title)
+{
+    registerTestWindowClass();
+    m_hwnd = CreateWindowExW(0, L"FlowkeydInteractiveTestWindow",
+                             reinterpret_cast<const wchar_t *>(title.utf16()),
+                             WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 720, 480,
+                             nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+    if (m_hwnd != nullptr) {
+        ShowWindow(m_hwnd, SW_SHOWNOACTIVATE);
+    }
+}
+
+TestWindow::~TestWindow()
+{
+    if (m_hwnd != nullptr && IsWindow(m_hwnd) != 0) {
+        DestroyWindow(m_hwnd);
+    }
+}
+
+void TestWindow::pump()
+{
+    MSG message{};
+    while (PeekMessageW(&message, m_hwnd, 0, 0, PM_REMOVE) != 0) {
+        TranslateMessage(&message);
+        DispatchMessageW(&message);
+    }
+}
+
 } // namespace
 
 class TestInteractive : public QObject
@@ -162,33 +242,68 @@ void TestInteractive::windowBackendLaunchesActivatesAndCloses()
     }
     QVERIFY2(hwnd != nullptr, "the launched Notepad window never appeared");
 
-    QVERIFY2(platform::win::window::applyTo(hwnd, core::WindowOp::Activate, false, &detail, &error),
+    // 记事本只负责盖“启动一个真程序 + 按标题找到它的窗口”（`runCommand` + `find`）；
+    // 后面的前台/最小化/关闭断言全部挪到测试自己的窗口上（见 `TestWindow` 的注释）：
+    // 本机的记事本是单实例、带标签页与会话恢复的 Store 应用，窗口会在多次启动之间
+    // 被复用、标题会随手切、后台窗口也未必真能拿到前台。
+    // 这里只尽量把它关掉当作清理，**不**把它当成断言。
+    (void)platform::win::window::applyTo(hwnd, core::WindowOp::Close, false, &detail, &error);
+
+    TestWindow own(marker + QStringLiteral("-backend"));
+    HWND backend = own.hwnd();
+    QVERIFY2(backend != nullptr, "the test window was not created");
+
+    QVERIFY2(platform::win::window::applyTo(backend, core::WindowOp::Activate, false, &detail,
+                                            &error),
              qPrintable(error));
-    QVERIFY2(platform::win::window::isActive(hwnd), "activate did not bring the window to the foreground");
+    {
+        // “已经激活”还要看虚拟桌面（见 `window::isActive`），出错时把三个子条件
+        // 都打出来，否则以后只能看着一句“没有拿到前台”猜。
+        const std::optional<bool> onCurrent =
+            platform::win::desktop::isWindowOnCurrentDesktop(backend, &error);
+        QVERIFY2(
+            platform::win::window::isActive(backend),
+            qPrintable(QStringLiteral("activate did not bring the window to the foreground "
+                                      "(foreground=%1 iconic=%2 onCurrentDesktop=%3 %4, hwnd=%5)")
+                           .arg(GetForegroundWindow() == backend ? QStringLiteral("yes")
+                                                                : QStringLiteral("no"),
+                                IsIconic(backend) != 0 ? QStringLiteral("yes")
+                                                       : QStringLiteral("no"),
+                                onCurrent.has_value()
+                                    ? (*onCurrent ? QStringLiteral("yes") : QStringLiteral("no"))
+                                    : QStringLiteral("unknown"),
+                                error)
+                           .arg(reinterpret_cast<quintptr>(backend))));
+    }
 
     // `animate = false` 走的就是 `TransitionGuard`：这里显式验证 dwmapi 解析成功
     // 且“设 TRUE → 设回 FALSE”这条往返能走通（属性读不回来，所以只能这么查）。
     if (platform::win::dwm::available()) {
-        QVERIFY2(platform::win::dwm::forceDisableTransitions(hwnd, true, &error), qPrintable(error));
-        QVERIFY2(platform::win::dwm::forceDisableTransitions(hwnd, false, &error), qPrintable(error));
+        QVERIFY2(platform::win::dwm::forceDisableTransitions(backend, true, &error),
+                 qPrintable(error));
+        QVERIFY2(platform::win::dwm::forceDisableTransitions(backend, false, &error),
+                 qPrintable(error));
     }
 
-    QVERIFY2(platform::win::window::applyTo(hwnd, core::WindowOp::Minimize, false, &detail, &error),
+    QVERIFY2(platform::win::window::applyTo(backend, core::WindowOp::Minimize, false, &detail,
+                                           &error),
              qPrintable(error));
-    QVERIFY(!platform::win::window::isActive(hwnd));
-    QVERIFY2(platform::win::window::applyTo(hwnd, core::WindowOp::Restore, false, &detail, &error),
+    QVERIFY(!platform::win::window::isActive(backend));
+    QVERIFY2(platform::win::window::applyTo(backend, core::WindowOp::Restore, false, &detail,
+                                           &error),
              qPrintable(error));
 
-    QVERIFY2(platform::win::window::applyTo(hwnd, core::WindowOp::Close, false, &detail, &error),
+    QVERIFY2(platform::win::window::applyTo(backend, core::WindowOp::Close, false, &detail, &error),
              qPrintable(error));
     bool gone = false;
     for (int i = 0; i < 120 && !gone; ++i) {
-        gone = IsWindow(hwnd) == 0;
+        own.pump();
+        gone = IsWindow(backend) == 0;
         if (!gone) {
             QThread::msleep(50);
         }
     }
-    QVERIFY2(gone, "the Notepad window did not close");
+    QVERIFY2(gone, "the test window did not close");
 }
 
 void TestInteractive::copySelectionCopiesTheFocusedSelection()
@@ -315,32 +430,14 @@ void TestInteractive::moveWindowToAnotherDesktopAndBack()
         QSKIP("only one virtual desktop exists; nothing to move a window to");
     }
 
-    QTemporaryDir dir;
-    QVERIFY(dir.isValid());
     const QString marker =
         QStringLiteral("flowkeyd-place-%1").arg(QCoreApplication::applicationPid());
-    const QString file = dir.filePath(marker + QStringLiteral(".txt"));
-    {
-        QFile handle(file);
-        QVERIFY(handle.open(QIODevice::WriteOnly));
-        handle.write("place\n");
-    }
-    platform::win::RunCommandSpec spec;
-    spec.program = QStringLiteral("notepad.exe");
-    spec.args << QDir::toNativeSeparators(file);
-    QString detail;
-    QVERIFY2(platform::win::runCommand(spec, &detail, &error), qPrintable(error));
 
-    const core::WindowQuery query =
-        core::WindowQuery::make(std::optional<QString>(marker), std::nullopt);
-    HWND hwnd = nullptr;
-    for (int i = 0; i < 120 && hwnd == nullptr; ++i) {
-        hwnd = platform::win::window::find(query);
-        if (hwnd == nullptr) {
-            QThread::msleep(50);
-        }
-    }
-    QVERIFY2(hwnd != nullptr, "the launched Notepad window never appeared");
+    // 用测试自己的窗口：见 `TestWindow` 的注释（不再拿记事本当载体）。
+    TestWindow window(marker);
+    HWND hwnd = window.hwnd();
+    QVERIFY2(hwnd != nullptr, "the test window was not created");
+    QString detail;
 
     const auto before = platform::win::desktop::isWindowOnCurrentDesktop(hwnd, &error);
     QVERIFY2(before.has_value(), qPrintable(error));
@@ -396,8 +493,6 @@ void TestInteractive::moveWindowToAnotherDesktopAndBack()
     const auto backId = platform::win::desktop::windowDesktopId(hwnd, &error);
     QVERIFY2(backId.has_value(), qPrintable(error));
     QCOMPARE(*backId, *beforeId);
-
-    (void)platform::win::window::applyTo(hwnd, core::WindowOp::Close, false, &detail, &error);
 }
 
 /// 跨桌面“唤醒”：窗口被搬到别的虚拟桌面之后，`window::isActive` 不能再被 shell
@@ -418,32 +513,13 @@ void TestInteractive::activatesAWindowThatIsOnAnotherDesktop()
         QSKIP("only one virtual desktop exists; nothing to move a window to");
     }
 
-    QTemporaryDir dir;
-    QVERIFY(dir.isValid());
     const QString marker =
         QStringLiteral("flowkeyd-desktop-%1").arg(QCoreApplication::applicationPid());
-    const QString file = dir.filePath(marker + QStringLiteral(".txt"));
-    {
-        QFile handle(file);
-        QVERIFY(handle.open(QIODevice::WriteOnly));
-        handle.write("desktop\n");
-    }
-    platform::win::RunCommandSpec spec;
-    spec.program = QStringLiteral("notepad.exe");
-    spec.args << QDir::toNativeSeparators(file);
-    QString detail;
-    QVERIFY2(platform::win::runCommand(spec, &detail, &error), qPrintable(error));
 
-    const core::WindowQuery query =
-        core::WindowQuery::make(std::optional<QString>(marker), std::nullopt);
-    HWND hwnd = nullptr;
-    for (int i = 0; i < 120 && hwnd == nullptr; ++i) {
-        hwnd = platform::win::window::find(query);
-        if (hwnd == nullptr) {
-            QThread::msleep(50);
-        }
-    }
-    QVERIFY2(hwnd != nullptr, "the launched Notepad window never appeared");
+    TestWindow window(marker);
+    HWND hwnd = window.hwnd();
+    QVERIFY2(hwnd != nullptr, "the test window was not created");
+    QString detail;
 
     // 先让它拿到前台（模拟“用户刚启动它”），再搬到别的桌面 —— 也就是
     // `window_rule` 在那个窗口刚出现时干的事。
@@ -512,8 +588,6 @@ void TestInteractive::activatesAWindowThatIsOnAnotherDesktop()
                                                         &changedBack),
              qPrintable(error));
     QVERIFY2(!changedBack, "moving a window to the desktop it already is on reported a change");
-
-    (void)platform::win::window::applyTo(hwnd, core::WindowOp::Close, false, &detail, &error);
 }
 
 /// `window_rule` 的显示器部分：把窗口摆到另一块显示器并最大化，再还原。
@@ -528,33 +602,14 @@ void TestInteractive::placementMovesAWindowToAnotherMonitor()
         QSKIP("only one monitor is connected; nothing to move a window to");
     }
 
-    QTemporaryDir dir;
-    QVERIFY(dir.isValid());
     const QString marker =
         QStringLiteral("flowkeyd-mon-%1").arg(QCoreApplication::applicationPid());
-    const QString file = dir.filePath(marker + QStringLiteral(".txt"));
-    {
-        QFile handle(file);
-        QVERIFY(handle.open(QIODevice::WriteOnly));
-        handle.write("monitor\n");
-    }
-    platform::win::RunCommandSpec spec;
-    spec.program = QStringLiteral("notepad.exe");
-    spec.args << QDir::toNativeSeparators(file);
+
+    TestWindow window(marker);
+    HWND hwnd = window.hwnd();
+    QVERIFY2(hwnd != nullptr, "the test window was not created");
     QString detail;
     QString error;
-    QVERIFY2(platform::win::runCommand(spec, &detail, &error), qPrintable(error));
-
-    const core::WindowQuery query =
-        core::WindowQuery::make(std::optional<QString>(marker), std::nullopt);
-    HWND hwnd = nullptr;
-    for (int i = 0; i < 120 && hwnd == nullptr; ++i) {
-        hwnd = platform::win::window::find(query);
-        if (hwnd == nullptr) {
-            QThread::msleep(50);
-        }
-    }
-    QVERIFY2(hwnd != nullptr, "the launched Notepad window never appeared");
 
     // 挑一块和窗口当前所在不同的显示器。
     const auto currentIndex = platform::win::monitor::indexForWindow(monitors, hwnd);
@@ -593,8 +648,6 @@ void TestInteractive::placementMovesAWindowToAnotherMonitor()
         }
     }
     QVERIFY2(normal, "the window did not go back to a normal window on the target monitor");
-
-    (void)platform::win::window::applyTo(hwnd, core::WindowOp::Close, false, &detail, &error);
 }
 
 QTEST_MAIN(TestInteractive)

@@ -144,6 +144,10 @@ bool switchToWindowDesktop(HWND hwnd, QString *detail, QString *error);
 /// （`CLSID_VirtualDesktopManager`），与版本表无关，因此最适合拿来做验证
 /// （`tst_interactive` 就是用它确认 `moveWindowToDesktop` 真的生效了）。
 /// 失败时返回 `std::nullopt`（`error` 里是英文原因）。
+///
+/// **“窗口不属于任何虚拟桌面”也算 `std::nullopt`**（不是“在别的桌面上”）：打包应用的
+/// 宿主窗口、刚创建还没被 shell 登记的窗口都会这样，返回 FALSE 且 GUID 全零；
+/// 调用方应当按“不知道”处理，不要把她当成“跑到别的桌面去了”。
 std::optional<bool> isWindowOnCurrentDesktop(HWND hwnd, QString *error);
 
 /// 窗口所在虚拟桌面的 GUID（`{xxxxxxxx-...}`）。
