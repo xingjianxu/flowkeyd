@@ -22,6 +22,30 @@ std::uint64_t fnv1a64(const QByteArray &bytes);
 /// 这样 `C:\a\config.lua` 与 `c:/a/config.lua` 会命中同一个实例。
 QString instanceKey(const QString &configPath);
 
+/// `Local\flowkeyd-<散列>-quit`：那个实例的「干净退出」请求事件。
+///
+/// 之所以另开一个事件而不是复用互斥体：互斥体只能表达「有人在跑」，
+/// 没法从外面通知持有者退出（见 AGENTS.md 第 10 节）。
+QString quitEventName(const QString &key);
+
+/// 守护进程侧：创建退出请求事件（自动重置）。失败时返回 `nullptr` 并填 `error`。
+///
+/// 事件用**手工构造的安全描述符**创建：默认描述符的对象带着创建者的完整性级别
+/// （提权的守护进程是 High），而 `SetEvent` 要的 `EVENT_MODIFY_STATE` 属于写权限，
+/// 「no write up」会让非提权的 `--quit` 直接吃访问被拒。所以这里给对象打上
+/// **Low** 完整性标签，任何级别的调用者都能置位它。
+HANDLE createQuitEvent(const QString &key, QString *error);
+
+/// 客户端侧：请 `key` 对应的实例退出。
+///
+/// 返回 false 表示调用本身失败（`error` 里是英文原因）；返回 true 时看 `*running`，
+/// 它是 false 就说明没有实例在跑（不算错误）。
+bool requestQuit(const QString &key, bool *running, QString *error);
+
+/// 客户端侧：退出事件对象还在不在。守护进程握着它，所以「对象消失」就等于
+/// 「那个实例已经退干净了」——`--quit` 用它来等进程真正收尾。
+bool quitEventExists(const QString &key);
+
 /// 一个已持有的命名互斥体。
 class SingleInstance
 {

@@ -145,6 +145,38 @@ int main(int argc, char *argv[])
         win::writeStdout(core::allKeyNames().join(QStringLiteral("\r\n")) + QStringLiteral("\r\n"));
         return 0;
     }
+    // `--quit`：请正在运行的实例干净退出。它自己不装钩子、不提权，也不读配置
+    // （只看配置文件路径对不对得上）；等对方真的把钩子卸掉再返回，脚本才能接着
+    // 替换 exe（见 AGENTS.md 第 10 节）。
+    if (options.quit) {
+        const QString path = options.config.value_or(core::defaultConfigPath());
+        const QString key = win::instanceKey(path);
+        const QString shown = QDir::toNativeSeparators(path);
+        bool running = false;
+        QString quitError;
+        if (!win::requestQuit(key, &running, &quitError)) {
+            win::writeStderr(toConsole(QStringLiteral("flowkeyd: could not ask %1 to quit: %2\n")
+                                           .arg(shown, quitError)));
+            return 1;
+        }
+        if (!running) {
+            win::writeStderr(toConsole(
+                QStringLiteral("flowkeyd: no running instance for %1\n").arg(shown)));
+            return 1;
+        }
+        for (int attempt = 0; attempt < 100; ++attempt) {
+            if (!win::quitEventExists(key)) {
+                win::writeStdout(
+                    toConsole(QStringLiteral("flowkeyd: %1 exited\n").arg(shown)));
+                return 0;
+            }
+            Sleep(100);
+        }
+        win::writeStderr(toConsole(
+            QStringLiteral("flowkeyd: %1 is still running 10 s after the quit request\n")
+                .arg(shown)));
+        return 1;
+    }
     // 离线命令到此为止：**绝不允许**提权，也绝不安装钩子（不变量 11）。
     if (options.check || options.list) {
         const bool usingDefault = !options.config.has_value();

@@ -13,6 +13,8 @@ private slots:
     void fnv1aIsStable();
     void instanceKeyNormalizesThePath();
     void secondAcquireSeesTheFirst();
+    void quitEventNameFollowsTheKey();
+    void quitEventRoundTrip();
 };
 
 void TestInstance::fnv1aIsStable()
@@ -53,6 +55,46 @@ void TestInstance::secondAcquireSeesTheFirst()
     auto third = platform::win::SingleInstance::acquire(key, &thirdAlready, &error);
     QVERIFY2(third.has_value(), qPrintable(error));
     QVERIFY(!thirdAlready);
+}
+
+void TestInstance::quitEventNameFollowsTheKey()
+{
+    const QString key = platform::win::instanceKey(QStringLiteral("C:\\tools\\config.lua"));
+    QCOMPARE(platform::win::quitEventName(key), key + QStringLiteral("-quit"));
+    // 两个名字不能撞在一起，否则「有实例在跑」与「实例在退出」会混淆。
+    QVERIFY(platform::win::quitEventName(key) != key);
+}
+
+void TestInstance::quitEventRoundTrip()
+{
+    // 只属于本测试的 key，避免碰醒真实的守护进程。
+    const QString key =
+        platform::win::instanceKey(QStringLiteral("\\\\.\\pipe\\flowkeyd-quit-test"));
+
+    // 没有实例时：不算错误，`running` 为 false。
+    bool running = true;
+    QString error;
+    QVERIFY2(platform::win::requestQuit(key, &running, &error), qPrintable(error));
+    QVERIFY(!running);
+    QVERIFY(!platform::win::quitEventExists(key));
+
+    // 守护进程那一侧把事件建出来之后，`--quit` 就能找到它并置位。
+    HANDLE event = platform::win::createQuitEvent(key, &error);
+    QVERIFY2(event != nullptr, qPrintable(error));
+    QVERIFY(platform::win::quitEventExists(key));
+    running = false;
+    QVERIFY2(platform::win::requestQuit(key, &running, &error), qPrintable(error));
+    QVERIFY(running);
+    // 自动重置事件：置位一次之后读回来就是有信号。
+    QCOMPARE(WaitForSingleObject(event, 0), DWORD(WAIT_OBJECT_0));
+
+    // 守护进程退出（关掉句柄）之后，事件对象消失 —— `--quit` 就是靠这个
+    // 判断“已经退干净了”。
+    CloseHandle(event);
+    QVERIFY(!platform::win::quitEventExists(key));
+    running = true;
+    QVERIFY2(platform::win::requestQuit(key, &running, &error), qPrintable(error));
+    QVERIFY(!running);
 }
 
 QTEST_MAIN(TestInstance)

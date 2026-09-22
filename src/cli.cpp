@@ -72,6 +72,8 @@ std::optional<QString> parseCli(const QStringList &args, CliOptions *out)
             cli.list = true;
         } else if (name == QLatin1String("--list-keys")) {
             cli.listKeys = true;
+        } else if (name == QLatin1String("--quit")) {
+            cli.quit = true;
         } else if (name == QLatin1String("--log-level")) {
             const auto value = takeValue();
             if (!value.has_value()) {
@@ -138,6 +140,8 @@ QString helpText()
         --check             校验配置并退出
         --list              打印已配置的快捷键并退出
         --list-keys         打印所有可接受的按键名并退出
+        --quit              请正在运行的实例干净退出（按配置文件路径匹配，
+                            最多等 10 秒；没找到在跑的实例时返回 1）
         --log-window        启动时直接打开日志窗口
         --parent-pid <PID>  兼容参数，本项目忽略
         --log-level <LVL>   trace|debug|info|warn|error|off
@@ -156,6 +160,7 @@ QString helpText()
 示例:
     flowkeyd --config C:\tools\config.lua
     flowkeyd --check
+    flowkeyd --quit
     flowkeyd --no-elevate --allow-multi --console
 )")
         .arg(QLatin1String(FLOWKEYD_VERSION));

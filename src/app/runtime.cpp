@@ -2,12 +2,15 @@
 
 #include "app/dispatcher.h"
 #include "lua/lua_config.h"
+#include "platform/win/ffi.h"
 #include "platform/win/hook.h"
 #include "platform/win/logging.h"
+#include "platform/win/single_instance.h"
 
 #include <QMetaObject>
 #include <QThread>
 #include <QVector>
+#include <QWinEventNotifier>
 
 #include <utility>
 
@@ -62,6 +65,23 @@ bool Runtime::start(const QString &configPath,
         return false;
     }
     m_started = true;
+
+    // `--quit` 通道：另一个进程（install.ps1）用它请我们走干净退出路径，
+    // 而不是 `taskkill /F`。事件在 GUI 线程上监听，所以退出走的还是
+    // 托盘「退出」那条 `performShutdown()`。
+    QString quitError;
+    m_quitEvent = win::createQuitEvent(win::instanceKey(configPath), &quitError);
+    if (m_quitEvent == nullptr) {
+        win::logWarn(QStringLiteral("no quit channel (%1); `--quit` cannot reach this instance")
+                         .arg(quitError));
+    } else {
+        auto *notifier = new QWinEventNotifier(static_cast<HANDLE>(m_quitEvent), this);
+        connect(notifier, &QWinEventNotifier::activated, this, [this]() {
+            win::logInfo(QStringLiteral("quit requested by another process"));
+            requestShutdownFromAnyThread();
+        });
+        m_quitNotifier = notifier;
+    }
     return true;
 }
 
@@ -88,6 +108,16 @@ void Runtime::shutdown()
     if (m_dispatcher != nullptr) {
         delete m_dispatcher;
         m_dispatcher = nullptr;
+    }
+    // 事件句柄先关：`quitEventExists()` 把「对象消失」当作「这个实例退干净了」。
+    if (m_quitNotifier != nullptr) {
+        m_quitNotifier->setEnabled(false);
+        delete m_quitNotifier;
+        m_quitNotifier = nullptr;
+    }
+    if (m_quitEvent != nullptr) {
+        CloseHandle(static_cast<HANDLE>(m_quitEvent));
+        m_quitEvent = nullptr;
     }
 }
 

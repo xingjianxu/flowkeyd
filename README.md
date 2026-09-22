@@ -138,8 +138,73 @@ flowkeyd 不会去动它（`--console` 可以强制保留输出）。右键菜�
 （**不带** `/F` 时如果日志窗口开着，`WM_CLOSE` 会被它吃掉，所以要么走托盘退出，
 要么用 `/F`）。日志窗口里看到的只是内存里的一小段——完整日志在日志文件里。
 
-用任务计划程序在登录时运行（*登录时*触发，勾上“使用最高权限运行”，
-这样不会每登录一次就弹一次 UAC），或者放到 `shell:startup` 里的快捷方式中。
+### 开机自启与更新（任务计划程序）
+
+`scripts\install.ps1` 把 release 产物装到 `C:\Program Files\flowkeyd`，并注册一个
+**登录时触发**的计划任务（*使用最高权限运行*）。之后每次登录、以及每次机器重启，
+flowkeyd 都会以管理员权限起来，**不弹 UAC**。
+
+为什么必须是计划任务，而不是 `shell:startup` 快捷方式或 `HKCU\...\Run`：
+
+* flowkeyd 需要管理员权限才能驱动提权进程的窗口、才能执行电源动作；
+  只有计划任务能做到「提权启动且不弹 UAC」（后两者要么以普通权限跑，
+  要么每次登录弹一次 UAC）。
+  也**不要**给 exe 登记 `RUNASADMIN` 兼容性标记：那会让**任何**调用都提权，
+  连 `flowkeyd --check` 都会弹 UAC —— 离线命令本就不该弹 UAC。
+* 服务（Windows Service）不行：它跑在 session 0，`WH_KEYBOARD_LL` 看不到桌面的
+  按键，也没有托盘图标。
+
+```powershell
+# 安装 / 更新（需要管理员；会先停掉当前实例、拷贝、注册任务、再启动）
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1
+
+# 只换 flowkeyd.exe 的快路径（Qt 运行时已经在安装目录里了）
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -ExeOnly
+
+# 只注册 / 检查，不启动
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -NoStart
+
+# 卸载（-RemoveFiles 连安装目录一起删；用户配置与日志不动）
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\uninstall.ps1 -RemoveFiles
+```
+
+**更新循环**（本机开发时）：`cmake --build --preset release` → `install.ps1`
+（想快点就 `-ExeOnly`）→ 完事，脚本自己会把旧实例停干净再启动新的。
+
+脚本里的任务参数（这些默认值全是坑，改的时候别删）：
+
+| 设置 | 值 | 为什么 |
+| ---- | -- | ------ |
+| `RunLevel` | *最高权限*（`HighestAvailable`） | 提权且不弹 UAC |
+| 触发器 | *登录时* + 延迟 15 秒 | 托盘要等 explorer；本版本还没有处理 `TaskbarCreated`（explorer 重启后重新挂托盘图标），延迟是最便宜的兜底 |
+| `ExecutionTimeLimit` | `PT0S`（不限） | **默认是 72 小时** —— 三天后任务计划程序会亲手把守护进程停掉 |
+| 「只在交流电时启动 / 掉电就停」 | 关 | 默认是开 |
+| 多个实例 | 忽略新实例 | 加上 flowkeyd 自己的单实例互斥体，双保险 |
+| 工作目录 | 安装目录 | `--config` 的相对路径与 `{cwd}` 模板看它 |
+| 允许按需启动 | 开 | 更新后不用重启系统，`Start-ScheduledTask flowkeyd` 就能起 |
+| 失败后重启 | 1 分钟一次，最多 3 次 | COM 那几块（Core Audio / 虚拟桌面 vtable）崩了能自己回来；**正常退出（退出码 0）不会触发重启**，所以托盘/`quit` 动作退出后不会被拉起来 |
+
+**任务失败是静默的**：路径写错、exe 被删、单实例冲突…结果都只是「没有托盘图标、
+快捷键不生效」，不会弹任何东西。排查顺序：任务计划程序里看 `flowkeyd` 这个任务
+（*上次运行结果*）、看 `%USERPROFILE%\.config\flowkeyd\flowkeyd.log`、
+再手动跑一次 `Start-ScheduledTask -TaskName flowkeyd`。
+
+任务指向的是**稳定的安装目录**，不是 `build\...`：任务里的路径一旦失效就是上面那种
+静默失败，而构建目录会被清理、被重命名、还会被正在运行的实例锁住。装到
+`C:\Program Files\flowkeyd` 之后，更新永远只是「换掉那个文件」，
+任务本身不需要重新注册（构建目录也不会再被常驻实例占用）。
+
+想立刻关掉正在运行的实例（安装脚本自己也用它）：
+
+```powershell
+& 'C:\Program Files\flowkeyd\flowkeyd.exe' --quit
+```
+
+`--quit` 按**配置文件路径**匹配实例（`--config` 可选），最多等 10 秒；
+它走的是一条命名的事件通道，让守护进程走**干净的退出路径**（卸钩子、退循环），
+而不是 `taskkill /F` —— 后者会留下一个幽灵托盘图标。
+没有在跑的实例时它返回 1，不算错误。
+事件对象带 Low 完整性标签，所以**不提权**的调用方也能请提权的守护进程退出。
 
 ### 本机现在常驻的是 flowkeyd（2026-09，阶段 10）
 
@@ -151,21 +216,26 @@ flowkeyd 不会去动它（`--console` 可以强制保留输出）。右键菜�
 本机那份配置已经搬到 `%USERPROFILE%\.config\flowkeyd\config.lua`（绑定一个字
 都没改），`flowkeyd --check` 通过：24 个快捷键、0 个重映射、零警告。
 
-```powershell
-# 启动常驻：默认会自提权，所以会弹一次 UAC
-Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowkeyd.exe'
+2026-09 起本机也**有**自启了：flowkeyd 装在 `C:\Program Files\flowkeyd`，
+由计划任务 `flowkeyd`（登录时 + 最高权限 + 15 秒延迟）拉起；构建目录里那一份
+只是开发用，不再被常驻实例锁住。
 
-# 干净退出（不带 /F）
-& taskkill.exe /PID <pid>
+```powershell
+# 装 / 更新（管理员；先停旧实例，再拷贝、注册、启动）
+powershell -NoProfile -ExecutionPolicy Bypass -File D:\prj\flowkeyd\scripts\install.ps1
+
+# 干净退出（不提权也行）
+& 'C:\Program Files\flowkeyd\flowkeyd.exe' --quit
+
+# 手动启动/查看任务
+Start-ScheduledTask -TaskName flowkeyd
+Get-ScheduledTask -TaskName flowkeyd
 
 # 回滚到 oskeyd（同样是提权启动）
 Start-Process -Verb RunAs -FilePath 'D:\prj\oskeyd\target\release\oskeyd.exe'
 ```
 
-**没有**给 flowkeyd 加开机自启：oskeyd 本来也没有自启项，它是靠 exe 上的
-`RUNASADMIN` 兼容性标记手动启动的。要做自启就用任务计划程序（*登录时*触发 +
-“使用最高权限运行”）。注意 `RUNASADMIN` 标记会让**任何**调用都提权，
-连 `flowkeyd --check` 都会弹 UAC，所以本仓库没有去登记那个标记。
+回滚前记得先 `uninstall.ps1`（否则两边同时常驻会抢同一批快捷键）。
 
 ## 命令行
 
@@ -181,6 +251,8 @@ flowkeyd [选项]
     --check             校验配置并退出
     --list              打印已解析的快捷键与重映射
     --list-keys         打印所有可接受的按键名
+    --quit              请正在运行的实例干净退出（按配置文件路径匹配，最多等 10 秒；
+                        没找到在跑的实例时返回 1；不会装钩子，也不需要管理员）
     --log-window        启动时直接打开日志窗口
     --parent-pid <PID>  兼容参数，本项目忽略（日志窗口在进程内）
     --log-level <LVL>   trace|debug|info|warn|error|off
@@ -202,6 +274,9 @@ D:\prj\flowkeyd\flowkeyd.lua.example: OK (37 hotkey(s), 3 remap(s))
 
 **离线命令**（`--check` / `--list` / `--list-keys` / `--help` / `--version`）
 永远不会弹 UAC，也绝不安装钩子——为一个只读的校验弹窗很没道理。
+`--quit` 同样不装钩子、不提权（它只去通知一个已经在跑的实例，
+见[开机自启与更新](#开机自启与更新任务计划程序)），但它会去碰另一个进程，
+所以不算离线命令。
 
 守护进程模式（不带任何离线命令）下配置读不出来或校验不过时，flowkeyd 除了把
 错误写进 `stderr`，还会弹一个 Qt 标准消息框（标题 `flowkeyd 配置错误`，错误文本
@@ -891,7 +966,11 @@ $env:FLOWKEYD_ALLOW_INTERACTIVE_TESTS = '1'
   （完整内容见日志文件），带一个子串筛选框，但还没有 `--follow`/`--grep` 之类
   的命令行参数，也不做“INFO 与 DEBUG 分色”之外的渲染。打开着日志窗口时，
   `taskkill /PID`（**不带** `/F`）退不掉进程（`WM_CLOSE` 被它吃掉），要走托盘
-  *退出*、`quit` 动作，或直接 `/F`。
+  *退出*、`quit` 动作、`--quit`，或直接 `/F`。
+* 守护进程**一直把日志文件开着写**，所以用 .NET 默认共享模式读它会报“文件正由
+  另一进程使用”（`[System.IO.File]::ReadAllLines` / `ReadAllText`）：它们要的是
+  `FileShare.Read`，与写句柄不兼容。用 `Get-Content -Encoding UTF8`，或者自己用
+  `FileShare.ReadWrite` 打开。`scripts\install.ps1` 里就是这么读的。
 * `menu` 与 `help` 的配色跟随系统 `palette`（比 oskeyd 的固定深色好），
   但**字体固定为微软雅黑**（不跟随系统字体），条目左侧还没有图标，动画也比较朴素。
 * 帮助窗口里 `Enter`/双击会**真的执行**那一行的动作（重映射那一行会真的注入
@@ -910,7 +989,13 @@ $env:FLOWKEYD_ALLOW_INTERACTIVE_TESTS = '1'
 * 托盘菜单里的动作和控制台快捷键动作走同一条控制通道，但**菜单**本身没有自动化
   覆盖（那需要 UI 自动化）；自提权的 UAC 流程也只能手工验证。
 * 托盘图标还不跟随 explorer 重启（没有处理 `TaskbarCreated`），也还没有真正的
-  应用图标（现在用系统图标）。
+  应用图标（现在用系统图标）。也因为这个，计划任务的登录触发器加了 15 秒延迟：
+  启动得太早会拿不到托盘图标，而且本版本不会在 explorer 回来后自己补上。
+* **计划任务的失败是静默的**：任务里的 exe 路径失效、单实例冲突、任务被禁用……
+  表现都只是“没有托盘图标、快捷键不生效”，不会弹任何东西。排查看任务计划程序
+  里 `flowkeyd` 那一条的*上次运行结果*，再看日志文件。
+  `scripts\install.ps1` 用的是稳定的安装目录（`C:\Program Files\flowkeyd`），
+  所以正常更新不会碰到这个问题。
 * **没有 `--simulate` / `--selftest` / `--probe`。** 引擎与钩子的行为靠
   `scripts/acceptance.ps1`（注入按键的外部观察）与 Qt Test 单测来验证，
   但那三个开关仍然是明确的待办（见[路线图](#路线图)）：

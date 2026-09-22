@@ -50,9 +50,16 @@
 >    （会因代码页变乱码）：要么写成脚本文件，要么只用 ASCII 的模式串。
 > 9. **接管已经完成（2026-09，第 10 阶段）：现在该常驻的是 flowkeyd。**
 >    用户日常绑定的提供者就是它，所以**不要**再去拉起别的实现。
->    提权常驻的启动由用户自己一条
->    `Start-Process -Verb RunAs ...\flowkeyd.exe` 完成 —— agent 的 shell 没有提权，
->    也不该去点 UAC；细节见第 10 阶段与 `README.md`。
+>    2026-09 起常驻实例是**计划任务** `flowkeyd`（登录时 + 最高权限）拉起的
+>    `C:\Program Files\flowkeyd\flowkeyd.exe`：装/更新一律
+>    `scripts\install.ps1`，停止用 `flowkeyd.exe --quit`（不要 `taskkill /F`，
+>    会留幽灵托盘图标），别再把常驻起在构建目录里 —— 那会把 release 产物锁住。
+>    细节见第 10 节与 `README.md` 的「开机自启与更新」。
+>
+>    **注意（2026-09 实测）**：这台机器上 agent 的 `powershell.exe` **是提权的**
+>    （`WindowsPrincipal.IsInRole(Administrator)` 为真），所以它能注册/启停那个
+>    「最高权限」任务。但**不要**假定它永远如此：写脚本/验证时先用
+>    `Assert-Admin` 之类的检查站稳，再动手。
 >
 >    开发期起 flowkeyd 一律用 `--no-elevate --allow-multi` + 一次性配置，
 >    并且**不要**占用用户真实配置里已经有的和弦（`Win+S`、`Win+1..3`、`Win+W`、
@@ -95,6 +102,7 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | 日志文件   | `%USERPROFILE%\.config\flowkeyd\flowkeyd.log`                                                                 |
 | 注入标记   | `dwExtraInfo` 里的 `"FLOW"`                                                                                   |
 | 互斥体     | `Local\flowkeyd-<配置路径散列>`                                                                               |
+| 开机自启   | 计划任务 `flowkeyd`（登录时 + 最高权限 + 15 秒延迟）→ `C:\Program Files\flowkeyd\flowkeyd.exe`；装/更新/卸载走 `scripts\install.ps1`，停止走 `--quit`（见第 2 节第 10 条与第 10 节） |
 | 日志窗口   | **进程内的 QML 窗口**（FluentWinUI3），尾随同一个日志文件                                                     |
 | 选单/帮助  | **QML 窗口**（FluentWinUI3），跑在 Qt GUI 线程上                                                              |
 | 示例配置   | `flowkeyd.lua.example`                                                                                        |
@@ -189,6 +197,15 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
      属性，不会自动往下传；QML 的 `font` 值类型也只有 `family`，没有族列表）。
      默认族 `Segoe UI Variable` 没有中文字形，不管的话中文会回退到宋体
      —— 见第 10 节。
+10. **开机自启：计划任务 + 稳定的安装目录**（项目所有者 2026-09 拍板，
+    推翻了之前的“不做自启”）。任务 `flowkeyd` 在登录时以
+    **最高权限**启动 `C:\Program Files\flowkeyd\flowkeyd.exe`（这样提权但不弹
+    UAC）；更新只换那个目录里的文件，**任务里的路径永不改变**
+    （指向 `build\…` 的话，构建目录一被清理/改名，自启就会**静默**失效，
+    而且正在跑的实例会把 release 产物锁住）。安装、更新、卸载走
+    `scripts\install.ps1` / `scripts\uninstall.ps1`；脚本自己用 `--quit`
+    把旧实例干净停掉。细节与任务的每个参数见 `README.md` 的「开机自启与更新」，
+    踩过的坑见第 10 节。
 
 ---
 
@@ -267,7 +284,7 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `flowkeyd.lua.example`                    | 有文档、覆盖全部特性的参考配置（中文注释、无警告），`--check` 就是拿它跑的                                                                                                                                                  |
 | `README.md`                               | 用户文档（中文，含完整配置/动作/schema 说明），是配置 schema 的权威定义                                                                                                                                                      |
 | `src/main.cpp`                            | `AttachConsole` + CLI 分发 + 日志初始化 + 单实例 + 组装 Runtime + Qt 事件循环                                                                                                                                               |
-| `src/cli.h/.cpp`                          | 参数解析 + 中文帮助文本（手写，不用 CLI11）                                                                                                                                                                                 |
+| `src/cli.h/.cpp`                          | 参数解析 + 中文帮助文本（手写，不用 CLI11）；`--quit` 走单独的早期分支：不装钩子、不提权，也不在 `isOfflineCommand()` 里（它确实要去碰另一个进程）                                                                                                                                                                                 |
 | `src/core/`                               | **纯逻辑层：不碰 Win32、不碰 Qt GUI**（只用 QtCore 的类型），因此能被 Qt Test 直接测                                                                                                                                        |
 | `src/core/keys.h/.cpp`                    | 键名 ↔ `VK` 表、`Modifiers`、`Chord`、AutoHotkey 发送脚本解析、小键盘 Enter 的内部伪码 `0x100`、`key_from_hook()`/`native_key()`                                                                                            |
 | `src/core/config.h/.cpp`                  | 配置结构体、严格校验（未知字段要报错）、编译成 `Compiled`/`Binding`/`CompiledRemap`、配置文件搜寻与旧 TOML 的迁移提示                                                                                                       |
@@ -291,11 +308,11 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `src/platform/win/power.h/.cpp`           | `powrprof!SetSuspendState`、`user32!ExitWindowsEx`、`LockWorkStation`、`WM_SYSCOMMAND`/`SC_MONITORPOWER` 广播，外加 `SeShutdownPrivilege`                                                                                   |
 | `src/platform/win/tray.h/.cpp`            | 托盘图标 + 气泡提示 + 右键菜单（查看日志/挂起/重载/打开配置/退出）+ 悬停提示                                                                                                                                                |
 | `src/platform/win/logging.h/.cpp`         | 控制台/文件日志器（英文、分级别、可选 ANSI 颜色），`--log-level`/`--log-file`/`--no-color`                                                                                                                                  |
-| `src/platform/win/single_instance.h/.cpp` | 按配置路径散列命名的互斥体，含提权重启后的重试                                                                                                                                                                              |
+| `src/platform/win/single_instance.h/.cpp` | 按配置路径散列命名的互斥体（含提权重启后的重试）；**`--quit` 的命名事件通道**：`quitEventName`/`createQuitEvent`（带 Low 完整性标签的 SDDL，让不提权的调用方也能 `SetEvent`）/`requestQuit`/`quitEventExists` |
 | `src/platform/win/elevate.h/.cpp`         | `ShellExecuteW("runas")` 自提权 + UAC 被拒时降级继续 + `--elevated` 标记 + 命令行/工作目录转发（`quote_arg`）                                                                                                               |
 | `src/app/`                                | 组装层：把 core / lua / platform 串起来，并拥有 Qt 对象                                                                                                                                                                     |
 | `src/app/dispatcher.h/.cpp`               | **动作工作线程**（`QThread`）：执行动作列表，含 `window` 的“先启动再激活”与默认开的 `toggle` 收起、`menu` 的窗口请求、`help` 的窗口请求 + 每一行的“执行目标”（绑定是 press+release 两串动作，`remap` 是直接注入目标按键） |
-| `src/app/runtime.h/.cpp`                  | 引擎 + 钩子 + 分发 + 托盘 + 弹窗的总装，`ControlCmd`（suspend/reload/quit）通道                                                                                                                                             |
+| `src/app/runtime.h/.cpp`                  | 引擎 + 钩子 + 分发 + 托盘 + 弹窗的总装，`ControlCmd`（suspend/reload/quit）通道；还持有 `--quit` 的事件句柄并用 `QWinEventNotifier` 在 GUI 线程上监听（收到就走 `performShutdown`）                                                       |
 | `src/app/log_model.h/.cpp`                | 日志窗口的模型：尾随日志文件（增量、半行、被截断的多字节 UTF-8）、最多 1000 行、按级别配色、子串过滤                                                                                                                        |
 | `src/app/menu_model.h/.cpp`               | `menu` 选单的**纯逻辑**（`QAbstractListModel`，只用 QtCore）：卡片外框几何（宽高、标题、底部提示）、高亮移动（到边界回绕）、单字符选中、`Esc`/`Enter` 语义，以及给 QML 排版用的几个常量（`listTop`/`rowHeight`/`rowSpacing`/`rowInset`/`badgeSize`）。**行几何与鼠标命中不归它管**：列表是真正的 QML `ListView` + 标准 `ItemDelegate`（见第 2 节第 9 条与第 10 节），所以它没有 `rowRect`/`hitTest`，也**没有** `highlighted`/`hovered` 角色（那两个名字被标准委托占了）。悬停仍由模型持有（`hover`/`setHover`），因为「`Enter` 选光标下那一条」是选单的语义 |
 | `src/app/help_model.h/.cpp`               | `help` 帮助的**纯逻辑**（同上）：筛选（和弦/`comment`/`name`/动作摘要）、`可见/总数` 计数、键盘选中项（**高亮就是它**，鼠标悬停不改高亮）、`Enter`/双击该执行还是先武装（危险动作两次确认）、三级 `Esc`，以及鼠标点选用的 `setSelected()`（**可单测**）。**列表的滚动、行几何与鼠标命中都不归它管**：那是一个真正的 QML `ListView` + `ItemDelegate` + Qt 自带的 `ScrollBar`（见第 2 节第 9 条）。`handleKey()` 只接导航键与 `Enter`/`Esc`，字符/退格/`Home`/`End` 放行给标准 `TextField` |
@@ -304,6 +321,8 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `src/qml/`                                | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`（三个文件都在开头写了 `pragma ComponentBehavior: Bound`）；配色一律用 `palette`，没有单独的 `Style.qml`；中文一律 `font.family: "Microsoft YaHei"`（默认族 `Segoe UI Variable` 没有中文字形，不管会回退到宋体，见第 10 节）。`HelpPopup.qml` 与 `MenuPopup.qml` 里除了卡片外框与按键徽标全是标准控件：帮助的筛选框是 `TextField`、列表是 `ListView` + Qt 自带 `ScrollBar` + `ItemDelegate`（列表只占行区域，不再需要表头/底部的遮罩）；选单的列表同样是 `ListView` + `ItemDelegate`（不滚动，所以没有滚动条；悬停与点击全部由委托提供） |
 | `tests/`                                  | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_log_tail`、`tst_audio`、`tst_interactive`（需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`，否则 skip）、`tst_menu_model`、`tst_help_model`、`tst_power_table`、`tst_desktop_table`、`tst_layout` |
 | `scripts/acceptance.ps1`                  | 桌面行为的验收脚本（注入按键 + 焦点捕捉窗口的外部观察，116 项检查：含弹窗滚轮/滚动条拖动/鼠标点选与点筛选框/鼠标点选单条目/`Enter` 与双击真的执行动作/危险动作两次确认）；需交互式桌面，**不属于 `ctest`**，见第 5 节与阶段 9 |
+| `scripts/install.ps1`                     | 装/更新常驻实例：停旧实例（`--quit`，兜底 `Stop-Process`）→ `robocopy /MIR build\dist-release → C:\Program Files\flowkeyd`（`-ExeOnly` 则只换 exe）→ 注册/刷新计划任务 `flowkeyd`（登录时 + 最高权限 + 15 秒延迟）→ `Start-ScheduledTask` → 校验进程与日志；需管理员；纯 ASCII |
+| `scripts/uninstall.ps1`                   | 卸载的薄包装：`install.ps1 -Uninstall`（停实例 + 删任务，`-RemoveFiles` 连安装目录一起删）                                                                                                                              |
 
 ### CMake 目标划分（阶段 6 之后）
 
@@ -448,7 +467,15 @@ QML 模块注册之后，两条 profile 都要重新全量构建一次**。
 * `--console`：保留控制台输出（见第 7 节的 `AttachConsole` 那一条）。
 
 **离线命令（绝不允许提权）**：`--check` / `--list` / `--list-keys`。
-提权判断必须在这些命令 `return` 之后。
+提权判断必须在这些命令 `return` 之后。`--quit` 也不提权（它只去通知一个
+已经在跑的实例），但它会碰另一个进程，所以不算离线命令（第 14 节）。
+
+**常驻实例与开发实例是分开的**：日常那个由计划任务拉起、跑的是安装目录里的
+拷贝（`C:\Program Files\flowkeyd\flowkeyd.exe`，见第 2 节第 10 条）；
+开发/冒烟一律用 `build/...` 里的一次性实例 + `--allow-multi` + 一次性配置。
+两者的单实例锁按**配置文件路径**分开，互不影响。
+要重新链接 release 的 exe 不再需要请用户先退出，因为它已经没在跑构建目录里的
+那份（这是自启改造顺带解决的）。
 
 > 从 2026-09 起，构建目录里就已经有 Qt 与 MinGW 的运行时 DLL（构建后自动跑
 > `windeployqt`，见第 4 节末），所以上面这些命令**不再需要手动把 Qt 的 `bin`
@@ -720,7 +747,7 @@ flowkeyd 自己注入的按键带着 `"FLOW"` 标记，
 | 7 虚拟桌面 + 电源 | **已完成** | `platform/win/desktop|power` + dispatcher 接线；`tst_desktop_table`/`tst_power_table` 全绿；真实 COM 探测/切换与关屏由 `tst_interactive` 验证 |
 | 8 示例配置 + README | **已完成** | 覆盖全特性的 `flowkeyd.lua.example`（37 hotkey / 3 remap，`--check` 零警告）；`README.md` 已写全 |
 | 9 验收（无 e2e 的替代） | **已完成** | `scripts/acceptance.ps1`（77 项检查：68 项原样 + 9 项弹窗滚轮回归，需交互式桌面）+ `FLOWKEYD_ACCEPT_INJECTED` 测试后门；debug 跑 3 遍、release 跑 2 遍全绿 |
-| 10 接管 | **已完成（待用户点一次 UAC）** | 真实配置已迁到 `.config\flowkeyd\config.lua`（24 hotkey / 0 remap，零警告）；常驻启动由用户手动 `Start-Process -Verb RunAs` |
+| 10 接管 | **已完成** | 真实配置已迁到 `.config\flowkeyd\config.lua`（24 hotkey / 0 remap，零警告）；**2026-09 起常驻也有了自启**：计划任务 `flowkeyd` → `C:\Program Files\flowkeyd\flowkeyd.exe`（见第 2 节第 10 条） |
 
 ### 阶段 0：仓库与构建骨架
 
@@ -1382,9 +1409,20 @@ checks: 68, failures: 0
    `keyboard hook removed`）。
 4. `README.md` 新增「本机现在常驻的是 flowkeyd」一节：启动命令、干净退出、
    为什么没加自启。
-5. **没有加开机自启**（用户拍板），也**没有**给 exe 登记 `RUNASADMIN` 兼容性
+5. **当时没有加开机自启**（用户拍板），也**没有**给 exe 登记 `RUNASADMIN` 兼容性
    标记：那个标记会让 `flowkeyd --check` 之类离线命令也弹 UAC
    （离线命令本不该弹 UAC —— 不变量 11）。
+
+> **2026-09 后续：自启补上了。** 用户改主意，要求“开机自启 + 经常更新的场景下也
+> 别出问题”。落地方式：**计划任务（登录时 + 最高权限）指向
+> `C:\Program Files\flowkeyd\flowkeyd.exe`**，装/更新/卸载走
+> `scripts\install.ps1` / `scripts\uninstall.ps1`，停实例走新的 `--quit`。
+> 为什么不指向构建目录、为什么不用启动文件夹/服务、任务的每个参数为什么是那样，
+> 见第 2 节第 10 条、第 10 节「开机自启」那几条与 `README.md` 的「开机自启与更新」。
+> **阶段 10 当时那份“剩下要用户做的一件事”已经作废**：现在一条
+> `scripts\install.ps1` 就把“停旧实例 + 安装 + 注册任务 + 启动”全做完，
+> 而且因为跑的是安装目录里的那份拷贝，**构建目录再也不会被常驻实例锁住**。
+> 下面那段历史记录保留，只为说明当时的处境。
 
 **剩下要用户做的一件事**：agent 的 shell 没有提权，启动提权进程会弹 UAC 而
 没人点（也不该由 agent 去点）。所以常驻由用户自己启动一次：
@@ -2136,6 +2174,120 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   不跟随系统字体设置；配色仍然跟随系统 `palette`。README 的「选单与电源」
   「已知限制」两节已同步。
 
+#### 2026-09 新增：开机自启（计划任务 + 稳定安装目录 + `--quit`）
+
+* **为什么只能是计划任务。** 自启要同时满足两件事：**提权**（否则电源动作、
+  驱动提权窗口都没了）与**不弹 UAC**。`shell:startup` 快捷方式与
+  `HKCU\...\Run` 都做不到（UAC 会在登录时拦一次，而 secure desktop 上的
+  弹窗没人点）；Windows 服务更不行：session 0 里 `WH_KEYBOARD_LL` 看不到
+  桌面按键，也没有托盘。只有计划任务的 `RunLevel=HighestAvailable` 能做到。
+  也**没有**给 exe 登记 `RUNASADMIN`：那会让 `--check` 也弹 UAC。
+* **计划任务的默认值几乎全是坑**（用 `schtasks /Create` 或手点向导都会中）：
+  * `ExecutionTimeLimit` 默认 **`PT72H`** —— 三天后任务计划程序会亲手把
+    守护进程停掉（现象：用了三天，快捷键突然全失效）。必须写 `PT0S`。
+  * `DisallowStartIfOnBatteries` / `StopIfGoingOnBatteries` 默认**是开**的
+    （“只在交流电时启动 / 掉电就停”）。本机是台式机、没电池，看起来无害，
+    但换机器（或插上 UPS/笔记本）就变成“登录后没反应”。显式写 false。
+  * `schtasks` 的默认触发器不能用：只能用 **BootTrigger** 或 LogonTrigger，
+    而 BootTrigger 跑在 **session 0**（没桌面）—— 必须 `LogonTrigger`
+    \+ `LogonType=InteractiveToken` + 指定 `UserId`。
+  * 登录触发器要加 **15 秒延迟**：启动得太早 explorer 还没就绪，托盘图标就
+    拿不到（本版本没处理 `TaskbarCreated`，explorer 重启后也不会自己补上）。
+  * `MultipleInstancesPolicy=IgnoreNew` + flowkeyd 自己的单实例互斥体，双保险。
+  * `WorkingDirectory` 要写安装目录：`--config` 的相对路径与模板里的 `{cwd}`
+    都看它。
+  * `RestartOnFailure`（PT1M x3）值得留：崩了能自己回来，而**正常退出
+    （退出码 0）不会触发重启**，所以托盘/`quit`/`--quit` 退出后不会被拉起来。
+  * 完整 XML 在 `scripts/install.ps1` 的 `New-TaskXml()`，注册用
+    `Register-ScheduledTask -Xml … -Force`（`Register-ScheduledTask` 不在时
+    回退 `schtasks /Create /XML`）。
+* **任务里只能放稳定路径，更新只能换文件、不能换路径。** 任务失败是**完全
+  静默**的：路径失效、exe 被删、单实例冲突……表现都只是“没托盘图标、快捷键
+  不生效”，不会弹任何东西。所以任务指向 `C:\Program Files\flowkeyd\flowkeyd.exe`，
+  而不是 `build\dist-release\...`（那个目录会被清理/改名，还会被正在跑的实例
+  锁住 —— 见第 15 节第 6 条，本次一并解决了）。`install.ps1` 用
+  `robocopy /MIR` 把 `build\dist-release` 镜像过去，需要快的时候 `-ExeOnly`
+  只换那个 38 MB 的 exe（首次全量约 145 MB / 1378 个文件）。
+* **`--quit`：给“从外面干净停掉守护进程”开一条通道。** 之前只有
+  `taskkill /PID`（日志窗口开着时会被 `WM_CLOSE` 吃掉 / 不带 `/F` 无效）与
+  `taskkill /F`（留幽灵托盘图标）两条烂路。做法：
+  * 守护进程用 `CreateEventW` 建一个 `Local\flowkeyd-<散列>-quit`
+    自动重置事件，用 `QWinEventNotifier`（QtCore，不用自己写线程）在 GUI
+    线程上监听，收到就 `requestShutdownFromAnyThread()` —— 走的就是托盘“退出”
+    那条 `performShutdown()`。
+  * 客户端 `--quit` 先 `OpenEventW`，找不到就是“没有在跑的实例”（不是错误）；
+    然后 `SetEvent`，再轮询 `OpenEventW`（**关掉自己的句柄之后**，因为句柄本身
+    会吊住对象）直到对象消失 —— 那就是“真的退干净了”，脚本可以接着替换 exe。
+  * **坑：完整性级别的 “no write up”。** 默认安全描述符建出来的对象带着创建者
+    的完整性标签（提权的守护进程是 High），而 `SetEvent` 要的
+    `EVENT_MODIFY_STATE` 算**写**权限 —— 非提权的 `--quit` 会直接吃
+    `ERROR_ACCESS_DENIED`。所以事件用一个手工拼的 SDDL 建：
+    `D:(A;;GA;;;<当前用户 SID>)S:(ML;;NW;;;LW)`，即把对象的强制标签压到
+    **Low**，任何级别都能写它。拿不到 SID 时退回 `WD`（Everyone）。
+    **怎么验证这种“只在跨权限时才会挂”的东西**：注册一个
+    `RunLevel=LeastPrivilege` + `InteractiveToken` 的一次性任务，让它去跑
+    `flowkeyd.exe --quit` 并把输出/退出码写进文件 —— 提权的 shell 里
+    `runas /trustlevel` 之类都不如这个可靠（任务本身就能拿到 medium IL 的现场）。
+* **守护进程一直把日志文件开着写**，所以 `[System.IO.File]::ReadAllLines` /
+  `ReadAllText` 会报“文件正由另一进程使用”：它们要的是 `FileShare.Read`，
+  与写句柄不兼容（`Get-Content` 用的是 ReadWrite，所以没事）。
+  `install.ps1` 里用 `FileShare.ReadWrite` 的 `FileStream` 读日志。
+  （这也是早期那些“怎么读日志都拿到 0 行”的怪现象的来源。）
+* **PowerShell 的数组 splatting 不能用来转发命名参数。**
+  `& script.ps1 @arrayOfDashNames` 会报
+  `找不到接受实际参数"-TaskName"的位置形式参数`（而且报的还是**里面**那一个
+  调用，非常误导）。转发命名参数一律用**哈希表 splatting**：
+  `$splat = @{ TaskName = $x }; & script.ps1 @splat`。
+* **`C:\Program Files` 里那份拷贝不能被“touch”。** 正在跑的 exe 是锁着的：
+  `(Get-Item exe).LastWriteTime = ...` 都会报“文件正由另一进程使用” ——
+  想造一个“安装目录已过期”的现场，必须先停实例。
+* **`QCoreApplication::applicationDirPath()` 在没有 `QApplication` 时会警告并
+  返回空串**（`QCoreApplication::applicationDirPath: Please instantiate the
+  QApplication object first`）。它在 `core::configPathCandidates()` / 
+  `legacyTomlCandidates()` 里被调用，而这两条都在 `QApplication` 之前跑
+  （离线命令与守护进程都是），于是：**文档里写的“exe 同目录”候选实际是失效的**
+  （`exeDir` 是空串，直接跳过），而 stderr 重定向时还会多一行 Qt 警告。
+  这是个预先存在的小缺陷，不在本次自启任务的范围里，**没改**；
+  要改就得给 core 一个不依赖 Qt 实例的 exe 目录来源（例如
+  `core::setExeDirectory()`，由 main 从平台层传进去），两处调用点都得改。
+* **本机 agent 的 `powershell.exe` 是提权的**（`IsInRole(Administrator)` 为真，
+  实测能注册“最高权限”任务、能 `Stop-Process` 提权进程）。之前 AGENTS 里
+  “agent 的 shell 没有提权”的结论在这台机器上不成立；但**别依赖它**，
+  脚本里仍然要自己检查管理员。
+* **提权实例被强杀会留下幽灵托盘图标**（explorer 不会马上发现进程没了）。
+  所以停实例优先 `--quit`；`Stop-Process -Force` 只当兜底，而且要在脚本里说明。
+
+#### 2026-09 修复：验收脚本在双屏下坐标错位（“拖动滚动条”那条检查时好时坏）
+
+* **现象**：`scripts/acceptance.ps1` 跑到帮助弹窗那一组时，
+  「拖动滚动条真的滚了列表（同一位置已经换了一行）」时会挂。挂的时候连看两次
+  都是同一条，但换一次运行又变绿，很难归因。
+* **抓因的手法**（值得收藏）：把脚本**复制到 `tmp/`**，用
+  `Copy-Item` + `[System.IO.File]::ReadAllText/WriteAllText(..., UTF8Encoding($true))`
+  做字符串替换（**必须保 BOM**，否则脚本里的中文断言会变成乱码），插入
+  `Diag(...)` 把现场写进 `%TEMP%\flowkeyd-accept\diag.txt`；
+  **然后一定要用 read 工具读 diag.txt** —— 把中文打到控制台会被代码页弄成乱码，
+  看上去像“名称对不上”，很容易误判成另一条检查。
+  （另一个发现：`Tee-Object` 写出来的日志是 **UTF-16**，不是 UTF-8。）
+  最后加一条只含 ASCII 的探针，把失败的检查名写进 diag：
+  `$script:failures += $name; Diag("FAILED-CHECK " + $name)` —— 这才是
+  “到底是哪一条挂了”的可靠来源。
+* **根因**（日志里的证据是 `afterDrag=[SENTINEL] fg=…Google Chrome`）：
+  弹窗是按**光标所在那块屏**居中的（`popup_host.cpp` 的
+  `centreOnCursorScreen()`），而脚本里的 `$midX`/`$rowY`/`$barX`/`$barY` 是
+  **在某个检查组开头一次性算好的绝对坐标**。本机是**两快屏**
+  （2x 1920x1080@200%，物理 3840x2160），拖动结束时 `SetCursorPos` 的目标
+  y 会超出屏幕（`$barBottom + 400*$scale`），光标被夹到屏幕边缘后，
+  下一个 `OpenHelp` 就可能把弹窗开在**另一块屏**上：坐标全部对不上，
+  那一下点击会落到另一块屏的浏览器窗口上（既没有复制，也真的点了一下用户的
+  Chrome）。
+* **修法**：`FocusCatcher`（每个依赖焦点的检查组都先调它）里先把光标归位到
+  主屏的固定点 `[FlowInject]::Cursor(200, 200)`。这样每个弹窗都在同一块屏、
+  同一个位置出现，那些一次性算好的坐标就都成立了。修完连跑两次 116/0。
+* **教训**：注入鼠标的脚本里，**凡是用绝对坐标就必须先把光标放到一个确定的
+  起点**（多显示器下尤其如此）；弹窗“跟着光标走”是对的 UX，错的是“坐标算一次
+  就管到底”的测试写法。
+
 ### 领域坑清单（动手前先看这一遍）
 
 下面这些每一条都值得在动钩子/引擎/窗口/电源之前先读一遍：
@@ -2471,6 +2623,48 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > **debug 实例在运行不会锁住 release 产物**，反之亦然。
 > 但仍然要记住：正在运行的 `flowkeyd.exe` 会锁住它自己那个 profile 的产物。
 
+> **2026-09 新增（开机自启 + `--quit` + 安装脚本）的 DoD**：
+> `windows-debug` 与 `windows-release` 都是 `build exit 0`、零编译警告
+> （release 的 `dist-release` 里也是新构建，Size/时间戳与 `windows-release` 一致）；
+> `ctest --test-dir build/windows-debug` **19 个测试目标全绿**
+> （`tst_instance` 从 4 项到 7 项：新增 `quitEventNameFollowsTheKey`、
+> `quitEventRoundTrip`）；`flowkeyd --check --config flowkeyd.lua.example` →
+> `OK (37 hotkey(s), 3 remap(s))`、零警告，用户真实配置 →
+> `OK (24 hotkey(s), 0 remap(s))`；`--version` 仍是 `flowkeyd 0.1.0` + `Lua 5.5.1`。
+> 实测（本机，`session 1`，均为真实提权环境）：
+> * `scripts/install.ps1` 把 `build\dist-release`（1378 个文件）装到
+>   `C:\Program Files\flowkeyd`，注册任务 `flowkeyd`，并拉起实例；
+>   任务导出的参数：`RunLevel=Highest`、`MSFT_TaskLogonTrigger` + `PT15S` +
+>   `UserId=WKS-HW\xingjian`、`ExecutionTimeLimit=PT0S`、
+>   `MultipleInstances=IgnoreNew`、`DisallowStartIfOnBatteries=False`、
+>   `StopIfGoingOnBatteries=False`、`RestartInterval=PT1M` / `RestartCount=3`、
+>   `WorkingDirectory=C:\Program Files\flowkeyd`；日志里是
+>   `running elevated: actions can drive windows of elevated processes`（没有提权重启）。
+> * 再跑一次 `install.ps1`（更新路径）：旧实例收到 `--quit`，日志依次是
+>   `quit requested by another process` / `keyboard hook removed`，随后新实例起来
+>   （全程没有 `taskkill`）。`-ExeOnly` 也验证过（换完 exe 的 SHA-256 与
+>   `dist-release` 一致），`uninstall.ps1 -RemoveFiles` 用一份 **临时安装目录 +
+>   临时任务名** 验证（任务与目录都被清掉，真实任务不受影响）。
+> * **非提权的 `--quit`** 专门验了：用一个 `LeastPrivilege` + `InteractiveToken`
+>   的一次性任务去跑 `--quit`（这才是真实场景：守护进程提权、调用方不提权），
+>   退出码 0、实例真的停了、日志里 `quit requested by another process`。
+> * `--quit` 没找到实例时退出码 1、stderr 是
+>   `flowkeyd: no running instance for <path>`。
+> * `scripts/acceptance.ps1`（只跑 release 产物，先把常驻实例 `--quit` 掉，
+>   免得两边的钩子互相干扰；跑完用 `Start-ScheduledTask` 拉回来）：
+>   **`checks: 116, failures: 0`**，连跑两次都是。
+>   过程里发现并修了**验收脚本自己的一个双屏陷阱**（详情见第 10 节）：
+>   前两次跑都在「拖动滚动条真的滚了列表（同一位置已经换了一行）」这一条上挂，
+>   根因是弹窗按**光标所在那块屏**居中，而脚本用的是一次性算好的绝对坐标——
+>   两次跑之间光标滑到了另一块屏上，坐标就全对不上了（日志证据：
+>   `afterDrag=[SENTINEL] fg=…Google Chrome`，即那一下点在了另一个屏的浏览器上）。
+>   修法是 `FocusCatcher` 里先把光标归位到主屏的固定点 `(200, 200)`；
+>   修完连跑两次 116/0。
+> * 顺带查实了一条与产品无关的环境事实：这台机器是 **两块 1920x1080@200%**
+>   （物理 3840x2160），所以“弹窗在哪个屏上”取决于光标在哪块屏上。
+> 行为变化：新增 `--quit`；常驻实例改为由计划任务从
+> `C:\Program Files\flowkeyd` 启动（不再跑构建目录里那份）。
+
 ---
 
 ## 12. 本期不做的（有意留白）与后续工作
@@ -2600,9 +2794,10 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 | 示例配置   | `flowkeyd.lua.example`                        |
 
 CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、
-`--check`、`--list`、`--list-keys`、`--log-window`、`--log-level`、
+`--check`、`--list`、`--list-keys`、`--quit`、`--log-window`、`--log-level`、
 `--log-file`、`--no-color`、`--allow-multi`、`-h/--help`、`-V/--version`。
-`--parent-pid` 与 `--simulate`/`--selftest`/`--probe` 见第 12 节。
+`--parent-pid` 与 `--simulate`/`--selftest`/`--probe` 见第 12 节；
+`--quit`（请正在跑的实例干净退出）见第 2 节第 10 条与第 5 节。
 
 ### 配置语义要点（容易做漏的）
 
@@ -2686,3 +2881,11 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、
    每次 release 全量构建前要请用户从托盘菜单点一下“退出”。
    可选的长期解法：把常驻实例改从一份**拷贝**（比如 `%LOCALAPPDATA%\flowkeyd\`）
    启动，构建目录就不再被占用 —— 但那需要用户改一下启动习惯。
+   → **已解决（2026-09，自启落地时）**：常驻现在跑的是安装目录里的
+   `C:\Program Files\flowkeyd\flowkeyd.exe`（由计划任务拉起的拷贝），
+   构建目录不再被占用；停实例用 `--quit`（不再需要 `taskkill`），
+   `scripts\install.ps1` 自己就是“停→拷→注册→启”。
+   当年的“改名绕路”（把被锁的 exe `Move-Item` 成 `*.locked`）仍然有效，
+   但已经用不上了。
+   → **附带更正**：本机 agent 的 shell **是提权的**（与这段原始的假设不同），
+   所以旧构建里的那个实例也能 `Stop-Process`。仍然优先用 `--quit`。

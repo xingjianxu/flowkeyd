@@ -13,6 +13,7 @@
 #include <memory>
 
 class QThread;
+class QWinEventNotifier;
 
 namespace flowkeyd::platform::win {
 class HookThread;
@@ -85,6 +86,9 @@ private:
     PopupHost *m_popupHost = nullptr;
     QThread *m_workerThread = nullptr;
     Dispatcher *m_dispatcher = nullptr;
+    /// `--quit` 的退出事件（`HANDLE`；这里不引入 `windows.h`，见 runtime.cpp）。
+    void *m_quitEvent = nullptr;
+    QWinEventNotifier *m_quitNotifier = nullptr;
     bool m_shuttingDown = false;
     bool m_started = false;
 };

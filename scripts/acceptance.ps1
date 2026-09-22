@@ -579,6 +579,13 @@ function Clear-Seen { $seen.Clear() }
 function SeenHas([string]$fragment) { return ($seen | Where-Object { $_ -like "*$fragment*" } | Measure-Object).Count -gt 0 }
 function SeenDump { return ($seen -join ' ') }
 function FocusCatcher {
+    # 先把光标挪回主屏上一个固定点：弹窗是按**光标所在那块屏**居中的
+    # （`centreOnCursorScreen`），而下面那些检查用的是**一次性算好的绝对坐标**。
+    # 光标要是停在另一块屏幕上，弹窗就会开到那块屏上去，坐标全部对不上
+    # （实测：双屏下“拖动滚动条”之后的那个点击会落到另一块屏的别的窗口上，
+    # 于是这一条检查会时好时坏）。每次抢焦点时顺手归位，让每个检查组都从
+    # 同一个起点开始。
+    [FlowInject]::Cursor(200, 200)
     for ($i = 0; $i -lt 4; $i++) {
         if ([FlowInject]::ForegroundTitle() -eq 'flowkeyd-accept-catcher') { break }
         $form.Activate() | Out-Null

@@ -19,6 +19,8 @@ struct CliOptions
     bool list = false;
     /// 打印 `keys = ...` 中可用的全部按键名。
     bool listKeys = false;
+    /// 请正在运行的实例干净退出（按配置文件路径匹配）。
+    bool quit = false;
     std::optional<QString> logLevel;
     std::optional<QString> logFile;
     bool noColor = false;
@@ -39,6 +41,9 @@ struct CliOptions
 
     /// 处理完请求后进程是否应当立即退出。
     /// 这些命令**绝不允许**提权，也绝不安装钩子。
+    ///
+    /// `--quit` 不在其中：它不装钩子、不提权，但确实要去碰另一个正在跑的实例
+    /// （所以由 main 单独处理，见 AGENTS.md 第 10 节）。
     bool isOfflineCommand() const { return showHelp || showVersion || listKeys || check || list; }
 };
 
