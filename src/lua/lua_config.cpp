@@ -828,14 +828,16 @@ core::MonitorRef convertMonitorRef(lua_State *L, int index)
 core::WindowRuleDef convertWindowRule(lua_State *L, int index)
 {
     checkFields(L, index,
-                {"name", "title", "process", "desktop", "monitor", "maximize", "x", "y",
-                 "width", "height", "enabled"});
+                {"name", "title", "process", "desktop", "all_desktops", "monitor", "maximize",
+                 "topmost", "x", "y", "width", "height", "enabled"});
     core::WindowRuleDef rule;
     rule.name = optString(L, index, "name");
     rule.title = optString(L, index, "title");
     rule.process = optString(L, index, "process");
     rule.desktop = optU32(L, index, "desktop");
+    rule.allDesktops = optBool(L, index, "all_desktops");
     rule.maximize = optBool(L, index, "maximize");
+    rule.topmost = optBool(L, index, "topmost");
     rule.x = optI32(L, index, "x");
     rule.y = optI32(L, index, "y");
     rule.width = optU32(L, index, "width");

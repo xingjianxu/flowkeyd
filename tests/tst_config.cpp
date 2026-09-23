@@ -37,6 +37,7 @@ private slots:
     void windowToggleAndAnimateValidation();
     void windowRulesCompile();
     void windowRuleGeometryDefaults();
+    void windowRulePinsAndTopmost();
     void windowRuleProblemsAreReported();
     void settingsValidation();
     void evaluationErrorsAreReported();
@@ -526,6 +527,26 @@ QString windowRuleError(const WindowRuleDef &def)
 
 } // namespace
 
+void TestConfig::windowRulePinsAndTopmost()
+{
+    Config config;
+    WindowRuleDef def;
+    def.process = QStringLiteral("wezterm");
+    def.allDesktops = true;
+    def.topmost = true;
+    config.windowRules.push_back(def);
+
+    const auto compiled = compileOrDie(config);
+    QCOMPARE(compiled->windowRules.size(), std::size_t(1));
+    const WindowRule &rule = compiled->windowRules.at(0);
+    QCOMPARE(rule.allDesktops, std::optional<bool>(true));
+    QCOMPARE(rule.topmost, std::optional<bool>(true));
+    // 钉桌面 / 置顶都不是几何，所以不该顺手把窗口最大化。
+    QVERIFY(!rule.applyGeometry);
+    QVERIFY(!rule.maximize);
+    QVERIFY(compiled->warnings.isEmpty());
+}
+
 void TestConfig::windowRuleProblemsAreReported()
 {
     WindowRuleDef noMatch;
@@ -546,6 +567,14 @@ void TestConfig::windowRuleProblemsAreReported()
     zeroDesktop.desktop = 0;
     QVERIFY2(windowRuleError(zeroDesktop).contains(QStringLiteral("`desktop` must be 1")),
              qPrintable(windowRuleError(zeroDesktop)));
+
+    // 钉在所有桌面与“挪到第 N 个桌面”是矛盾的。
+    WindowRuleDef pinnedAndMoved;
+    pinnedAndMoved.process = QStringLiteral("wezterm");
+    pinnedAndMoved.allDesktops = true;
+    pinnedAndMoved.desktop = 2;
+    QVERIFY2(windowRuleError(pinnedAndMoved).contains(QStringLiteral("all_desktops = true")),
+             qPrintable(windowRuleError(pinnedAndMoved)));
 
     WindowRuleDef zeroMonitor;
     zeroMonitor.process = QStringLiteral("code");

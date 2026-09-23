@@ -156,4 +156,23 @@ std::optional<bool> isWindowOnCurrentDesktop(HWND hwnd, QString *error);
 /// 移动窗口前后对比它，就能知道未公开的 `MoveViewToDesktop` 到底有没有生效。
 std::optional<QString> windowDesktopId(HWND hwnd, QString *error);
 
+/// 窗口是不是被钉在**所有**虚拟桌面上（Task View 里的“在所有桌面显示”）。
+///
+/// 走未公开的 `IVirtualDesktopPinnedApps::IsViewPinned`（`{4CE81583-...}`）：
+/// 这个 IID 自 Windows 10 起没有变过，所以它不进版本表。拿不到那个接口时返回
+/// `std::nullopt`（`error` 里是英文原因）。
+std::optional<bool> isWindowPinned(HWND hwnd, QString *error);
+
+/// 把窗口钉在所有虚拟桌面上（`pinned = false` 取消钉住）。
+///
+/// 成功时 `detail` 是 `"all desktops"` / `"this desktop only"`；
+/// `changed`（可空）报告状态是不是真的变了（已经是目标状态时为 `false`）。
+/// 与 `moveWindowToDesktop` 同一个风险等级：vtable 布局若与系统不匹配只会
+/// 返回错误码，不会随机破坏内存。
+bool setWindowPinned(HWND hwnd,
+                     bool pinned,
+                     QString *detail,
+                     QString *error,
+                     bool *changed = nullptr);
+
 } // namespace flowkeyd::platform::win::desktop

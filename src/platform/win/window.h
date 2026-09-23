@@ -45,6 +45,13 @@ bool isActive(HWND hwnd);
 /// 尽力“把这个窗口变成前台窗口”（前台锁的三级递进绕行，见实现）。
 bool raiseWindow(HWND hwnd);
 
+/// 让窗口始终在最上层（`topmost = false` 取消置顶）。
+///
+/// 同时改 `WS_EX_TOPMOST` 与 Z 序（`SetWindowPos` 的 `HWND_TOPMOST` /
+/// `HWND_NOTOPMOST`），**不激活窗口**。`window_rule` 的 `topmost` 用它；
+/// `window` 动作的 `toggle_topmost` 也走它。
+bool setTopmost(HWND hwnd, bool topmost, QString *error);
+
 /// 对一个已经解析出来的句柄应用 `window` 动作。
 ///
 /// `animate = false`（默认）时先让这个窗口的 DWM 过渡动画静下来，于是

@@ -591,6 +591,28 @@ void placeWindowOnce(const std::shared_ptr<const core::Compiled> &config,
         }
     }
 
+    // 钉在所有虚拟桌面 / 始终在最上层：两个与几何无关的开关。
+    if (rule->allDesktops.has_value()) {
+        QString detail;
+        QString error;
+        bool changed = false;
+        if (!win::desktop::setWindowPinned(hwnd, *rule->allDesktops, &detail, &error, &changed)) {
+            win::logWarn(QStringLiteral("window rule `%1`: %2: %3")
+                             .arg(rule->name, core::rustDebug(title), error));
+        } else if (changed) {
+            done.append(detail);
+        }
+    }
+    if (rule->topmost.has_value()) {
+        QString error;
+        if (!win::window::setTopmost(hwnd, *rule->topmost, &error)) {
+            win::logWarn(QStringLiteral("window rule `%1`: %2: %3")
+                             .arg(rule->name, core::rustDebug(title), error));
+        } else {
+            done.append(*rule->topmost ? QStringLiteral("topmost") : QStringLiteral("not topmost"));
+        }
+    }
+
     // 视图跟着窗口走：让用户跟着它到那张桌面，并且它要重新拿到前台（`SwitchDesktop`
     // 本身会激活目标桌面上“上次用过”的那个窗口，不一定是它）。
     if (followDesktop && movedToAnotherDesktop && rule->desktop.has_value()) {

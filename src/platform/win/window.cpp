@@ -284,6 +284,30 @@ bool raiseWindow(HWND hwnd)
     return raised || isActive(hwnd);
 }
 
+bool setTopmost(HWND hwnd, bool topmost, QString *error)
+{
+    if (hwnd == nullptr || IsWindow(hwnd) == 0) {
+        if (error != nullptr) {
+            *error = QStringLiteral("the window is gone");
+        }
+        return false;
+    }
+    // `WS_EX_TOPMOST` 是窗口管理器维护的“伪样式”：不能用 `SetWindowLongPtr`
+    // 设置，只能用 `SetWindowPos` 的 `HWND_TOPMOST` / `HWND_NOTOPMOST`
+    // （手动写样式位会造成“返回 TRUE 却没生效”的怪状态，实测会遇到）。
+    if (SetWindowPos(hwnd, topmost ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+        == 0) {
+        if (error != nullptr) {
+            *error = QStringLiteral("could not %1 %2")
+                         .arg(topmost ? QStringLiteral("raise") : QStringLiteral("lower"),
+                              core::rustDebug(windowTitle(hwnd)));
+        }
+        return false;
+    }
+    return true;
+}
+
 bool applyTo(HWND hwnd, core::WindowOp op, bool animate, QString *detail, QString *error)
 {
     const QString title = windowTitle(hwnd);
@@ -325,11 +349,9 @@ bool applyTo(HWND hwnd, core::WindowOp op, bool animate, QString *detail, QStrin
     case core::WindowOp::ToggleTopmost: {
         const LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
         const bool topmost = (style & WS_EX_TOPMOST) != 0;
-        const LONG_PTR updated = topmost ? (style & ~static_cast<LONG_PTR>(WS_EX_TOPMOST))
-                                         : (style | static_cast<LONG_PTR>(WS_EX_TOPMOST));
-        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, updated);
-        SetWindowPos(hwnd, topmost ? HWND_NOTOPMOST : HWND_TOPMOST, 0, 0, 0, 0,
-                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        if (!setTopmost(hwnd, !topmost, error)) {
+            return false;
+        }
         break;
     }
     }

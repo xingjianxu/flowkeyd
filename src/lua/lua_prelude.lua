@@ -82,8 +82,12 @@ end
 --   window_rule{ process = "wezterm", desktop = 2, monitor = 2 }
 --   window_rule{ process = "code", monitor = "primary", maximize = false,
 --                x = 0, y = 0, width = 1280, height = 800 }
+--   window_rule{ process = "wezterm", all_desktops = true }   -- 钉在所有虚拟桌面上
+--   window_rule{ process = "code", topmost = true }           -- 始终在最上层
 -- 触发时机只有三个：窗口第一次出现、断开的显示器重新接上、flowkeyd 启动时；
 -- 之后不再干预（用户自己移动/缩放窗口不会被纠正）。
+-- all_desktops = true 与 desktop 互斥；all_desktops / topmost 写 false 就是
+-- 取消钉住 / 取消置顶，不写则不去碰它们。
 function window_rule(t)
   state.window_rules[#state.window_rules + 1] = registration(t, "window_rule")
 end

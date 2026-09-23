@@ -161,6 +161,13 @@ QString WindowRule::summary() const
     if (desktop.has_value()) {
         parts.append(QStringLiteral("desktop %1").arg(*desktop));
     }
+    if (allDesktops.has_value()) {
+        parts.append(*allDesktops ? QStringLiteral("all desktops")
+                                  : QStringLiteral("single desktop"));
+    }
+    if (topmost.has_value()) {
+        parts.append(*topmost ? QStringLiteral("topmost") : QStringLiteral("not topmost"));
+    }
     if (monitor.has_value()) {
         parts.append(monitor->describe());
     }
@@ -481,6 +488,13 @@ std::optional<ConfigError> compile(const Config &config,
                               .arg(label));
             continue;
         }
+        if (def.allDesktops.value_or(false) && def.desktop.has_value()) {
+            errors.append(QStringLiteral("%1: `all_desktops = true` cannot be combined with `desktop`; "
+                                         "a window on every desktop has no single desktop to move "
+                                         "to")
+                              .arg(label));
+            continue;
+        }
         if (def.monitor.has_value() && def.monitor->kind == MonitorRef::Kind::Index
             && def.monitor->index == 0) {
             errors.append(QStringLiteral("%1: `monitor` must be 1 or greater (monitors are numbered "
@@ -505,13 +519,16 @@ std::optional<ConfigError> compile(const Config &config,
         rule.process = hasProcess ? def.process : std::nullopt;
         rule.desktop = def.desktop;
         rule.monitor = def.monitor;
+        rule.allDesktops = def.allDesktops;
+        rule.topmost = def.topmost;
         rule.maximize = def.maximize.value_or(def.monitor.has_value() && !hasGeometry);
         rule.applyGeometry = def.monitor.has_value() || hasGeometry || rule.maximize;
         rule.x = def.x;
         rule.y = def.y;
         rule.width = def.width;
         rule.height = def.height;
-        if (!rule.desktop.has_value() && !rule.applyGeometry) {
+        if (!rule.desktop.has_value() && !rule.applyGeometry && !rule.allDesktops.has_value()
+            && !rule.topmost.has_value()) {
             warnings.append(QStringLiteral("%1: only matches windows and does nothing").arg(label));
             continue;
         }

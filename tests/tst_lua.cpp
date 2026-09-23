@@ -494,6 +494,23 @@ void TestLua::windowRulesAreConverted()
     const auto maximizeDefault = parse(R"(window_rule{ process = "a", monitor = "primary" })");
     QVERIFY(maximizeDefault.has_value());
     QVERIFY(maximizeDefault->windowRules[0].maximize);
+
+    // 钉在所有桌面 / 始终在最上层：两个布尔字段，不写就是不去碰它们。
+    const auto pinned = parse(R"(
+        window_rule{ process = "wezterm", all_desktops = true, topmost = true }
+    )");
+    QVERIFY(pinned.has_value());
+    QCOMPARE(pinned->windowRules.size(), std::size_t(1));
+    QCOMPARE(pinned->windowRules[0].allDesktops, std::optional<bool>(true));
+    QCOMPARE(pinned->windowRules[0].topmost, std::optional<bool>(true));
+    QVERIFY(!pinned->windowRules[0].applyGeometry);
+
+    const auto cleared = parse(R"(
+        window_rule{ process = "wezterm", all_desktops = false, topmost = false }
+    )");
+    QVERIFY(cleared.has_value());
+    QCOMPARE(cleared->windowRules[0].allDesktops, std::optional<bool>(false));
+    QCOMPARE(cleared->windowRules[0].topmost, std::optional<bool>(false));
 }
 
 QTEST_MAIN(TestLua)

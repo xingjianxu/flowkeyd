@@ -211,6 +211,11 @@ struct WindowRuleDef
     std::optional<QString> process;
     /// 目标虚拟桌面序号（1 起，Task View 顺序）。
     std::optional<std::uint32_t> desktop;
+    /// 把窗口钉在**所有**虚拟桌面上（`true`）或取消钉住（`false`）。
+    /// 不写就是不去碰它。与 `desktop` 互斥。
+    std::optional<bool> allDesktops;
+    /// 让窗口始终在最上层（`true`）或取消置顶（`false`）。不写就是不去碰它。
+    std::optional<bool> topmost;
     /// 目标显示器；不写就是窗口当前所在的那一个。
     std::optional<MonitorRef> monitor;
     /// 是否铺满目标显示器的工作区。默认：给了 `monitor`、又没写位置/大小时为 true。
@@ -273,6 +278,7 @@ struct CompiledRemap
 ///
 /// `applyGeometry` 区分「这条规则只挪虚拟桌面」与「还要摆到某个显示器上」：
 /// 只写 `desktop` 时窗口的大小/位置保持不动，不会因为默认最大化而突然被放大。
+/// `allDesktops` / `topmost` 是另外两个与几何无关的开关（见 `WindowRuleDef`）。
 struct WindowRule
 {
     QString name;
@@ -280,6 +286,10 @@ struct WindowRule
     std::optional<QString> process;
     std::optional<std::uint32_t> desktop;
     std::optional<MonitorRef> monitor;
+    /// 钉在所有虚拟桌面上（`true`）/ 取消钉住（`false`）；不写就是不去碰它。
+    std::optional<bool> allDesktops;
+    /// 始终在最上层（`true`）/ 取消置顶（`false`）；不写就是不去碰它。
+    std::optional<bool> topmost;
     /// 是否调整窗口的几何（写了 `monitor` / `maximize` / `x` / `y` / `width` / `height`）。
     bool applyGeometry = false;
     /// 铺满目标显示器的工作区（`applyGeometry` 为 false 时无意义）。

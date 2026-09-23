@@ -34,6 +34,13 @@ const GUID kClsidVirtualDesktopManager = {
 /// `IID_IVirtualDesktopManager`
 const GUID kIidVirtualDesktopManager = {
     0xA5CD92FF, 0x29BE, 0x454C, {0x8D, 0x04, 0xD8, 0x28, 0x79, 0xFB, 0x3F, 0x1B}};
+/// `SID_IVirtualDesktopPinnedApps`（也就是 `CLSID_VirtualDesktopPinnedApps`）：
+/// `QueryService` 用它请求“钉在所有桌面”那个服务。
+const GUID kSidPinnedApps = {
+    0xB5A399E7, 0x1C87, 0x46B8, {0x88, 0xE9, 0xFC, 0x57, 0x47, 0xB1, 0x71, 0xBD}};
+/// `IID_IVirtualDesktopPinnedApps`
+const GUID kIidPinnedApps = {
+    0x4CE81583, 0x1E4C, 0x4632, {0xA6, 0x21, 0x07, 0xA5, 0x35, 0x43, 0x14, 0x8F}};
 
 // --- 手写 vtable -----------------------------------------------------------
 //
@@ -90,6 +97,27 @@ struct IVirtualDesktopManagerVtbl
     ULONG(WINAPI *release)(void *);
     HRESULT(WINAPI *isWindowOnCurrentVirtualDesktop)(void *, HWND, BOOL *);
     HRESULT(WINAPI *getWindowDesktopId)(void *, HWND, GUID *);
+};
+
+/// 未公开的 `IVirtualDesktopPinnedApps`：`IUnknown` + 六个方法。
+///
+/// 「在所有桌面显示」就是 `PinView`（`UnpinView` 取消）。**这个 IID 自
+/// Windows 10 起就没变过**（VD.ahk、MScholtes/VirtualDesktop 与 windhawk 的
+/// virtual-desktop-helper 都用同一个 `{4CE81583-…}`），所以它不进版本表；
+/// 随版本变的是 `IVirtualDesktopManagerInternal` / `IVirtualDesktop`。
+/// 下标 3/4/5 是按 AppUserModelID 钉住整个应用（“显示此应用的所有窗口”），
+/// 这里用不到，但必须留着占位。
+struct IVirtualDesktopPinnedAppsVtbl
+{
+    HRESULT(WINAPI *queryInterface)(void *, const GUID *, void **);
+    ULONG(WINAPI *addRef)(void *);
+    ULONG(WINAPI *release)(void *);
+    void *isAppIdPinned;
+    void *pinAppId;
+    void *unpinAppId;
+    HRESULT(WINAPI *isViewPinned)(void *, void *, BOOL *);
+    HRESULT(WINAPI *pinView)(void *, void *);
+    HRESULT(WINAPI *unpinView)(void *, void *);
 };
 
 /// 未公开的 `IVirtualDesktop`：`IUnknown` + `IsViewVisible`（下标 3，没用到）+
@@ -274,6 +302,12 @@ public:
     /// 把窗口移到第 `index` 个桌面（从 1 开始）。
     bool moveWindowToDesktop(HWND hwnd, std::uint32_t index, QString *detail, QString *error) const;
 
+    /// 窗口是不是被钉在所有虚拟桌面上（`IVirtualDesktopPinnedApps::IsViewPinned`）。
+    bool isViewPinned(HWND hwnd, std::optional<bool> *out, QString *error) const;
+
+    /// 钉住 / 取消钉住（`PinView` / `UnpinView`）。
+    bool setPinned(HWND hwnd, bool pinned, bool *changed, QString *detail, QString *error) const;
+
     /// 等窗口的桌面 GUID 发生变化（`MoveViewToDesktop` 异步生效）。
     /// 只有拿得到移动前后的 GUID 才能回答。
     bool waitForDesktopChange(HWND hwnd, const std::optional<QString> &before) const;
@@ -290,6 +324,8 @@ private:
     bool currentDesktop(ComPtr *out, QString *error) const;
     bool getDesktops(ComPtr *out, QString *error) const;
     bool switchDesktop(const ComPtr &target, QString *error) const;
+    /// 把 `HWND` 换成 shell 侧的 `IApplicationView*`（移动与钉住都要用）。
+    bool viewForWindow(HWND hwnd, ComPtr *out, QString *error) const;
 
     const ApiEntry *m_api = nullptr;
     ComPtr m_manager;
@@ -297,6 +333,8 @@ private:
     ComPtr m_viewCollection;
     /// 已公开的 `IVirtualDesktopManager`；只用来读窗口在哪个桌面。
     ComPtr m_publicManager;
+    /// 未公开的 `IVirtualDesktopPinnedApps`；只用来钉住 / 取消钉住窗口。
+    ComPtr m_pinnedApps;
 };
 
 bool Session::open(const ApiEntry &api, const WindowsVersion &version, QString *error)
@@ -361,6 +399,19 @@ bool Session::open(const ApiEntry &api, const WindowsVersion &version, QString *
         logWarn(QStringLiteral("IVirtualDesktopManager is unavailable (%1); cannot verify "
                                "window moves between desktops")
                     .arg(hresultText(hr)));
+    }
+
+    // “在所有桌面显示”（钉住）用的接口。它的 IID 不随版本变化，拿不到时也只
+    // 影响 `window_rule` 的 `all_desktops`，所以不让整个 Session 失败。
+    void *pinned = nullptr;
+    hr = vtableOf<IServiceProviderVtbl>(provider)->queryService(
+        provider, &kSidPinnedApps, &kIidPinnedApps, &pinned);
+    if (FAILED(hr) || pinned == nullptr) {
+        logWarn(QStringLiteral("IVirtualDesktopPinnedApps is unavailable (%1); window rules "
+                               "cannot pin windows to all desktops")
+                    .arg(hresultText(hr)));
+    } else {
+        m_pinnedApps = ComPtr(pinned);
     }
     return true;
 }
@@ -647,6 +698,110 @@ bool Session::goToWindowDesktop(HWND hwnd, QString *detail, QString *error) cons
     return true;
 }
 
+/// 把 `HWND` 换成 shell 侧的 `IApplicationView*`。
+///
+/// 移动窗口（`MoveViewToDesktop`）与钉住（`PinView`）要的都是这个对象；
+/// 拿不到 `IApplicationViewCollection` 或转换失败时返回 `false`。
+bool Session::viewForWindow(HWND hwnd, ComPtr *out, QString *error) const
+{
+    if (m_viewCollection.get() == nullptr) {
+        if (error != nullptr) {
+            *error = QStringLiteral("the shell's IApplicationViewCollection is not available");
+        }
+        return false;
+    }
+    void *view = nullptr;
+    const HRESULT hr = vtableOf<IApplicationViewCollectionVtbl>(m_viewCollection.get())
+                           ->getViewForHwnd(m_viewCollection.get(), hwnd, &view);
+    if (FAILED(hr) || view == nullptr) {
+        if (error != nullptr) {
+            *error = QStringLiteral("IApplicationViewCollection::GetViewForHwnd failed: %1")
+                         .arg(hresultText(hr));
+        }
+        return false;
+    }
+    *out = ComPtr(view);
+    return true;
+}
+
+bool Session::isViewPinned(HWND hwnd, std::optional<bool> *out, QString *error) const
+{
+    if (m_pinnedApps.get() == nullptr) {
+        if (error != nullptr) {
+            *error = QStringLiteral("the shell's IVirtualDesktopPinnedApps is not available; "
+                                    "cannot tell whether the window is on all desktops");
+        }
+        return false;
+    }
+    ComPtr view;
+    if (!viewForWindow(hwnd, &view, error)) {
+        return false;
+    }
+    BOOL pinned = FALSE;
+    const HRESULT hr = vtableOf<IVirtualDesktopPinnedAppsVtbl>(m_pinnedApps.get())
+                           ->isViewPinned(m_pinnedApps.get(), view.get(), &pinned);
+    if (FAILED(hr)) {
+        if (error != nullptr) {
+            *error = hresultMessage(hr, "IVirtualDesktopPinnedApps::IsViewPinned");
+        }
+        return false;
+    }
+    *out = pinned != FALSE;
+    return true;
+}
+
+bool Session::setPinned(HWND hwnd,
+                        bool pinned,
+                        bool *changed,
+                        QString *detail,
+                        QString *error) const
+{
+    if (m_pinnedApps.get() == nullptr) {
+        if (error != nullptr) {
+            *error = QStringLiteral("the shell's IVirtualDesktopPinnedApps is not available; "
+                                    "cannot pin windows to all desktops");
+        }
+        return false;
+    }
+    ComPtr view;
+    if (!viewForWindow(hwnd, &view, error)) {
+        return false;
+    }
+
+    // 已经是目标状态时不要再调一次 `PinView`（免得 shell 白忙、日志也变吵）。
+    if (changed != nullptr) {
+        std::optional<bool> current;
+        QString ignored;
+        if (isViewPinned(hwnd, &current, &ignored) && *current == pinned) {
+            *changed = false;
+            if (detail != nullptr) {
+                *detail = pinned ? QStringLiteral("already on all desktops")
+                                 : QStringLiteral("already on this desktop only");
+            }
+            return true;
+        }
+    }
+
+    const IVirtualDesktopPinnedAppsVtbl *vtbl =
+        vtableOf<IVirtualDesktopPinnedAppsVtbl>(m_pinnedApps.get());
+    const HRESULT hr = pinned ? vtbl->pinView(m_pinnedApps.get(), view.get())
+                              : vtbl->unpinView(m_pinnedApps.get(), view.get());
+    if (FAILED(hr)) {
+        if (error != nullptr) {
+            *error = hresultMessage(hr, pinned ? "IVirtualDesktopPinnedApps::PinView"
+                                               : "IVirtualDesktopPinnedApps::UnpinView");
+        }
+        return false;
+    }
+    if (changed != nullptr) {
+        *changed = true;
+    }
+    if (detail != nullptr) {
+        *detail = pinned ? QStringLiteral("all desktops") : QStringLiteral("this desktop only");
+    }
+    return true;
+}
+
 bool Session::moveWindowToDesktop(HWND hwnd,
                                   std::uint32_t index,
                                   QString *detail,
@@ -672,21 +827,15 @@ bool Session::moveWindowToDesktop(HWND hwnd,
         return false;
     }
 
-    void *view = nullptr;
-    HRESULT hr = vtableOf<IApplicationViewCollectionVtbl>(m_viewCollection.get())
-                     ->getViewForHwnd(m_viewCollection.get(), hwnd, &view);
-    if (FAILED(hr) || view == nullptr) {
-        if (error != nullptr) {
-            *error = QStringLiteral("IApplicationViewCollection::GetViewForHwnd failed: %1")
-                         .arg(hresultText(hr));
-        }
+    ComPtr viewGuard;
+    if (!viewForWindow(hwnd, &viewGuard, error)) {
         return false;
     }
-    ComPtr viewGuard(view);
+    void *view = viewGuard.get();
 
     void *object = m_manager.get();
     void *desktop = desktops[static_cast<std::size_t>(index) - 1].get();
-    hr = E_FAIL;
+    HRESULT hr = E_FAIL;
     switch (m_api->layout) {
     case Layout::Plain:
         hr = vtableOf<ManagerPlainVtbl>(object)->moveViewToDesktop(object, view, desktop);
@@ -1162,6 +1311,85 @@ std::optional<QString> windowDesktopId(HWND hwnd, QString *error)
         *error = localError;
     }
     return result;
+}
+
+std::optional<bool> isWindowPinned(HWND hwnd, QString *error)
+{
+    if (hwnd == nullptr || IsWindow(hwnd) == 0) {
+        if (error != nullptr) {
+            *error = QStringLiteral("the window is gone");
+        }
+        return std::nullopt;
+    }
+    std::optional<bool> result;
+    QString localError;
+    inSta([&]() {
+        Apartment apartment;
+        if (!apartment.enter(&localError)) {
+            return;
+        }
+        const WindowsVersion version = windowsVersion();
+        const ApiEntry &api = apiFor(version.build, version.revision);
+        Session session;
+        if (!session.open(api, version, &localError)) {
+            return;
+        }
+        std::optional<bool> value;
+        if (!session.isViewPinned(hwnd, &value, &localError)) {
+            return;
+        }
+        result = value;
+    });
+    if (!result.has_value() && error != nullptr) {
+        *error = localError;
+    }
+    return result;
+}
+
+bool setWindowPinned(HWND hwnd, bool pinned, QString *detail, QString *error, bool *changed)
+{
+    if (changed != nullptr) {
+        *changed = false;
+    }
+    if (hwnd == nullptr || IsWindow(hwnd) == 0) {
+        if (error != nullptr) {
+            *error = QStringLiteral("the window is gone");
+        }
+        return false;
+    }
+    QString localDetail;
+    QString localError;
+    bool ok = false;
+    bool localChanged = false;
+    inSta([&]() {
+        Apartment apartment;
+        if (!apartment.enter(&localError)) {
+            return;
+        }
+        const WindowsVersion version = windowsVersion();
+        const ApiEntry &api = apiFor(version.build, version.revision);
+        Session session;
+        if (!session.open(api, version, &localError)) {
+            return;
+        }
+        ok = session.setPinned(hwnd, pinned, &localChanged, &localDetail, &localError);
+    });
+    if (!ok) {
+        if (error != nullptr) {
+            *error = localError.isEmpty()
+                         ? (pinned ? QStringLiteral("could not pin the window to all desktops")
+                                   : QStringLiteral("could not unpin the window from all desktops"))
+                         : localError;
+        }
+        return false;
+    }
+    if (detail != nullptr) {
+        *detail = localDetail;
+    }
+    if (changed != nullptr) {
+        *changed = localChanged;
+    }
+    return true;
 }
 
 } // namespace flowkeyd::platform::win::desktop

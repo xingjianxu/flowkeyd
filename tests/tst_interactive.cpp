@@ -136,6 +136,8 @@ private slots:
     void moveWindowToAnotherDesktopAndBack();
     void activatesAWindowThatIsOnAnotherDesktop();
     void placementMovesAWindowToAnotherMonitor();
+    void pinsAWindowToAllDesktops();
+    void topmostIsAppliedAndCleared();
 };
 
 void TestInteractive::clipboardRoundTrip()
@@ -648,6 +650,123 @@ void TestInteractive::placementMovesAWindowToAnotherMonitor()
         }
     }
     QVERIFY2(normal, "the window did not go back to a normal window on the target monitor");
+}
+
+/// `window_rule` 的 `all_desktops`：走未公开的 `IVirtualDesktopPinnedApps`
+/// （`PinView` / `UnpinView` / `IsViewPinned`）。
+///
+/// `PinView` 返回 S_OK 不代表真的钉上了，所以这里用 `IsViewPinned` 从外面确认
+/// 状态真的变了 —— 这也是唯一能证明那个 vtable 下标（6/7/8）没选错的办法。
+void TestInteractive::pinsAWindowToAllDesktops()
+{
+    if (!interactiveEnabled()) {
+        QSKIP("set FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1 to run the interactive tests");
+    }
+    const QString marker =
+        QStringLiteral("flowkeyd-pin-%1").arg(QCoreApplication::applicationPid());
+    TestWindow window(marker);
+    HWND hwnd = window.hwnd();
+    QVERIFY2(hwnd != nullptr, "the test window was not created");
+
+    QString error;
+    const auto before = platform::win::desktop::isWindowPinned(hwnd, &error);
+    if (!before.has_value()) {
+        QSKIP(qPrintable(QStringLiteral("IVirtualDesktopPinnedApps is unavailable: %1")
+                             .arg(error)));
+    }
+    QVERIFY2(!*before, "the fresh test window is already pinned to all desktops");
+
+    QString detail;
+    bool changed = false;
+    QVERIFY2(platform::win::desktop::setWindowPinned(hwnd, true, &detail, &error, &changed),
+             qPrintable(error));
+    QCOMPARE(detail, QStringLiteral("all desktops"));
+    QVERIFY2(changed, "pinning a fresh window should report a real change");
+
+    bool pinned = false;
+    for (int i = 0; i < 60 && !pinned; ++i) {
+        const auto now = platform::win::desktop::isWindowPinned(hwnd, &error);
+        QVERIFY2(now.has_value(), qPrintable(error));
+        pinned = *now;
+        if (!pinned) {
+            QThread::msleep(50);
+        }
+    }
+    QVERIFY2(pinned, "the window did not become pinned after PinView");
+
+    // 幂等：已经是目标状态时不再调 `PinView`，`changed` 为假。
+    changed = true;
+    QVERIFY2(platform::win::desktop::setWindowPinned(hwnd, true, &detail, &error, &changed),
+             qPrintable(error));
+    QVERIFY(!changed);
+    QCOMPARE(detail, QStringLiteral("already on all desktops"));
+
+    // 取消钉住：别给用户留下一个到处都显示的窗口。
+    changed = false;
+    QVERIFY2(platform::win::desktop::setWindowPinned(hwnd, false, &detail, &error, &changed),
+             qPrintable(error));
+    QVERIFY2(changed, "unpinning a pinned window should report a real change");
+    QCOMPARE(detail, QStringLiteral("this desktop only"));
+
+    bool unpinned = false;
+    for (int i = 0; i < 60 && !unpinned; ++i) {
+        const auto now = platform::win::desktop::isWindowPinned(hwnd, &error);
+        QVERIFY2(now.has_value(), qPrintable(error));
+        unpinned = !*now;
+        if (!unpinned) {
+            QThread::msleep(50);
+        }
+    }
+    QVERIFY2(unpinned, "the window stayed pinned after UnpinView");
+}
+
+/// `window_rule` 的 `topmost`：`WS_EX_TOPMOST` 与 Z 序都要跟着变，而且不能
+/// 把窗口激活。用的是已公开的 `SetWindowPos`，风险很低，但值得盯住。
+///
+/// 这里刻意先做一遍**几何摆放**（跨屏 + 最大化 + 还原）再置顶，因为
+/// `placeWindowOnce` 就是这个顺序：先搬桌面 / 摆几何，最后才置顶。
+void TestInteractive::topmostIsAppliedAndCleared()
+{
+    if (!interactiveEnabled()) {
+        QSKIP("set FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1 to run the interactive tests");
+    }
+    const QString marker =
+        QStringLiteral("flowkeyd-top-%1").arg(QCoreApplication::applicationPid());
+    TestWindow window(marker);
+    HWND hwnd = window.hwnd();
+    QVERIFY2(hwnd != nullptr, "the test window was not created");
+
+    QString error;
+
+    // 先按 `window_rule` 的顺序摆一次几何（有第二块屏时）。
+    const std::vector<core::MonitorDescription> monitors =
+        core::sortedMonitors(platform::win::monitor::list());
+    if (monitors.size() >= 2) {
+        const auto currentIndex = platform::win::monitor::indexForWindow(monitors, hwnd);
+        QVERIFY(currentIndex.has_value());
+        const std::size_t targetIndex = *currentIndex == 0 ? monitors.size() - 1 : 0;
+        const core::MonitorDescription &target = monitors[targetIndex];
+        const core::Rect current =
+            platform::win::monitor::windowRect(hwnd).value_or(core::Rect{0, 0, 800, 600});
+        const core::Rect maximized = core::placementRect(current, target, true, std::nullopt,
+                                                         std::nullopt, std::nullopt, std::nullopt);
+        QVERIFY2(platform::win::monitor::applyPlacement(hwnd, maximized, true, &error),
+                 qPrintable(error));
+        const core::Rect restored{target.work.x + 40, target.work.y + 40, 800, 600};
+        QVERIFY2(platform::win::monitor::applyPlacement(hwnd, restored, false, &error),
+                 qPrintable(error));
+    }
+
+    QVERIFY2((GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST) == 0,
+             "the fresh test window is already topmost");
+
+    QVERIFY2(platform::win::window::setTopmost(hwnd, true, &error), qPrintable(error));
+    QVERIFY2((GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0,
+             "setTopmost(true) did not set WS_EX_TOPMOST");
+
+    QVERIFY2(platform::win::window::setTopmost(hwnd, false, &error), qPrintable(error));
+    QVERIFY2((GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST) == 0,
+             "setTopmost(false) did not clear WS_EX_TOPMOST");
 }
 
 QTEST_MAIN(TestInteractive)

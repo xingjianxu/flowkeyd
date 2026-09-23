@@ -262,6 +262,20 @@ void TestPlacement::windowRuleSummaryIsReadable()
     positioned.height = 800;
     QCOMPARE(positioned.summary(),
              QStringLiteral("process \"code\", size 1280x800, at 0,10"));
+
+    // 钉桌面 / 置顶：与几何无关的两个开关，也要出现在摘要里。
+    core::WindowRule pinned;
+    pinned.process = QStringLiteral("wezterm");
+    pinned.allDesktops = true;
+    pinned.topmost = true;
+    QCOMPARE(pinned.summary(), QStringLiteral("process \"wezterm\", all desktops, topmost"));
+
+    core::WindowRule cleared;
+    cleared.process = QStringLiteral("wezterm");
+    cleared.allDesktops = false;
+    cleared.topmost = false;
+    QCOMPARE(cleared.summary(),
+             QStringLiteral("process \"wezterm\", single desktop, not topmost"));
 }
 
 QTEST_MAIN(TestPlacement)

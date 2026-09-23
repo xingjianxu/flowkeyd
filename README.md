@@ -15,7 +15,8 @@ flowkeyd 是 **oskeyd**（Rust 参考实现）的 **Qt 6 / C++ 复刻版**：它
 `Enter`（或双击一行）就直接把那一行的动作跑起来。
 它还能按程序摆放窗口：`window_rule{...}` 让某个程序的窗口第一次出现时落到指定的
 虚拟桌面 / 显示器上（默认铺满那块显示器的工作区），并在之前断开的显示器重新接上时
-重新归位。
+重新归位。规则还能把窗口**钉在所有虚拟桌面上**（`all_desktops = true`）或让它
+**始终在最上层**（`topmost = true`）。
 
 ```lua
 hotkey{
@@ -28,6 +29,9 @@ remap{ from = "CapsLock", to = "Esc" }
 
 -- 按程序摆放窗口：第一次出现时放到第 2 个虚拟桌面的右屏并最大化
 window_rule{ process = "wezterm", desktop = 2, monitor = 2 }
+
+-- 也可以只钉住 / 置顶：切到哪张桌面都看得见，而且一直在最上层
+window_rule{ process = "wezterm", all_desktops = true, topmost = true }
 ```
 
 ## 与 oskeyd 的关系
@@ -869,6 +873,8 @@ window_rule{
   process = "wezterm",   -- 可执行文件名子串（与 `window` 动作的 process 一致）
   title = "项目",        -- 可选，窗口标题子串；两个都给时都要满足
   desktop = 2,           -- 可选，虚拟桌面序号（1 起，Task View 顺序）
+  all_desktops = true,   -- 可选，钉在所有虚拟桌面上（与 desktop 互斥）
+  topmost = true,        -- 可选，始终在最上层
   monitor = 2,           -- 可选：2 / "primary" / "DISPLAY2"
   -- 下面这些不写时的默认是「铺满目标显示器的工作区」
   maximize = false,      -- 可选
@@ -888,6 +894,14 @@ window_rule{
   * `"DISPLAY2"` —— `EnumDisplayMonitors` 的设备名（也可写全名 `\\.\DISPLAY2`）。
 
   找不到匹配的显示器时只记一条 warning，窗口留在原处（例如笔记本没插外接屏时）。
+* `all_desktops = true` 把窗口**钉在所有虚拟桌面上**（Task View 里的「在所有桌面
+  显示」）：切到哪张桌面都看得见它。`false` 是显式取消钉住，不写就不去碰它。
+  它与 `desktop` 互斥（窗口既然在每张桌面上，就没有「搬到第几张」可言），
+  两个都写会被 `--check` 拒绝。
+* `topmost = true` 让窗口**始终在最上层**（`WS_EX_TOPMOST`）；`false` 是显式
+  取消置顶，不写就不去碰它。
+* `all_desktops` 与 `topmost` 都不算“几何”：只写它们（没写 `monitor`）时窗口的
+  大小与位置保持不动，也不会因为默认最大化而突然变大。
 * **默认最大化。** 只写了 `monitor`（而没写位置 / 大小）时，窗口会铺满那块显示器的
   **工作区**（扣掉任务栏）。只写 `desktop` 时窗口的大小与位置保持不动；
   `maximize = true` 与 `x`/`y`/`width`/`height` 不能同时写。
@@ -904,9 +918,10 @@ window_rule{
 2. 之前断开的显示器重新接上（设备名从无到有）；
 3. flowkeyd 启动时，对当前已经存在的窗口过一遍。
 
-之后**不再干预**：你自己移动 / 缩放窗口不会被纠正，直到下次显示器重新接入
-或者重启 flowkeyd。被当成“主窗口”的条件是：可见、没有属主、不是工具窗口
-（`WS_EX_TOOLWINDOW`）、有标题、尺寸非零 —— 应用的内部辅助窗口不会被误摆。
+之后**不再干预**：你自己移动 / 缩放窗口、取消钉住、取消置顶都不会被纠正，
+直到下次显示器重新接入或者重启 flowkeyd。被当成“主窗口”的条件是：可见、
+没有属主、不是工具窗口（`WS_EX_TOOLWINDOW`）、有标题、尺寸非零 ——
+应用的内部辅助窗口不会被误摆。
 
 **规则真的把窗口移到了另一张桌面时，视图也跟着过去**（只限“窗口第一次出现”
 那一遍）：flowkeyd 会切到目标桌面并重新激活那个窗口，于是“启动它”一次就能看到
@@ -1159,12 +1174,20 @@ $env:FLOWKEYD_ALLOW_INTERACTIVE_TESTS = '1'
   窗口会先在当前桌面上出现一瞬间、然后被移走；判断“这是不是主窗口”用的是
   可见 / 无属主 / 非工具窗口 / 有标题 / 尺寸非零这套启发式，偶尔会漏掉一个
   标题设置得很晚的窗口（`process` 匹配不受影响）。
+* `window_rule` 的 `all_desktops` 走的是 shell 另一个未公开接口
+  `IVirtualDesktopPinnedApps`（`{4CE81583-...}`，`QueryService` 的 SID 是
+  `{B5A399E7-...}`）。与 `IVirtualDesktopManagerInternal` 不同，**这个 IID 自
+  Windows 10 起就没变过**，所以它没有版本表；拿不到那个接口时只记一条 warning，
+  规则里其余部分照常生效。本机（build 26200.9457）已用 `IsViewPinned` 验证过
+  `PinView` / `UnpinView` 真的生效。`topmost` 用的是已公开的 `SetWindowPos`，
+  没有这个风险。
 * 跟着窗口切过去（`window_rule` 搬完窗口 / `window` 动作跨桌面唤起）是**故意的
   行为变化**，不是所有程序都欢迎它：某个后台程序如果在启动时开了自己的窗口，
   而你正好给它写了 `window_rule`，你的视图会被拽到那张桌面上。不想被拽就把
   `desktop` 从那条规则里去掉（只留 `monitor`），或者把规则整个 `enabled = false`。
 * `window_rule` 只在**窗口第一次出现、显示器重新接入、以及 flowkeyd 启动时**
-  生效；之后你手动移动 / 缩放窗口不会被纠正。它也不管已经开着的窗口 ——
+  生效；之后你手动移动 / 缩放窗口、取消钉住、取消置顶都不会被纠正。它也不管
+  已经开着的窗口 ——
   想重新归位就按一下 `reload`（会重新读配置，但不会重摆已有窗口）或重启
   flowkeyd。
 
