@@ -3436,6 +3436,36 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > 按工作约定第 11 条：常驻实例已 `--quit` → 构建 release → 从
 > `build\dist-release` 重新拉起（自启任务仍指向那个路径）。
 
+> **2026-09 配置整理（本机真实配置里能合并的部分合并成 `app{...}`）的 DoD**：
+> 本次只改了 `%USERPROFILE%\.config\flowkeyd\config.lua`（在仓库之外）与本文件，
+> **没有碰任何代码**。`windows-debug` 与 `windows-release` 都是 `build exit 0`
+> （两条都是 `ninja: no work to do`，因为 `AGENTS.md` 不是构建输入）；
+> `ctest --test-dir build/windows-debug` **22 个测试目标全绿**（`100% tests passed`）。
+> 合并前后的 `--check` / `--list` 用 `git diff --no-index` 逐字比对
+> （手法见第 10 节）：`--check` 从 `OK (24 hotkey(s), 0 remap(s), 4 window rule(s))`
+> 到**同样的** `OK (24 hotkey(s), 0 remap(s), 4 window rule(s))`、零警告；
+> `--list` 的差异只有两处，且都是 `app{}` 语义的必然结果 ——
+> 5 条快捷键从原来的位置挪到了全局条目之后（见第 2 节第 15 条），
+> 窗口规则的名字从 `chrome-on-1-2` / `code-on-2-2` / `wps-on-3-2` /
+> `wezterm-all-desktops` 变成 `chrome` / `code` / `wps` / `wezterm`
+> （项目所有者选的“用 app 的名字”）。24 条绑定的和弦、动作、`comment` 与
+> 4 条窗口规则的字段逐条不变，所以**行为没有任何变化**。
+> 合并的五段是 `Win+S` → WezTerm、`Win+1` → Chrome、`Win+2` → VS Code、
+> `Win+3` → WPS、`Win+W` → 微信（最后一个只写 `hotkeys`，没有 `window`）；
+> 其余（CapsLock / Alt 导航 / `LWin+F1..F4` / 电源选单 / 帮助 / 小键盘音量 /
+> 控制类）没有 `process` / `title`，继续是全局 `hotkey{}`。
+> **顺带查实（与本次改动无关）**：示例配置 `flowkeyd.lua.example` 现在有
+> **5 条 `--check` 警告** —— `wezterm-right` vs `wezterm`、`code-primary` vs
+> `code`、`steam-on-second` vs `Steam` 三条“匹配同一批窗口”，以及 `Win+S`、
+> `Ctrl+Alt+S` 两条“同一个和弦被绑两次”。根因是 `app{}` 那次提交（`6b64285`）
+> 给 app 段的示例用了**和上面全局段相同的程序**，于是两套条目互相重复。
+> 退出码仍然是 0（DoD 第 5 条只要求“通过”），**本任务没有动示例配置**；
+> 本节上面那条“零警告”的记录因此不准确。要清掉的话，把 app 段换成别的程序
+> （或删掉重复的全局条目）即可。
+> 按工作约定第 11 条：提交之后 `--quit` 常驻 → 构建 release → 从
+> `build\dist-release` 重新拉起（重新拉起也正好让常驻读进这份新配置 ——
+> 常驻是在启动时读配置的，改完不重载/不重启就还是旧的那份）。
+
 ---
 
 ## 12. 本期不做的（有意留白）与后续工作
@@ -3650,9 +3680,24 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、
 ### 本机真实配置（也是验收的清单）
 
 **这份配置住在 `%USERPROFILE%\.config\flowkeyd\config.lua`**。
-`flowkeyd --check`（走默认搜寻）→ `OK (24 hotkey(s), 0 remap(s))`，零警告。
+`flowkeyd --check`（走默认搜寻）→ `OK (24 hotkey(s), 0 remap(s), 4 window rule(s))`，
+零警告。
 
-`%USERPROFILE%\.config\flowkeyd\config.lua` 里的绑定：
+**2026-09：五个「同一个程序的快捷键 + 窗口摆放」合并成了 `app{...}`**
+（`Win+S` → WezTerm、`Win+1` → Chrome、`Win+2` → VS Code、`Win+3` → WPS、
+`Win+W` → 微信）—— `process` 只写一遍，`window` 子表就是那条 `window_rule`。
+这是纯书写上的合并：展开后的 24 条快捷键与 4 条窗口规则与合并前逐条一致，
+`--check` 的计数与零警告都不变。只有两处能从外面观察到：
+
+* `--list` 里这 5 条快捷键排到了全局 `hotkey{}` 之后（app 展开的条目总是排在
+  最后，见第 2 节第 15 条），窗口规则的顺序变成 app 的声明顺序；
+* 窗口规则的**名字**不再是 `chrome-on-1-2` 那种，而是跟着 app 的名字
+  （默认取 `process`）变成 `chrome` / `code` / `wps` / `wezterm` ——
+  项目所有者 2026-09 选的（规则名不必再重复 desktop/monitor 信息）。
+  连带 VS Code 那条的**绑定名**从 `vscode` 变成 `code`（它写了 `comment`，
+  所以 `--list` 与帮助窗口显示的都是 comment，看不出区别）。
+
+`%USERPROFILE%\.config\flowkeyd\config.lua` 里的绑定（★ = 来自 `app{}`）：
 
 | 快捷键                 | 动作                                                                              |
 | ---------------------- | --------------------------------------------------------------------------------- |
@@ -3661,9 +3706,9 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、
 | `Alt+Space`            | `send("{F14}")`                                                                   |
 | `LWin+Q`               | `send("{F24}")`                                                                   |
 | `LWin+F1..F4`          | `desktop(1..4)`（用 Lua `for` 循环生成）                                          |
-| `Win+S`                | `window("activate", { process = "wezterm", launch = … })`                         |
-| `Win+1/2/3`            | `window("activate", { process = "chrome"/"code"/"wps", launch = … })`             |
-| `Win+W`                | `window("activate", { process = "weixin", launch = … })`                          |
+| ★ `Win+S`              | `window("activate", { launch = … })`，process 由 app 继承（`wezterm`）            |
+| ★ `Win+1/2/3`          | `window("activate", { launch = … })`，process 继承自 `chrome`/`code`/`wps`         |
+| ★ `Win+W`              | `window("activate", { launch = … })`，process 继承自 `weixin`                      |
 | `Win+X`                | `menu{ title = "电源", items = { sleep/shutdown/restart/lock/screen_off/取消 } }` |
 | `Win+/`                | `help()`                                                                          |
 | 小键盘 `-`/`+`/`*` | `volume("down"/"up"/"toggle")`，前两个 `repeatable`（静音用 `NumpadMult`） |
@@ -3673,14 +3718,16 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、
 
 **没有** `remap{}`。`settings` 里只有 `log_level = "info"`。
 
-窗口摆放规则（`window_rule`，2026-09 新增；`wezterm-all-desktops` 也是 2026-09 新增）：
+窗口摆放规则（2026-09 起写在 `app{}` 的 `window` 子表里；
+`window_rule{}` 全局注册入口仍然可用，只是本机现在没有单独的规则了）：
 
-| 程序      | desktop | monitor | all_desktops |
-| --------- | ------- | ------- | ------------ |
-| `chrome`  | 1       | 2       |              |
-| `code`    | 2       | 2       |              |
-| `wps`     | 3       | 2       |              |
-| `wezterm` |         |         | true         |
+| app（`process`） | 快捷键  | desktop | monitor | all_desktops |
+| ---------------- | ------- | ------- | ------- | ------------ |
+| `wezterm`        | `Win+S` |         |         | true         |
+| `chrome`         | `Win+1` | 1       | 2       |              |
+| `code`           | `Win+2` | 2       | 2       |              |
+| `wps`            | `Win+3` | 3       | 2       |              |
+| `weixin`         | `Win+W` | —— 没有窗口规则，只有快捷键 —— |      |              |
 
 （`monitor = 2` 在本机是 `\\.\DISPLAY2`，也就是右边那块 1920x1080；
 没写位置/大小时默认最大化。`wezterm` 只钉在所有虚拟桌面上、不摆几何。
