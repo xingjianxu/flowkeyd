@@ -249,11 +249,53 @@ struct SeenChord
 /// 语义上它依然属于这个程序。
 void applyWindowDefaults(ActionSpec &spec,
                          const std::optional<QString> &process,
-                         const std::optional<QString> &title);
+                         const std::optional<QString> &title,
+                         const std::optional<LaunchSpec> &launch);
+
+/// `launch` 的逐字段合并：app 的 `launch` 是默认值，动作里显式写过的字段覆盖它，
+/// 动作顶层的 `wait_ms` 最后压上去（它是 `launch.wait_ms` 的简写）。
+void mergeLaunch(Action &action, const std::optional<LaunchSpec> &base)
+{
+    if (base.has_value()) {
+        LaunchSpec merged = *base;
+        if (action.launch.has_value()) {
+            const LaunchSpec &own = *action.launch;
+            const LaunchFields &written = action.launchFields;
+            if (written.program) {
+                merged.program = own.program;
+            }
+            if (written.args) {
+                merged.args = own.args;
+            }
+            if (written.cwd) {
+                merged.cwd = own.cwd;
+            }
+            if (written.show) {
+                merged.show = own.show;
+            }
+            if (written.shell) {
+                merged.shell = own.shell;
+            }
+            if (written.env) {
+                merged.env = own.env;
+            }
+            if (written.waitMs) {
+                merged.waitMs = own.waitMs;
+            }
+        }
+        action.launch = merged;
+        // 合并完就是一份完整的 `launch`，下次再合并时整份都算显式写的。
+        action.launchFields = LaunchFields{};
+    }
+    if (action.waitMs.has_value() && action.launch.has_value()) {
+        action.launch->waitMs = action.waitMs;
+    }
+}
 
 void applyWindowDefaults(Action &action,
                          const std::optional<QString> &process,
-                         const std::optional<QString> &title)
+                         const std::optional<QString> &title,
+                         const std::optional<LaunchSpec> &launch)
 {
     if (action.kind == Action::Kind::Window) {
         if (process.has_value() && !action.process.has_value()) {
@@ -263,11 +305,12 @@ void applyWindowDefaults(Action &action,
         if (title.has_value() && !action.target.has_value()) {
             action.target = title;
         }
+        mergeLaunch(action, launch);
     }
     if (action.kind == Action::Kind::Menu) {
         for (MenuItemDef &item : action.items) {
             if (item.action) {
-                applyWindowDefaults(*item.action, process, title);
+                applyWindowDefaults(*item.action, process, title, launch);
             }
         }
     }
@@ -275,15 +318,16 @@ void applyWindowDefaults(Action &action,
 
 void applyWindowDefaults(ActionSpec &spec,
                          const std::optional<QString> &process,
-                         const std::optional<QString> &title)
+                         const std::optional<QString> &title,
+                         const std::optional<LaunchSpec> &launch)
 {
     switch (spec.kind) {
     case ActionSpec::Kind::One:
-        applyWindowDefaults(spec.action, process, title);
+        applyWindowDefaults(spec.action, process, title, launch);
         break;
     case ActionSpec::Kind::List:
         for (ActionSpec &item : spec.list) {
-            applyWindowDefaults(item, process, title);
+            applyWindowDefaults(item, process, title, launch);
         }
         break;
     case ActionSpec::Kind::Short:
@@ -342,10 +386,10 @@ void expandApps(const std::vector<AppDef> &apps,
                 hotkey.name = name;
             }
             if (hotkey.action.has_value()) {
-                applyWindowDefaults(*hotkey.action, app.process, app.title);
+                applyWindowDefaults(*hotkey.action, app.process, app.title, app.launch);
             }
             if (hotkey.onRelease.has_value()) {
-                applyWindowDefaults(*hotkey.onRelease, app.process, app.title);
+                applyWindowDefaults(*hotkey.onRelease, app.process, app.title, app.launch);
             }
             hotkeys->push_back(std::move(hotkey));
         }
@@ -368,6 +412,17 @@ std::optional<ConfigError> compile(const Config &config,
     std::vector<HotkeyDef> hotkeys = config.hotkeys;
     std::vector<WindowRuleDef> windowRuleDefs = config.windowRules;
     expandApps(config.apps, &hotkeys, &windowRuleDefs, &errors, &warnings);
+
+    // 动作顶层的 `wait_ms` 是 `launch.wait_ms` 的简写：app 展开时已经合并过，
+    // 这里把全局条目（含嵌套在 `menu` 里的 window 动作）也归一化。
+    for (HotkeyDef &def : hotkeys) {
+        if (def.action.has_value()) {
+            applyWindowDefaults(*def.action, std::nullopt, std::nullopt, std::nullopt);
+        }
+        if (def.onRelease.has_value()) {
+            applyWindowDefaults(*def.onRelease, std::nullopt, std::nullopt, std::nullopt);
+        }
+    }
 
     if (config.settings.tickMs == 0 || config.settings.tickMs > 1000) {
         errors.append(QStringLiteral("settings.tick_ms must be between 1 and 1000 (got %1)")
@@ -795,6 +850,11 @@ void validateAction(const QString &label, const Action &action, QStringList *err
         }
         break;
     case Action::Kind::Window: {
+        if (action.waitMs.has_value() && !action.launch.has_value()) {
+            errors->append(QStringLiteral(
+                               "%1: `wait_ms` needs `launch` (it overrides launch.wait_ms)")
+                               .arg(label));
+        }
         if (action.launch.has_value()) {
             if (action.launch->program.trimmed().isEmpty()) {
                 errors->append(QStringLiteral("%1: launch.program must not be empty").arg(label));

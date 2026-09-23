@@ -315,12 +315,18 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
     `HotkeyDef`，展开出来的条目**排在全局 `hotkey{}` / `window_rule{}` 之后**
     （先注册者先匹配的规则不变）。拍板的细节：
 
-    * 字段只有 `name` / `process` / `title` / `window` / `hotkeys` / `enabled`；
-      `process` 与 `title` 至少写一个。
+    * 字段只有 `name` / `process` / `title` / `launch` / `window` / `hotkeys` /
+      `enabled`；`process` 与 `title` 至少写一个。
     * `window` 就是一条 `window_rule`（字段完全一样），`process` / `title` / `name`
       自动继承，显式写的优先；不写 `window` 就只展开快捷键。
+    * **`launch`（2026-09 新增）**就是这个程序怎么启动，字段与 `window` 动作的
+      `launch` 完全一样（`program` / `args` / `cwd` / `show` / `shell` / `env` /
+      `wait_ms`）。它也是**默认值**：动作不写 `launch` 就整份继承，写了就**逐字段
+      合并**（写了的覆盖、没写的继承）；动作顶层的 `wait_ms` 覆盖 `launch.wait_ms`。
+      “写了哪些字段”由 Lua 层在转换时记进 `core::LaunchFields`（`show` / `shell` /
+      `args` 的默认值与“没写”在值上分不开），见第 10 节。
     * `hotkeys` 里每一项就是一条 `hotkey`；其中的 `window` 动作自动补上 app 的
-      `process` / `title`（显式写的优先），**嵌套在 `menu` 条目里的也算**；
+      `process` / `title` / `launch`（显式写的优先），**嵌套在 `menu` 条目里的也算**；
       只对表 / 构造器形式的 `window` 动作生效（简写字符串没有可继承的字段）。
     * 名字默认：`name` → `process` → `title`；这个名字给展开出来的 `window_rule`
       用，app 里**只有一个 hotkey** 时也给那条绑定当默认名（多个时保持“第一个
@@ -416,7 +422,7 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `src/cli.h/.cpp`                          | 参数解析 + 中文帮助文本（手写，不用 CLI11）；`--quit` 走单独的早期分支：不装钩子、不提权，也不在 `isOfflineCommand()` 里（它确实要去碰另一个进程）；`helpText()`/`versionText()` 都接收 `core::buildVersion()` 给出的构建版本号                                                                                                                                                                                 |
 | `src/core/`                               | **纯逻辑层：不碰 Win32、不碰 Qt GUI**（只用 QtCore 的类型），因此能被 Qt Test 直接测                                                                                                                                        |
 | `src/core/keys.h/.cpp`                    | 键名 ↔ `VK` 表、`Modifiers`、`Chord`、AutoHotkey 发送脚本解析、小键盘 Enter 的内部伪码 `0x100`、`key_from_hook()`/`native_key()`                                                                                            |
-| `src/core/config.h/.cpp`                  | 配置结构体、严格校验（未知字段要报错）、编译成 `Compiled`/`Binding`/`CompiledRemap`、配置文件搜寻与旧 TOML 的迁移提示。`AppDef` 与 `compile()` 里的 `expandApps`/`applyWindowDefaults` 负责把 `app{...}` 展开成普通的 `WindowRuleDef` + `HotkeyDef`（见第 2 节第 15 条）                                                                                                       |
+| `src/core/config.h/.cpp`                  | 配置结构体、严格校验（未知字段要报错）、编译成 `Compiled`/`Binding`/`CompiledRemap`、配置文件搜寻与旧 TOML 的迁移提示。`AppDef` 与 `compile()` 里的 `expandApps`/`applyWindowDefaults` 负责把 `app{...}` 展开成普通的 `WindowRuleDef` + `HotkeyDef`，并把 `process`/`title`/`launch` 逐字段继承下去（见第 2 节第 15 条）                                                                                                       |
 | `src/core/engine.h/.cpp`                  | 快捷键状态机：匹配、优先级、吞键、自动重复抑制、长按重复、挂起、重映射 hold/tap、Win/Alt 菜单遮断按键                                                                                                                       |
 | `src/core/template.h/.cpp`                | `{clipboard}`、`{selection}`、`{date}` 等占位符展开                                                                                                                                                                         |
 | `src/core/action.h/.cpp`                  | 声明式动作的表示 + 摘要文本（`--list` 与 `help()` 都用它）+ `isDestructive()`（帮助窗口要靠它决定“要不要再确认一次”）                                                                                                        |
@@ -2671,6 +2677,41 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   `std::nullopt`（不知道），而不是“在别的桌面上”——否则 `window::isActive` 会把
   一个就在眼前、刚创建的好窗口判成“没在眼前”（`toggle` 就永远收不起它）。
 
+#### 2026-09 新增：`app{...}` 的 `launch` 提级（动作只写 `wait_ms`）
+
+* **需求**（项目所有者）：`app` 段里每个 `hotkey` 的 `window` 动作都要重复一整张
+  `launch = { program, args, wait_ms }`，而启动参数其实是**这个程序自己的属性**。
+  把 `launch` 提到 `app` 上，动作里就只剩 `window("activate")`（或只写要覆盖的
+  `wait_ms`）。
+* **落地**：`AppDef` 多一个 `std::optional<LaunchSpec> launch`；`expandApps` 把它
+  作为**默认值**套到 app 的每个 `window` 动作上（`applyWindowDefaults` 的第 4 个
+  参数），`mergeLaunch` 负责逐字段合并；`Action` 多一个顶层的
+  `std::optional<std::uint64_t> waitMs`（`launch.wait_ms` 的简写）。
+* **`LaunchFields` 是必须的，别想省。** “逐字段合并、动作优先”听起来简单，但
+  `show`（默认 `normal`）、`shell`（默认 false）、`args`（默认空表）的**默认值与
+  “没写”在值上分不开**：app 写了 `show = "maximized"`、动作的 `launch` 只写了
+  `args`，若按值判断就会把 `show` 当成“动作显式写了 normal”而覆盖掉 app 的。
+  所以 Lua 层在 `convertLaunchSpec` 里用 `hasField` 把**写了哪些键**记进
+  `core::LaunchFields`；C++ 里直接构造的 `LaunchSpec` 没有“没写”的概念，默认全
+  true（整份都算显式写的）。
+* **`wait_ms` 要在 `compile()` 里对全局条目也归一化一次。** `mergeLaunch` 只在
+  `expandApps` 里对 app 的 hotkey 跑；全局 `hotkey{}` 的
+  `window("activate", { launch = {…}, wait_ms = 5000 })` 不会被折进
+  `launch.waitMs`，而 dispatcher 读的就是 `launch.waitMs`（静默失效）。所以
+  `compile()` 在 `expandApps` 之后对**所有** hotkey 再跑一遍
+  `applyWindowDefaults(spec, nullopt, nullopt, nullopt)`（只折 `wait_ms`，不动
+  `process`/`target`）。
+* **没有 `launch` 可覆盖时写 `wait_ms` 要报错**（`validateAction`：
+  `` `wait_ms` needs `launch` ``），否则它会变成一个静默的空操作。
+* **迁移本机配置**：五个 app 的 `launch` 从动作搬到 app 上、`wait_ms` 留在动作里，
+  `--check` 与 `--list` 的输出与迁移前**逐字节相同**（`--list` 只显示
+  `(launch if missing)`，不看 `wait_ms`）。
+* **顺带修好了示例配置的 5 条 `--check` 警告**：`app{}` 那次提交给 app 段的示例
+  用了与全局段相同的程序（wezterm / code / Steam）与和弦（`Win+S` / `Ctrl+Alt+S`），
+  于是“匹配同一批窗口”与“同一个和弦被绑两次”各报了几条。这次把 app 段换成
+  `wps` / `obs64` / `Epic Games` 与 `Win+3` / `Ctrl+Alt+K`，现在是**零警告**
+  （`OK (39 hotkey(s), 3 remap(s), 7 window rule(s))`）。
+
 ### 领域坑清单（动手前先看这一遍）
 
 下面这些每一条都值得在动钩子/引擎/窗口/电源之前先读一遍：
@@ -3466,6 +3507,27 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > `build\dist-release` 重新拉起（重新拉起也正好让常驻读进这份新配置 ——
 > 常驻是在启动时读配置的，改完不重载/不重启就还是旧的那份）。
 
+> **2026-09 新增（`app{...}` 的 `launch` 提级）的 DoD**：`windows-debug` 与
+> `windows-release` 都是 `build exit 0`、零编译警告（release 里那句
+> `dxcompiler.dll` 是 `windeployqt` 自己的提示）；
+> `ctest --test-dir build/windows-debug` **22 个测试目标全绿**
+> （`tst_config` 新增 `appLaunchIsInheritedAndOverridden`：整份继承 / `wait_ms`
+> 覆盖 / 逐字段合并 / 全局条目也生效 / 没有 `launch` 却写 `wait_ms` 报错；
+> `tst_lua` 新增 `appLaunchIsHoistedToTheApp`，并改写了
+> `appBlocksExpandIntoHotkeysAndRules`）。
+> `flowkeyd --check --config flowkeyd.lua.example` →
+> `OK (39 hotkey(s), 3 remap(s), 7 window rule(s))`、**零警告**（示例配置的 5 条
+> 重复警告也顺手清掉了）；用户真实配置（不带 `--config`）→
+> `OK (24 hotkey(s), 0 remap(s), 4 window rule(s))`、零警告，
+> 迁移前后的 `--check` 与 `--list` 输出用 `git diff --no-index` 比对**逐字节相同**。
+> 行为变化：新增 `app.launch`（整份继承 + 逐字段合并）与 `window` 动作顶层的
+> `wait_ms`（`launch.wait_ms` 的简写）；README（`app{ ... }` 一节、`window` 动作表、
+> 快速上手示例）、`flowkeyd.lua.example`、本文件第 2/4/10/13/14 节已同步。
+> 本次没有动钩子/引擎/分发/窗口后端（只是配置的加载期合并），所以按第 11 节
+> 第 3 条没有重跑 `scripts/acceptance.ps1`。
+> 按工作约定第 11 条：常驻实例已 `--quit` → 构建 release → 从
+> `build\dist-release` 重新拉起（自启任务仍指向那个路径）。
+
 ---
 
 ## 12. 本期不做的（有意留白）与后续工作
@@ -3575,6 +3637,8 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   README 的 `app{ ... }` 一节与 `flowkeyd.lua.example` →
   `tst_config`（展开）/ `tst_lua`（转换，两种写法与错误信息）。
   如果新字段是“动作的默认值”，跟着 `applyWindowDefaults` 那一对重载改。
+  如果新字段是“可被动作局部覆盖的一整份值”（像 `launch`），照 `LaunchFields`
+  的做法把“写了哪些键”记下来（见第 2 节第 15 条与第 10 节）。
 * **新的窗口条件**：`core/window_match`（纯逻辑）+ `platform/win/window` 的
   枚举适配 + `launch_then_activate` 回退 + 手工冒烟清单里加一条用例。
 * **新按键或别名**：扩展 `core/keys` 的键表并加一个往返用例
@@ -3658,10 +3722,12 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、
   `IVirtualDesktopPinnedApps`（IID `{4CE81583-…}` 自 Win10 起未变，不进版本表），
   `topmost` 走已公开的 `SetWindowPos`。**规则真的把窗口搬到另一张桌面时，只有
   “窗口首次出现”那一遍会让视图跟着切过去并重新激活它**（见第 2 节第 14 条）。
-* `app{}`：`name`、`process`、`title`、`window`（一条 `window_rule`，字段同上）、
+* `app{}`：`name`、`process`、`title`、`launch`（这个程序怎么启动，字段与
+  `window` 动作的 `launch` 一样）、`window`（一条 `window_rule`，字段同上）、
   `hotkeys`（一个 `hotkey{}` 列表）、`enabled`。`process` / `title` 至少写一个；
   `process` / `title` / `name` 自动继承到 `window` 与 hotkey 里的 `window` 动作
-  （显式写的优先）。展开出来的条目排在全局 `hotkey{}` / `window_rule{}` 之后
+  （显式写的优先），`launch` 逐字段继承到 hotkey 里的 `window` 动作。
+  展开出来的条目排在全局 `hotkey{}` / `window_rule{}` 之后
   （见第 2 节第 15 条）；声明式写法叫 `apps`。
 * 和弦语法：`~` 放行原始按键、`*` 忽略额外修饰键；`Numpad*` 与主键盘同名键不同。
 * 动作：`run`/`send`/`type`/`open`/`volume`/`media`/`clipboard`/`window`/
@@ -3674,6 +3740,9 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、
 * `window` 的 `toggle`（默认**开**）只对 `op = "activate"` 有意义；
   `launch` 回退不套用它；显式 `toggle = false` 才关闭。
   “已经激活”要同时满足：前台、未最小化、**就在当前虚拟桌面上**（见第 2 节第 14 条）。
+* `window` 动作顶层的 `wait_ms` 是 `launch.wait_ms` 的简写（也是 app 的 `launch`
+  与动作之间逐字段合并的那一半）；没有 `launch` 可覆盖时 `--check` 报
+  `` `wait_ms` needs `launch` ``。
 * `window` 的 `animate`（默认**关**）只对会改变窗口状态的 `op` 有意义，
   写在不产生过渡的 `op`（`close`/`toggle_topmost`）上要被 `--check` 拒绝。
 
@@ -3697,6 +3766,12 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、
   连带 VS Code 那条的**绑定名**从 `vscode` 变成 `code`（它写了 `comment`，
   所以 `--list` 与帮助窗口显示的都是 comment，看不出区别）。
 
+**2026-09（launch 提级）**：这五条 app 的 `launch` 从动作搬到了 app 上（启动参数
+是这个程序自己的属性），动作只剩下 `window("activate", { wait_ms = … })`。
+`--check`（`OK (24 hotkey(s), 0 remap(s), 4 window rule(s))`、零警告）与 `--list`
+的输出**逐字节不变**（`--list` 只显示 `(launch if missing)`，不看 `wait_ms`），
+合并出来的 `launch` 也一样。
+
 `%USERPROFILE%\.config\flowkeyd\config.lua` 里的绑定（★ = 来自 `app{}`）：
 
 | 快捷键                 | 动作                                                                              |
@@ -3706,9 +3781,9 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、
 | `Alt+Space`            | `send("{F14}")`                                                                   |
 | `LWin+Q`               | `send("{F24}")`                                                                   |
 | `LWin+F1..F4`          | `desktop(1..4)`（用 Lua `for` 循环生成）                                          |
-| ★ `Win+S`              | `window("activate", { launch = … })`，process 由 app 继承（`wezterm`）            |
-| ★ `Win+1/2/3`          | `window("activate", { launch = … })`，process 继承自 `chrome`/`code`/`wps`         |
-| ★ `Win+W`              | `window("activate", { launch = … })`，process 继承自 `weixin`                      |
+| ★ `Win+S`              | `window("activate", { wait_ms = … })`，process 与 launch 由 app 继承（`wezterm`） |
+| ★ `Win+1/2/3`          | `window("activate", { wait_ms = … })`，process 与 launch 继承自 `chrome`/`code`/`wps` |
+| ★ `Win+W`              | `window("activate", { wait_ms = … })`，process 与 launch 继承自 `weixin`          |
 | `Win+X`                | `menu{ title = "电源", items = { sleep/shutdown/restart/lock/screen_off/取消 } }` |
 | `Win+/`                | `help()`                                                                          |
 | 小键盘 `-`/`+`/`*` | `volume("down"/"up"/"toggle")`，前两个 `repeatable`（静音用 `NumpadMult`） |

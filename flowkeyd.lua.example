@@ -544,16 +544,20 @@ window_rule{
 -- =============================================================================
 -- 上面两节是把「唤起某个程序的快捷键」与「这个程序的窗口摆放规则」分开写的；
 -- 一个程序只用一次还行，程序多了就会把 process 写两遍（动作里一次、规则里一次），
--- 而且改程序名要改两处。app{} 把这两半写到一起：
+-- 而且改程序名要改两处。app{} 把这几半写到一起：
 --
 --   name         可选，日志 / --list / 帮助窗口里的名字；不写用 process，再退到 title。
 --   process      可执行文件名子串（与 window_rule / window 动作的 process 一致）。
 --   title        窗口标题子串；与 process 至少写一个。
+--   launch       可选，这个程序怎么启动（字段与 window 动作的 launch 完全一样：
+--                program / args / cwd / show / shell / env / wait_ms）。里面的 window
+--                动作自动继承它，于是只写 window("activate") 就够了；想给某一条
+--                快捷键换等待时间就写 window("activate", { wait_ms = 5000 })。
 --   window       可选，一条 window_rule 的全部字段（desktop / monitor / maximize …），
 --                process / title / name 自动继承，不用重复写。
 --   hotkeys      可选，一组 hotkey（字段与 hotkey{} 完全相同）；其中的 window 动作
---                自动继承 app 的 process / title（显式写的优先），于是 window("activate")
---                不再需要手写 process = "..."。
+--                自动继承 app 的 process / title / launch（显式写的优先；动作自己的
+--                launch 逐字段覆盖 app 的），于是不再需要手写 process = "..."。
 --   enabled      可选，false 表示整条 app（规则 + 快捷键）都忽略。
 --
 -- 展开出来的 hotkey / window_rule 排在全局条目之后（同一次注册顺序的最后），
@@ -563,35 +567,41 @@ window_rule{
 -- app 里**只有一个 hotkey** 时，它的默认名字用 app 的名字；多个时用第一个和弦，
 -- 免得一个 app 下的几条绑定重名。
 
+-- 启动参数与窗口规则都写在 app 上，动作只剩 window("activate")。
 app{
-  process = "wezterm",
-  name = "wezterm",
-  window = { desktop = 2, monitor = 2 },
+  process = "wps",
+  name = "wps",
+  launch = {
+    program = [[C:\tools\ksolaunch.exe]],
+    args = { "/prometheus", "/fromksolaunch" },
+    wait_ms = 10000,
+  },
+  window = { desktop = 3, monitor = 2 },
   hotkeys = {
     {
-      comment = "Win+S：激活 WezTerm（没有就启动）",
-      keys = "Win+S",
-      action = window("activate", {
-        -- process 自动继承 app 的 "wezterm"；launch 仍然是这条快捷键自己的。
-        launch = { program = [[C:\tools\wezterm.exe]], args = { "start" }, wait_ms = 5000 },
-      }),
+      comment = "Win+3：激活 WPS Office（没有就启动）",
+      keys = "Win+3",
+      -- launch 整份继承；process 也自动继承 app 的 "wps"。
+      action = window("activate"),
     },
   },
 }
 
 -- 不写 name 也可以：规则与默认的绑定名都用 process。
 app{
-  process = "code",
+  process = "obs64",
   window = { monitor = "primary", maximize = false, width = 1280, height = 800 },
 }
 
 -- 只按标题匹配的程序（比如没固定可执行文件名的游戏启动器）：title 同样会传给
--- 规则与 hotkey 里的 window 动作。
+-- 规则与 hotkey 里的 window 动作。动作里只写 wait_ms 时，其余启动参数（这里的
+-- program）从 app 的 launch 继承。
 app{
-  title = "Steam",
+  title = "Epic Games",
+  launch = { program = [[C:\tools\epic.exe]] },
   window = { monitor = "DISPLAY2" },
   hotkeys = {
-    { keys = "Ctrl+Alt+S", action = window("activate") },
+    { keys = "Ctrl+Alt+K", action = window("activate", { wait_ms = 8000 }) },
   },
 }
 

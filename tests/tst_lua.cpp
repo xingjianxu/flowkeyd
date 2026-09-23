@@ -86,6 +86,7 @@ private slots:
     void legacyTomlIsRejected();
     void windowRulesAreConverted();
     void appBlocksExpandIntoHotkeysAndRules();
+    void appLaunchIsHoistedToTheApp();
     void appBlocksAreChecked();
 };
 
@@ -517,18 +518,15 @@ void TestLua::windowRulesAreConverted()
 
 void TestLua::appBlocksExpandIntoHotkeysAndRules()
 {
-    // app 把同一个程序的 window_rule 与 hotkey 写在一起：process 只写一遍。
+    // app 把同一个程序的 window_rule 与 hotkey 写在一起：process 只写一遍；
+    // launch 也提级到 app 上，动作只写要覆盖的 wait_ms。
     const auto c = parse(R"(
         app{
           process = "wps",
+          launch = { program = [[C:\tools\ksolaunch.exe]], args = { "/prometheus" }, wait_ms = 10000 },
           window = { desktop = 3, monitor = 2 },
           hotkeys = {
-            {
-              keys = "Win+3",
-              action = window("activate", {
-                launch = { program = [[C:\tools\ksolaunch.exe]], wait_ms = 10000 },
-              }),
-            },
+            { keys = "Win+3", action = window("activate", { wait_ms = 5000 }) },
           },
         }
     )");
@@ -540,6 +538,8 @@ void TestLua::appBlocksExpandIntoHotkeysAndRules()
     QCOMPARE(action.process.value_or(QString()), QStringLiteral("wps"));
     QVERIFY(action.launch.has_value());
     QCOMPARE(action.launch->program, QStringLiteral("C:\\tools\\ksolaunch.exe"));
+    QCOMPARE(action.launch->args, QStringList{QStringLiteral("/prometheus")});
+    QCOMPARE(action.launch->waitMs, std::optional<std::uint64_t>(5000));
     QCOMPARE(c->windowRules.size(), std::size_t(1));
     QCOMPARE(c->windowRules[0].name, QStringLiteral("wps"));
     QCOMPARE(c->windowRules[0].process.value_or(QString()), QStringLiteral("wps"));
@@ -577,6 +577,37 @@ void TestLua::appBlocksExpandIntoHotkeysAndRules()
     QCOMPARE(mixed->windowRules.size(), std::size_t(2));
     QCOMPARE(mixed->windowRules[0].process.value_or(QString()), QStringLiteral("code"));
     QCOMPARE(mixed->windowRules[1].process.value_or(QString()), QStringLiteral("wps"));
+}
+
+void TestLua::appLaunchIsHoistedToTheApp()
+{
+    // 动作什么都不写时，整份 launch 从 app 继承。
+    const auto c = parse(R"(
+        app{
+          process = "wezterm",
+          launch = { program = [[C:\tools\wezterm.exe]], args = { "start" }, wait_ms = 5000 },
+          hotkeys = { { keys = "Win+S", action = window("activate") } },
+        }
+    )");
+    QVERIFY(c.has_value());
+    QCOMPARE(c->bindings.size(), std::size_t(1));
+    const core::Action &action = c->bindings[0].press[0];
+    QVERIFY(action.launch.has_value());
+    QCOMPARE(action.launch->program, QStringLiteral("C:\\tools\\wezterm.exe"));
+    QCOMPARE(action.launch->args, QStringList{QStringLiteral("start")});
+    QCOMPARE(action.launch->waitMs, std::optional<std::uint64_t>(5000));
+
+    // app.launch 必须是表。
+    const QString notATable = failure(R"(
+        app{ process = "wps", launch = 3 }
+    )");
+    QVERIFY2(notATable.contains(QStringLiteral("launch fields")), qPrintable(notATable));
+
+    // 没有 launch 可覆盖时光写 wait_ms 是错的。
+    const QString stray = failure(R"(
+        hotkey{ keys = "F1", action = window("activate", { process = "wps", wait_ms = 5000 }) }
+    )");
+    QVERIFY2(stray.contains(QStringLiteral("`wait_ms` needs `launch`")), qPrintable(stray));
 }
 
 void TestLua::appBlocksAreChecked()

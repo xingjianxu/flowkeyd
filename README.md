@@ -35,13 +35,14 @@ window_rule{ process = "wezterm", desktop = 2, monitor = 2 }
 -- 也可以只钉住 / 置顶：切到哪张桌面都看得见，而且一直在最上层
 window_rule{ process = "wezterm", all_desktops = true, topmost = true }
 
--- 同一个程序的窗口规则 + 快捷键写在一起：process 只写一遍，
--- hotkey 里的 window 动作也自动拿到它
+-- 同一个程序的窗口规则 + 快捷键 + 启动参数写在一起：process 与 launch 只写一遍，
+-- hotkey 里的 window 动作自动拿到它们
 app{
   process = "wps",
+  launch = { program = [[C:\tools\wps.exe]], wait_ms = 10000 },
   window = { desktop = 3, monitor = 2 },
   hotkeys = {
-    { keys = "Win+3", action = window("activate", { launch = { program = [[C:\tools\wps.exe]] } }) },
+    { keys = "Win+3", action = window("activate") },
   },
 }
 ```
@@ -382,9 +383,10 @@ remap{ from = "CapsLock", to = "Esc" }
 -- 按程序摆放窗口：第一次出现时放到第 2 个虚拟桌面、第 2 块显示器上并最大化
 window_rule{ process = "wezterm", desktop = 2, monitor = 2 }
 
--- 同一个程序的窗口规则与唤起它的快捷键写在一起（process 只写一遍）
+-- 同一个程序的窗口规则、启动参数与唤起它的快捷键写在一起
 app{
   process = "wps",
+  launch = { program = [[C:\tools\wps.exe]] },
   window = { desktop = 3, monitor = 2 },
   hotkeys = { { keys = "Win+3", action = window("activate") } },
 }
@@ -632,7 +634,7 @@ hotkey{
 | `volume`    | `op` = `up`/`down`/`set`/`mute`/`unmute`/`toggle`、`level`（0-100）、`step`                               | 对默认输出设备使用 Core Audio 的 `IAudioEndpointVolume`                                                                                                                                                                                                                                   |
 | `media`     | `op` = `play_pause`/`next`/`prev`/`stop`                                                                  |                                                                                                                                                                                                                                                                                           |
 | `clipboard` | `op` = `get`/`set`/`append`/`clear`、`text`                                                               |                                                                                                                                                                                                                                                                                           |
-| `window`    | `op` = `activate`/`minimize`/`maximize`/`restore`/`close`/`toggle_topmost`、`target`、`process`、`launch`、`toggle`、`animate` | `target` 匹配窗口标题的子串，`process` 匹配可执行文件名（`wezterm` 也能匹配 `wezterm-gui.exe`）；既没有 `target` 也没有 `process` 就表示前台窗口。`launch = { program, args[], cwd, show, shell, env{}, wait_ms }` 会在没有任何匹配时启动该程序，然后等待它的窗口（默认 3000 ms）并激活它。`toggle`（默认开，只对 `op = "activate"` 有意义）会在目标窗口已经在前台时改为最小化它。`animate`（默认**关**）控制这次状态变化要不要播放 DWM 的过渡动画 |
+| `window`    | `op` = `activate`/`minimize`/`maximize`/`restore`/`close`/`toggle_topmost`、`target`、`process`、`launch`、`wait_ms`、`toggle`、`animate` | `target` 匹配窗口标题的子串，`process` 匹配可执行文件名（`wezterm` 也能匹配 `wezterm-gui.exe`）；既没有 `target` 也没有 `process` 就表示前台窗口。`launch = { program, args[], cwd, show, shell, env{}, wait_ms }` 会在没有任何匹配时启动该程序，然后等待它的窗口（默认 3000 ms）并激活它。`toggle`（默认开，只对 `op = "activate"` 有意义）会在目标窗口已经在前台时改为最小化它。`animate`（默认**关**）控制这次状态变化要不要播放 DWM 的过渡动画。`wait_ms` 写在动作顶层时是 `launch.wait_ms` 的简写；在 `app{}` 里 `launch` 还会继承 app 的 `launch`（逐字段合并） |
 | `notify`    | `title`、`body`                                                                                           | 托盘气泡提示                                                                                                                                                                                                                                                                              |
 | `menu`      | `title`、`items[]`（每项 `{ key, label, hint, action }`）                                                  | 弹出一个 QML 选单让用户挑一项（见[选单与电源](#选单与电源)）；条目上的单字符 `key` 直接选中它，`↑`/`↓` + `Enter` 与鼠标也能选，`Esc`（或点到别的地方）只关窗口。没有 `action`（或 `none()`）的条目只是把选单关掉                                                                         |
 | `help`      | `title`（可选，默认「快捷键」）                                                                            | 弹出一个**快捷键帮助**（同一套卡片风格，见[快捷键帮助](#快捷键帮助)）：列出当前配置里全部生效的快捷键与重映射；筛选框里直接输入（鼠标点一下就进去）就筛选；`↑`/`↓`、`PgUp`/`PgDn` 或滚轮/拖动滚动条滚动（滚动不改选中项）；**`Enter` 或双击一行 = 关掉窗口并执行那一行的动作**；左键点一行 = 选中它并把它的按键复制到剪贴板；`quit`/`suspend`/`power` 这类危险动作要按两次（第一次只是等确认）；`Esc` 依次是「取消确认 → 清筛选 → 关窗」。列表由配置本身生成，所以没有别的参数 |
@@ -956,9 +958,9 @@ window_rule{
 
 ### `app{ ... }`
 
-把**同一个程序**的窗口摆放规则与快捷键写在一起，省掉重复的 `process` / `title`。
-它本身不是新能力：加载配置时会展开成一条普通的 `window_rule` 与若干条普通的
-`hotkey`，排在同一次注册顺序的最后。
+把**同一个程序**的窗口摆放规则、启动参数与快捷键写在一起，省掉重复的 `process` /
+`title` / `launch`。它本身不是新能力：加载配置时会展开成一条普通的 `window_rule`
+与若干条普通的 `hotkey`，排在同一次注册顺序的最后。
 
 ```lua
 app{
@@ -966,6 +968,11 @@ app{
   process = "wps",               -- 与 window_rule / window 动作的 process 一致
   title = "WPS",                 -- 可选，窗口标题子串
   enabled = true,                -- 可选，false 表示整条 app 都忽略
+  launch = {                     -- 可选：这个程序怎么启动（与 window 动作的 launch 字段一样）
+    program = [[C:\tools\ksolaunch.exe]],
+    args = { "/prometheus" },
+    wait_ms = 10000,
+  },
   window = {                     -- 可选：window_rule 的全部字段
     desktop = 3,
     monitor = 2,
@@ -973,7 +980,8 @@ app{
   hotkeys = {                    -- 可选：与 hotkey{} 字段完全相同
     {
       keys = "Win+3",
-      action = window("activate", { launch = { program = [[C:\tools\ksolaunch.exe]] } }),
+      -- launch 自动继承，所以只写要覆盖的部分（这里把等待时间改成 5 秒）
+      action = window("activate", { wait_ms = 5000 }),
     },
   },
 }
@@ -982,8 +990,14 @@ app{
 * `process` / `title` 至少要写一个（与 `window_rule` 一样）。
 * `window` 就是一条 `window_rule`，字段完全一样；`process` / `title` / `name`
   自动继承，显式写在 `window` 里的优先。不写 `window` 就只展开快捷键。
+* `launch` 就是这个程序怎么启动，字段与 `window` 动作的 `launch` 完全一样
+  （`program`、`args[]`、`cwd`、`show`、`shell`、`env{}`、`wait_ms`）。
+  `hotkeys` 里的 `window()` 动作会自动继承它；动作自己写了 `launch` 时**逐字段合并**
+  （写了的覆盖，没写的继续继承），动作顶层的 `wait_ms` 覆盖 `launch.wait_ms`。
+  于是最常见的写法就是 `action = window("activate")`。
 * `hotkeys` 里每一项就是一条 `hotkey`；其中的 `window()` 动作会自动补上 app 的
-  `process`（写到动作的 `process`）与 `title`（写到动作的 `target`），显式写的优先。
+  `process`（写到动作的 `process`）与 `title`（写到动作的 `target`），以及 app 的
+  `launch`，显式写的优先。
   嵌套在 `menu` 条目里的 `window()` 动作同样继承。**只对表 / 构造器形式的
   `window` 动作生效**：简写字符串（`"window:activate"`）里没有可继承的字段。
 * 名字：`name` 不写时用 `process`，再退到 `title`。这个名字会给展开出来的

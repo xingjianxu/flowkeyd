@@ -98,14 +98,21 @@ end
 --   app{
 --     process = "wps",                     -- 也可只写 title；至少写一个
 --     name = "wps",                        -- 可选，默认用 process（再退到 title）
+--     launch = {                           -- 可选：这个程序怎么启动
+--       program = [[C:\tools\ksolaunch.exe]],
+--       args = { "/prometheus" },
+--       wait_ms = 10000,
+--     },
 --     window = { desktop = 3, monitor = 2 },
 --     hotkeys = {
---       { keys = "Win+3", action = window("activate", { launch = { ... } }) },
+--       -- launch 自动继承，所以这里只写要覆盖的部分
+--       { keys = "Win+3", action = window("activate", { wait_ms = 5000 }) },
 --     },
 --   }
 -- `window` 的字段与 window_rule 完全相同（process / title / name 自动继承）；
 -- `hotkeys` 里每一项与 hotkey 完全相同，其中的 window 动作会自动补上
--- process / title（显式写的优先）。
+-- process / title / launch（显式写的优先：动作自己的 launch 逐字段覆盖 app 的，
+-- 顶层的 wait_ms 覆盖 launch.wait_ms）。
 -- 全局的 hotkey{} / window_rule{} 仍然保留：没有窗口规则的快捷键、
 -- 或没有快捷键的规则，照旧单独写。
 function app(t)
@@ -209,6 +216,10 @@ end
 --   window("activate", { process = "wezterm" })
 --   window("activate", { target = "Notepad", toggle = false })
 --   window("maximize", { animate = true })
+--
+-- `launch = { program, args[], cwd, show, shell, env{}, wait_ms }` 只在没有窗口
+-- 匹配时执行；`wait_ms` 也可以写在动作顶层（它是 `launch.wait_ms` 的简写），
+-- 在 app{} 里还会继承 app 的 launch。
 --
 -- `op = "activate"` 默认带 `toggle`：目标窗口已经在前台时就把它最小化，
 -- 于是同一个快捷键在唤起与收起之间切换（任务栏按钮的行为）。

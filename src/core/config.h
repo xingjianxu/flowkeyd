@@ -232,9 +232,9 @@ struct WindowRuleDef
 /// 一条 `app{...}`：把「同一个程序」的窗口摆放规则与快捷键写在一起。
 ///
 /// 它本身不是新能力，只是**书写上的合并**：`compile()` 会把它展开成一条普通的
-/// `WindowRuleDef` 与若干条 `HotkeyDef`，`process` / `title` / `name` 自动继承，
-/// 不用在 `window_rule{}` 与 `window()` 动作里各写一遍。展开出来的条目排在
-/// 全局 `hotkey{}` / `window_rule{}` 之后（先注册者仍然先匹配）。
+/// `WindowRuleDef` 与若干条 `HotkeyDef`，`process` / `title` / `name` 与 `launch`
+/// 自动继承，不用在 `window_rule{}` 与 `window()` 动作里各写一遍。展开出来的条目
+/// 排在全局 `hotkey{}` / `window_rule{}` 之后（先注册者仍然先匹配）。
 struct AppDef
 {
     /// 可选的标签；`process` / `title` 都省略时用于日志与 `--list`。
@@ -245,6 +245,9 @@ struct AppDef
     std::optional<QString> title;
     /// 可选的窗口摆放规则；`process` / `title` / `name` 留空时由 app 补齐。
     std::optional<WindowRuleDef> window;
+    /// 这个程序怎么启动：`hotkeys` 里的 `window()` 动作自动继承它，
+    /// 于是动作只需要写 `window("activate")`（或只写要覆盖的 `wait_ms`）。
+    std::optional<LaunchSpec> launch;
     /// 属于这个程序的快捷键；其中的 `window` 动作自动继承 app 的 `process` / `title`。
     std::vector<HotkeyDef> hotkeys;
     bool enabled = true;

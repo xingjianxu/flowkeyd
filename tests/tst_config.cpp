@@ -44,6 +44,7 @@ private slots:
     void appWindowActionsKeepExplicitFields();
     void appNamesDefaultToProcess();
     void appMenuItemsInheritToo();
+    void appLaunchIsInheritedAndOverridden();
     void appProblemsAreReported();
     void settingsValidation();
     void evaluationErrorsAreReported();
@@ -794,6 +795,103 @@ void TestConfig::appMenuItemsInheritToo()
     QVERIFY(expanded.items.at(0).action != nullptr);
     QCOMPARE(expanded.items.at(0).action->action.process.value_or(QString()),
              QStringLiteral("wps"));
+}
+
+void TestConfig::appLaunchIsInheritedAndOverridden()
+{
+    // app 的 launch 是默认值：动作不写 launch 时整份继承。
+    Config config;
+    AppDef app;
+    app.process = QStringLiteral("wezterm");
+    LaunchSpec launch;
+    launch.program = QStringLiteral("wezterm.exe");
+    launch.args = QStringList{QStringLiteral("start")};
+    launch.waitMs = 5000;
+    app.launch = launch;
+    HotkeyDef def;
+    def.keys = QStringList{QStringLiteral("Win+S")};
+    def.action = specOne(windowAction(WindowOp::Activate));
+    app.hotkeys.push_back(def);
+    config.apps.push_back(app);
+
+    const auto compiled = compileOrDie(config);
+    const Action &inherited = compiled->bindings.at(0).press.at(0);
+    QVERIFY(inherited.launch.has_value());
+    QCOMPARE(inherited.launch->program, QStringLiteral("wezterm.exe"));
+    QCOMPARE(inherited.launch->args, QStringList{QStringLiteral("start")});
+    QCOMPARE(inherited.launch->waitMs, std::optional<std::uint64_t>(5000));
+
+    // 动作顶层的 wait_ms 覆盖 app 的 wait_ms，其余字段继续继承。
+    Config override;
+    AppDef term = app;
+    HotkeyDef faster;
+    faster.keys = QStringList{QStringLiteral("Win+S")};
+    Action fasterAction = windowAction(WindowOp::Activate);
+    fasterAction.waitMs = 8000;
+    faster.action = specOne(fasterAction);
+    term.hotkeys = {faster};
+    override.apps.push_back(term);
+    const auto compiledOverride = compileOrDie(override);
+    const Action &merged = compiledOverride->bindings.at(0).press.at(0);
+    QVERIFY(merged.launch.has_value());
+    QCOMPARE(merged.launch->program, QStringLiteral("wezterm.exe"));
+    QCOMPARE(merged.launch->args, QStringList{QStringLiteral("start")});
+    QCOMPARE(merged.launch->waitMs, std::optional<std::uint64_t>(8000));
+
+    // 动作自己写了 launch 时逐字段合并：写了的覆盖，没写的继承。
+    LaunchFields none;
+    none.program = none.args = none.cwd = none.show = none.shell = none.env = none.waitMs = false;
+    Config partial;
+    AppDef partialApp = app;
+    HotkeyDef tweak;
+    tweak.keys = QStringList{QStringLiteral("Win+S")};
+    Action tweaked = windowAction(WindowOp::Activate);
+    LaunchSpec own;
+    own.args = QStringList{QStringLiteral("--new-window")};
+    tweaked.launch = own;
+    tweaked.launchFields = none;
+    tweaked.launchFields.args = true;
+    tweak.action = specOne(tweaked);
+    partialApp.hotkeys = {tweak};
+    partial.apps.push_back(partialApp);
+    const auto compiledPartial = compileOrDie(partial);
+    const Action &partialLaunch = compiledPartial->bindings.at(0).press.at(0);
+    QVERIFY(partialLaunch.launch.has_value());
+    QCOMPARE(partialLaunch.launch->program, QStringLiteral("wezterm.exe"));
+    QCOMPARE(partialLaunch.launch->args, QStringList{QStringLiteral("--new-window")});
+    QCOMPARE(partialLaunch.launch->waitMs, std::optional<std::uint64_t>(5000));
+
+    // 全局条目里的 wait_ms 也生效（没有 app 时不能继承，但能覆盖自己的 launch）。
+    Config global;
+    HotkeyDef globalHotkey;
+    globalHotkey.keys = QStringList{QStringLiteral("F1")};
+    Action globalAction = windowAction(WindowOp::Activate);
+    globalAction.process = QStringLiteral("wezterm");
+    LaunchSpec globalLaunch;
+    globalLaunch.program = QStringLiteral("wezterm.exe");
+    globalLaunch.waitMs = 3000;
+    globalAction.launch = globalLaunch;
+    globalAction.waitMs = 7000;
+    globalHotkey.action = specOne(globalAction);
+    global.hotkeys.push_back(globalHotkey);
+    const auto compiledGlobal = compileOrDie(global);
+    const Action &globalMerged = compiledGlobal->bindings.at(0).press.at(0);
+    QVERIFY(globalMerged.launch.has_value());
+    QCOMPARE(globalMerged.launch->waitMs, std::optional<std::uint64_t>(7000));
+
+    // 没有 launch 可覆盖时光写 wait_ms 是错的。
+    Config stray;
+    HotkeyDef strayHotkey;
+    strayHotkey.keys = QStringList{QStringLiteral("F1")};
+    Action strayAction = windowAction(WindowOp::Activate);
+    strayAction.process = QStringLiteral("wezterm");
+    strayAction.waitMs = 5000;
+    strayHotkey.action = specOne(strayAction);
+    stray.hotkeys.push_back(strayHotkey);
+    const auto error = compileConfig(stray);
+    QVERIFY(error.has_value());
+    QVERIFY2(error->toString().contains(QStringLiteral("`wait_ms` needs `launch`")),
+             qPrintable(error->toString()));
 }
 
 void TestConfig::appProblemsAreReported()

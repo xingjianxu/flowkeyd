@@ -95,6 +95,24 @@ struct LaunchSpec
     std::optional<std::uint64_t> waitMs;
 };
 
+/// `launch = { ... }` 里**显式写了**哪些字段。
+///
+/// `app{...}` 的 `launch` 是默认值、动作里的 `launch` 是覆盖，两者逐字段合并
+/// （见 `core/config.cpp` 的 `expandApps`）。但 `show` / `shell` / `args` 这些
+/// 字段的“默认值”与“没写”在值上分不开，所以 Lua 层在转换时把写过的键记在这里。
+/// C++ 里直接构造出来的 `LaunchSpec` 没有“没写”的概念，因此默认全为 true
+/// （整份 `launch` 都算显式写的）。
+struct LaunchFields
+{
+    bool program = true;
+    bool args = true;
+    bool cwd = true;
+    bool show = true;
+    bool shell = true;
+    bool env = true;
+    bool waitMs = true;
+};
+
 /// `menu` 动作里的一个条目。
 struct MenuItemDef
 {
@@ -183,6 +201,10 @@ struct Action
     std::optional<QString> target;
     std::optional<QString> process;
     std::optional<LaunchSpec> launch;
+    /// `launch` 表里显式写了哪些字段（与 app 的 `launch` 逐字段合并时用）。
+    LaunchFields launchFields;
+    /// `window` 动作顶层的 `wait_ms`：覆盖 `launch.wait_ms`。
+    std::optional<std::uint64_t> waitMs;
     std::optional<bool> toggle;
     std::optional<bool> animate;
 

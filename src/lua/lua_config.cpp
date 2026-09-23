@@ -425,7 +425,7 @@ std::optional<QMap<QString, QString>> optStringMap(lua_State *L, int index, cons
 core::ActionSpec convertActionSpec(lua_State *L, int index);
 core::Action convertAction(lua_State *L, int index);
 core::RepeatSpec convertRepeatSpec(lua_State *L, int index);
-core::LaunchSpec convertLaunchSpec(lua_State *L, int index);
+core::LaunchSpec convertLaunchSpec(lua_State *L, int index, core::LaunchFields *fields);
 core::MenuItemDef convertMenuItem(lua_State *L, int index);
 core::MonitorRef convertMonitorRef(lua_State *L, int index);
 
@@ -516,9 +516,18 @@ core::Action convertAction(lua_State *L, int index)
         action.animate = optBool(L, index, "animate");
         int launch = 0;
         if (pushField(L, index, "launch", &launch)) {
-            action.launch = convertLaunchSpec(L, launch);
+            if (lua_type(L, launch) != LUA_TTABLE) {
+                const QString launchType = luaTypeName(lua_type(L, launch));
+                lua_pop(L, 1);
+                fail(QStringLiteral("invalid type: %1, expected a table with the launch fields "
+                                    "(`program`, `args`, ...)")
+                         .arg(launchType));
+            }
+            action.launch = convertLaunchSpec(L, launch, &action.launchFields);
             lua_pop(L, 1);
         }
+        // `wait_ms` 是 `launch.wait_ms` 的简写（与 app 的 launch 合并后生效）。
+        action.waitMs = optU64(L, index, "wait_ms");
     } else if (type == QLatin1String("notify")) {
         action.kind = core::Action::Kind::Notify;
         action.title = reqString(L, index, "title");
@@ -592,10 +601,21 @@ core::Action convertAction(lua_State *L, int index)
     return action;
 }
 
-core::LaunchSpec convertLaunchSpec(lua_State *L, int index)
+core::LaunchSpec convertLaunchSpec(lua_State *L, int index, core::LaunchFields *fields)
 {
     checkFields(L, index,
                 {"program", "args", "cwd", "show", "shell", "env", "wait_ms"});
+    if (fields != nullptr) {
+        // 记下显式写了哪些字段：app 的 `launch` 与动作的 `launch` 要逐字段合并，
+        // 而 `show` / `shell` / `args` 的默认值与“没写”在值上分不开。
+        fields->program = hasField(L, index, "program");
+        fields->args = hasField(L, index, "args");
+        fields->cwd = hasField(L, index, "cwd");
+        fields->show = hasField(L, index, "show");
+        fields->shell = hasField(L, index, "shell");
+        fields->env = hasField(L, index, "env");
+        fields->waitMs = hasField(L, index, "wait_ms");
+    }
     core::LaunchSpec spec;
     spec.program = reqString(L, index, "program");
     spec.args = optStringList(L, index, "args").value_or(QStringList());
@@ -947,12 +967,25 @@ QVector<int> readTableList(lua_State *L, int index, const QString &what)
 
 core::AppDef convertApp(lua_State *L, int index)
 {
-    checkFields(L, index, {"name", "process", "title", "window", "hotkeys", "enabled"});
+    checkFields(L, index, {"name", "process", "title", "window", "launch", "hotkeys", "enabled"});
     core::AppDef app;
     app.name = optString(L, index, "name");
     app.process = optString(L, index, "process");
     app.title = optString(L, index, "title");
     app.enabled = optBool(L, index, "enabled").value_or(true);
+
+    int launch = 0;
+    if (pushField(L, index, "launch", &launch)) {
+        if (lua_type(L, launch) != LUA_TTABLE) {
+            const QString launchType = luaTypeName(lua_type(L, launch));
+            lua_pop(L, 1);
+            fail(QStringLiteral("invalid type: %1, expected a table with the launch fields "
+                                "(`program`, `args`, ...)")
+                     .arg(launchType));
+        }
+        app.launch = convertLaunchSpec(L, launch, nullptr);
+        lua_pop(L, 1);
+    }
 
     int window = 0;
     if (pushField(L, index, "window", &window)) {
