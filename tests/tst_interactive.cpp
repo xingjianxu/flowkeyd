@@ -135,6 +135,7 @@ private slots:
     void desktopBackendProbesAndSwitches();
     void moveWindowToAnotherDesktopAndBack();
     void movesAWindowToTheAdjacentDesktop();
+    void movesAWindowToTheAdjacentDesktopAndFollows();
     void activatesAWindowThatIsOnAnotherDesktop();
     void placementMovesAWindowToAnotherMonitor();
     void movesAWindowToTheAdjacentMonitor();
@@ -572,6 +573,90 @@ void TestInteractive::movesAWindowToTheAdjacentDesktop()
         QThread::msleep(50);
     }
     QCOMPARE(backId.value_or(QString()), beforeId.value_or(QString()));
+}
+
+/// `window` 动作的 `follow = true`：把当前窗口挪到相邻桌面时，**视图也跟过去**，
+/// 并且那个窗口重新拿到前台。
+///
+/// 这正是 `Win+i` / `Win+u` 与 `Win+Shift+i` / `Win+Shift+u` 的区别：后者只搬
+/// 窗口（和 Windows 自己的 `Win+Ctrl+Shift+←/→` 一样），前者把用户一起带过去。
+void TestInteractive::movesAWindowToTheAdjacentDesktopAndFollows()
+{
+    if (!interactiveEnabled()) {
+        QSKIP("set FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1 to run the interactive tests");
+    }
+    QString error;
+    platform::win::desktop::Snapshot snapshot;
+    QVERIFY2(platform::win::desktop::probe(&snapshot, &error), qPrintable(error));
+    if (snapshot.count < 2) {
+        QSKIP("only one virtual desktop exists; nothing to follow");
+    }
+
+    const QString marker =
+        QStringLiteral("flowkeyd-follow-%1").arg(QCoreApplication::applicationPid());
+    TestWindow window(marker);
+    HWND hwnd = window.hwnd();
+    QVERIFY2(hwnd != nullptr, "the test window was not created");
+    // 真实用法里被搬的就是前台窗口，先让它拿到前台。
+    QVERIFY2(platform::win::window::raiseWindow(hwnd), "could not activate the test window");
+
+    // 刚创建、shell 还没登记的窗口不属于任何虚拟桌面，先等它归属某一张。
+    const QString zeroGuid = QStringLiteral("{00000000-0000-0000-0000-000000000000}");
+    std::optional<QString> beforeId;
+    for (int i = 0; i < 60; ++i) {
+        beforeId = platform::win::desktop::windowDesktopId(hwnd, &error);
+        if (beforeId.has_value() && *beforeId != zeroGuid) {
+            break;
+        }
+        QThread::msleep(50);
+    }
+    QVERIFY2(beforeId.has_value() && *beforeId != zeroGuid, qPrintable(error));
+
+    QString detail;
+    QVERIFY2(platform::win::window::applyTo(hwnd, core::WindowOp::MoveNextDesktop, false, &detail,
+                                            &error, true),
+             qPrintable(error));
+    QVERIFY2(detail.contains(QStringLiteral("view followed")), qPrintable(detail));
+
+    // 视图跟过去了：窗口现在就在当前桌面上，并且重新拿到了前台。
+    bool onCurrent = false;
+    for (int i = 0; i < 60 && !onCurrent; ++i) {
+        const auto value = platform::win::desktop::isWindowOnCurrentDesktop(hwnd, &error);
+        QVERIFY2(value.has_value(), qPrintable(error));
+        onCurrent = *value;
+        if (!onCurrent) {
+            QThread::msleep(50);
+        }
+    }
+    QVERIFY2(onCurrent, "follow = true must switch the view to the window's new desktop");
+
+    bool active = false;
+    for (int i = 0; i < 30 && !active; ++i) {
+        active = platform::win::window::isActive(hwnd);
+        if (!active) {
+            QThread::msleep(50);
+        }
+    }
+    QVERIFY2(active, "the window must stay active after following it to the new desktop");
+
+    // 再跟回来，别把用户留在别的桌面上。
+    QVERIFY2(platform::win::window::applyTo(hwnd, core::WindowOp::MovePrevDesktop, false, &detail,
+                                            &error, true),
+             qPrintable(error));
+    std::optional<QString> backId;
+    for (int i = 0; i < 60; ++i) {
+        backId = platform::win::desktop::windowDesktopId(hwnd, &error);
+        QVERIFY2(backId.has_value(), qPrintable(error));
+        if (*backId == *beforeId) {
+            break;
+        }
+        QThread::msleep(50);
+    }
+    QCOMPARE(backId.value_or(QString()), beforeId.value_or(QString()));
+
+    platform::win::desktop::Snapshot after;
+    QVERIFY2(platform::win::desktop::probe(&after, &error), qPrintable(error));
+    QCOMPARE(after.current, snapshot.current);
 }
 
 /// 跨桌面“唤醒”：窗口被搬到别的虚拟桌面之后，`window::isActive` 不能再被 shell

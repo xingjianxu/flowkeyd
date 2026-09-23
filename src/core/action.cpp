@@ -432,6 +432,9 @@ QString Action::summary() const
         if (animate.has_value() && *animate) {
             text += QLatin1String(" (animated)");
         }
+        if (follow.value_or(false)) {
+            text += QLatin1String(" (follow)");
+        }
         return text;
     }
     case Kind::Notify:

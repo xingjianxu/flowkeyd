@@ -893,6 +893,15 @@ void validateAction(const QString &label, const Action &action, QStringList *err
             errors->append(QStringLiteral("%1: `toggle` only works with op = \"activate\", not %2")
                                .arg(label, windowOpDebugName(action.windowOp)));
         }
+        // `follow` 是 `move_prev_desktop` / `move_next_desktop` 的附加行为：搬完窗口
+        // 再把视图切过去并重新激活它。写在其它的 op 上是一个静默的空操作，所以拒绝。
+        if (action.follow.has_value() && action.windowOp != WindowOp::MovePrevDesktop
+            && action.windowOp != WindowOp::MoveNextDesktop) {
+            errors->append(
+                QStringLiteral("%1: `follow` only works with op = \"move_prev_desktop\" or "
+                               "\"move_next_desktop\", not %2")
+                    .arg(label, windowOpDebugName(action.windowOp)));
+        }
         if (action.animate.has_value() && !windowOpHasTransition(action.windowOp)) {
             errors->append(
                 QStringLiteral("%1: `animate` has no effect on %2 (no window transition is involved); "

@@ -130,12 +130,21 @@ bool moveWindowToDesktop(HWND hwnd,
 ///
 /// 与 `moveWindowToDesktop` 不同，这里**首尾相接**：窗口在第一张桌面上再往
 /// 前会到最右那一张，在最后一张再往后会回到第一张（用户 2026-09 拍板）。
-/// 视图不会跟着窗口走 —— 移动的是窗口，不是当前桌面（与 Windows 自己的
-/// `Win+Ctrl+Shift+←/→` 一致，显示器上的几何完全不变）。
+/// 显示器上的几何完全不变（与 Windows 自己的 `Win+Ctrl+Shift+←/→` 一致）。
 ///
-/// 成功时 `detail` 是 `"desktop 2/4"`；只有一张桌面、或窗口不属于任何虚拟
+/// `follow = false`（默认）时视图**不**跟着窗口走 —— 移动的是窗口，不是当前桌面。
+/// `follow = true` 时在搬完之后把视图也切到目标桌面（`SwitchDesktop`）：窗口
+/// 与视图在同一个 STA 会话里一次做完，不会出现“搬走了但视图还留在原地”的中间态。
+/// 重新激活窗口是调用方的事（`window::applyTo` 会补一次 `raiseWindow`）。
+///
+/// 成功时 `detail` 是 `"desktop 2/4"`（`follow = true` 时是
+/// `"desktop 2/4, view followed"`）；只有一张桌面、或窗口不属于任何虚拟
 /// 桌面时失败（`error` 里是英文原因）。
-bool moveWindowToAdjacentDesktop(HWND hwnd, int delta, QString *detail, QString *error);
+bool moveWindowToAdjacentDesktop(HWND hwnd,
+                                 int delta,
+                                 QString *detail,
+                                 QString *error,
+                                 bool follow = false);
 
 /// 把视图切到 `hwnd` 所在的那个虚拟桌面（它已经在当前桌面时是空操作）。
 ///

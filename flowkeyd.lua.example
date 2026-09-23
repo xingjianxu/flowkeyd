@@ -334,8 +334,10 @@ hotkey{
 --
 --   move_prev_desktop / move_next_desktop
 --       上一张 / 下一张虚拟桌面。**首尾相接**：第一张再往前是最后一张，
---       最后一张再往后是第一张。窗口在显示器上的大小/位置完全不变，
---       视图也**不**跟着走（移动的是窗口，不是当前桌面）。
+--       最后一张再往后是第一张。窗口在显示器上的大小/位置完全不变。
+--       默认视图**不**跟着走（移动的是窗口，不是当前桌面）；带
+--       `follow = true` 时搬完之后把视图也切到目标桌面并重新激活那个窗口
+--       （用户跟着窗口一起过去）。
 --   move_left_monitor / move_right_monitor
 --       左 / 右边的显示器（按“先左后右、再上后下”的排列顺序）。虚拟桌面不变；
 --       最大化窗口在新显示器上仍然最大化，普通窗口保持原有大小并居中；
@@ -369,6 +371,23 @@ hotkey{
   comment = "把当前窗口移到右边的显示器（没有更右的显示器时就只记一条日志）",
   keys = "Ctrl+Alt+4",
   action = window("move_right_monitor"),
+}
+
+-- `follow = true`：把窗口搬过去之后，视图也切到目标桌面，并重新激活那个窗口
+-- （`Win+Ctrl+Shift+←/→` 只搬窗口，这几条会把用户一起带过去）。
+-- `follow` 只能写在这两个虚拟桌面 op 上，写在其它的 op 上会被 `--check` 拒绝。
+hotkey{
+  name = "window-prev-desktop-follow",
+  comment = "把当前窗口移到上一张虚拟桌面，并跟着切过去（首尾相接）",
+  keys = "Ctrl+Alt+5",
+  action = window("move_prev_desktop", { follow = true }),
+}
+
+hotkey{
+  name = "window-next-desktop-follow",
+  comment = "把当前窗口移到下一张虚拟桌面，并跟着切过去（首尾相接）",
+  keys = "Ctrl+Alt+6",
+  action = window("move_next_desktop", { follow = true }),
 }
 
 -- 虚拟桌面：按序号直达。

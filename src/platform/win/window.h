@@ -57,11 +57,17 @@ bool setTopmost(HWND hwnd, bool topmost, QString *error);
 /// `animate = false`（默认）时先让这个窗口的 DWM 过渡动画静下来，于是
 /// 最小化/最大化/还原不再播放缩放效果——只影响这个窗口这一次的调用。
 /// `close` 与 `toggle_topmost` 不产生过渡，所以不去动它们。
+///
+/// `follow` 只对 `move_prev_desktop` / `move_next_desktop` 有意义：搬完之后
+/// 把视图也切到目标桌面，并让窗口重新拿到前台（`SwitchDesktop` 激活的是目标
+/// 桌面上上次用过的窗口，不一定是它）。激活失败只写一条 warning，因为窗口
+/// 确实已经搬过去、视图也确实跟着走了。
 bool applyTo(HWND hwnd,
              core::WindowOp op,
              bool animate,
              QString *detail,
-             QString *error);
+             QString *error,
+             bool follow = false);
 
 /// “什么都没匹配到”的错误文本，与启动回退共享。
 QString missing(const core::WindowQuery &query);

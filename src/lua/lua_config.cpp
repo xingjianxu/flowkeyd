@@ -516,6 +516,7 @@ core::Action convertAction(lua_State *L, int index)
         action.process = optString(L, index, "process");
         action.toggle = optBool(L, index, "toggle");
         action.animate = optBool(L, index, "animate");
+        action.follow = optBool(L, index, "follow");
         int launch = 0;
         if (pushField(L, index, "launch", &launch)) {
             if (lua_type(L, launch) != LUA_TTABLE) {

@@ -181,7 +181,7 @@ void TestLua::movingWindowOpsAreConverted()
 {
     const auto c = parse(R"(
         hotkey{ keys = "Win+u", action = window("move_prev_desktop") }
-        hotkey{ keys = "Win+i", action = window("move_next_desktop") }
+        hotkey{ keys = "Win+i", action = window("move_next_desktop", { follow = true }) }
         hotkey{ keys = "Win+y", action = window("move_left_monitor") }
         hotkey{ keys = "Win+o", action = window("move_right_monitor") }
     )");
@@ -191,6 +191,10 @@ void TestLua::movingWindowOpsAreConverted()
     QCOMPARE(c->bindings[1].press.at(0).windowOp, core::WindowOp::MoveNextDesktop);
     QCOMPARE(c->bindings[2].press.at(0).windowOp, core::WindowOp::MoveLeftMonitor);
     QCOMPARE(c->bindings[3].press.at(0).windowOp, core::WindowOp::MoveRightMonitor);
+    // `follow` 只出现在写了它的那一条上；不写就是 `nullopt`（不跟随）。
+    QCOMPARE(c->bindings[1].press.at(0).follow, std::optional<bool>(true));
+    QVERIFY(!c->bindings[0].press.at(0).follow.has_value());
+    QVERIFY(!c->bindings[2].press.at(0).follow.has_value());
 }
 
 void TestLua::runWithoutArgsAndWithEmptyArgs()

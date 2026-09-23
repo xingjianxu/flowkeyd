@@ -620,7 +620,7 @@ keys = "Alt+H"        -- 报错：字母键名要小写（写 Shift+h）
 | `volume`    | `op` = `up`/`down`/`set`/`mute`/`unmute`/`toggle`、`level`（0-100）、`step`                               | 对默认输出设备使用 Core Audio 的 `IAudioEndpointVolume`                                                                                                                                                                                                                                   |
 | `media`     | `op` = `play_pause`/`next`/`prev`/`stop`                                                                  |                                                                                                                                                                                                                                                                                           |
 | `clipboard` | `op` = `get`/`set`/`append`/`clear`、`text`                                                               |                                                                                                                                                                                                                                                                                           |
-| `window`    | `op` = `activate`/`minimize`/`maximize`/`restore`/`close`/`toggle_topmost`/`move_prev_desktop`/`move_next_desktop`/`move_left_monitor`/`move_right_monitor`、`target`、`process`、`launch`、`wait_ms`、`toggle`、`animate` | `target` 匹配窗口标题的子串，`process` 匹配可执行文件名（`wezterm` 也能匹配 `wezterm-gui.exe`）；既没有 `target` 也没有 `process` 就表示前台窗口。`launch = { program, args[], cwd, show, shell, env{}, wait_ms }` 会在没有任何匹配时启动该程序，然后等待它的窗口（默认 3000 ms）并激活它。`toggle`（默认开，只对 `op = "activate"` 有意义）会在目标窗口已经在前台时改为最小化它。`animate`（默认**关**）控制这次状态变化要不要播放 DWM 的过渡动画。`wait_ms` 写在动作顶层时是 `launch.wait_ms` 的简写；在 `app{}` 里 `launch` 还会继承 app 的 `launch`（逐字段合并）。四个 `move_*` op 把**当前窗口**（不写 `target`/`process` 时）挪到相邻的虚拟桌面 / 显示器：`move_prev_desktop`/`move_next_desktop` 只动虚拟桌面且**首尾相接**（显示器上的几何不变，视图**不**跟着走），`move_left_monitor`/`move_right_monitor` 只动显示器（保留最大化状态，否则保持原有大小并居中到目标工作区；没有更左/更右那一块时失败，**不循环**）。这四个 op 都不套用 `toggle`、也不接受 `launch` |
+| `window`    | `op` = `activate`/`minimize`/`maximize`/`restore`/`close`/`toggle_topmost`/`move_prev_desktop`/`move_next_desktop`/`move_left_monitor`/`move_right_monitor`、`target`、`process`、`launch`、`wait_ms`、`toggle`、`animate`、`follow` | `target` 匹配窗口标题的子串，`process` 匹配可执行文件名（`wezterm` 也能匹配 `wezterm-gui.exe`）；既没有 `target` 也没有 `process` 就表示前台窗口。`launch = { program, args[], cwd, show, shell, env{}, wait_ms }` 会在没有任何匹配时启动该程序，然后等待它的窗口（默认 3000 ms）并激活它。`toggle`（默认开，只对 `op = "activate"` 有意义）会在目标窗口已经在前台时改为最小化它。`animate`（默认**关**）控制这次状态变化要不要播放 DWM 的过渡动画。`wait_ms` 写在动作顶层时是 `launch.wait_ms` 的简写；在 `app{}` 里 `launch` 还会继承 app 的 `launch`（逐字段合并）。四个 `move_*` op 把**当前窗口**（不写 `target`/`process` 时）挪到相邻的虚拟桌面 / 显示器：`move_prev_desktop`/`move_next_desktop` 只动虚拟桌面且**首尾相接**（显示器上的几何不变，视图**不**跟着走），`move_left_monitor`/`move_right_monitor` 只动显示器（保留最大化状态，否则保持原有大小并居中到目标工作区；没有更左/更右那一块时失败，**不循环**）。这四个 op 都不套用 `toggle`、也不接受 `launch`。`follow = true` 只能写给 `move_prev_desktop`/`move_next_desktop`：搬完之后把视图也切到目标桌面并重新激活那个窗口（用户跟着窗口一起过去；不写时视图不动，与 Windows 自己的 `Win+Ctrl+Shift+←/→` 一致），写在其它的 op 上会被 `--check` 拒绝 |
 | `notify`    | `title`、`body`                                                                                           | 托盘气泡提示                                                                                                                                                                                                                                                                              |
 | `menu`      | `title`、`items[]`（每项 `{ key, label, hint, action }`）                                                  | 弹出一个 QML 选单让用户挑一项（见[选单与电源](#选单与电源)）；条目上的单字符 `key` 直接选中它，`↑`/`↓` + `Enter` 与鼠标也能选，`Esc`（或点到别的地方）只关窗口。没有 `action`（或 `none()`）的条目只是把选单关掉                                                                         |
 | `help`      | `title`（可选，默认「快捷键」）                                                                            | 弹出一个**快捷键帮助**（同一套卡片风格，见[快捷键帮助](#快捷键帮助)）：列出当前配置里全部生效的快捷键与重映射；筛选框里直接输入（鼠标点一下就进去）就筛选；`↑`/`↓`、`PgUp`/`PgDn` 或滚轮/拖动滚动条滚动（滚动不改选中项）；**`Enter` 或双击一行 = 关掉窗口并执行那一行的动作**；左键点一行 = 选中它并把它的按键复制到剪贴板；`quit`/`suspend`/`power` 这类危险动作要按两次（第一次只是等确认）；`Esc` 依次是「取消确认 → 清筛选 → 关窗」。列表由配置本身生成，所以没有别的参数 |
@@ -712,16 +712,32 @@ VS Code 的窗口属于 `Code.exe`。
 的 `op`，用来把窗口搬到相邻的位置：
 
 ```lua
-hotkey{ keys = "Win+u", action = window("move_prev_desktop") }   -- 上一张虚拟桌面
-hotkey{ keys = "Win+i", action = window("move_next_desktop") }   -- 下一张虚拟桌面
-hotkey{ keys = "Win+y", action = window("move_left_monitor") }   -- 左边的显示器
-hotkey{ keys = "Win+o", action = window("move_right_monitor") }  -- 右边的显示器
+-- 只搬窗口，视图不动（和 Windows 自己的 Win+Ctrl+Shift+←/→ 一个语义）
+hotkey{ keys = "Win+Shift+u", action = window("move_prev_desktop") }
+hotkey{ keys = "Win+Shift+i", action = window("move_next_desktop") }
+-- 搬过去，并把视图一起带过去、重新激活那个窗口
+hotkey{ keys = "Win+u", action = window("move_prev_desktop", { follow = true }) }
+hotkey{ keys = "Win+i", action = window("move_next_desktop", { follow = true }) }
+-- 只动显示器
+hotkey{ keys = "Win+y", action = window("move_left_monitor") }
+hotkey{ keys = "Win+o", action = window("move_right_monitor") }
 ```
 
 * `move_prev_desktop` / `move_next_desktop` 只动**虚拟桌面**，窗口在显示器上的
-  大小与位置完全不变，视图也**不**跟着走（移动的是窗口，不是当前桌面；和
+  大小与位置完全不变。默认视图也**不**跟着走（移动的是窗口，不是当前桌面；和
   Windows 自己的 `Win+Ctrl+Shift+←/→` 一个语义）。两张桌面**首尾相接**：在
   第一张再往前会到最右那一张，在最后一张再往后会回到第一张。
+* 这两个虚拟桌面 `op` 还可以带 `follow = true`：搬完之后把**视图也切到目标
+  桌面**，并让那个窗口重新拿到前台（`SwitchDesktop` 激活的是目标桌面上上次
+  用过的窗口，不一定是它）。搬窗口与切视图在同一个 shell 会话里一次做完，
+  所以不会出现“窗口搬走了、视图还留在原地”的中间态。“保持激活”是尽力而为：
+  真抢不到前台时只写一条 warning，动作本身算成功（窗口确实已经搬过去、视图
+  也确实跟过去了）。`Win+i` / `Win+u`（不按 Shift）用的就是这个，而
+  `Win+Shift+i` / `Win+Shift+u` 只搬窗口 —— 两者的区别就是“把窗口带着一起走”
+  与 Windows 自己的 `Win+Ctrl+Shift+←/→`。
+  `follow` 只能写在这两个 `op` 上（写在别的 `op` 上会被 `--check` 拒绝），
+  且**视图跟随必然伴随一次 `SwitchDesktop`**：如果你更想留在当前桌面，
+  就别写 `follow`。
 * `move_left_monitor` / `move_right_monitor` 只动**显示器**：按“先左后右、
   再上后下”的排列顺序找相邻那一块（和 `window_rule` 里 `monitor = 2` 的 1
   起序号是同一个排列）。虚拟桌面不变；**最大化窗口在新显示器上仍然最大化**
@@ -730,7 +746,8 @@ hotkey{ keys = "Win+o", action = window("move_right_monitor") }  -- 右边的显
   按下去只会写一条日志，**不循环**（与虚拟桌面那两条不同）。
 * 这四个 `op` 都不套用 `toggle`（不会因为窗口已经在前台就把它收起），也不接受
   `launch`；跨显示器移动会产生窗口过渡，所以 `animate` 对它有意义，而跨虚拟
-  桌面移动不产生过渡、写 `animate` 会被 `--check` 拒绝。
+  桌面移动不产生过渡、写 `animate` 会被 `--check` 拒绝。`follow` 也不影响
+  这一条：它只决定要不要切视图，不产生窗口过渡。
 * 底层：跨桌面走 shell 未公开的 `IVirtualDesktopManagerInternal::MoveViewToDesktop`
   （与 `window_rule` 的 `desktop` 同一套），跨显示器走 `SetWindowPlacement`
   （与 `window_rule` 的几何摆放同一套），所以两者的已知限制也一样。

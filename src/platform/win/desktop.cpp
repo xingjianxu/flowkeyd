@@ -307,8 +307,8 @@ public:
     /// 把窗口移到第 `index` 个桌面（从 1 开始）。
     bool moveWindowToDesktop(HWND hwnd, std::uint32_t index, QString *detail, QString *error) const;
 
-    /// 把窗口移到相邻的桌面（首尾相接）。
-    bool moveWindowToAdjacent(HWND hwnd, int delta, QString *detail, QString *error) const;
+    /// 把窗口移到相邻的桌面（首尾相接）；`follow` 还要把视图也切过去。
+    bool moveWindowToAdjacent(HWND hwnd, int delta, bool follow, QString *detail, QString *error) const;
 
     /// 窗口是不是被钉在所有虚拟桌面上（`IVirtualDesktopPinnedApps::IsViewPinned`）。
     bool isViewPinned(HWND hwnd, std::optional<bool> *out, QString *error) const;
@@ -882,7 +882,11 @@ bool Session::moveWindowToDesktop(HWND hwnd,
     return moveViewToDesktopIndex(hwnd, desktops, static_cast<std::size_t>(index) - 1, detail, error);
 }
 
-bool Session::moveWindowToAdjacent(HWND hwnd, int delta, QString *detail, QString *error) const
+bool Session::moveWindowToAdjacent(HWND hwnd,
+                                   int delta,
+                                   bool follow,
+                                   QString *detail,
+                                   QString *error) const
 {
     if (m_viewCollection.get() == nullptr) {
         if (error != nullptr) {
@@ -915,7 +919,23 @@ bool Session::moveWindowToAdjacent(HWND hwnd, int delta, QString *detail, QStrin
         }
         return false;
     }
-    return moveViewToDesktopIndex(hwnd, desktops, *target, detail, error);
+    if (!moveViewToDesktopIndex(hwnd, desktops, *target, detail, error)) {
+        return false;
+    }
+    // `follow`：把视图也切到刚才那张桌面。用的是同一个会话、已知的目标下标，
+    // 所以不依赖“异步搬迁已经生效”（那会像 `switchToWindowDesktop` 一样
+    // 读到旧的桌面 GUID）。
+    if (follow) {
+        if (!switchDesktop(desktops[*target], error)) {
+            return false;
+        }
+        if (detail != nullptr) {
+            *detail = QStringLiteral("desktop %1/%2, view followed")
+                          .arg(*target + 1)
+                          .arg(desktops.size());
+        }
+    }
+    return true;
 }
 
 std::optional<QString> Session::windowDesktopId(HWND hwnd) const
@@ -1252,7 +1272,11 @@ bool moveWindowToDesktop(HWND hwnd,
     return true;
 }
 
-bool moveWindowToAdjacentDesktop(HWND hwnd, int delta, QString *detail, QString *error)
+bool moveWindowToAdjacentDesktop(HWND hwnd,
+                                 int delta,
+                                 QString *detail,
+                                 QString *error,
+                                 bool follow)
 {
     if (hwnd == nullptr || IsWindow(hwnd) == 0) {
         if (error != nullptr) {
@@ -1281,7 +1305,7 @@ bool moveWindowToAdjacentDesktop(HWND hwnd, int delta, QString *detail, QString 
             return;
         }
         const std::optional<QString> before = session.windowDesktopId(hwnd);
-        ok = session.moveWindowToAdjacent(hwnd, delta, &localDetail, &localError);
+        ok = session.moveWindowToAdjacent(hwnd, delta, follow, &localDetail, &localError);
         if (ok) {
             logDebug(QStringLiteral("window desktop id %1 -> %2")
                          .arg(before.value_or(QStringLiteral("?")),

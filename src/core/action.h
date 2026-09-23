@@ -228,6 +228,10 @@ struct Action
     std::optional<std::uint64_t> waitMs;
     std::optional<bool> toggle;
     std::optional<bool> animate;
+    /// 只对 `move_prev_desktop` / `move_next_desktop` 有意义的附加行为：搬完之后
+    /// **把视图也切到目标桌面**并重新激活那个窗口（默认 `false`，即只搬窗口、
+    /// 视图不动）。写在其它的 op 上会被 `--check` 拒绝。
+    std::optional<bool> follow;
 
     // notify
     QString title;

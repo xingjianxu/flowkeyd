@@ -433,7 +433,8 @@ void executeWindowAction(ExpandContext &ctx,
             }
             return;
         }
-        if (!win::window::applyTo(hwnd, action.windowOp, animate, &detail, &error)) {
+        if (!win::window::applyTo(hwnd, action.windowOp, animate, &detail, &error,
+                                  action.follow.value_or(false))) {
             win::logError(QStringLiteral("`%1` window: %2").arg(hotkey, error));
         } else {
             win::logInfo(QStringLiteral("`%1` -> %2").arg(hotkey, detail));

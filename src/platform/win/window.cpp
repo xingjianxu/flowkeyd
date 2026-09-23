@@ -313,7 +313,7 @@ bool setTopmost(HWND hwnd, bool topmost, QString *error)
     return true;
 }
 
-bool applyTo(HWND hwnd, core::WindowOp op, bool animate, QString *detail, QString *error)
+bool applyTo(HWND hwnd, core::WindowOp op, bool animate, QString *detail, QString *error, bool follow)
 {
     const QString title = windowTitle(hwnd);
     std::optional<TransitionGuard> guard;
@@ -367,10 +367,17 @@ bool applyTo(HWND hwnd, core::WindowOp op, bool animate, QString *detail, QStrin
     case core::WindowOp::MoveNextDesktop: {
         const int delta = op == core::WindowOp::MovePrevDesktop ? -1 : 1;
         QString note;
-        if (!desktop::moveWindowToAdjacentDesktop(hwnd, delta, &note, error)) {
+        if (!desktop::moveWindowToAdjacentDesktop(hwnd, delta, &note, error, follow)) {
             return false;
         }
         extra = note;
+        // `follow` 的语义是“用户跟着窗口到那张桌面”，所以搬完还要让窗口重新拿到
+        // 前台。失败不算动作失败：窗口确实已经搬过去、视图也确实跟着走了。
+        if (follow && !raiseWindow(hwnd)) {
+            logWarn(QStringLiteral("moved %1 to its desktop but could not activate it")
+                        .arg(core::rustDebug(title)));
+            extra += QStringLiteral(", could not activate");
+        }
         break;
     }
     case core::WindowOp::MoveLeftMonitor:

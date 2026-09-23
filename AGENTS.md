@@ -353,7 +353,8 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
       `Win+Ctrl+Shift+←/→` 同义）。两张桌面**首尾相接**（项目所有者拍板）：在
       第一张再往前到最右那一张，在最后一张再往后回到第一张。走
       `desktop::moveWindowToAdjacentDesktop`，复用未公开的 `MoveViewToDesktop`
-      （与 `window_rule` 的 `desktop` 同一条路）。
+      （与 `window_rule` 的 `desktop` 同一条路）。**默认视图不跟着走；2026-09 又加了
+      `follow`（搬完把视图也切过去），见第 18 条。**
     * `move_left_monitor` / `move_right_monitor`：只动**显示器**，虚拟桌面不变。
       **保留最大化状态**（项目所有者拍板）：`IsZoomed` 的窗口在新显示器上仍然
       最大化；普通窗口保持原有大小并**居中**到目标显示器的工作区（复用
@@ -389,6 +390,33 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
       `send` 的裸字符仍然允许大写（`send("A")` = Shift+A）。
       `nameFromKey()` 与 `allKeyNames()`（`--list-keys`）一律输出小写，
       所以默认绑定名与 `--list` 里看到的也都是小写。
+
+18. **`window` 的 `follow` 选项：把窗口挪到相邻虚拟桌面时连视图一起带走
+    （项目所有者 2026-09 要求）。** `move_prev_desktop` / `move_next_desktop`
+    多了一个可选的 `follow`（默认 `false`）：`follow = true` 时，搬完窗口之后
+    **把视图也切到目标桌面**，并重新激活那个窗口（用户跟着窗口一起过去）。
+    这就是 `Win+i` / `Win+u` 与 `Win+Shift+i` / `Win+Shift+u` 的区别：带 Shift 的
+    仍然是“只搬窗口、视图不动”（与 Windows 自己的 `Win+Ctrl+Shift+←/→` 同义）。
+    * 配置层：`Action::follow`（`std::optional<bool>`）；`--check` 只允许它出现在
+      这两个 `op` 上（写在其它的 `op` 上是一个静默的空操作，所以报错）；
+      `--list` 的摘要里显示 `(follow)`。底层是
+      `desktop::moveWindowToAdjacentDesktop(hwnd, delta, detail, error, follow)`。
+    * 搬窗口与切视图在**同一个 STA 会话**里做完：先 `MoveViewToDesktop` 再
+      `SwitchDesktop`，用的是**已知的目标下标**，不去读窗口的桌面 GUID
+      （`MoveViewToDesktop` 是异步的，立刻读可能还是旧桌面，
+      `switchToWindowDesktop` 就会切错）。之后 `window::applyTo()` 再补一次
+      `raiseWindow()`：`SwitchDesktop` 激活的是目标桌面上上次用过的窗口，
+      不一定是它。
+    * “保持激活”是尽力而为：`raiseWindow` 失败只写一条 warning，动作仍然算成功
+      （窗口确实已经搬过去、视图也确实跟过去了），日志的 detail 会带上
+      `, could not activate`。
+    * **它不产生窗口过渡**（只切视图，不动几何），所以 `windowOpHasTransition()`
+      与 `animate` 的规则不变。
+    * 已验证：`tst_engine::winShiftChordWinsOverPlainWinChord`（默认
+      `exact_modifiers = false` 时按 Win+Shift+u 只能触发更具体的那条）、
+      `tst_config` / `tst_lua` 的转换与校验、
+      `tst_interactive::movesAWindowToTheAdjacentDesktopAndFollows`
+      （真机：视图跟过去、窗口在前台、再跟回来且桌面复原）。
 
 ---
 
@@ -3660,6 +3688,38 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > 本次没有改钩子/引擎/分发/窗口后端，但因改了验收脚本自己用的一次性配置，
 > 还是把完整脚本跑了一遍。
 
+> **2026-09 新增（`window` 的 `follow`：挪到相邻桌面时视图一起走）的 DoD**：
+> `windows-debug` 与 `windows-release` 都是 `build exit 0`、零编译警告
+> （release 里那句 `dxcompiler.dll` 是 `windeployqt` 自己的提示）；
+> `ctest --test-dir build/windows-debug` **22 个测试目标全绿**
+> （`tst_engine` 新增 `winShiftChordWinsOverPlainWinChord`，本文件 31 项；
+> `tst_config` 的 `movingWindowOpsAreValidated` 加了 `follow` 的合法 / 非法 / 摘要；
+> `tst_lua` 的 `movingWindowOpsAreConverted` 加了 `follow` 的转换）。
+> `flowkeyd --check --config flowkeyd.lua.example` →
+> `OK (45 hotkey(s), 3 remap(s), 7 window rule(s))`、零警告（示例配置新增
+> `Ctrl+Alt+5` / `Ctrl+Alt+6` 两条 `follow = true`）；用户真实配置（不带
+> `--config`）→ `OK (30 hotkey(s), 0 remap(s), 4 window rule(s))`、零警告。
+> `--list` 里能看到 `Win+u` / `Win+i` 的摘要是
+> `window MovePrevDesktop foreground (follow)` / `MoveNextDesktop ...`。
+> `tst_interactive`（`FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`，只跑
+> `movesAWindowToTheAdjacentDesktop` 与新的
+> `movesAWindowToTheAdjacentDesktopAndFollows` 两个函数）**4 passed, 0 failed**：
+> `applyTo(..., follow = true)` 之后 `detail` 含 `view followed`、窗口回到当前
+> 桌面（`isWindowOnCurrentDesktop` 为真）、`window::isActive` 为真，再跟回来
+> 桌面复原。
+> `scripts/acceptance.ps1`（只跑 release；跑前先 `--quit` 常驻、跑完从
+> `build\dist-release` 拉起）**116 项、0 失败**（与上次持平：脚本本身没动，
+> 但 `applyTo` / `desktop::moveWindowToAdjacentDesktop` 的签名变了，所以按第 11 节
+> 第 3 条重跑了一遍）。
+> **行为变化**：`window` 动作多了 `follow`（只对 `move_prev_desktop` /
+> `move_next_desktop` 有效）；真实配置新增 `Win+u` / `Win+i` 两条
+> `follow = true` 绑定（`Win+Shift+u` / `Win+Shift+i` 保持只搬窗口）。
+> README（`window` 动作表、把窗口挪到相邻的桌面 / 显示器）、
+> `flowkeyd.lua.example`、第 2 节第 16 / 18 条与第 14 节已同步。
+> 按工作约定第 11 条：常驻实例已 `--quit` → 构建 release → 从
+> `build\dist-release` 重新拉起（日志 `30 hotkey(s)`、`keyboard hook installed`，
+> 自启任务仍指向那个路径）。
+
 ---
 
 ## 12. 本期不做的（有意留白）与后续工作
@@ -3885,8 +3945,9 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、
   `animate` 对它有意义。
 * `window` 的四个「挪窗口」op（`move_prev_desktop`/`move_next_desktop`/
   `move_left_monitor`/`move_right_monitor`）只动一类东西：前者只动虚拟桌面
-  （首尾相接，视图不跟着走），后者只动显示器（保留最大化，否则保持大小并居中，
-  不循环）。它们都不套用 `toggle`、不接受 `launch`，见第 2 节第 16 条。
+  （首尾相接，默认视图不跟着走，`follow = true` 时连视图一起切过去），后者只动显示器
+  （保留最大化，否则保持大小并居中，不循环）。它们都不套用 `toggle`、不接受 `launch`，
+  见第 2 节第 16 条与第 18 条。
 
 ### 本机真实配置不进仓库（2026-09 起）
 

@@ -223,6 +223,11 @@ end
 --   window("move_left_monitor")   -- 左边的显示器（保留最大化，否则保持大小并居中）
 --   window("move_right_monitor")  -- 右边的显示器（没有更左/更右的显示器时会失败）
 --
+-- 这两个虚拟桌面 op 还可以带 `follow = true`：搬完窗口之后把**视图也切到目标
+-- 桌面**并重新激活那个窗口（Windows 自己的 Win+Ctrl+Shift+←/→ 不跟随视图）：
+--   window("move_next_desktop", { follow = true })
+-- `follow` 只能写在这两个 op 上，写在其它的 op 上会被 `--check` 拒绝。
+--
 -- `launch = { program, args[], cwd, show, shell, env{}, wait_ms }` 只在没有窗口
 -- 匹配时执行；`wait_ms` 也可以写在动作顶层（它是 `launch.wait_ms` 的简写），
 -- 在 app{} 里还会继承 app 的 launch。

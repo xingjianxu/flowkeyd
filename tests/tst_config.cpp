@@ -552,6 +552,33 @@ void TestConfig::movingWindowOpsAreValidated()
     Config toggledConfig;
     toggledConfig.hotkeys.push_back(hotkey(QStringLiteral("F1"), specOne(toggled)));
     QVERIFY2(compileConfig(toggledConfig).has_value(), "toggle must be rejected on move ops");
+
+    // `follow` 是虚拟桌面挪动的附加行为：合法时保留下来并出现在摘要里。
+    Action followed = windowAction(WindowOp::MoveNextDesktop);
+    followed.follow = true;
+    Config followedConfig;
+    followedConfig.hotkeys.push_back(hotkey(QStringLiteral("F1"), specOne(followed)));
+    const auto followedCompiled = compileOrDie(followedConfig);
+    const Action &compiledFollow = followedCompiled->bindings.at(0).press.at(0);
+    QCOMPARE(compiledFollow.follow, std::optional<bool>(true));
+    QCOMPARE(compiledFollow.summary(),
+             QStringLiteral("window MoveNextDesktop foreground (follow)"));
+    // 不写 `follow` 时保持 `nullopt`（默认不跟随）。
+    Action plain;
+    QVERIFY(!parseActionShorthand(QStringLiteral("window:move_next_desktop"), &plain).has_value());
+    QVERIFY(!plain.follow.has_value());
+
+    // 写到别的 op 上是一个静默的空操作，所以 `--check` 必须拒绝（显式 false 也一样）。
+    for (const WindowOp op : {WindowOp::Activate, WindowOp::MoveLeftMonitor}) {
+        Action bad = windowAction(op);
+        bad.follow = false;
+        Config badConfig;
+        badConfig.hotkeys.push_back(hotkey(QStringLiteral("F1"), specOne(bad)));
+        const auto badError = compileConfig(badConfig);
+        QVERIFY2(badError.has_value(), "follow must be rejected outside the desktop move ops");
+        QVERIFY2(badError->toString().contains(QStringLiteral("follow")),
+                 qPrintable(badError->toString()));
+    }
 }
 
 void TestConfig::windowRulesCompile()

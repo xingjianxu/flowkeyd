@@ -63,6 +63,7 @@ private slots:
     void explicitNoneActionStillCountsAsAnAction();
     void onReleaseFires();
     void mostSpecificChordWins();
+    void winShiftChordWinsOverPlainWinChord();
     void extraModifiersAreToleratedButWildcardPrefersExact();
     void autoRepeatIsNotRematched();
     void injectedEventsAreIgnored();
@@ -280,6 +281,28 @@ void TestEngine::mostSpecificChordWins()
     QCOMPARE(press(&engine, {CTRL, ALT, static_cast<Vk>(u'H')}).triggers,
              (std::vector<Trigger>{onPress(2)}));
     release(&engine, {static_cast<Vk>(u'H'), ALT, CTRL});
+}
+
+void TestEngine::winShiftChordWinsOverPlainWinChord()
+{
+    // 本机配置把 `Win+u` / `Win+i`（带 `follow`）与 `Win+Shift+u` / `Win+Shift+i`
+    // 绑成两件事：默认 `exact_modifiers = false`，所以按住 Shift 时**两个和弦都
+    // 会匹配**，只能靠打分选更具体的那一条。这条测试盯住它：按 Win+Shift+u
+    // 只能触发带 Shift 的那条，不能把不带 Shift 的那条也触发（也不能吞错键）。
+    Config config;
+    config.hotkeys.push_back(hotkeyNamed(QStringLiteral("plain"), QStringLiteral("Win+u"),
+                                         specOne(noneAction())));
+    config.hotkeys.push_back(hotkeyNamed(QStringLiteral("shift"), QStringLiteral("Win+Shift+u"),
+                                         specOne(noneAction())));
+    Engine engine = engineOf(config);
+
+    QCOMPARE(press(&engine, {vk::LWIN, static_cast<Vk>(u'U')}).triggers,
+             (std::vector<Trigger>{onPress(0)}));
+    release(&engine, {static_cast<Vk>(u'U'), vk::LWIN});
+
+    QCOMPARE(press(&engine, {vk::LWIN, vk::LSHIFT, static_cast<Vk>(u'U')}).triggers,
+             (std::vector<Trigger>{onPress(1)}));
+    release(&engine, {static_cast<Vk>(u'U'), vk::LSHIFT, vk::LWIN});
 }
 
 void TestEngine::extraModifiersAreToleratedButWildcardPrefersExact()
