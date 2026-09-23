@@ -354,8 +354,8 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
       那一块时失败并记一条日志，**不循环**（与虚拟桌面那两条不同）。
     * 这四个 op 都**不套用 `toggle`**、**不接受 `launch`**；
       `core::windowOpHasTransition()` 对跨显示器移动返回 true（会改几何）、对跨
-      虚拟桌面移动返回 false —— `--check` 因此会拒绕写在不产生过渡的 op 上的
-      `animate`。
+      虚拟桌面移动返回 false —— 写在不产生过渡的 op 上的 `animate` 会被
+      `--check` 报错。
     * 相邻下标由纯函数 `core::stepIndex(count, current, delta, wrap)` 算
       （虚拟桌面 `wrap = true`、显示器 `wrap = false`），所以首尾相接 / 越界
       这两套语义都有单测（`tst_placement`）。
