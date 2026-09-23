@@ -17,6 +17,8 @@ flowkeyd 是 **oskeyd**（Rust 参考实现）的 **Qt 6 / C++ 复刻版**：它
 虚拟桌面 / 显示器上（默认铺满那块显示器的工作区），并在之前断开的显示器重新接上时
 重新归位。规则还能把窗口**钉在所有虚拟桌面上**（`all_desktops = true`）或让它
 **始终在最上层**（`topmost = true`）。
+如果要给同一个程序同时配「窗口规则」与「唤起它的快捷键」，用 `app{...}` 写到
+一起即可，`process` / `title` 只写一遍。
 
 ```lua
 hotkey{
@@ -32,6 +34,16 @@ window_rule{ process = "wezterm", desktop = 2, monitor = 2 }
 
 -- 也可以只钉住 / 置顶：切到哪张桌面都看得见，而且一直在最上层
 window_rule{ process = "wezterm", all_desktops = true, topmost = true }
+
+-- 同一个程序的窗口规则 + 快捷键写在一起：process 只写一遍，
+-- hotkey 里的 window 动作也自动拿到它
+app{
+  process = "wps",
+  window = { desktop = 3, monitor = 2 },
+  hotkeys = {
+    { keys = "Win+3", action = window("activate", { launch = { program = [[C:\tools\wps.exe]] } }) },
+  },
+}
 ```
 
 ## 与 oskeyd 的关系
@@ -369,6 +381,13 @@ remap{ from = "CapsLock", to = "Esc" }
 
 -- 按程序摆放窗口：第一次出现时放到第 2 个虚拟桌面、第 2 块显示器上并最大化
 window_rule{ process = "wezterm", desktop = 2, monitor = 2 }
+
+-- 同一个程序的窗口规则与唤起它的快捷键写在一起（process 只写一遍）
+app{
+  process = "wps",
+  window = { desktop = 3, monitor = 2 },
+  hotkeys = { { keys = "Win+3", action = window("activate") } },
+}
 ```
 
 ```lua
@@ -378,6 +397,7 @@ return {
   hotkeys = { { keys = "Ctrl+Alt+T", action = run("wt.exe") } },
   remaps = { { from = "CapsLock", to = "Esc" } },
   window_rules = { { process = "wezterm", desktop = 2, monitor = 2 } },
+  apps = { { process = "wps", window = { desktop = 3, monitor = 2 } } },
 }
 ```
 
@@ -408,6 +428,7 @@ return {
 | 构造器                                        | 等价于                                                              |
 | --------------------------------------------- | ------------------------------------------------------------------- |
 | `settings{...}`、`hotkey{...}`、`remap{...}`、`window_rule{...}` | 四个注册入口                            |
+| `app{...}`                                    | 同一个程序的窗口规则 + 快捷键（见下文）                              |
 | `run(p[, args][, opts])`                      | `{ type = "run", program = p, args = args, ... }`                   |
 | `send(keys[, opts])`、`type_text(text[, opts])` | `{ type = "send", keys = keys, ... }`、`{ type = "type", text = text, ... }` |
 | `open(target[, opts])`、`notify(title[, body])` | `{ type = "open", target = target, ... }`、`{ type = "notify", ... }` |
@@ -932,6 +953,51 @@ window_rule{
 `desktop` 走的是 shell 内部的 `MoveViewToDesktop`（已公开的
 `IVirtualDesktopManager::MoveWindowToDesktop` 拒绝移动别的进程的窗口）。
 窗口会先在当前桌面上出现一瞬间，然后被移到目标桌面。
+
+### `app{ ... }`
+
+把**同一个程序**的窗口摆放规则与快捷键写在一起，省掉重复的 `process` / `title`。
+它本身不是新能力：加载配置时会展开成一条普通的 `window_rule` 与若干条普通的
+`hotkey`，排在同一次注册顺序的最后。
+
+```lua
+app{
+  name = "wps",                  -- 可选，默认用 process（再退到 title）
+  process = "wps",               -- 与 window_rule / window 动作的 process 一致
+  title = "WPS",                 -- 可选，窗口标题子串
+  enabled = true,                -- 可选，false 表示整条 app 都忽略
+  window = {                     -- 可选：window_rule 的全部字段
+    desktop = 3,
+    monitor = 2,
+  },
+  hotkeys = {                    -- 可选：与 hotkey{} 字段完全相同
+    {
+      keys = "Win+3",
+      action = window("activate", { launch = { program = [[C:\tools\ksolaunch.exe]] } }),
+    },
+  },
+}
+```
+
+* `process` / `title` 至少要写一个（与 `window_rule` 一样）。
+* `window` 就是一条 `window_rule`，字段完全一样；`process` / `title` / `name`
+  自动继承，显式写在 `window` 里的优先。不写 `window` 就只展开快捷键。
+* `hotkeys` 里每一项就是一条 `hotkey`；其中的 `window()` 动作会自动补上 app 的
+  `process`（写到动作的 `process`）与 `title`（写到动作的 `target`），显式写的优先。
+  嵌套在 `menu` 条目里的 `window()` 动作同样继承。**只对表 / 构造器形式的
+  `window` 动作生效**：简写字符串（`"window:activate"`）里没有可继承的字段。
+* 名字：`name` 不写时用 `process`，再退到 `title`。这个名字会给展开出来的
+  `window_rule` 用；app 里**只有一个 hotkey** 时也用它当这条绑定的默认名字
+  （多个时用第一个和弦，免得重名）。`--list` 的快捷键那一列显示的仍然是和弦，
+  但日志、`{name}` 模板与帮助窗口（没写 `comment` 时）用的是这个名字。
+* `enabled = false` 把整条 app（规则 + 全部快捷键）都丢掉，并给一条 warning。
+* 出错时的标签是 `app #1 (\`wps\`)`：不写 `name` 就用 `process`（再退到 `title`）。
+
+**与全局条目的关系**：`hotkey{}` / `window_rule{}` 仍然照旧可用 —— 没有窗口规则的
+快捷键（例如 `Ctrl+Alt+F4` 退出）、或没有快捷键的规则（例如只把某个程序钉在所有
+桌面上），继续单独写。app 展开出来的条目排在全局条目**之后**（同一次注册顺序的
+最后）：快捷键冲突时先注册的赢，窗口规则仍然是先写的赢，所以全局规则会先于
+app 规则匹配。
 
 ## 工作原理
 

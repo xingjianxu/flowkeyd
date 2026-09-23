@@ -2,13 +2,14 @@
 --
 -- 本文件由 src/lua/lua_config.cpp 注入到每个配置脚本的全局环境里；
 -- 最上面的 `...` 是 C++ 传进来的注册表（settings / hotkeys / remaps /
--- window_rules 四个列表）。
+-- window_rules / apps 五个列表）。
 --
 -- 两种写法可以混用：
---   * 命令式：hotkey{...} / remap{...} / window_rule{...} / settings{...}
+--   * 命令式：hotkey{...} / remap{...} / window_rule{...} / app{...} / settings{...}
 --   * 声明式：return { settings = {...}, hotkeys = {...}, remaps = {...},
---                      window_rules = {...} }
--- 返回值里的条目排在脚本体注册的条目之后（快捷键按注册顺序匹配，先者优先）。
+--                      window_rules = {...}, apps = {...} }
+-- 返回值里的条目排在脚本体注册的条目之后（快捷键按注册顺序匹配，先者优先）；
+-- app{...} 展开出来的 hotkey / window_rule 也排在同一次注册顺序的最后。
 --
 -- 动作一律是「表」或「简写字符串」，不接受 Lua 函数：钩子回调与工作线程
 -- 只执行已经校验过的声明式动作。
@@ -90,6 +91,25 @@ end
 -- 取消钉住 / 取消置顶，不写则不去碰它们。
 function window_rule(t)
   state.window_rules[#state.window_rules + 1] = registration(t, "window_rule")
+end
+
+-- 把一个程序（进程名 / 窗口标题）的窗口摆放规则与唤起它的快捷键写在一起，
+-- 省掉在 hotkey 与 window_rule 里各写一遍 process / title：
+--   app{
+--     process = "wps",                     -- 也可只写 title；至少写一个
+--     name = "wps",                        -- 可选，默认用 process（再退到 title）
+--     window = { desktop = 3, monitor = 2 },
+--     hotkeys = {
+--       { keys = "Win+3", action = window("activate", { launch = { ... } }) },
+--     },
+--   }
+-- `window` 的字段与 window_rule 完全相同（process / title / name 自动继承）；
+-- `hotkeys` 里每一项与 hotkey 完全相同，其中的 window 动作会自动补上
+-- process / title（显式写的优先）。
+-- 全局的 hotkey{} / window_rule{} 仍然保留：没有窗口规则的快捷键、
+-- 或没有快捷键的规则，照旧单独写。
+function app(t)
+  state.apps[#state.apps + 1] = registration(t, "app")
 end
 
 -- 注册一组全局设置。可以多次调用，后写的键覆盖先写的。
@@ -297,6 +317,7 @@ flowkeyd = {
   hotkey = hotkey,
   remap = remap,
   window_rule = window_rule,
+  app = app,
   run = run,
   send = send,
   type_text = type_text,

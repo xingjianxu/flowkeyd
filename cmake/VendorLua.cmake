@@ -21,7 +21,11 @@ endif()
 
 target_sources(lua_static PRIVATE ${_lua_sources})
 target_include_directories(lua_static PUBLIC "${_lua_dir}")
-target_compile_definitions(lua_static PRIVATE LUA_USE_WINDOWS)
+# 注意写成 `LUA_USE_WINDOWS`（空值），不要写成 `LUA_USE_WINDOWS` 不带 `=`：
+# 后者会被 GCC 当成 `LUA_USE_WINDOWS 1`，而 luaconf.h 在 _WIN32 下会再
+# `#define LUA_USE_WINDOWS`（空值）一次 —— 替换列表不同，于是每个 .c 都会报
+# “LUA_USE_WINDOWS redefined”。空值声明与 luaconf.h 完全一致，不再报警告。
+target_compile_definitions(lua_static PRIVATE "LUA_USE_WINDOWS=")
 
 # Lua 源码不是我们的代码，不做 -Werror；但仍然打开基础告警便于注意。
 target_compile_options(lua_static PRIVATE -Wall -Wno-unused-parameter)

@@ -308,6 +308,28 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
     为什么这两条必须一起做：`MoveViewToDesktop` 把窗口搬走之后 shell 仍然把它当
     作**前台窗口**，所以“是不是已经激活”的判定不带上虚拟桌面时，同一个快捷键会
     去*收起*一个用户根本看不见的窗口 —— 见第 10 节。
+15. **`app{...}`：把同一个程序的窗口规则与快捷键写在一起**（项目所有者 2026-09 要求）。
+    配置里同一个程序的 `process` 本来要写两遍（`window()` 动作的 `process` 与
+    `window_rule` 的 `process`），程序一多就成了负担。`app{...}` 不是新能力，只是
+    **书写上的合并**：`compile()` 把它展开成一条普通的 `WindowRuleDef` 与若干条
+    `HotkeyDef`，展开出来的条目**排在全局 `hotkey{}` / `window_rule{}` 之后**
+    （先注册者先匹配的规则不变）。拍板的细节：
+
+    * 字段只有 `name` / `process` / `title` / `window` / `hotkeys` / `enabled`；
+      `process` 与 `title` 至少写一个。
+    * `window` 就是一条 `window_rule`（字段完全一样），`process` / `title` / `name`
+      自动继承，显式写的优先；不写 `window` 就只展开快捷键。
+    * `hotkeys` 里每一项就是一条 `hotkey`；其中的 `window` 动作自动补上 app 的
+      `process` / `title`（显式写的优先），**嵌套在 `menu` 条目里的也算**；
+      只对表 / 构造器形式的 `window` 动作生效（简写字符串没有可继承的字段）。
+    * 名字默认：`name` → `process` → `title`；这个名字给展开出来的 `window_rule`
+      用，app 里**只有一个 hotkey** 时也给那条绑定当默认名（多个时保持“第一个
+      和弦”的默认，免得一个 app 下几条绑定重名）。
+    * `enabled = false` 把整条 app（规则 + 全部快捷键）都丢掉，并给一条 warning。
+    * **全局的 `hotkey{}` / `window_rule{}` 保留**（项目所有者明确要求）：没有窗口
+      规则的快捷键、没有快捷键的规则照旧单独写。
+    * 声明式写法在返回表里叫 `apps`；错误标签是 `app #1 (\`wps\`)`（不写 `name`
+      就用 `process`）。权威定义在 `README.md` 的「配置 → `app{ ... }`」。
 
 ---
 
@@ -394,7 +416,7 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `src/cli.h/.cpp`                          | 参数解析 + 中文帮助文本（手写，不用 CLI11）；`--quit` 走单独的早期分支：不装钩子、不提权，也不在 `isOfflineCommand()` 里（它确实要去碰另一个进程）；`helpText()`/`versionText()` 都接收 `core::buildVersion()` 给出的构建版本号                                                                                                                                                                                 |
 | `src/core/`                               | **纯逻辑层：不碰 Win32、不碰 Qt GUI**（只用 QtCore 的类型），因此能被 Qt Test 直接测                                                                                                                                        |
 | `src/core/keys.h/.cpp`                    | 键名 ↔ `VK` 表、`Modifiers`、`Chord`、AutoHotkey 发送脚本解析、小键盘 Enter 的内部伪码 `0x100`、`key_from_hook()`/`native_key()`                                                                                            |
-| `src/core/config.h/.cpp`                  | 配置结构体、严格校验（未知字段要报错）、编译成 `Compiled`/`Binding`/`CompiledRemap`、配置文件搜寻与旧 TOML 的迁移提示                                                                                                       |
+| `src/core/config.h/.cpp`                  | 配置结构体、严格校验（未知字段要报错）、编译成 `Compiled`/`Binding`/`CompiledRemap`、配置文件搜寻与旧 TOML 的迁移提示。`AppDef` 与 `compile()` 里的 `expandApps`/`applyWindowDefaults` 负责把 `app{...}` 展开成普通的 `WindowRuleDef` + `HotkeyDef`（见第 2 节第 15 条）                                                                                                       |
 | `src/core/engine.h/.cpp`                  | 快捷键状态机：匹配、优先级、吞键、自动重复抑制、长按重复、挂起、重映射 hold/tap、Win/Alt 菜单遮断按键                                                                                                                       |
 | `src/core/template.h/.cpp`                | `{clipboard}`、`{selection}`、`{date}` 等占位符展开                                                                                                                                                                         |
 | `src/core/action.h/.cpp`                  | 声明式动作的表示 + 摘要文本（`--list` 与 `help()` 都用它）+ `isDestructive()`（帮助窗口要靠它决定“要不要再确认一次”）                                                                                                        |
@@ -402,8 +424,8 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `src/core/window_match.h/.cpp`            | 窗口匹配与 `window` 动作决策的纯函数：标题/进程名子串、可执行文件名提取、`toggle` 边界、`animate` 是否有意义                                                                                                                |
 | `src/core/placement.h/.cpp`               | `window_rule` 的**纯逻辑**（只用 QtCore、可单测）：显示器排序与选择（序号 / `primary` / 设备名）、「显示器重新接入」检测（设备名从无到有）、摆放几何（最大化 / 居中 / 指定位置与大小 / 夹进工作区）、规则匹配。`all_desktops` / `topmost` 不算几何，只影响 `WindowRule::summary()`。见第 2 节第 13 条 |
 | `src/core/version.h/.cpp`                 | 构建版本号（纯逻辑、可单测）：`buildVersion(executablePath)`（拼成 `yy-MM-dd-<git 短修订>`）、`buildDateFromFile()`、`sourceRevision()`（编译进来的 `FLOWKEYD_GIT_REVISION`）、`unknownValue()`。修订来自 CMake 用 `cmake/version_revision.h.in` 生成的 `flowkeyd_revision.h`；机制与取舍见第 2 节第 12 条与第 10 节 |
-| `src/lua/lua_config.h/.cpp`               | **Lua 与 C++ 的唯一边界**：建 `lua_State`、注入 DSL、把脚本里的表转成 `core::Config`（逐条目、带上下文的错误）、UTF-8 BOM 剔除、`.toml` 明确拒绝                                                                            |
-| `src/lua/lua_prelude.lua`                 | 注入配置脚本的 DSL：`settings{}`/`hotkey{}`/`remap{}` + 动作构造器 + `flowkeyd` 表。**纯 Lua，改它不需要改 C++**（编进 qrc，见第 7 节）                                                                                     |
+| `src/lua/lua_config.h/.cpp`               | **Lua 与 C++ 的唯一边界**：建 `lua_State`、注入 DSL、把脚本里的表转成 `core::Config`（逐条目、带上下文的错误；`app{}` 转成 `core::AppDef` 后在 `compile()` 里展开）、UTF-8 BOM 剔除、`.toml` 明确拒绝                                                                            |
+| `src/lua/lua_prelude.lua`                 | 注入配置脚本的 DSL：`settings{}`/`hotkey{}`/`remap{}`/`window_rule{}`/`app{}` + 动作构造器 + `flowkeyd` 表。**纯 Lua，改它不需要改 C++**（编进 qrc，见第 7 节）                                                                                     |
 | `src/platform/win/`                       | Win32 后端（每个文件都只做一件事，方便单独替换）                                                                                                                                                                            |
 | `src/platform/win/ffi.h/.cpp`             | 全部 Win32 声明、结构体与常量（`INPUT` 的 40 字节布局有 `static_assert` 盯着）                                                                                                                                              |
 | `src/platform/win/nt.h/.cpp`              | 未公开的 `win32u.dll` 导出，运行时解析并校验                                                                                                                                                                                |
@@ -1742,6 +1764,22 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   `new Dispatcher(this)` 传成 parent——仔细看签名，它没有第二个参数。
 * **`core::Trigger` / `Phase` 在 `core/engine.h`，不在 `core/config.h`。**
   只 include `config.h` 时会报 `'Trigger' has not been declared`。
+
+* **Lua C API 的“栈上还剩多少槽”不是无限的：`lua_push*`/`lua_rawgeti` 不会自己扩容。**
+  `readTableList` 会把读到的每个条目都留在栈上，而 `lua_State` 的初始栈（`BASIC_STACK_SIZE
+  + EXTRA_STACK = 45` 个槽，`StackValue` 16 字节）在 `evaluate` 里是唯一的缓冲：先前那是
+  靠“配置小”（几十个条目刚好塞得进余量）在硬撑。加了 `app{...}` 之后条目变多，
+  栈直接写到了数组之外 —— 现象是 `--check` 以一个诡异的退出码（`0xC0000374`，
+  heap corruption）崩掉，而且堆是到 `lua_close()` 释放栈时才报错。
+  **修法**：`readTableList` 在压条目之前先 `lua_checkstack(L, 条目数 + LUA_MINSTACK)`
+  （这会把 `ci->top` 一起抬上去，之后 `lua_settop` 也不会再撞“new top too large”）。
+  **诊断手法**：临时给 `lua_static` 加一条 `LUA_USE_APICHECK` 编译定义（
+  `cmake/VendorLua.cmake`），它会把所有非法索引变成一个确定的 abort —— 比 gdb 里
+  等在 `lua_close` 的堆检查可靠得多，代价是一次只针对 Lua 的重编。
+* **`lua_settop(L, n)` 也是“相对当前函数的槽数”，而且 `api_check` 只允许 `n <= ci->top`。**
+  想“把栈收回到某一层”时，如果那一层比 API 保证的槽数还深，就必须先 `lua_checkstack`
+  把 `ci->top` 抬上去，否则它在 `LUA_USE_APICHECK` 下会断言、在普通构建里会真的往
+  栈外写 nil（同一个 heap corruption）。
 
 #### 阶段 4/5 真的踩到的（2026-09）
 
@@ -3372,6 +3410,32 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > 一起提交之后又构建并拉起了一次，所以常驻跑的那份版本号里就是这次提交的哈希
 > （「提交 → 构建 → 重新拉起」）。
 
+> **2026-09 新增（`app{...}`：同一个程序的窗口规则 + 快捷键写在一起）的 DoD**：
+> `windows-debug` 与 `windows-release` 都是 `build exit 0`、零编译警告
+> （release 里那句 `dxcompiler.dll` 是 `windeployqt` 自己的提示）；
+> `ctest --test-dir build/windows-debug` **22 个测试目标全绿**
+> （`tst_config` 新增 5 项：展开、显式字段优先、名字默认、`menu` 条目继承、错误；
+> `tst_lua` 新增 2 项：两种写法展开一致 + 全局条目排在前面、错误信息带 app 标签）；
+> `flowkeyd --check --config flowkeyd.lua.example` →
+> `OK (39 hotkey(s), 3 remap(s), 7 window rule(s))`、零警告
+> （示例配置新增 3 个 app：wezterm 的“规则 + 快捷键”、code 的“只有规则”、
+> Steam 的“只按 title”）；用户真实配置（不带 `--config`）→
+> `OK (24 hotkey(s), 0 remap(s), 4 window rule(s))`、零警告（未改动）。
+> 行为变化：新增 `app{...}`（与声明式 `apps`）；`window_rule` 不写 `name` 时，
+> app 展开出来的那条用 `process`（再退到 `title`）当名字。
+> 本次没有动钩子/引擎/分发/窗口后端（只是配置的加载期展开），所以按第 11 节
+> 第 3 条没有重跑 `scripts/acceptance.ps1`。
+> **顺带修了一个潜伏的 Lua C API 栈越界**：`readTableList` 会把每个条目留在
+> 栈上而从不清，靠 `EXTRA_STACK` 的 5 个余量硬撑；`app` 让条目变多之后直接写到
+> 栈数组之外（`--check` 以 `0xC0000374` 堆损坏退出，而且到 `lua_close()` 才报）。
+> 现在 `readTableList` 先 `lua_checkstack`；诊断手法（临时 `LUA_USE_APICHECK`）
+> 记在第 10 节。
+> 另外把 `lua_static` 的 `-DLUA_USE_WINDOWS` 改成空值定义（`LUA_USE_WINDOWS=`），
+> 消掉了全量重编 Lua 时每个 `.c` 都会报的 `LUA_USE_WINDOWS redefined`
+> （那是个一直存在、只是以前没触发全量重编的警告）。
+> 按工作约定第 11 条：常驻实例已 `--quit` → 构建 release → 从
+> `build\dist-release` 重新拉起（自启任务仍指向那个路径）。
+
 ---
 
 ## 12. 本期不做的（有意留白）与后续工作
@@ -3475,6 +3539,12 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   `tst_placement` / `tst_config` / `tst_lua`。
   如果新字段要调新的 Win32/COM 后端，放在 `platform/win/*` 里，并在
   `tst_interactive` 里加一条真机验证（`all_desktops`/`topmost` 就是这么做的）。
+* **新的 app 字段**：`core/config.h` 的 `AppDef` 加字段 → `lua_config.cpp` 的
+  `convertApp` 加白名单与读取 → 在 `core/config.cpp` 的 `expandApps` 里决定怎么继承 /
+  忽略（纯逻辑，`tst_config` 直接测）→ `lua_prelude.lua` 的 `app` 注释 →
+  README 的 `app{ ... }` 一节与 `flowkeyd.lua.example` →
+  `tst_config`（展开）/ `tst_lua`（转换，两种写法与错误信息）。
+  如果新字段是“动作的默认值”，跟着 `applyWindowDefaults` 那一对重载改。
 * **新的窗口条件**：`core/window_match`（纯逻辑）+ `platform/win/window` 的
   枚举适配 + `launch_then_activate` 回退 + 手工冒烟清单里加一条用例。
 * **新按键或别名**：扩展 `core/keys` 的键表并加一个往返用例
@@ -3558,6 +3628,11 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、
   `IVirtualDesktopPinnedApps`（IID `{4CE81583-…}` 自 Win10 起未变，不进版本表），
   `topmost` 走已公开的 `SetWindowPos`。**规则真的把窗口搬到另一张桌面时，只有
   “窗口首次出现”那一遍会让视图跟着切过去并重新激活它**（见第 2 节第 14 条）。
+* `app{}`：`name`、`process`、`title`、`window`（一条 `window_rule`，字段同上）、
+  `hotkeys`（一个 `hotkey{}` 列表）、`enabled`。`process` / `title` 至少写一个；
+  `process` / `title` / `name` 自动继承到 `window` 与 hotkey 里的 `window` 动作
+  （显式写的优先）。展开出来的条目排在全局 `hotkey{}` / `window_rule{}` 之后
+  （见第 2 节第 15 条）；声明式写法叫 `apps`。
 * 和弦语法：`~` 放行原始按键、`*` 忽略额外修饰键；`Numpad*` 与主键盘同名键不同。
 * 动作：`run`/`send`/`type`/`open`/`volume`/`media`/`clipboard`/`window`/
   `notify`/`menu`/`help`/`power`/`desktop`/`caps_lock`/`suspend`/`reload`/

@@ -920,6 +920,16 @@ QVector<int> readTableList(lua_State *L, int index, const QString &what)
     }
     QVector<int> out;
     const lua_Unsigned length = lua_rawlen(L, index);
+    // 每个条目都会压在栈上（调用方负责清），而条目数可能远多于 API 保证的
+    // `LUA_MINSTACK` 个槽。不先扩容的话，`api_incr_top` 会直接写到栈数组之外
+    // —— 以前一直是靠 `EXTRA_STACK` 的 5 个余量在硬撑，条目一多（例如
+    // 一个 app 里的 hotkeys）就变成堆损坏。
+    if (length > 100000) {
+        fail(QStringLiteral("%1 has too many entries").arg(what));
+    }
+    if (!lua_checkstack(L, static_cast<int>(length) + LUA_MINSTACK)) {
+        fail(QStringLiteral("%1 is too large to load (out of stack space)").arg(what));
+    }
     for (lua_Unsigned i = 1; i <= length; ++i) {
         lua_rawgeti(L, index, static_cast<lua_Integer>(i));
         if (lua_type(L, -1) != LUA_TTABLE) {
@@ -935,18 +945,70 @@ QVector<int> readTableList(lua_State *L, int index, const QString &what)
     return out;
 }
 
+core::AppDef convertApp(lua_State *L, int index)
+{
+    checkFields(L, index, {"name", "process", "title", "window", "hotkeys", "enabled"});
+    core::AppDef app;
+    app.name = optString(L, index, "name");
+    app.process = optString(L, index, "process");
+    app.title = optString(L, index, "title");
+    app.enabled = optBool(L, index, "enabled").value_or(true);
+
+    int window = 0;
+    if (pushField(L, index, "window", &window)) {
+        if (lua_type(L, window) != LUA_TTABLE) {
+            const QString type = luaTypeName(lua_type(L, window));
+            lua_pop(L, 1);
+            fail(QStringLiteral("invalid type: %1, expected a table with the window_rule fields "
+                                "(`desktop`, `monitor`, ...)")
+                     .arg(type));
+        }
+        app.window = convertWindowRule(L, window);
+        lua_pop(L, 1);
+    }
+
+    int hotkeys = 0;
+    if (pushField(L, index, "hotkeys", &hotkeys)) {
+        // `readTableList` 把每个条目都压上栈；转换完要把它们连同列表一起清掉，
+        // 否则会把调用方的栈顶弄乱（下面的 `lua_pop` 就弹错东西了）。
+        const int listBase = lua_gettop(L);
+        const QVector<int> tables = readTableList(L, hotkeys, QStringLiteral("`hotkeys`"));
+        for (int tableIndex : tables) {
+            app.hotkeys.push_back(convertHotkey(L, tableIndex));
+        }
+        lua_settop(L, listBase);
+        lua_pop(L, 1);
+    }
+    return app;
+}
+
 QString entryLabel(lua_State *L, int index, std::size_t position, const char *kind)
 {
+    const QString kindName = QString::fromLatin1(kind);
     lua_getfield(L, index, "name");
     QString name;
     if (lua_type(L, -1) == LUA_TSTRING) {
         name = rawStringAt(L, -1);
     }
     lua_pop(L, 1);
-    if (!name.isEmpty()) {
-        return QStringLiteral("%1 #%2 (`%3`)").arg(QString::fromLatin1(kind)).arg(position + 1).arg(name);
+    // `app` 不写 `name` 时用 `process`（再退到 `title`）当标签，
+    // 这样错误信息里能直接看出是哪个程序。
+    if (name.isEmpty() && kindName == QLatin1String("app")) {
+        for (const char *field : {"process", "title"}) {
+            lua_getfield(L, index, field);
+            if (lua_type(L, -1) == LUA_TSTRING) {
+                name = rawStringAt(L, -1);
+            }
+            lua_pop(L, 1);
+            if (!name.isEmpty()) {
+                break;
+            }
+        }
     }
-    return QStringLiteral("%1 #%2").arg(QString::fromLatin1(kind)).arg(position + 1);
+    if (!name.isEmpty()) {
+        return QStringLiteral("%1 #%2 (`%3`)").arg(kindName).arg(position + 1).arg(name);
+    }
+    return QStringLiteral("%1 #%2").arg(kindName).arg(position + 1);
 }
 
 } // namespace
@@ -982,10 +1044,10 @@ std::optional<core::ConfigError> evaluate(const QString &text, const QString &pa
     } guard{L};
     luaL_openlibs(L);
 
-    // DSL 注册表：settings / hotkeys / remaps / window_rules 四个列表，
+    // DSL 注册表：settings / hotkeys / remaps / window_rules / apps 五个列表，
     // 只作为参数传给预置脚本。
-    lua_createtable(L, 0, 4);
-    for (const char *name : {"settings", "hotkeys", "remaps", "window_rules"}) {
+    lua_createtable(L, 0, 5);
+    for (const char *name : {"settings", "hotkeys", "remaps", "window_rules", "apps"}) {
         lua_newtable(L);
         lua_setfield(L, -2, name);
     }
@@ -1118,6 +1180,13 @@ std::optional<core::ConfigError> evaluate(const QString &text, const QString &pa
                            errors.append(QStringLiteral("%1: %2").arg(label, error.message));
                        }
                    });
+    convertEntries("apps", "app", [&](int tableIndex, std::size_t, const QString &label) {
+        try {
+            config.apps.push_back(convertApp(L, tableIndex));
+        } catch (const ConvError &error) {
+            errors.append(QStringLiteral("%1: %2").arg(label, error.message));
+        }
+    });
 
     // ---- 脚本 `return` 的那张表（排在脚本体注册的条目之后） ----
     if (returnedIndex != 0 && !lua_isnil(L, returnedIndex)) {
@@ -1145,9 +1214,13 @@ std::optional<core::ConfigError> evaluate(const QString &text, const QString &pa
                 if (key == QLatin1String("settings")) {
                     // 已经在上面处理过了。
                 } else if (key == QLatin1String("hotkeys") || key == QLatin1String("remaps")
-                           || key == QLatin1String("window_rules")) {
+                           || key == QLatin1String("window_rules") || key == QLatin1String("apps")) {
                     const bool isHotkeys = key == QLatin1String("hotkeys");
                     const bool isRemaps = key == QLatin1String("remaps");
+                    const bool isApps = key == QLatin1String("apps");
+                    const char *kind = isHotkeys ? "hotkey"
+                                                 : (isRemaps ? "remap"
+                                                             : (isApps ? "app" : "window_rule"));
                     const QString what =
                         QStringLiteral("the returned `%1`").arg(key);
                     try {
@@ -1156,10 +1229,9 @@ std::optional<core::ConfigError> evaluate(const QString &text, const QString &pa
                             const std::size_t position =
                                 isHotkeys ? config.hotkeys.size()
                                           : (isRemaps ? config.remaps.size()
-                                                      : config.windowRules.size());
-                            const QString label = entryLabel(
-                                L, tableIndex, position,
-                                isHotkeys ? "hotkey" : (isRemaps ? "remap" : "window_rule"));
+                                                      : (isApps ? config.apps.size()
+                                                                : config.windowRules.size()));
+                            const QString label = entryLabel(L, tableIndex, position, kind);
                             QVector<const void *> seen;
                             checkMixedTables(L, tableIndex, label, &seen, &errors);
                             try {
@@ -1167,6 +1239,8 @@ std::optional<core::ConfigError> evaluate(const QString &text, const QString &pa
                                     config.hotkeys.push_back(convertHotkey(L, tableIndex));
                                 } else if (isRemaps) {
                                     config.remaps.push_back(convertRemap(L, tableIndex));
+                                } else if (isApps) {
+                                    config.apps.push_back(convertApp(L, tableIndex));
                                 } else {
                                     config.windowRules.push_back(convertWindowRule(L, tableIndex));
                                 }
@@ -1180,7 +1254,7 @@ std::optional<core::ConfigError> evaluate(const QString &text, const QString &pa
                 } else {
                     errors.append(QStringLiteral(
                                       "unknown field `%1` in the returned table, expected `settings`, "
-                                      "`hotkeys`, `remaps` or `window_rules`")
+                                      "`hotkeys`, `remaps`, `window_rules` or `apps`")
                                       .arg(key));
                 }
                 lua_settop(L, loopBase + 1);

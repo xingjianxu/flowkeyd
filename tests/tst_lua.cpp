@@ -85,6 +85,8 @@ private slots:
     void bomIsStrippedBeforeLuaSeesIt();
     void legacyTomlIsRejected();
     void windowRulesAreConverted();
+    void appBlocksExpandIntoHotkeysAndRules();
+    void appBlocksAreChecked();
 };
 
 void TestLua::imperativeAndDeclarativeStylesAgree()
@@ -511,6 +513,104 @@ void TestLua::windowRulesAreConverted()
     QVERIFY(cleared.has_value());
     QCOMPARE(cleared->windowRules[0].allDesktops, std::optional<bool>(false));
     QCOMPARE(cleared->windowRules[0].topmost, std::optional<bool>(false));
+}
+
+void TestLua::appBlocksExpandIntoHotkeysAndRules()
+{
+    // app 把同一个程序的 window_rule 与 hotkey 写在一起：process 只写一遍。
+    const auto c = parse(R"(
+        app{
+          process = "wps",
+          window = { desktop = 3, monitor = 2 },
+          hotkeys = {
+            {
+              keys = "Win+3",
+              action = window("activate", {
+                launch = { program = [[C:\tools\ksolaunch.exe]], wait_ms = 10000 },
+              }),
+            },
+          },
+        }
+    )");
+    QVERIFY(c.has_value());
+    QCOMPARE(c->bindings.size(), std::size_t(1));
+    QCOMPARE(c->bindings[0].name, QStringLiteral("wps"));
+    const core::Action &action = c->bindings[0].press[0];
+    QCOMPARE(action.kind, core::Action::Kind::Window);
+    QCOMPARE(action.process.value_or(QString()), QStringLiteral("wps"));
+    QVERIFY(action.launch.has_value());
+    QCOMPARE(action.launch->program, QStringLiteral("C:\\tools\\ksolaunch.exe"));
+    QCOMPARE(c->windowRules.size(), std::size_t(1));
+    QCOMPARE(c->windowRules[0].name, QStringLiteral("wps"));
+    QCOMPARE(c->windowRules[0].process.value_or(QString()), QStringLiteral("wps"));
+    QCOMPARE(c->windowRules[0].desktop, std::optional<std::uint32_t>(3));
+    QVERIFY(c->windowRules[0].maximize);
+
+    // 声明式写法一样。
+    const auto declarative = parse(R"(
+        return {
+          apps = {
+            {
+              process = "wps",
+              window = { desktop = 3, monitor = 2 },
+              hotkeys = { { keys = "Win+3", action = { type = "window", op = "activate" } } },
+            },
+          },
+        }
+    )");
+    QVERIFY(declarative.has_value());
+    QCOMPARE(declarative->bindings.size(), std::size_t(1));
+    QCOMPARE(declarative->bindings[0].press[0].process.value_or(QString()), QStringLiteral("wps"));
+    QCOMPARE(declarative->windowRules.size(), std::size_t(1));
+    QCOMPARE(declarative->windowRules[0].desktop, std::optional<std::uint32_t>(3));
+
+    // 全局条目照旧可用，排在 app 展开的条目之前。
+    const auto mixed = parse(R"(
+        hotkey{ keys = "F1", action = none() }
+        window_rule{ process = "code", desktop = 1 }
+        app{ process = "wps", window = { desktop = 3 }, hotkeys = { { keys = "Win+3" } } }
+    )");
+    QVERIFY(mixed.has_value());
+    QCOMPARE(mixed->bindings.size(), std::size_t(2));
+    QCOMPARE(mixed->bindings[0].name, QStringLiteral("F1"));
+    QCOMPARE(mixed->bindings[1].name, QStringLiteral("wps"));
+    QCOMPARE(mixed->windowRules.size(), std::size_t(2));
+    QCOMPARE(mixed->windowRules[0].process.value_or(QString()), QStringLiteral("code"));
+    QCOMPARE(mixed->windowRules[1].process.value_or(QString()), QStringLiteral("wps"));
+}
+
+void TestLua::appBlocksAreChecked()
+{
+    // 未知字段要报错，并且报的是 app 的标签。
+    const QString unknown = failure(R"(
+        app{ name = "wps", process = "wps", windwo = { desktop = 1 } }
+    )");
+    QVERIFY2(unknown.contains(QStringLiteral("app #1 (`wps`)")), qPrintable(unknown));
+    QVERIFY2(unknown.contains(QStringLiteral("unknown field `windwo`")), qPrintable(unknown));
+
+    // 嵌套 hotkey 的未知字段也要带 app 上下文。
+    const QString nested = failure(R"(
+        app{ process = "wps", hotkeys = { { keys = "Win+3", oops = true } } }
+    )");
+    QVERIFY2(nested.contains(QStringLiteral("app #1 (`wps`)")), qPrintable(nested));
+    QVERIFY2(nested.contains(QStringLiteral("unknown field `oops`")), qPrintable(nested));
+
+    // hotkeys 必须是列表，window 必须是表。
+    const QString notAList = failure(R"(
+        app{ process = "wps", hotkeys = { keys = "Win+3" } }
+    )");
+    QVERIFY2(notAList.contains(QStringLiteral("list of tables")), qPrintable(notAList));
+
+    const QString notATable = failure(R"(
+        app{ process = "wps", window = 3 }
+    )");
+    QVERIFY2(notATable.contains(QStringLiteral("window_rule fields")), qPrintable(notATable));
+
+    // 没有 process / title 的 app 不知道自己是哪个程序。
+    const QString noMatch = failure(R"(
+        app{ window = { desktop = 1 } }
+    )");
+    QVERIFY2(noMatch.contains(QStringLiteral("needs `process` or `title`")), qPrintable(noMatch));
 }
 
 QTEST_MAIN(TestLua)

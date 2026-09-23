@@ -243,6 +243,115 @@ struct SeenChord
     QString owner;
 };
 
+/// 把 app 的默认值套到动作树里的 `window` 动作上（显式写的优先）。
+///
+/// 递归进 `menu` 的条目：`app` 里的选单条目也可能是 `window()` 动作，
+/// 语义上它依然属于这个程序。
+void applyWindowDefaults(ActionSpec &spec,
+                         const std::optional<QString> &process,
+                         const std::optional<QString> &title);
+
+void applyWindowDefaults(Action &action,
+                         const std::optional<QString> &process,
+                         const std::optional<QString> &title)
+{
+    if (action.kind == Action::Kind::Window) {
+        if (process.has_value() && !action.process.has_value()) {
+            action.process = process;
+        }
+        // `window` 动作里“标题”那个字段叫 `target`。
+        if (title.has_value() && !action.target.has_value()) {
+            action.target = title;
+        }
+    }
+    if (action.kind == Action::Kind::Menu) {
+        for (MenuItemDef &item : action.items) {
+            if (item.action) {
+                applyWindowDefaults(*item.action, process, title);
+            }
+        }
+    }
+}
+
+void applyWindowDefaults(ActionSpec &spec,
+                         const std::optional<QString> &process,
+                         const std::optional<QString> &title)
+{
+    switch (spec.kind) {
+    case ActionSpec::Kind::One:
+        applyWindowDefaults(spec.action, process, title);
+        break;
+    case ActionSpec::Kind::List:
+        for (ActionSpec &item : spec.list) {
+            applyWindowDefaults(item, process, title);
+        }
+        break;
+    case ActionSpec::Kind::Short:
+        // 简写字符串（`"window:activate"`）里没有可继承的字段，原样放行。
+        break;
+    }
+}
+
+/// 把 `Config::apps` 展开成普通的 `HotkeyDef` / `WindowRuleDef`（追加在全局条目之后）。
+void expandApps(const std::vector<AppDef> &apps,
+                std::vector<HotkeyDef> *hotkeys,
+                std::vector<WindowRuleDef> *windowRules,
+                QStringList *errors,
+                QStringList *warnings)
+{
+    for (std::size_t i = 0; i < apps.size(); ++i) {
+        const AppDef &app = apps.at(i);
+        const QString label = app.name.has_value()
+                                  ? QStringLiteral("app #%1 (`%2`)").arg(i + 1).arg(*app.name)
+                                  : QStringLiteral("app #%1").arg(i + 1);
+        const bool hasProcess = app.process.has_value() && !app.process->trimmed().isEmpty();
+        const bool hasTitle = app.title.has_value() && !app.title->trimmed().isEmpty();
+        if (!hasProcess && !hasTitle) {
+            errors->append(QStringLiteral("%1: needs `process` or `title` to know which program it "
+                                          "is for")
+                               .arg(label));
+            continue;
+        }
+        if (!app.enabled) {
+            warnings->append(QStringLiteral("%1: disabled").arg(label));
+            continue;
+        }
+        // app 的名字：显式的优先，否则用 process，再退到 title。
+        const QString name = app.name.value_or(hasProcess ? *app.process : *app.title);
+
+        if (app.window.has_value()) {
+            WindowRuleDef rule = *app.window;
+            if (!rule.process.has_value() && hasProcess) {
+                rule.process = app.process;
+            }
+            if (!rule.title.has_value() && hasTitle) {
+                rule.title = app.title;
+            }
+            if (!rule.name.has_value()) {
+                rule.name = name;
+            }
+            windowRules->push_back(std::move(rule));
+        }
+
+        // 只有一个 hotkey 时用 app 的名字当默认名；多个时保持“第一个和弦”的旧默认，
+        // 免得一个 app 下的几条绑定重名。
+        const bool singleHotkey = app.hotkeys.size() == 1;
+        for (const HotkeyDef &def : app.hotkeys) {
+            HotkeyDef hotkey = def;
+            if (!hotkey.name.has_value() && singleHotkey) {
+                hotkey.name = name;
+            }
+            if (hotkey.action.has_value()) {
+                applyWindowDefaults(*hotkey.action, app.process, app.title);
+            }
+            if (hotkey.onRelease.has_value()) {
+                applyWindowDefaults(*hotkey.onRelease, app.process, app.title);
+            }
+            hotkeys->push_back(std::move(hotkey));
+        }
+    }
+}
+
 } // namespace
 
 std::optional<ConfigError> compile(const Config &config,
@@ -254,6 +363,11 @@ std::optional<ConfigError> compile(const Config &config,
     std::vector<Binding> bindings;
     std::vector<CompiledRemap> remaps;
     std::vector<WindowRule> windowRules;
+
+    // `app{...}` 先展开成普通的 hotkey / window_rule（排在全局条目之后）。
+    std::vector<HotkeyDef> hotkeys = config.hotkeys;
+    std::vector<WindowRuleDef> windowRuleDefs = config.windowRules;
+    expandApps(config.apps, &hotkeys, &windowRuleDefs, &errors, &warnings);
 
     if (config.settings.tickMs == 0 || config.settings.tickMs > 1000) {
         errors.append(QStringLiteral("settings.tick_ms must be between 1 and 1000 (got %1)")
@@ -278,8 +392,8 @@ std::optional<ConfigError> compile(const Config &config,
                           .arg(config.settings.inputBackend));
     }
 
-    for (std::size_t i = 0; i < config.hotkeys.size(); ++i) {
-        const HotkeyDef &def = config.hotkeys.at(i);
+    for (std::size_t i = 0; i < hotkeys.size(); ++i) {
+        const HotkeyDef &def = hotkeys.at(i);
         const QString label = def.name.has_value()
                                   ? *def.name
                                   : QStringLiteral("hotkey #%1").arg(i + 1);
@@ -457,8 +571,8 @@ std::optional<ConfigError> compile(const Config &config,
         remaps.push_back(std::move(remap));
     }
 
-    for (std::size_t i = 0; i < config.windowRules.size(); ++i) {
-        const WindowRuleDef &def = config.windowRules.at(i);
+    for (std::size_t i = 0; i < windowRuleDefs.size(); ++i) {
+        const WindowRuleDef &def = windowRuleDefs.at(i);
         const QString label = def.name.has_value()
                                   ? QStringLiteral("window rule #%1 (`%2`)").arg(i + 1).arg(*def.name)
                                   : QStringLiteral("window rule #%1").arg(i + 1);

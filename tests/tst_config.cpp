@@ -9,6 +9,7 @@
 #include <QtTest>
 
 #include <algorithm>
+#include <memory>
 
 using namespace flowkeyd::core;
 using namespace flowkeyd::test;
@@ -39,6 +40,11 @@ private slots:
     void windowRuleGeometryDefaults();
     void windowRulePinsAndTopmost();
     void windowRuleProblemsAreReported();
+    void appsExpandIntoHotkeysAndWindowRules();
+    void appWindowActionsKeepExplicitFields();
+    void appNamesDefaultToProcess();
+    void appMenuItemsInheritToo();
+    void appProblemsAreReported();
     void settingsValidation();
     void evaluationErrorsAreReported();
     void legacyTomlIsReportedInsteadOfParsed();
@@ -607,6 +613,235 @@ void TestConfig::windowRuleProblemsAreReported()
                         [](const QString &warning) {
                             return warning.contains(QStringLiteral("first"));
                         }));
+}
+
+void TestConfig::appsExpandIntoHotkeysAndWindowRules()
+{
+    // app 只是书写上的合并：展开成一条 window_rule 与若干条 hotkey。
+    Config config;
+    AppDef app;
+    app.process = QStringLiteral("wps");
+    WindowRuleDef window;
+    window.desktop = 3;
+    MonitorRef monitor;
+    monitor.kind = MonitorRef::Kind::Index;
+    monitor.index = 2;
+    window.monitor = monitor;
+    app.window = window;
+
+    HotkeyDef def;
+    def.keys = QStringList{QStringLiteral("Win+3")};
+    Action action = windowAction(WindowOp::Activate);
+    LaunchSpec launch;
+    launch.program = QStringLiteral("ksolaunch.exe");
+    action.launch = launch;
+    def.action = specOne(action);
+    app.hotkeys.push_back(def);
+    config.apps.push_back(app);
+
+    const auto compiled = compileOrDie(config);
+    QCOMPARE(compiled->windowRules.size(), std::size_t(1));
+    const WindowRule &rule = compiled->windowRules.at(0);
+    QCOMPARE(rule.name, QStringLiteral("wps"));
+    QCOMPARE(rule.process.value_or(QString()), QStringLiteral("wps"));
+    QCOMPARE(rule.desktop, std::optional<std::uint32_t>(3));
+    QVERIFY(rule.applyGeometry);
+    QVERIFY(rule.maximize);
+
+    QCOMPARE(compiled->bindings.size(), std::size_t(1));
+    QCOMPARE(compiled->bindings.at(0).name, QStringLiteral("wps"));
+    QCOMPARE(compiled->bindings.at(0).press.size(), std::size_t(1));
+    const Action &expanded = compiled->bindings.at(0).press.at(0);
+    QCOMPARE(expanded.kind, Action::Kind::Window);
+    QCOMPARE(expanded.process.value_or(QString()), QStringLiteral("wps"));
+    QVERIFY(!expanded.target.has_value());
+    QVERIFY(expanded.launch.has_value());
+    QCOMPARE(expanded.launch->program, QStringLiteral("ksolaunch.exe"));
+    QVERIFY(compiled->warnings.isEmpty());
+
+    // 不写 window 的 app 只展开快捷键，不产生规则。
+    Config hotkeyOnly;
+    AppDef onlyHotkey;
+    onlyHotkey.process = QStringLiteral("code");
+    onlyHotkey.hotkeys.push_back(def);
+    hotkeyOnly.apps.push_back(onlyHotkey);
+    const auto compiledOnlyHotkey = compileOrDie(hotkeyOnly);
+    QVERIFY(compiledOnlyHotkey->windowRules.empty());
+    QCOMPARE(compiledOnlyHotkey->bindings.size(), std::size_t(1));
+}
+
+void TestConfig::appWindowActionsKeepExplicitFields()
+{
+    // app 补的是默认值：动作里显式写的 process / target 一字不改。
+    Config config;
+    AppDef app;
+    app.process = QStringLiteral("wezterm");
+    app.title = QStringLiteral("project");
+    HotkeyDef def;
+    def.keys = QStringList{QStringLiteral("Win+S")};
+    Action explicitAction = windowAction(WindowOp::Activate);
+    explicitAction.process = QStringLiteral("kitty");
+    explicitAction.target = QStringLiteral("scratch");
+    def.action = specOne(explicitAction);
+    app.hotkeys.push_back(def);
+    config.apps.push_back(app);
+
+    const auto compiled = compileOrDie(config);
+    const Action &action = compiled->bindings.at(0).press.at(0);
+    QCOMPARE(action.process.value_or(QString()), QStringLiteral("kitty"));
+    QCOMPARE(action.target.value_or(QString()), QStringLiteral("scratch"));
+
+    // 只写 title 的 app 把标题（`window` 动作里的 `target`）传下去。
+    Config titleOnly;
+    AppDef term;
+    term.title = QStringLiteral("wezterm");
+    HotkeyDef focus = def;
+    focus.action = specOne(windowAction(WindowOp::Activate));
+    term.hotkeys.push_back(focus);
+    titleOnly.apps.push_back(term);
+    const auto compiledTitle = compileOrDie(titleOnly);
+    const Action &inherited = compiledTitle->bindings.at(0).press.at(0);
+    QCOMPARE(inherited.target.value_or(QString()), QStringLiteral("wezterm"));
+    QVERIFY(!inherited.process.has_value());
+
+    // 非 window 动作不受影响。
+    Config other;
+    AppDef sendApp;
+    sendApp.process = QStringLiteral("wps");
+    HotkeyDef sendHotkey;
+    sendHotkey.keys = QStringList{QStringLiteral("F9")};
+    sendHotkey.action = specOne(sendAction(QStringLiteral("^{c}")));
+    sendApp.hotkeys.push_back(sendHotkey);
+    other.apps.push_back(sendApp);
+    const auto compiledOther = compileOrDie(other);
+    QCOMPARE(compiledOther->bindings.at(0).press.at(0).kind, Action::Kind::Send);
+    QCOMPARE(compiledOther->bindings.at(0).press.at(0).keys, QStringLiteral("^{c}"));
+}
+
+void TestConfig::appNamesDefaultToProcess()
+{
+    Config config;
+    AppDef app;
+    app.process = QStringLiteral("code");
+    WindowRuleDef window;
+    window.desktop = 2;
+    app.window = window;
+    HotkeyDef def;
+    def.keys = QStringList{QStringLiteral("Win+2")};
+    app.hotkeys.push_back(def);
+    config.apps.push_back(app);
+
+    const auto compiled = compileOrDie(config);
+    QCOMPARE(compiled->windowRules.at(0).name, QStringLiteral("code"));
+    QCOMPARE(compiled->bindings.at(0).name, QStringLiteral("code"));
+
+    // 显式 name 优先。
+    Config named;
+    AppDef renamed = app;
+    renamed.name = QStringLiteral("vscode");
+    named.apps.push_back(renamed);
+    const auto compiledNamed = compileOrDie(named);
+    QCOMPARE(compiledNamed->windowRules.at(0).name, QStringLiteral("vscode"));
+    QCOMPARE(compiledNamed->bindings.at(0).name, QStringLiteral("vscode"));
+
+    // window 自己的 process / name 优先于 app 的。
+    Config override;
+    AppDef overriding = app;
+    WindowRuleDef explicitRule;
+    explicitRule.process = QStringLiteral("chromium");
+    explicitRule.name = QStringLiteral("chrome-rule");
+    explicitRule.desktop = 1;
+    overriding.window = explicitRule;
+    override.apps.push_back(overriding);
+    const auto compiledOverride = compileOrDie(override);
+    QCOMPARE(compiledOverride->windowRules.at(0).process.value_or(QString()),
+             QStringLiteral("chromium"));
+    QCOMPARE(compiledOverride->windowRules.at(0).name, QStringLiteral("chrome-rule"));
+
+    // 多个 hotkey：默认名回到「第一个和弦」，免得一个 app 下的绑定重名。
+    Config many;
+    AppDef multi;
+    multi.process = QStringLiteral("code");
+    HotkeyDef first;
+    first.keys = QStringList{QStringLiteral("Win+2")};
+    HotkeyDef second;
+    second.keys = QStringList{QStringLiteral("Ctrl+Alt+C")};
+    multi.hotkeys = {first, second};
+    many.apps.push_back(multi);
+    const auto compiledMulti = compileOrDie(many);
+    QCOMPARE(compiledMulti->bindings.at(0).name, QStringLiteral("Win+2"));
+    QCOMPARE(compiledMulti->bindings.at(1).name, QStringLiteral("Ctrl+Alt+C"));
+}
+
+void TestConfig::appMenuItemsInheritToo()
+{
+    Config config;
+    AppDef app;
+    app.process = QStringLiteral("wps");
+    HotkeyDef def;
+    def.keys = QStringList{QStringLiteral("Win+3")};
+    Action menu = actionOf(Action::Kind::Menu);
+    MenuItemDef item = menuItem(QStringLiteral("activate"));
+    item.action = std::make_shared<ActionSpec>(specOne(windowAction(WindowOp::Activate)));
+    menu.items.push_back(item);
+    def.action = specOne(menu);
+    app.hotkeys.push_back(def);
+    config.apps.push_back(app);
+
+    const auto compiled = compileOrDie(config);
+    const Action &expanded = compiled->bindings.at(0).press.at(0);
+    QCOMPARE(expanded.kind, Action::Kind::Menu);
+    QVERIFY(expanded.items.at(0).action != nullptr);
+    QCOMPARE(expanded.items.at(0).action->action.process.value_or(QString()),
+             QStringLiteral("wps"));
+}
+
+void TestConfig::appProblemsAreReported()
+{
+    // 没有 process / title 的 app 不知道自己是哪个程序。
+    Config config;
+    AppDef empty;
+    WindowRuleDef window;
+    window.desktop = 2;
+    empty.window = window;
+    config.apps.push_back(empty);
+    const auto error = compileConfig(config);
+    QVERIFY(error.has_value());
+    QVERIFY2(error->toString().contains(QStringLiteral("app #1")), qPrintable(error->toString()));
+    QVERIFY2(error->toString().contains(QStringLiteral("needs `process` or `title`")),
+             qPrintable(error->toString()));
+
+    // enabled = false 的 app 整条丢掉，但要有一条 warning。
+    Config disabled;
+    AppDef off;
+    off.process = QStringLiteral("code");
+    off.enabled = false;
+    off.window = window;
+    HotkeyDef def;
+    def.keys = QStringList{QStringLiteral("Win+2")};
+    off.hotkeys.push_back(def);
+    disabled.apps.push_back(off);
+    const auto compiled = compileOrDie(disabled);
+    QVERIFY(compiled->bindings.empty());
+    QVERIFY(compiled->windowRules.empty());
+    QVERIFY(std::any_of(compiled->warnings.begin(), compiled->warnings.end(),
+                        [](const QString &warning) {
+                            return warning.contains(QStringLiteral("disabled"));
+                        }));
+
+    // app 展开出来的规则与全局规则一样要报自己的问题。
+    Config badRule;
+    AppDef app;
+    app.process = QStringLiteral("code");
+    WindowRuleDef zero;
+    zero.process = QStringLiteral("code");
+    zero.desktop = 0;
+    app.window = zero;
+    badRule.apps.push_back(app);
+    const auto ruleError = compileConfig(badRule);
+    QVERIFY(ruleError.has_value());
+    QVERIFY2(ruleError->toString().contains(QStringLiteral("`desktop` must be 1")),
+             qPrintable(ruleError->toString()));
 }
 
 void TestConfig::settingsValidation()
