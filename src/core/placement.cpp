@@ -78,6 +78,29 @@ QStringList newMonitorDevices(const QStringList &previous, const QStringList &cu
     return out;
 }
 
+std::optional<std::size_t> stepIndex(std::size_t count,
+                                     std::size_t current,
+                                     int delta,
+                                     bool wrap)
+{
+    if (count == 0 || current >= count) {
+        return std::nullopt;
+    }
+    const auto total = static_cast<long long>(count);
+    long long value = static_cast<long long>(current) + static_cast<long long>(delta);
+    if (wrap) {
+        value %= total;
+        if (value < 0) {
+            value += total;
+        }
+        return static_cast<std::size_t>(value);
+    }
+    if (value < 0 || value >= total) {
+        return std::nullopt;
+    }
+    return static_cast<std::size_t>(value);
+}
+
 Rect placementRect(const Rect &current,
                    const MonitorDescription &target,
                    bool maximize,

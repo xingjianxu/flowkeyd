@@ -119,6 +119,14 @@ QString windowOpDebugName(WindowOp op)
         return QStringLiteral("Close");
     case WindowOp::ToggleTopmost:
         return QStringLiteral("ToggleTopmost");
+    case WindowOp::MovePrevDesktop:
+        return QStringLiteral("MovePrevDesktop");
+    case WindowOp::MoveNextDesktop:
+        return QStringLiteral("MoveNextDesktop");
+    case WindowOp::MoveLeftMonitor:
+        return QStringLiteral("MoveLeftMonitor");
+    case WindowOp::MoveRightMonitor:
+        return QStringLiteral("MoveRightMonitor");
     }
     return QStringLiteral("Activate");
 }
@@ -262,6 +270,18 @@ std::optional<WindowOp> windowOpFromName(const QString &name)
     }
     if (key == QLatin1String("toggle_topmost") || key == QLatin1String("topmost")) {
         return WindowOp::ToggleTopmost;
+    }
+    if (key == QLatin1String("move_prev_desktop") || key == QLatin1String("prev_desktop")) {
+        return WindowOp::MovePrevDesktop;
+    }
+    if (key == QLatin1String("move_next_desktop") || key == QLatin1String("next_desktop")) {
+        return WindowOp::MoveNextDesktop;
+    }
+    if (key == QLatin1String("move_left_monitor") || key == QLatin1String("left_monitor")) {
+        return WindowOp::MoveLeftMonitor;
+    }
+    if (key == QLatin1String("move_right_monitor") || key == QLatin1String("right_monitor")) {
+        return WindowOp::MoveRightMonitor;
     }
     return std::nullopt;
 }
@@ -573,7 +593,8 @@ std::optional<QString> parseActionShorthand(const QString &input, Action *out)
         const auto op = windowOpFromName(rest);
         if (!op.has_value()) {
             return bad(QStringLiteral("`window:` expects activate|minimize|maximize|restore|close|"
-                                      "toggle_topmost, got `%1`")
+                                      "toggle_topmost|move_prev_desktop|move_next_desktop|"
+                                      "move_left_monitor|move_right_monitor, got `%1`")
                            .arg(rest));
         }
         out->kind = Action::Kind::Window;

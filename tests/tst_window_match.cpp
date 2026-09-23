@@ -108,6 +108,11 @@ void TestWindowMatch::toggleOnlyCollapsesAnAlreadyActiveWindow()
     QVERIFY(core::planWindowAction(WindowOp::Minimize, std::nullopt, true) == WindowPlan::ApplyOp);
     QVERIFY(core::planWindowAction(WindowOp::Maximize, std::nullopt, true) == WindowPlan::ApplyOp);
     QVERIFY(core::planWindowAction(WindowOp::Close, std::nullopt, true) == WindowPlan::ApplyOp);
+    // 四个「挪窗口」的 op 也不套用 toggle（即使目标已经在前台也照做）。
+    for (const WindowOp op : {WindowOp::MovePrevDesktop, WindowOp::MoveNextDesktop,
+                             WindowOp::MoveLeftMonitor, WindowOp::MoveRightMonitor}) {
+        QVERIFY(core::planWindowAction(op, std::nullopt, true) == WindowPlan::ApplyOp);
+    }
 }
 
 void TestWindowMatch::onlyStateChangingOpsHaveTransitions()
@@ -117,9 +122,14 @@ void TestWindowMatch::onlyStateChangingOpsHaveTransitions()
     QVERIFY(core::windowOpHasTransition(WindowOp::Minimize));
     QVERIFY(core::windowOpHasTransition(WindowOp::Maximize));
     QVERIFY(core::windowOpHasTransition(WindowOp::Restore));
-    // `close` 与 `toggle_topmost` 不产生过渡，`animate` 对它们无意义。
+    // `close` 与 `toggle_topmost` 不产生过渡，`animate` 对它们无意义；
+    // 跨虚拟桌面移动也不产生过渡，而跨显示器移动会改变几何、有过渡。
     QVERIFY(!core::windowOpHasTransition(WindowOp::Close));
     QVERIFY(!core::windowOpHasTransition(WindowOp::ToggleTopmost));
+    QVERIFY(!core::windowOpHasTransition(WindowOp::MovePrevDesktop));
+    QVERIFY(!core::windowOpHasTransition(WindowOp::MoveNextDesktop));
+    QVERIFY(core::windowOpHasTransition(WindowOp::MoveLeftMonitor));
+    QVERIFY(core::windowOpHasTransition(WindowOp::MoveRightMonitor));
 }
 
 QTEST_MAIN(TestWindowMatch)

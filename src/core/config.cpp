@@ -1,4 +1,5 @@
 #include "core/config.h"
+#include "core/window_match.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -874,11 +875,11 @@ void validateAction(const QString &label, const Action &action, QStringList *err
             errors->append(QStringLiteral("%1: `toggle` only works with op = \"activate\", not %2")
                                .arg(label, windowOpDebugName(action.windowOp)));
         }
-        if (action.animate.has_value()
-            && (action.windowOp == WindowOp::Close || action.windowOp == WindowOp::ToggleTopmost)) {
+        if (action.animate.has_value() && !windowOpHasTransition(action.windowOp)) {
             errors->append(
                 QStringLiteral("%1: `animate` has no effect on %2 (no window transition is involved); "
-                               "drop it or use activate/minimize/maximize/restore")
+                               "drop it or use activate/minimize/maximize/restore/"
+                               "move_left_monitor/move_right_monitor")
                     .arg(label, windowOpDebugName(action.windowOp)));
         }
         break;

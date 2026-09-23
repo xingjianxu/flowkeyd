@@ -126,6 +126,17 @@ bool moveWindowToDesktop(HWND hwnd,
                          QString *error,
                          bool *changed = nullptr);
 
+/// 把窗口移到相邻的虚拟桌面（`delta`：`-1` 上一张，`+1` 下一张）。
+///
+/// 与 `moveWindowToDesktop` 不同，这里**首尾相接**：窗口在第一张桌面上再往
+/// 前会到最右那一张，在最后一张再往后会回到第一张（用户 2026-09 拍板）。
+/// 视图不会跟着窗口走 —— 移动的是窗口，不是当前桌面（与 Windows 自己的
+/// `Win+Ctrl+Shift+←/→` 一致，显示器上的几何完全不变）。
+///
+/// 成功时 `detail` 是 `"desktop 2/4"`；只有一张桌面、或窗口不属于任何虚拟
+/// 桌面时失败（`error` 里是英文原因）。
+bool moveWindowToAdjacentDesktop(HWND hwnd, int delta, QString *detail, QString *error);
+
 /// 把视图切到 `hwnd` 所在的那个虚拟桌面（它已经在当前桌面时是空操作）。
 ///
 /// 为什么不能只靠 `SetForegroundWindow`：窗口被 `MoveViewToDesktop` 搬到别的桌面

@@ -330,6 +330,47 @@ hotkey{
   }),
 }
 
+-- 把当前（前台）窗口挪到相邻的虚拟桌面 / 显示器。
+--
+--   move_prev_desktop / move_next_desktop
+--       上一张 / 下一张虚拟桌面。**首尾相接**：第一张再往前是最后一张，
+--       最后一张再往后是第一张。窗口在显示器上的大小/位置完全不变，
+--       视图也**不**跟着走（移动的是窗口，不是当前桌面）。
+--   move_left_monitor / move_right_monitor
+--       左 / 右边的显示器（按“先左后右、再上后下”的排列顺序）。虚拟桌面不变；
+--       最大化窗口在新显示器上仍然最大化，普通窗口保持原有大小并居中；
+--       已经在最左/最右那一块时只会写一条日志，**不循环**。
+--
+-- 这四个 op 都不写 `target` / `process`，所以目标是当前前台窗口；它们也不
+-- 套用 `toggle`，不接受 `launch`。下面的键位只是例子（不吞系统快捷键）。
+hotkey{
+  name = "window-prev-desktop",
+  comment = "把当前窗口移到上一张虚拟桌面（首尾相接）",
+  keys = "Ctrl+Alt+1",
+  action = window("move_prev_desktop"),
+}
+
+hotkey{
+  name = "window-next-desktop",
+  comment = "把当前窗口移到下一张虚拟桌面（首尾相接）",
+  keys = "Ctrl+Alt+2",
+  action = window("move_next_desktop"),
+}
+
+hotkey{
+  name = "window-left-monitor",
+  comment = "把当前窗口移到左边的显示器（保持最大化状态，否则保持大小并居中）",
+  keys = "Ctrl+Alt+3",
+  action = window("move_left_monitor"),
+}
+
+hotkey{
+  name = "window-right-monitor",
+  comment = "把当前窗口移到右边的显示器（没有更右的显示器时就只记一条日志）",
+  keys = "Ctrl+Alt+4",
+  action = window("move_right_monitor"),
+}
+
 -- 虚拟桌面：按序号直达。
 --
 -- Windows 自己只有相邻切换（Ctrl+Win+Left/Right），按编号跳转要用 shell

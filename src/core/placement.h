@@ -58,6 +58,19 @@ QString normalizeDeviceName(const QString &device);
 /// 分辨率/排列变化（设备名集合不变）不算。
 QStringList newMonitorDevices(const QStringList &previous, const QStringList &current);
 
+/// 在 `[0, count)` 里从下标 `current` 走 `delta` 步。
+///
+/// `wrap` 为真时首尾相接（在最前/最后一步越界就回另一端），为假时越界返回
+/// `std::nullopt`。`count == 0` 或 `current >= count` 同样返回 `std::nullopt`。
+///
+/// `window` 动作的 `move_prev_desktop` / `move_next_desktop`（循环）与
+/// `move_left_monitor` / `move_right_monitor`（不循环）共用它，于是这两套语义
+/// 都能被单测直接覆盖。
+std::optional<std::size_t> stepIndex(std::size_t count,
+                                     std::size_t current,
+                                     int delta,
+                                     bool wrap);
+
 /// 计算窗口应该被摆到的矩形（虚拟屏幕坐标）。
 ///
 /// `current` 是窗口当前的矩形（拿不到时调用方给一个合理的默认值）。

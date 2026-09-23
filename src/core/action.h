@@ -31,7 +31,28 @@ enum class ShowMode { Normal, Hidden, Minimized, Maximized };
 enum class VolumeOp { Up, Down, Set, Mute, Unmute, Toggle };
 enum class MediaOp { PlayPause, Next, Prev, Stop };
 enum class ClipboardOp { Get, Set, Append, Clear };
-enum class WindowOp { Activate, Minimize, Maximize, Restore, Close, ToggleTopmost };
+/// `window` 动作能做的事。
+///
+/// 最后四个是 2026-09 新增的「把窗口挪到相邻的虚拟桌面 / 显示器」：
+///   * `MovePrevDesktop` / `MoveNextDesktop` 只动虚拟桌面，窗口在显示器上的
+///     几何完全不变，**首尾相接**（第一张再往前是最后一张）；
+///   * `MoveLeftMonitor` / `MoveRightMonitor` 只动显示器（按 `sortedMonitors` 的
+///     排列顺序），保留最大化状态，普通窗口保持大小并居中；没有更左/更右的
+///     显示器时失败（不循环）。
+/// 这四个都不套用 `toggle`，也不接受 `launch`；视图不会跟着窗口走（移动的是
+/// 窗口，不是当前桌面）。
+enum class WindowOp {
+    Activate,
+    Minimize,
+    Maximize,
+    Restore,
+    Close,
+    ToggleTopmost,
+    MovePrevDesktop,
+    MoveNextDesktop,
+    MoveLeftMonitor,
+    MoveRightMonitor,
+};
 enum class ToggleState { On, Off, Toggle };
 enum class CapsLockState { Off };
 enum class PowerOp { Sleep, Hibernate, Shutdown, Restart, Logoff, Lock, ScreenOff };

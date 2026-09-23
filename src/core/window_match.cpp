@@ -63,9 +63,14 @@ bool windowOpHasTransition(WindowOp op)
     case WindowOp::Minimize:
     case WindowOp::Maximize:
     case WindowOp::Restore:
+    // 跨显示器移动会改变窗口几何，所以有过渡动画；跨虚拟桌面移动不会。
+    case WindowOp::MoveLeftMonitor:
+    case WindowOp::MoveRightMonitor:
         return true;
     case WindowOp::Close:
     case WindowOp::ToggleTopmost:
+    case WindowOp::MovePrevDesktop:
+    case WindowOp::MoveNextDesktop:
         return false;
     }
     return false;

@@ -134,8 +134,10 @@ private slots:
     void copySelectionCopiesTheFocusedSelection();
     void desktopBackendProbesAndSwitches();
     void moveWindowToAnotherDesktopAndBack();
+    void movesAWindowToTheAdjacentDesktop();
     void activatesAWindowThatIsOnAnotherDesktop();
     void placementMovesAWindowToAnotherMonitor();
+    void movesAWindowToTheAdjacentMonitor();
     void pinsAWindowToAllDesktops();
     void topmostIsAppliedAndCleared();
 };
@@ -497,6 +499,81 @@ void TestInteractive::moveWindowToAnotherDesktopAndBack()
     QCOMPARE(*backId, *beforeId);
 }
 
+/// 跨桌面「挪窗口」：`moveWindowToAdjacentDesktop`。
+///
+/// 与 `moveWindowToDesktop` 不同，这里的目标是“相邻”的那一张（首尾相接），
+/// 而且**视图不跟着走** —— 移动的是窗口，不是当前桌面。
+void TestInteractive::movesAWindowToTheAdjacentDesktop()
+{
+    if (!interactiveEnabled()) {
+        QSKIP("set FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1 to run the interactive tests");
+    }
+    QString error;
+    platform::win::desktop::Snapshot snapshot;
+    QVERIFY2(platform::win::desktop::probe(&snapshot, &error), qPrintable(error));
+    if (snapshot.count < 2) {
+        QSKIP("only one virtual desktop exists; nothing to move a window to");
+    }
+
+    const QString marker =
+        QStringLiteral("flowkeyd-adj-%1").arg(QCoreApplication::applicationPid());
+    TestWindow window(marker);
+    HWND hwnd = window.hwnd();
+    QVERIFY2(hwnd != nullptr, "the test window was not created");
+
+    // 刚创建、shell 还没登记的窗口 `GetWindowDesktopId` 会给全零 GUID（本机实测）；
+    // 先等它真正属于某张虚拟桌面，否则 `moveWindowToAdjacentDesktop` 只能报
+    // “不属于任何虚拟桌面”。真实使用里目标都是已经在桌面上的前台窗口。
+    const QString zeroGuid = QStringLiteral("{00000000-0000-0000-0000-000000000000}");
+    std::optional<QString> beforeId;
+    for (int i = 0; i < 60; ++i) {
+        beforeId = platform::win::desktop::windowDesktopId(hwnd, &error);
+        if (beforeId.has_value() && *beforeId != zeroGuid) {
+            break;
+        }
+        QThread::msleep(50);
+    }
+    QVERIFY2(beforeId.has_value() && *beforeId != zeroGuid, qPrintable(error));
+
+    QString detail;
+    QVERIFY2(platform::win::desktop::moveWindowToAdjacentDesktop(hwnd, 1, &detail, &error),
+             qPrintable(error));
+    QVERIFY2(detail.startsWith(QStringLiteral("desktop ")), qPrintable(detail));
+
+    std::optional<QString> afterId;
+    for (int i = 0; i < 60; ++i) {
+        afterId = platform::win::desktop::windowDesktopId(hwnd, &error);
+        QVERIFY2(afterId.has_value(), qPrintable(error));
+        if (*afterId != *beforeId) {
+            break;
+        }
+        QThread::msleep(50);
+    }
+    QVERIFY2(afterId.has_value() && *afterId != *beforeId,
+             "the window's desktop id did not change after moving it to the next desktop");
+
+    // 视图**不**跟着走：移动的是窗口，当前桌面上已经看不到它了。
+    const auto onCurrent = platform::win::desktop::isWindowOnCurrentDesktop(hwnd, &error);
+    if (onCurrent.has_value()) {
+        QVERIFY2(!*onCurrent,
+                 "moving a window to another desktop must not follow it with the view");
+    }
+
+    // 再搬回来：GUID 应当回到原值。
+    QVERIFY2(platform::win::desktop::moveWindowToAdjacentDesktop(hwnd, -1, &detail, &error),
+             qPrintable(error));
+    std::optional<QString> backId;
+    for (int i = 0; i < 60; ++i) {
+        backId = platform::win::desktop::windowDesktopId(hwnd, &error);
+        QVERIFY2(backId.has_value(), qPrintable(error));
+        if (*backId == *beforeId) {
+            break;
+        }
+        QThread::msleep(50);
+    }
+    QCOMPARE(backId.value_or(QString()), beforeId.value_or(QString()));
+}
+
 /// 跨桌面“唤醒”：窗口被搬到别的虚拟桌面之后，`window::isActive` 不能再被 shell
 /// 记着的“前台窗口”骗到，`window::raiseWindow` 必须能把视图切回去并让它拿到前台。
 ///
@@ -650,6 +727,85 @@ void TestInteractive::placementMovesAWindowToAnotherMonitor()
         }
     }
     QVERIFY2(normal, "the window did not go back to a normal window on the target monitor");
+}
+
+/// 跨显示器「挪窗口」：`moveToAdjacentMonitor`（不循环）。
+///
+/// 普通窗口保持大小并居中；最大化窗口搬到新显示器后仍然最大化；
+/// 已经在最边上时失败（与虚拟桌面不同，显示器不首尾相接）。
+void TestInteractive::movesAWindowToTheAdjacentMonitor()
+{
+    if (!interactiveEnabled()) {
+        QSKIP("set FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1 to run the interactive tests");
+    }
+    const std::vector<core::MonitorDescription> monitors =
+        core::sortedMonitors(platform::win::monitor::list());
+    if (monitors.size() < 2) {
+        QSKIP("only one monitor is connected; nothing to move a window to");
+    }
+
+    const QString marker =
+        QStringLiteral("flowkeyd-adjmon-%1").arg(QCoreApplication::applicationPid());
+    TestWindow window(marker);
+    HWND hwnd = window.hwnd();
+    QVERIFY2(hwnd != nullptr, "the test window was not created");
+
+    const auto beforeIndex = platform::win::monitor::indexForWindow(monitors, hwnd);
+    QVERIFY(beforeIndex.has_value());
+    const core::Rect before =
+        platform::win::monitor::windowRect(hwnd).value_or(core::Rect{0, 0, 800, 600});
+
+    // 优先往右；窗口已经在最右那一块时往左（两个方向共用同一条路径）。
+    const int delta = (*beforeIndex + 1 < monitors.size()) ? 1 : -1;
+    const std::size_t target =
+        delta > 0 ? *beforeIndex + 1 : *beforeIndex - 1;
+    QString detail;
+    QString error;
+    QVERIFY2(platform::win::monitor::moveToAdjacentMonitor(hwnd, delta, &detail, &error),
+             qPrintable(error));
+    QVERIFY(!detail.isEmpty());
+
+    bool onTarget = false;
+    for (int i = 0; i < 60 && !onTarget; ++i) {
+        const auto index = platform::win::monitor::indexForWindow(monitors, hwnd);
+        onTarget = index.has_value() && *index == target;
+        if (!onTarget) {
+            QThread::msleep(50);
+        }
+    }
+    QVERIFY2(onTarget, "the window did not end up on the target monitor");
+
+    // 普通窗口：保持原有大小，居中到目标显示器的工作区。
+    const core::Rect after =
+        platform::win::monitor::windowRect(hwnd).value_or(core::Rect{0, 0, 0, 0});
+    QCOMPARE(after.width, before.width);
+    QCOMPARE(after.height, before.height);
+    QCOMPARE(after.x, monitors[target].work.x + (monitors[target].work.width - after.width) / 2);
+    QCOMPARE(after.y, monitors[target].work.y + (monitors[target].work.height - after.height) / 2);
+
+    // 最大化之后搬回去：最大化状态要保留。
+    QVERIFY2(platform::win::monitor::applyPlacement(hwnd, monitors[target].work, true, &error),
+             qPrintable(error));
+    QVERIFY(IsZoomed(hwnd) != 0);
+    QVERIFY2(platform::win::monitor::moveToAdjacentMonitor(hwnd, -delta, &detail, &error),
+             qPrintable(error));
+    bool back = false;
+    for (int i = 0; i < 60 && !back; ++i) {
+        const auto index = platform::win::monitor::indexForWindow(monitors, hwnd);
+        back = index.has_value() && *index == *beforeIndex && IsZoomed(hwnd) != 0;
+        if (!back) {
+            QThread::msleep(50);
+        }
+    }
+    QVERIFY2(back, "a maximized window should stay maximized on the adjacent monitor");
+
+    // 边界：把窗口放到最左那一块，再往左就该失败（显示器不循环）。
+    QVERIFY2(platform::win::monitor::applyPlacement(hwnd, monitors.front().work, false, &error),
+             qPrintable(error));
+    error.clear();
+    QVERIFY2(!platform::win::monitor::moveToAdjacentMonitor(hwnd, -1, &detail, &error),
+             "moving left from the leftmost monitor must fail");
+    QVERIFY(!error.isEmpty());
 }
 
 /// `window_rule` 的 `all_desktops`：走未公开的 `IVirtualDesktopPinnedApps`

@@ -1,3 +1,8 @@
+// `core/placement.h` 会经 `core/config.h` 拉到 `core/keys.h`，必须在任何
+// `windows.h` 之前包含：`keys.h` 里的 `DELETE` / `XBUTTON1` / `XBUTTON2`
+// 与 windows.h 的宏同名（与 `monitor.h` 同一套写法）。
+#include "core/placement.h"
+
 #include "platform/win/desktop.h"
 
 #include "platform/win/logging.h"
@@ -302,6 +307,9 @@ public:
     /// 把窗口移到第 `index` 个桌面（从 1 开始）。
     bool moveWindowToDesktop(HWND hwnd, std::uint32_t index, QString *detail, QString *error) const;
 
+    /// 把窗口移到相邻的桌面（首尾相接）。
+    bool moveWindowToAdjacent(HWND hwnd, int delta, QString *detail, QString *error) const;
+
     /// 窗口是不是被钉在所有虚拟桌面上（`IVirtualDesktopPinnedApps::IsViewPinned`）。
     bool isViewPinned(HWND hwnd, std::optional<bool> *out, QString *error) const;
 
@@ -326,6 +334,13 @@ private:
     bool switchDesktop(const ComPtr &target, QString *error) const;
     /// 把 `HWND` 换成 shell 侧的 `IApplicationView*`（移动与钉住都要用）。
     bool viewForWindow(HWND hwnd, ComPtr *out, QString *error) const;
+    /// 把窗口移到**已枚举**的 `desktops[index]`（`moveWindowToDesktop` 与
+    /// `moveWindowToAdjacent` 共用的最后一步；`index` 从 0 开始）。
+    bool moveViewToDesktopIndex(HWND hwnd,
+                                const std::vector<ComPtr> &desktops,
+                                std::size_t index,
+                                QString *detail,
+                                QString *error) const;
 
     const ApiEntry *m_api = nullptr;
     ComPtr m_manager;
@@ -802,6 +817,44 @@ bool Session::setPinned(HWND hwnd,
     return true;
 }
 
+bool Session::moveViewToDesktopIndex(HWND hwnd,
+                                     const std::vector<ComPtr> &desktops,
+                                     std::size_t index,
+                                     QString *detail,
+                                     QString *error) const
+{
+    ComPtr viewGuard;
+    if (!viewForWindow(hwnd, &viewGuard, error)) {
+        return false;
+    }
+    void *view = viewGuard.get();
+
+    void *object = m_manager.get();
+    void *desktop = desktops[index].get();
+    HRESULT hr = E_FAIL;
+    switch (m_api->layout) {
+    case Layout::Plain:
+        hr = vtableOf<ManagerPlainVtbl>(object)->moveViewToDesktop(object, view, desktop);
+        break;
+    case Layout::Monitor:
+        hr = vtableOf<ManagerMonitorVtbl>(object)->moveViewToDesktop(object, view, desktop);
+        break;
+    case Layout::MonitorShifted:
+        hr = vtableOf<ManagerMonitorShiftedVtbl>(object)->moveViewToDesktop(object, view, desktop);
+        break;
+    }
+    if (FAILED(hr)) {
+        if (error != nullptr) {
+            *error = hresultMessage(hr, "IVirtualDesktopManagerInternal::MoveViewToDesktop");
+        }
+        return false;
+    }
+    if (detail != nullptr) {
+        *detail = QStringLiteral("desktop %1/%2").arg(index + 1).arg(desktops.size());
+    }
+    return true;
+}
+
 bool Session::moveWindowToDesktop(HWND hwnd,
                                   std::uint32_t index,
                                   QString *detail,
@@ -826,37 +879,43 @@ bool Session::moveWindowToDesktop(HWND hwnd,
         }
         return false;
     }
+    return moveViewToDesktopIndex(hwnd, desktops, static_cast<std::size_t>(index) - 1, detail, error);
+}
 
-    ComPtr viewGuard;
-    if (!viewForWindow(hwnd, &viewGuard, error)) {
-        return false;
-    }
-    void *view = viewGuard.get();
-
-    void *object = m_manager.get();
-    void *desktop = desktops[static_cast<std::size_t>(index) - 1].get();
-    HRESULT hr = E_FAIL;
-    switch (m_api->layout) {
-    case Layout::Plain:
-        hr = vtableOf<ManagerPlainVtbl>(object)->moveViewToDesktop(object, view, desktop);
-        break;
-    case Layout::Monitor:
-        hr = vtableOf<ManagerMonitorVtbl>(object)->moveViewToDesktop(object, view, desktop);
-        break;
-    case Layout::MonitorShifted:
-        hr = vtableOf<ManagerMonitorShiftedVtbl>(object)->moveViewToDesktop(object, view, desktop);
-        break;
-    }
-    if (FAILED(hr)) {
+bool Session::moveWindowToAdjacent(HWND hwnd, int delta, QString *detail, QString *error) const
+{
+    if (m_viewCollection.get() == nullptr) {
         if (error != nullptr) {
-            *error = hresultMessage(hr, "IVirtualDesktopManagerInternal::MoveViewToDesktop");
+            *error = QStringLiteral("the shell's IApplicationViewCollection is not available; "
+                                    "cannot move windows between desktops");
         }
         return false;
     }
-    if (detail != nullptr) {
-        *detail = QStringLiteral("desktop %1/%2").arg(index).arg(desktops.size());
+    std::vector<ComPtr> desktops;
+    if (!enumerateDesktops(&desktops, error)) {
+        return false;
     }
-    return true;
+    if (desktops.size() < 2) {
+        if (error != nullptr) {
+            *error = QStringLiteral(
+                "there is only one virtual desktop; there is no adjacent desktop to move to");
+        }
+        return false;
+    }
+    const std::optional<std::size_t> index = desktopIndexOfWindow(hwnd, desktops, error);
+    if (!index.has_value()) {
+        return false;
+    }
+    // 首尾相接：第一张再往前是最后一张，最后一张再往后是第一张（用户 2026-09 拍板）。
+    const std::optional<std::size_t> target =
+        core::stepIndex(desktops.size(), *index, delta, true);
+    if (!target.has_value()) {
+        if (error != nullptr) {
+            *error = QStringLiteral("could not find an adjacent virtual desktop");
+        }
+        return false;
+    }
+    return moveViewToDesktopIndex(hwnd, desktops, *target, detail, error);
 }
 
 std::optional<QString> Session::windowDesktopId(HWND hwnd) const
@@ -1189,6 +1248,56 @@ bool moveWindowToDesktop(HWND hwnd,
     }
     if (changed != nullptr) {
         *changed = localChanged;
+    }
+    return true;
+}
+
+bool moveWindowToAdjacentDesktop(HWND hwnd, int delta, QString *detail, QString *error)
+{
+    if (hwnd == nullptr || IsWindow(hwnd) == 0) {
+        if (error != nullptr) {
+            *error = QStringLiteral("the window is gone");
+        }
+        return false;
+    }
+    if (delta != -1 && delta != 1) {
+        if (error != nullptr) {
+            *error = QStringLiteral("the desktop step must be -1 (previous) or +1 (next)");
+        }
+        return false;
+    }
+    QString localDetail;
+    QString localError;
+    bool ok = false;
+    inSta([&]() {
+        Apartment apartment;
+        if (!apartment.enter(&localError)) {
+            return;
+        }
+        const WindowsVersion version = windowsVersion();
+        const ApiEntry &api = apiFor(version.build, version.revision);
+        Session session;
+        if (!session.open(api, version, &localError)) {
+            return;
+        }
+        const std::optional<QString> before = session.windowDesktopId(hwnd);
+        ok = session.moveWindowToAdjacent(hwnd, delta, &localDetail, &localError);
+        if (ok) {
+            logDebug(QStringLiteral("window desktop id %1 -> %2")
+                         .arg(before.value_or(QStringLiteral("?")),
+                              session.windowDesktopId(hwnd).value_or(QStringLiteral("?"))));
+        }
+    });
+    if (!ok) {
+        if (error != nullptr) {
+            *error = localError.isEmpty()
+                         ? QStringLiteral("could not move the window to the adjacent desktop")
+                         : localError;
+        }
+        return false;
+    }
+    if (detail != nullptr) {
+        *detail = localDetail;
     }
     return true;
 }

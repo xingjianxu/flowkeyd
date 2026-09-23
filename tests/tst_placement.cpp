@@ -50,6 +50,7 @@ private slots:
     void selectMonitorReturnsNulloptWhenMissing();
     void normalizeDeviceNameStripsThePrefix();
     void newMonitorDevicesDetectsReconnects();
+    void stepIndexWrapsOrStopsAtTheEdges();
     void placementRectMaximizesToTheWorkArea();
     void placementRectCentersAndKeepsTheSize();
     void placementRectHonoursPositionAndSize();
@@ -143,6 +144,29 @@ void TestPlacement::newMonitorDevicesDetectsReconnects()
     // 同一块显示器换个写法（全名 / 短名）不算“新设备”。
     QCOMPARE(core::newMonitorDevices(QStringList{QStringLiteral("\\\\.\\DISPLAY1")}, one),
              QStringList());
+}
+
+void TestPlacement::stepIndexWrapsOrStopsAtTheEdges()
+{
+    // 不循环（显示器移动）：越界就是找不到。
+    QCOMPARE(core::stepIndex(3, 1, -1, false), std::optional<std::size_t>(0));
+    QCOMPARE(core::stepIndex(3, 1, 1, false), std::optional<std::size_t>(2));
+    QCOMPARE(core::stepIndex(3, 0, -1, false), std::nullopt);
+    QCOMPARE(core::stepIndex(3, 2, 1, false), std::nullopt);
+
+    // 循环（虚拟桌面移动）：首尾相接。
+    QCOMPARE(core::stepIndex(3, 0, -1, true), std::optional<std::size_t>(2));
+    QCOMPARE(core::stepIndex(3, 2, 1, true), std::optional<std::size_t>(0));
+    QCOMPARE(core::stepIndex(2, 1, 1, true), std::optional<std::size_t>(0));
+    QCOMPARE(core::stepIndex(2, 0, -1, true), std::optional<std::size_t>(1));
+
+    // 只有一张桌面/一块显示器时，任何方向都没有“相邻”的那一个。
+    QCOMPARE(core::stepIndex(1, 0, 1, true), std::optional<std::size_t>(0));
+    QCOMPARE(core::stepIndex(1, 0, -1, false), std::nullopt);
+
+    // 空的列表 / 越界的起点。
+    QCOMPARE(core::stepIndex(0, 0, 1, true), std::nullopt);
+    QCOMPARE(core::stepIndex(3, 5, 1, true), std::nullopt);
 }
 
 void TestPlacement::placementRectMaximizesToTheWorkArea()

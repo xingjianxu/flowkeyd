@@ -217,6 +217,12 @@ end
 --   window("activate", { target = "Notepad", toggle = false })
 --   window("maximize", { animate = true })
 --
+-- 把窗口挪到相邻的桌面 / 显示器（不写 target / process 就是前台窗口）：
+--   window("move_prev_desktop")   -- 上一张虚拟桌面（第一张再往前 = 最后一张，首尾相接）
+--   window("move_next_desktop")   -- 下一张虚拟桌面（显示器上的几何不变）
+--   window("move_left_monitor")   -- 左边的显示器（保留最大化，否则保持大小并居中）
+--   window("move_right_monitor")  -- 右边的显示器（没有更左/更右的显示器时会失败）
+--
 -- `launch = { program, args[], cwd, show, shell, env{}, wait_ms }` 只在没有窗口
 -- 匹配时执行；`wait_ms` 也可以写在动作顶层（它是 `launch.wait_ms` 的简写），
 -- 在 app{} 里还会继承 app 的 launch。
@@ -228,7 +234,11 @@ end
 -- DWMWA_TRANSITIONS_FORCEDISABLED，不改系统设置）；`animate = true` 恢复。
 function window(op, opts)
   if type(op) ~= "string" then
-    error("window() expects one of activate|minimize|maximize|restore|close|toggle_topmost", 2)
+    error(
+      "window() expects one of activate|minimize|maximize|restore|close|toggle_topmost|"
+        .. "move_prev_desktop|move_next_desktop|move_left_monitor|move_right_monitor",
+      2
+    )
   end
   return merge({ type = "window", op = op }, opts)
 end

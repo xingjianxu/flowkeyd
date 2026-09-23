@@ -1,3 +1,8 @@
+// `monitor.h` 会经 `core/placement.h` 拉到 `core/keys.h`，必须在任何 `windows.h`
+// 之前包含：`keys.h` 里的 `DELETE` / `XBUTTON1` / `XBUTTON2` 与 windows.h 的
+// 宏同名。
+#include "platform/win/monitor.h"
+
 #include "platform/win/window.h"
 
 #include "core/window_match.h"
@@ -316,6 +321,10 @@ bool applyTo(HWND hwnd, core::WindowOp op, bool animate, QString *detail, QStrin
         guard.emplace(hwnd, animate);
     }
 
+    // 需要额外一行说明的 op（例如“搬到了 2/4 号桌面”）把说明放在这里，
+    // 拼进最后那条统一的 detail。
+    QString extra;
+
     switch (op) {
     case core::WindowOp::Activate:
         if (IsIconic(hwnd) != 0) {
@@ -354,10 +363,34 @@ bool applyTo(HWND hwnd, core::WindowOp op, bool animate, QString *detail, QStrin
         }
         break;
     }
+    case core::WindowOp::MovePrevDesktop:
+    case core::WindowOp::MoveNextDesktop: {
+        const int delta = op == core::WindowOp::MovePrevDesktop ? -1 : 1;
+        QString note;
+        if (!desktop::moveWindowToAdjacentDesktop(hwnd, delta, &note, error)) {
+            return false;
+        }
+        extra = note;
+        break;
+    }
+    case core::WindowOp::MoveLeftMonitor:
+    case core::WindowOp::MoveRightMonitor: {
+        const int delta = op == core::WindowOp::MoveLeftMonitor ? -1 : 1;
+        QString note;
+        if (!monitor::moveToAdjacentMonitor(hwnd, delta, &note, error)) {
+            return false;
+        }
+        extra = note;
+        break;
+    }
     }
 
     if (detail != nullptr) {
-        *detail = QStringLiteral("%1 %2").arg(core::windowOpDebugName(op), core::rustDebug(title));
+        QString text = QStringLiteral("%1 %2").arg(core::windowOpDebugName(op), core::rustDebug(title));
+        if (!extra.isEmpty()) {
+            text += QStringLiteral(" (%1)").arg(extra);
+        }
+        *detail = text;
     }
     return true;
 }

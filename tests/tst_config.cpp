@@ -36,6 +36,7 @@ private slots:
     void menuProblemsAreReportedAtLoadTime();
     void helpTitleMustNotBeEmpty();
     void windowToggleAndAnimateValidation();
+    void movingWindowOpsAreValidated();
     void windowRulesCompile();
     void windowRuleGeometryDefaults();
     void windowRulePinsAndTopmost();
@@ -460,6 +461,47 @@ void TestConfig::windowToggleAndAnimateValidation()
     QVERIFY(error.has_value());
     QVERIFY2(error->toString().contains(QStringLiteral("`launch` needs")),
              qPrintable(error->toString()));
+}
+
+void TestConfig::movingWindowOpsAreValidated()
+{
+    // 四个「挪窗口」的 op：简写、解析与摘要。
+    const std::vector<std::pair<QString, WindowOp>> cases{
+        {QStringLiteral("window:move_prev_desktop"), WindowOp::MovePrevDesktop},
+        {QStringLiteral("window:move_next_desktop"), WindowOp::MoveNextDesktop},
+        {QStringLiteral("window:move_left_monitor"), WindowOp::MoveLeftMonitor},
+        {QStringLiteral("window:move_right_monitor"), WindowOp::MoveRightMonitor},
+    };
+    for (const auto &entry : cases) {
+        Action action;
+        QVERIFY2(!parseActionShorthand(entry.first, &action).has_value(), qPrintable(entry.first));
+        QCOMPARE(action.kind, Action::Kind::Window);
+        QCOMPARE(action.windowOp, entry.second);
+        QCOMPARE(action.summary(),
+                 QStringLiteral("window %1 foreground").arg(windowOpDebugName(entry.second)));
+    }
+
+    // `animate` 对跨显示器移动有意义，但对跨虚拟桌面移动没有（不产生过渡）。
+    Action desktop = windowAction(WindowOp::MoveNextDesktop);
+    desktop.animate = true;
+    Config desktopConfig;
+    desktopConfig.hotkeys.push_back(hotkey(QStringLiteral("F1"), specOne(desktop)));
+    auto error = compileConfig(desktopConfig);
+    QVERIFY(error.has_value());
+    QVERIFY2(error->toString().contains(QStringLiteral("animate")), qPrintable(error->toString()));
+
+    Action monitor = windowAction(WindowOp::MoveRightMonitor);
+    monitor.animate = true;
+    Config monitorConfig;
+    monitorConfig.hotkeys.push_back(hotkey(QStringLiteral("F1"), specOne(monitor)));
+    QVERIFY(!compileConfig(monitorConfig).has_value());
+
+    // `toggle` 与 `launch` 都只对 `activate` 有意义，新 op 写它们要被拒绝。
+    Action toggled = windowAction(WindowOp::MovePrevDesktop);
+    toggled.toggle = false;
+    Config toggledConfig;
+    toggledConfig.hotkeys.push_back(hotkey(QStringLiteral("F1"), specOne(toggled)));
+    QVERIFY2(compileConfig(toggledConfig).has_value(), "toggle must be rejected on move ops");
 }
 
 void TestConfig::windowRulesCompile()

@@ -138,4 +138,66 @@ bool applyPlacement(HWND hwnd, const core::Rect &rect, bool maximize, QString *e
     return true;
 }
 
+bool moveToAdjacentMonitor(HWND hwnd, int delta, QString *detail, QString *error)
+{
+    if (hwnd == nullptr || IsWindow(hwnd) == 0) {
+        if (error != nullptr) {
+            *error = QStringLiteral("the window is gone");
+        }
+        return false;
+    }
+    if (delta != -1 && delta != 1) {
+        if (error != nullptr) {
+            *error = QStringLiteral("the monitor step must be -1 (left) or +1 (right)");
+        }
+        return false;
+    }
+    const std::vector<core::MonitorDescription> monitors = core::sortedMonitors(list());
+    if (monitors.size() < 2) {
+        if (error != nullptr) {
+            *error = QStringLiteral("there is only one monitor; nothing to move the window to");
+        }
+        return false;
+    }
+    const std::optional<std::size_t> index = indexForWindow(monitors, hwnd);
+    if (!index.has_value()) {
+        if (error != nullptr) {
+            *error = QStringLiteral("could not tell which monitor the window is on");
+        }
+        return false;
+    }
+    // 显示器不循环：没有更左/更右的那一块时直接报错（虚拟桌面那边才首尾相接）。
+    const std::optional<std::size_t> target =
+        core::stepIndex(monitors.size(), *index, delta, false);
+    if (!target.has_value()) {
+        if (error != nullptr) {
+            *error = delta < 0 ? QStringLiteral("there is no monitor to the left of the window")
+                               : QStringLiteral("there is no monitor to the right of the window");
+        }
+        return false;
+    }
+
+    const core::MonitorDescription &destination = monitors[*target];
+    const core::Rect current = windowRect(hwnd).value_or(core::Rect{0, 0, 800, 600});
+    // 保留最大化状态；普通窗口保持原有大小并居中到目标显示器的工作区
+    // （`placementRect` 的位置/大小参数全空时就是居中）。
+    const bool maximize = IsZoomed(hwnd) != 0;
+    const core::Rect rect = core::placementRect(current, destination, maximize, std::nullopt,
+                                                std::nullopt, std::nullopt, std::nullopt);
+    if (!applyPlacement(hwnd, rect, maximize, error)) {
+        return false;
+    }
+    if (detail != nullptr) {
+        *detail = QStringLiteral("%1 %2x%3 at %4,%5 on monitor %6/%7")
+                      .arg(maximize ? QStringLiteral("maximized") : QStringLiteral("placed"),
+                           QString::number(rect.width),
+                           QString::number(rect.height),
+                           QString::number(rect.x),
+                           QString::number(rect.y),
+                           QString::number(*target + 1),
+                           QString::number(monitors.size()));
+    }
+    return true;
+}
+
 } // namespace flowkeyd::platform::win::monitor

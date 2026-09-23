@@ -36,4 +36,16 @@ std::optional<core::Rect> windowRect(HWND hwnd);
 /// 本身也不激活；万一焦点还是被抢走了，会把它还给原来的前台窗口。
 bool applyPlacement(HWND hwnd, const core::Rect &rect, bool maximize, QString *error);
 
+/// 把窗口移到相邻的显示器（`delta`：`-1` 左边，`+1` 右边）。
+///
+/// “左/右”按 `core::sortedMonitors` 的排列顺序（先左后右、再上后下）。
+/// **保留最大化状态**：最大化窗口在新显示器上仍然最大化；普通窗口保持原有
+/// 大小并居中到目标显示器的工作区；最小化的窗口只更新还原位置，不会被弹出来。
+/// 虚拟桌面完全不变（移动的是显示器，不是桌面）。
+///
+/// 与虚拟桌面不同，这里**不循环**：没有更左/更右的显示器时失败（`error` 里
+/// 说明原因）。成功时 `detail` 是 `"maximized 1920x1040 at 1920,0 on monitor 2/2"`
+/// 这样一行。
+bool moveToAdjacentMonitor(HWND hwnd, int delta, QString *detail, QString *error);
+
 } // namespace flowkeyd::platform::win::monitor

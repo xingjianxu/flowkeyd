@@ -63,6 +63,7 @@ private slots:
     void imperativeAndDeclarativeStylesAgree();
     void loopsCanGenerateBindings();
     void helpersBuildTheSameTablesAsTheRawForm();
+    void movingWindowOpsAreConverted();
     void runWithoutArgsAndWithEmptyArgs();
     void menuAndPowerHelpersBuildTheExpectedTables();
     void helpHelperTakesAnOptionalTitle();
@@ -173,6 +174,22 @@ void TestLua::helpersBuildTheSameTablesAsTheRawForm()
     QCOMPARE(second.repeat->intervalMs, quint32(60));
     QCOMPARE(second.repeat->delayMs, quint32(250));
     QCOMPARE(second.trigger, core::TriggerMode::Repeat);
+}
+
+void TestLua::movingWindowOpsAreConverted()
+{
+    const auto c = parse(R"(
+        hotkey{ keys = "Win+U", action = window("move_prev_desktop") }
+        hotkey{ keys = "Win+I", action = window("move_next_desktop") }
+        hotkey{ keys = "Win+Y", action = window("move_left_monitor") }
+        hotkey{ keys = "Win+O", action = window("move_right_monitor") }
+    )");
+    QVERIFY(c.has_value());
+    QCOMPARE(c->bindings.size(), std::size_t(4));
+    QCOMPARE(c->bindings[0].press.at(0).windowOp, core::WindowOp::MovePrevDesktop);
+    QCOMPARE(c->bindings[1].press.at(0).windowOp, core::WindowOp::MoveNextDesktop);
+    QCOMPARE(c->bindings[2].press.at(0).windowOp, core::WindowOp::MoveLeftMonitor);
+    QCOMPARE(c->bindings[3].press.at(0).windowOp, core::WindowOp::MoveRightMonitor);
 }
 
 void TestLua::runWithoutArgsAndWithEmptyArgs()

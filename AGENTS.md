@@ -337,6 +337,33 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
     * 声明式写法在返回表里叫 `apps`；错误标签是 `app #1 (\`wps\`)`（不写 `name`
       就用 `process`）。权威定义在 `README.md` 的「配置 → `app{ ... }`」。
 
+16. **`window` 动作的四个「挪窗口」op（项目所有者 2026-09 要求）。**
+    把**当前窗口**（不写 `target`/`process` 就是前台窗口）挪到相邻位置，
+    实现为 `WindowOp` 的四个新取值（不是新动作类型）——它们就是普通 `window`
+    动作，复用同一套目标查询、`swallow` 与 `--list` / 帮助摘要：
+    * `move_prev_desktop` / `move_next_desktop`：只动**虚拟桌面**，窗口在显示器上的
+      几何完全不变，**视图不跟着走**（移动的是窗口，不是当前桌面；与 Windows 自己的
+      `Win+Ctrl+Shift+←/→` 同义）。两张桌面**首尾相接**（项目所有者拍板）：在
+      第一张再往前到最右那一张，在最后一张再往后回到第一张。走
+      `desktop::moveWindowToAdjacentDesktop`，复用未公开的 `MoveViewToDesktop`
+      （与 `window_rule` 的 `desktop` 同一条路）。
+    * `move_left_monitor` / `move_right_monitor`：只动**显示器**，虚拟桌面不变。
+      **保留最大化状态**（项目所有者拍板）：`IsZoomed` 的窗口在新显示器上仍然
+      最大化；普通窗口保持原有大小并**居中**到目标显示器的工作区（复用
+      `core::placementRect` 的居中）；最小化的窗口只更新还原位置。没有更左/更右
+      那一块时失败并记一条日志，**不循环**（与虚拟桌面那两条不同）。
+    * 这四个 op 都**不套用 `toggle`**、**不接受 `launch`**；
+      `core::windowOpHasTransition()` 对跨显示器移动返回 true（会改几何）、对跨
+      虚拟桌面移动返回 false —— `--check` 因此会拒绕写在不产生过渡的 op 上的
+      `animate`。
+    * 相邻下标由纯函数 `core::stepIndex(count, current, delta, wrap)` 算
+      （虚拟桌面 `wrap = true`、显示器 `wrap = false`），所以首尾相接 / 越界
+      这两套语义都有单测（`tst_placement`）。
+    * 本机配置把 `Win+U` / `Win+I` / `Win+Y` / `Win+O` 绑到了这四个 op
+      （会吞掉系统自己的 Win+U 辅助功能、Win+I 设置、Win+O 方向锁定）；
+      `tst_interactive` 新增 `movesAWindowToTheAdjacentDesktop` 与
+      `movesAWindowToTheAdjacentMonitor` 做真机验证。
+
 ---
 
 ## 3. 环境与工具链
@@ -428,7 +455,7 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `src/core/action.h/.cpp`                  | 声明式动作的表示 + 摘要文本（`--list` 与 `help()` 都用它）+ `isDestructive()`（帮助窗口要靠它决定“要不要再确认一次”）                                                                                                        |
 | `src/core/log_tail.h/.cpp`                | 日志文件的增量尾随（纯逻辑，可单测）：按字节读、末尾不完整的 UTF-8 序列不消费、半行留到下一轮、一次最多 1000 行                                                                                                            |
 | `src/core/window_match.h/.cpp`            | 窗口匹配与 `window` 动作决策的纯函数：标题/进程名子串、可执行文件名提取、`toggle` 边界、`animate` 是否有意义                                                                                                                |
-| `src/core/placement.h/.cpp`               | `window_rule` 的**纯逻辑**（只用 QtCore、可单测）：显示器排序与选择（序号 / `primary` / 设备名）、「显示器重新接入」检测（设备名从无到有）、摆放几何（最大化 / 居中 / 指定位置与大小 / 夹进工作区）、规则匹配。`all_desktops` / `topmost` 不算几何，只影响 `WindowRule::summary()`。见第 2 节第 13 条 |
+| `src/core/placement.h/.cpp`               | `window_rule` 的**纯逻辑**（只用 QtCore、可单测）：显示器排序与选择（序号 / `primary` / 设备名）、「显示器重新接入」检测（设备名从无到有）、摆放几何（最大化 / 居中 / 指定位置与大小 / 夹进工作区）、规则匹配，以及窗口相邻移动用的下标步进 `stepIndex()`（见第 2 节第 16 条）。`all_desktops` / `topmost` 不算几何，只影响 `WindowRule::summary()`。见第 2 节第 13 条 |
 | `src/core/version.h/.cpp`                 | 构建版本号（纯逻辑、可单测）：`buildVersion(executablePath)`（拼成 `yy-MM-dd-<git 短修订>`）、`buildDateFromFile()`、`sourceRevision()`（编译进来的 `FLOWKEYD_GIT_REVISION`）、`unknownValue()`。修订来自 CMake 用 `cmake/version_revision.h.in` 生成的 `flowkeyd_revision.h`；机制与取舍见第 2 节第 12 条与第 10 节 |
 | `src/lua/lua_config.h/.cpp`               | **Lua 与 C++ 的唯一边界**：建 `lua_State`、注入 DSL、把脚本里的表转成 `core::Config`（逐条目、带上下文的错误；`app{}` 转成 `core::AppDef` 后在 `compile()` 里展开）、UTF-8 BOM 剔除、`.toml` 明确拒绝                                                                            |
 | `src/lua/lua_prelude.lua`                 | 注入配置脚本的 DSL：`settings{}`/`hotkey{}`/`remap{}`/`window_rule{}`/`app{}` + 动作构造器 + `flowkeyd` 表。**纯 Lua，改它不需要改 C++**（编进 qrc，见第 7 节）                                                                                     |
@@ -3528,6 +3555,42 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > 按工作约定第 11 条：常驻实例已 `--quit` → 构建 release → 从
 > `build\dist-release` 重新拉起（自启任务仍指向那个路径）。
 
+> **2026-09 新增（`window` 的四个「挪窗口」op，本机绑 `Win+U/I/Y/O`）的 DoD**：
+> `windows-debug` 与 `windows-release` 两边都是 `build exit 0`、零编译警告
+> （release 里那两句 `dxcompiler.dll` 是 `windeployqt` 自己的提示）；
+> `ctest --test-dir build/windows-debug` **22 个测试目标全绿**
+> （`tst_placement` 新增 `stepIndexWrapsOrStopsAtTheEdges`；`tst_window_match` 的
+> `onlyStateChangingOpsHaveTransitions` / `toggleOnlyCollapsesAnAlreadyActiveWindow`
+> 覆盖新 op；`tst_config` 新增 `movingWindowOpsAreValidated`（四个简写/摘要、
+> 桌面移动禁 `animate`、显示器移动允许、`toggle` 被拒）；`tst_lua` 新增
+> `movingWindowOpsAreConverted`）。
+> `tst_interactive`（`FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`，`-o <file>,txt`）新增
+> `movesAWindowToTheAdjacentDesktop`（搬迁前后用**已公开**的 `GetWindowDesktopId`
+> 确认真的换了桌面、视图**没有**跟着走、再搬回来 GUID 回到原值）与
+> `movesAWindowToTheAdjacentMonitor`（普通窗口保持大小并居中、最大化窗口搬到新显示器
+> 仍然最大化、最左那块再往左必须失败）；两条都真机跑绿。一次完整跑里
+> `copySelectionCopiesTheFocusedSelection` 与 `activatesAWindowThatIsOnAnotherDesktop`
+> 因前台锁不在我们手上而失败（AGENTS 第 10 节写过的环境问题），重跑即绿。
+> `flowkeyd --check --config flowkeyd.lua.example` →
+> `OK (43 hotkey(s), 3 remap(s), 7 window rule(s))`、零警告；用户真实配置（不带
+> `--config`）→ `OK (28 hotkey(s), 0 remap(s), 4 window rule(s))`、零警告，
+> `--list` 里是 `Win+U/I/Y/O -> window MovePrevDesktop/MoveNextDesktop/MoveLeftMonitor/MoveRightMonitor foreground`。
+> `scripts/acceptance.ps1`（只跑 release；跑前先 `--quit` 常驻、跑完从
+> `build\dist-release` 重新拉起）**116 项、0 失败**（与上次持平）。
+> 行为变化：`window` 动作多了 `move_prev_desktop` / `move_next_desktop` /
+> `move_left_monitor` / `move_right_monitor`；前两个首尾相接、只动桌面；
+> 后两个保留最大化、否则保持大小并居中，不循环；四个都不套用 `toggle`、
+> 不接受 `launch`。README（`window` 动作表、简写、新增「把窗口挪到相邻的桌面 /
+> 显示器」一节、动画那一段）、`flowkeyd.lua.example`（新增 4 条示例绑定）与
+> 本文件第 2/4/13/14 节已同步。
+> **没有给 `acceptance.ps1` 加新 op 的检查**：真实窗口的跨桌面 / 跨显示器行为
+> 已经由上面两条 opt-in 交互式测试用真窗口覆盖，而验收脚本里的 `window` 链
+> （钩子吞键 → dispatcher → `window::applyTo`）与现有 `accept-window` 那条
+> 完全相同；为省下重复覆盖而改那个 116 项的脚本反而会动到它的配置计数与
+> 帮助条目下标。要补的话就沿那个窗口组加：注入新和弦后用
+> `[FlowInject]::WindowRect` 看位置变了、用 `DaemonText` 看日志里出现了
+> `MoveNextDesktop`。
+
 ---
 
 ## 12. 本期不做的（有意留白）与后续工作
@@ -3744,13 +3807,24 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、
   与动作之间逐字段合并的那一半）；没有 `launch` 可覆盖时 `--check` 报
   `` `wait_ms` needs `launch` ``。
 * `window` 的 `animate`（默认**关**）只对会改变窗口状态的 `op` 有意义，
-  写在不产生过渡的 `op`（`close`/`toggle_topmost`）上要被 `--check` 拒绝。
+  写在不产生过渡的 `op`（`close`/`toggle_topmost`/`move_prev_desktop`/
+  `move_next_desktop`）上要被 `--check` 拒绝；跨显示器移动会改变几何，
+  `animate` 对它有意义。
+* `window` 的四个「挪窗口」op（`move_prev_desktop`/`move_next_desktop`/
+  `move_left_monitor`/`move_right_monitor`）只动一类东西：前者只动虚拟桌面
+  （首尾相接，视图不跟着走），后者只动显示器（保留最大化，否则保持大小并居中，
+  不循环）。它们都不套用 `toggle`、不接受 `launch`，见第 2 节第 16 条。
 
 ### 本机真实配置（也是验收的清单）
 
 **这份配置住在 `%USERPROFILE%\.config\flowkeyd\config.lua`**。
-`flowkeyd --check`（走默认搜寻）→ `OK (24 hotkey(s), 0 remap(s), 4 window rule(s))`，
+`flowkeyd --check`（走默认搜寻）→ `OK (28 hotkey(s), 0 remap(s), 4 window rule(s))`，
 零警告。
+
+**2026-09（新增窗口挪动）**：新增 `Win+U` / `Win+I` / `Win+Y` / `Win+O` 四条绑定，
+把**当前窗口**挪到上一张 / 下一张虚拟桌面、或左 / 右显示器上（`window` 动作的四个
+新 op，见第 2 节第 16 条）。这四个 op 不写 `target`/`process`（目标是前台窗口），
+不套用 `toggle`、不接受 `launch`。
 
 **2026-09：五个「同一个程序的快捷键 + 窗口摆放」合并成了 `app{...}`**
 （`Win+S` → WezTerm、`Win+1` → Chrome、`Win+2` → VS Code、`Win+3` → WPS、
@@ -3781,6 +3855,10 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、
 | `Alt+Space`            | `send("{F14}")`                                                                   |
 | `LWin+Q`               | `send("{F24}")`                                                                   |
 | `LWin+F1..F4`          | `desktop(1..4)`（用 Lua `for` 循环生成）                                          |
+| `Win+U`                | `window("move_prev_desktop")`：当前窗口去上一张虚拟桌面（首尾相接）                |
+| `Win+I`                | `window("move_next_desktop")`：当前窗口去下一张虚拟桌面（首尾相接）                |
+| `Win+Y`                | `window("move_left_monitor")`：当前窗口到左边显示器（保留最大化，否则居中）        |
+| `Win+O`                | `window("move_right_monitor")`：当前窗口到右边显示器（没有更右时只记日志）         |
 | ★ `Win+S`              | `window("activate", { wait_ms = … })`，process 与 launch 由 app 继承（`wezterm`） |
 | ★ `Win+1/2/3`          | `window("activate", { wait_ms = … })`，process 与 launch 继承自 `chrome`/`code`/`wps` |
 | ★ `Win+W`              | `window("activate", { wait_ms = … })`，process 与 launch 继承自 `weixin`          |
@@ -3806,7 +3884,7 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、
 
 （`monitor = 2` 在本机是 `\\.\DISPLAY2`，也就是右边那块 1920x1080；
 没写位置/大小时默认最大化。`wezterm` 只钉在所有虚拟桌面上、不摆几何。
-`--check` → `OK (24 hotkey(s), 0 remap(s), 4 window rule(s))`、
+`--check` → `OK (28 hotkey(s), 0 remap(s), 4 window rule(s))`、
 零警告。仅供用户自己手工验证行为，没有进 `acceptance.ps1`。）
 
 ---

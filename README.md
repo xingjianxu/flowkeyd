@@ -329,7 +329,7 @@ flowkeyd [选项]
 
 ```console
 $ flowkeyd --check --config flowkeyd.lua.example
-D:\prj\flowkeyd\flowkeyd.lua.example: OK (37 hotkey(s), 3 remap(s), 3 window rule(s))
+D:\prj\flowkeyd\flowkeyd.lua.example: OK (43 hotkey(s), 3 remap(s), 7 window rule(s))
 ```
 
 （`window rule(s)` 只在配置里真的写了 `window_rule` 时才出现，没有摆放规则的
@@ -634,7 +634,7 @@ hotkey{
 | `volume`    | `op` = `up`/`down`/`set`/`mute`/`unmute`/`toggle`、`level`（0-100）、`step`                               | 对默认输出设备使用 Core Audio 的 `IAudioEndpointVolume`                                                                                                                                                                                                                                   |
 | `media`     | `op` = `play_pause`/`next`/`prev`/`stop`                                                                  |                                                                                                                                                                                                                                                                                           |
 | `clipboard` | `op` = `get`/`set`/`append`/`clear`、`text`                                                               |                                                                                                                                                                                                                                                                                           |
-| `window`    | `op` = `activate`/`minimize`/`maximize`/`restore`/`close`/`toggle_topmost`、`target`、`process`、`launch`、`wait_ms`、`toggle`、`animate` | `target` 匹配窗口标题的子串，`process` 匹配可执行文件名（`wezterm` 也能匹配 `wezterm-gui.exe`）；既没有 `target` 也没有 `process` 就表示前台窗口。`launch = { program, args[], cwd, show, shell, env{}, wait_ms }` 会在没有任何匹配时启动该程序，然后等待它的窗口（默认 3000 ms）并激活它。`toggle`（默认开，只对 `op = "activate"` 有意义）会在目标窗口已经在前台时改为最小化它。`animate`（默认**关**）控制这次状态变化要不要播放 DWM 的过渡动画。`wait_ms` 写在动作顶层时是 `launch.wait_ms` 的简写；在 `app{}` 里 `launch` 还会继承 app 的 `launch`（逐字段合并） |
+| `window`    | `op` = `activate`/`minimize`/`maximize`/`restore`/`close`/`toggle_topmost`/`move_prev_desktop`/`move_next_desktop`/`move_left_monitor`/`move_right_monitor`、`target`、`process`、`launch`、`wait_ms`、`toggle`、`animate` | `target` 匹配窗口标题的子串，`process` 匹配可执行文件名（`wezterm` 也能匹配 `wezterm-gui.exe`）；既没有 `target` 也没有 `process` 就表示前台窗口。`launch = { program, args[], cwd, show, shell, env{}, wait_ms }` 会在没有任何匹配时启动该程序，然后等待它的窗口（默认 3000 ms）并激活它。`toggle`（默认开，只对 `op = "activate"` 有意义）会在目标窗口已经在前台时改为最小化它。`animate`（默认**关**）控制这次状态变化要不要播放 DWM 的过渡动画。`wait_ms` 写在动作顶层时是 `launch.wait_ms` 的简写；在 `app{}` 里 `launch` 还会继承 app 的 `launch`（逐字段合并）。四个 `move_*` op 把**当前窗口**（不写 `target`/`process` 时）挪到相邻的虚拟桌面 / 显示器：`move_prev_desktop`/`move_next_desktop` 只动虚拟桌面且**首尾相接**（显示器上的几何不变，视图**不**跟着走），`move_left_monitor`/`move_right_monitor` 只动显示器（保留最大化状态，否则保持原有大小并居中到目标工作区；没有更左/更右那一块时失败，**不循环**）。这四个 op 都不套用 `toggle`、也不接受 `launch` |
 | `notify`    | `title`、`body`                                                                                           | 托盘气泡提示                                                                                                                                                                                                                                                                              |
 | `menu`      | `title`、`items[]`（每项 `{ key, label, hint, action }`）                                                  | 弹出一个 QML 选单让用户挑一项（见[选单与电源](#选单与电源)）；条目上的单字符 `key` 直接选中它，`↑`/`↓` + `Enter` 与鼠标也能选，`Esc`（或点到别的地方）只关窗口。没有 `action`（或 `none()`）的条目只是把选单关掉                                                                         |
 | `help`      | `title`（可选，默认「快捷键」）                                                                            | 弹出一个**快捷键帮助**（同一套卡片风格，见[快捷键帮助](#快捷键帮助)）：列出当前配置里全部生效的快捷键与重映射；筛选框里直接输入（鼠标点一下就进去）就筛选；`↑`/`↓`、`PgUp`/`PgDn` 或滚轮/拖动滚动条滚动（滚动不改选中项）；**`Enter` 或双击一行 = 关掉窗口并执行那一行的动作**；左键点一行 = 选中它并把它的按键复制到剪贴板；`quit`/`suspend`/`power` 这类危险动作要按两次（第一次只是等确认）；`Esc` 依次是「取消确认 → 清筛选 → 关窗」。列表由配置本身生成，所以没有别的参数 |
@@ -647,8 +647,8 @@ hotkey{
 
 简写：`"run:notepad.exe file.txt"`、`"send:^{c}"`、`"type:hello"`、
 `"open:https://example.com"`、`"notify:title|body"`、`"volume:up"`、
-`"media:next"`、`"clipboard:get"`、`"window:minimize"`、`"desktop:1"`、
-`"power:sleep"`、`"reload"`、`"quit"`、`"help"`、`"none"`。
+`"media:next"`、`"clipboard:get"`、`"window:minimize"`、`"window:move_next_desktop"`、
+`"desktop:1"`、`"power:sleep"`、`"reload"`、`"quit"`、`"help"`、`"none"`。
 
 可能有多个窗口匹配；最近使用过的那个（Z 序里最靠前的）胜出，
 而已还原的窗口优于最小化的窗口。不可见窗口以及属于别的窗口的弹出窗口
@@ -720,6 +720,35 @@ hotkey{
 微信 4.x 是 `Weixin.exe`（写 `weixin`；`WeChatAppEx.exe` 只是它的小程序子进程），
 VS Code 的窗口属于 `Code.exe`。
 
+### 把窗口挪到相邻的桌面 / 显示器
+
+`window` 动作还有四个只针对**当前窗口**（不写 `target`/`process` 就是前台窗口）
+的 `op`，用来把窗口搬到相邻的位置：
+
+```lua
+hotkey{ keys = "Win+U", action = window("move_prev_desktop") }   -- 上一张虚拟桌面
+hotkey{ keys = "Win+I", action = window("move_next_desktop") }   -- 下一张虚拟桌面
+hotkey{ keys = "Win+Y", action = window("move_left_monitor") }   -- 左边的显示器
+hotkey{ keys = "Win+O", action = window("move_right_monitor") }  -- 右边的显示器
+```
+
+* `move_prev_desktop` / `move_next_desktop` 只动**虚拟桌面**，窗口在显示器上的
+  大小与位置完全不变，视图也**不**跟着走（移动的是窗口，不是当前桌面；和
+  Windows 自己的 `Win+Ctrl+Shift+←/→` 一个语义）。两张桌面**首尾相接**：在
+  第一张再往前会到最右那一张，在最后一张再往后会回到第一张。
+* `move_left_monitor` / `move_right_monitor` 只动**显示器**：按“先左后右、
+  再上后下”的排列顺序找相邻那一块（和 `window_rule` 里 `monitor = 2` 的 1
+  起序号是同一个排列）。虚拟桌面不变；**最大化窗口在新显示器上仍然最大化**
+  （保留 `IsZoomed` 状态），普通窗口保持原有大小并**居中**到目标显示器的工作区，
+  最小化的窗口只更新它的还原位置、不会被弹出来。已经在最左/最右那一块时
+  按下去只会写一条日志，**不循环**（与虚拟桌面那两条不同）。
+* 这四个 `op` 都不套用 `toggle`（不会因为窗口已经在前台就把它收起），也不接受
+  `launch`；跨显示器移动会产生窗口过渡，所以 `animate` 对它有意义，而跨虚拟
+  桌面移动不产生过渡、写 `animate` 会被 `--check` 拒绝。
+* 底层：跨桌面走 shell 未公开的 `IVirtualDesktopManagerInternal::MoveViewToDesktop`
+  （与 `window_rule` 的 `desktop` 同一套），跨显示器走 `SetWindowPlacement`
+  （与 `window_rule` 的几何摆放同一套），所以两者的已知限制也一样。
+
 ### 窗口动画
 
 flowkeyd 触发的窗口状态变化默认**不播放动画**：`minimize` 不再“缩”到任务栏，
@@ -737,8 +766,10 @@ DWMWA_TRANSITIONS_FORCEDISABLED, TRUE)`：调 `ShowWindow` 前设上、调完立
 * **不改系统设置。** 系统里“辅助功能 / 视觉效果 → 最小化/最大化时播放动画”
   （`SPI_SETANIMATION`）不会被碰，其它程序、以及你手动点标题栏按钮时的动画
   都不受影响。
-* 只有会改变窗口状态的 `op` 有这个效果；`close` 与 `toggle_topmost` 不产生过渡，
-  写 `animate` 会被 `--check` 拒绝。
+* 只有会改变窗口状态的 `op` 有这个效果；`close`、`toggle_topmost` 与跨虚拟桌面
+  移动（`move_prev_desktop`/`move_next_desktop`）不产生过渡，写 `animate` 会被
+  `--check` 拒绝；跨显示器移动（`move_left_monitor`/`move_right_monitor`）会改变
+  几何，`animate` 对它有意义。
 * 这个属性读不回来（`DwmGetWindowAttribute` 对它返回 `E_INVALIDARG`），
   所以 flowkeyd 在调用后只能把它设回 `FALSE`（即“按默认，带动画”）。
   `dwmapi.dll` 是用运行时解析的（见 `src/platform/win/dwm.cpp`），拿不到它时
