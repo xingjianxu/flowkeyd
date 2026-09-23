@@ -28,6 +28,7 @@ private slots:
     void parsesAhkPrefixChords();
     void winIsASpelledOutWindowsModifier();
     void rejectsBadChords();
+    void rejectsUppercaseLetterNames();
     void rendersChords();
     void genericModifiersMatchEitherSide();
     void numpadEnterIsNotTheMainEnter();
@@ -39,7 +40,7 @@ private slots:
 
 void TestKeys::parsesNamedChords()
 {
-    const Chord chord = chordOf(QStringLiteral("Ctrl+Alt+H"));
+    const Chord chord = chordOf(QStringLiteral("Ctrl+Alt+h"));
     QCOMPARE(chord.key, static_cast<Vk>(u'H'));
     QCOMPARE(chord.mods, Modifiers::Ctrl.unioned(Modifiers::Alt));
     QVERIFY(!chord.passthrough);
@@ -78,8 +79,8 @@ void TestKeys::parsesAhkPrefixChords()
 void TestKeys::winIsASpelledOutWindowsModifier()
 {
     // `Win+S` 与 `#s` 必须含义相同；只有 `LWin`/`RWin` 才是分侧的按键。
-    for (const QString &spelling : {QStringLiteral("Win+S"),
-                                    QStringLiteral("Windows+S"),
+    for (const QString &spelling : {QStringLiteral("Win+s"),
+                                    QStringLiteral("Windows+s"),
                                     QStringLiteral("#s")}) {
         const Chord chord = chordOf(spelling);
         QCOMPARE(chord.key, static_cast<Vk>(u'S'));
@@ -97,7 +98,7 @@ void TestKeys::rejectsBadChords()
     QCOMPARE(parseChord(QString(), &chord)->kind, KeyError::Kind::Empty);
     QCOMPARE(parseChord(QStringLiteral("   "), &chord)->kind, KeyError::Kind::Empty);
     QCOMPARE(parseChord(QStringLiteral("Ctrl+Nope"), &chord)->kind, KeyError::Kind::UnknownKey);
-    QCOMPARE(parseChord(QStringLiteral("Ctrl++H"), &chord)->kind, KeyError::Kind::Syntax);
+    QCOMPARE(parseChord(QStringLiteral("Ctrl++h"), &chord)->kind, KeyError::Kind::Syntax);
     QCOMPARE(parseChord(QStringLiteral("Ctrl+Ctrl"), &chord)->kind, KeyError::Kind::Syntax);
     QCOMPARE(parseChord(QStringLiteral("^"), &chord)->kind, KeyError::Kind::Syntax);
     // `-` 不是分隔符，因此这里是一个未知的按键名。
@@ -111,9 +112,41 @@ void TestKeys::rejectsBadChords()
              qPrintable(twoKeys->message()));
 }
 
+void TestKeys::rejectsUppercaseLetterNames()
+{
+    Chord chord;
+
+    // 单个字母必须是 小写；大写不是键名，要显式写 `Shift+`。
+    const auto chordError = parseChord(QStringLiteral("Alt+H"), &chord);
+    QVERIFY(chordError.has_value());
+    QCOMPARE(chordError->kind, KeyError::Kind::UppercaseLetter);
+    QVERIFY2(chordError->message().contains(QStringLiteral("lowercase")),
+             qPrintable(chordError->message()));
+    QVERIFY2(chordError->message().contains(QStringLiteral("Shift+h")),
+             qPrintable(chordError->message()));
+
+    const auto bare = parseChord(QStringLiteral("H"), &chord);
+    QVERIFY(bare.has_value());
+    QCOMPARE(bare->kind, KeyError::Kind::UppercaseLetter);
+
+    const auto ahk = parseChord(QStringLiteral("#S"), &chord);
+    QVERIFY(ahk.has_value());
+    QCOMPARE(ahk->kind, KeyError::Kind::UppercaseLetter);
+
+    // 查表本身也只认小写字母；多字母的名字仍然对大小写不敏感。
+    QVERIFY(!keyFromName(QStringLiteral("H")).has_value());
+    QCOMPARE(keyFromName(QStringLiteral("h")), std::optional<Vk>(static_cast<Vk>(u'H')));
+    QCOMPARE(keyFromName(QStringLiteral("ENTER")), std::optional<Vk>(vk::RETURN));
+
+    // 规范名与 `--list-keys` 里都是小写。
+    QCOMPARE(nameFromKey(static_cast<Vk>(u'H')), QStringLiteral("h"));
+    QVERIFY(allKeyNames().contains(QStringLiteral("h")));
+    QVERIFY(!allKeyNames().contains(QStringLiteral("H")));
+}
+
 void TestKeys::rendersChords()
 {
-    QCOMPARE(chordOf(QStringLiteral("^!h")).render(), QStringLiteral("Ctrl+Alt+H"));
+    QCOMPARE(chordOf(QStringLiteral("^!h")).render(), QStringLiteral("Ctrl+Alt+h"));
     QCOMPARE(chordOf(QStringLiteral("F4")).render(), QStringLiteral("F4"));
     QCOMPARE(chordOf(QStringLiteral("NumpadAdd")).render(), QStringLiteral("NumpadAdd"));
     QCOMPARE(chordOf(QStringLiteral("~*#Volume_Up")).render(), QStringLiteral("Win+Volume_Up"));
@@ -201,6 +234,13 @@ void TestKeys::keyOrScriptPrefersKeyNames()
     // 普通文本仍是文本。
     QVERIFY(!parseKeyOrScript(QStringLiteral("hello"), &ops).has_value());
     QCOMPARE(ops.size(), 10);
+
+    // 大写的单个字母不是键名，整串按发送脚本文本解释：`A` = Shift+A。
+    QVERIFY(!parseKeyOrScript(QStringLiteral("A"), &ops).has_value());
+    QCOMPARE(ops, (QVector<SendOp>{SendOp::keyDown(vk::LSHIFT),
+                                   SendOp::keyDown(static_cast<Vk>(u'A')),
+                                   SendOp::keyUp(static_cast<Vk>(u'A')),
+                                   SendOp::keyUp(vk::LSHIFT)}));
 
     QVERIFY(!parseKeyOrScript(QString(), &ops).has_value());
     QVERIFY(ops.isEmpty());

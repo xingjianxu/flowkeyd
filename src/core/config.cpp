@@ -591,6 +591,17 @@ std::optional<ConfigError> compile(const Config &config,
         }
         // `to = "Esc"` 表示 Escape 键，完全等同于 AutoHotkey 的
         // `CapsLock::Esc`；而 `to = "^{c}"` 是一个发送脚本。
+        //
+        // `to` 里的单个字母是**键名**，所以同样必须小写：大写的 `to = "A"`
+        // 会被拒绝（想送 Shift+A 就写 `to = "+a"`）；`send` 脚本里的裸字符
+        // 才允许大写（`send("A")` = 打出大写 A）。
+        if (uppercaseLetterKey(def.to).has_value()) {
+            errors.append(QStringLiteral("%1: to = %2: %3")
+                              .arg(label,
+                                   rustDebug(def.to),
+                                   KeyError::uppercaseLetter(def.to.trimmed()).message()));
+            continue;
+        }
         QVector<SendOp> ops;
         if (const auto error = parseKeyOrScript(def.to, &ops); error.has_value()) {
             errors.append(QStringLiteral("%1: to = %2: %3").arg(label, rustDebug(def.to), error->message()));
@@ -775,7 +786,14 @@ void validateMenu(const QString &label, const std::vector<MenuItemDef> &items, Q
             const std::optional<QChar> ch = item.keyChar();
             const bool usable = ch.has_value() && ch->isLetterOrNumber();
             const bool punctuation = ch.has_value() && ch->isPunct();
-            if (ch.has_value() && (usable || punctuation)) {
+            // 选单条目上的也是“键名”：单个字母一律小写（匹配本来就不区分大小写）。
+            const QString keyText = item.key->trimmed();
+            const bool uppercaseLetter = keyText.size() == 1
+                && keyText.at(0).unicode() >= u'A' && keyText.at(0).unicode() <= u'Z';
+            if (uppercaseLetter) {
+                errors->append(QStringLiteral("%1: key %2 must be lowercase; write %3 instead")
+                                   .arg(itemLabel, rustDebug(*item.key), rustDebug(keyText.toLower())));
+            } else if (ch.has_value() && (usable || punctuation)) {
                 const auto it = std::find_if(used.begin(), used.end(), [&ch](const auto &entry) {
                     return entry.first == *ch;
                 });

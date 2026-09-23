@@ -100,6 +100,13 @@
 >    * 纯文档任务通常 `ninja: no work to do`：什么都不用做。
 >    * 需要管理员权限的只有**提权启动**（新实例会注册计划任务），本机 agent 的
 >      shell 是提权的，实测能直接跑。
+>
+> 12. **不要把某台机器上真实使用的配置文件写进仓库**（项目所有者 2026-09 要求）。
+>    本仓库只放产品文档与参考配置（`README.md`、`flowkeyd.lua.example`）：真实配置
+>    的绑定清单、`--check` 计数、路径、以及“本机现在跑的是哪一个 exe”都不记录。
+>    **修改真实配置后不需要更新 README 或本文件。** 历史上第 14 节有一张
+>    「本机真实配置」的清单，已删除；要看当前绑定就直接看那份配置文件本身与
+>    `flowkeyd --list`。
 
 ---
 
@@ -363,6 +370,25 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
       （会吞掉系统自己的 Win+U 辅助功能、Win+I 设置、Win+O 方向锁定）；
       `tst_interactive` 新增 `movesAWindowToTheAdjacentDesktop` 与
       `movesAWindowToTheAdjacentMonitor` 做真机验证。
+
+17. **字母键名一律小写（项目所有者 2026-09 拍板）。** 配置里凡是表示按键的单个
+    字母（`keys` 的按键、`remap` 的 `from`/`to`、发送脚本 `{...}` 里的键名、
+    选单条目的 `key`）都写小写；`a` 就是 A 键，要按住 Shift 的“大写键”必须
+    **显式**写 `Shift+a`，直接写大写的 `A` 会被 `--check` 拒绝
+    （`letter key names must be lowercase: write ...`）。理由：大写在小写键名
+    里只是噪声，把“大写 = Shift”显式化之后没有歧义。
+    * **例外：发送脚本里的裸字符保持 AutoHotkey 语义** —— `send("A")` 就是
+      “打出大写 A”（等价于 `send("+a")`），`send("Hello")` 照旧能打出
+      `Hello`；要按字面输入任意文本用 `type("...")` 或 `send("{Text}...")`。
+      花括号里的是**键名**，所以 `send("{S}")` 报错、要写 `send("{s}")`
+      （要 Shift 就写成 `send("+s")`）。
+    * 实现：`core/keys.cpp` 的 `uppercaseLetterKey()`（只识别“单个大写字母”
+      这一种错误形状，并在 `keys.h` 里导出给 config 用）+ `parseChord` /
+      `parseSendScript` 两处检查，以及 `core/config.cpp` 的 `validateMenu`
+      （选单键）与 `remap` 的 `to` 检查。`parseKeyOrScript()` 本身保持宽松：
+      `send` 的裸字符仍然允许大写（`send("A")` = Shift+A）。
+      `nameFromKey()` 与 `allKeyNames()`（`--list-keys`）一律输出小写，
+      所以默认绑定名与 `--list` 里看到的也都是小写。
 
 ---
 
@@ -2868,6 +2894,19 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   就是空的，见本节的另一条），也别只看那一瞬间的进程表：常驻已经开始关闭时
   `Get-Process` 仍可能看得到它。可靠的判据是 stdio 里那句
   `flowkeyd: <path> exited`（退出码 0）加稍后为空。
+* **`cmake --build --preset release` 不一定会刷新 git 修订。**
+  `CMAKE_CONFIGURE_DEPENDS` 登记的是 `.git/HEAD` 与**当前分支的 ref 文件**，
+  而只有在 configure 时那个 ref **确实以松散文件存在**才会被登记（
+  `CMakeLists.txt` 里是 `if(EXISTS ...)`）。如果当时分支 ref 还在 `packed-refs`
+  里，release 的 `build.ninja` 就只依赖 `.git/HEAD`，之后在**同一条分支上提交**
+  （HEAD 文件本身不变）不会触发重新配置，`--build --preset release` 会继续用旧
+  的 `FLOWKEYD_GIT_REVISION` 链接 —— 本次实测就是这样：
+  `build/windows-debug/generated/flowkeyd_revision.h` 自动刷成了新哈希，
+  `windows-release` 那份还停在旧哈希，直到显式跑了一次
+  `cmake --preset windows-release`。**提交之后要么显式 configure 一次再构建，
+  要么先确认 `build.ninja` 的 `RERUN_CMAKE` 依赖里有
+  `.git/refs/heads/<branch>`。** 纯文档提交也一样：只有重新配置才会把新哈希写进
+  `flowkeyd_revision.h`。
 
 #### 2026-09 新增：应用图标（`logo.svg` → exe 资源 + 托盘）
 
@@ -3591,6 +3630,36 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > `[FlowInject]::WindowRect` 看位置变了、用 `DaemonText` 看日志里出现了
 > `MoveNextDesktop`。
 
+> **2026-09 新增（字母键名一律小写）的 DoD**：`windows-debug` 与
+> `windows-release` 都是 `build exit 0`、零编译警告（release 里那两句
+> `dxcompiler.dll` 是 `windeployqt` 自己的提示）；`ctest --test-dir
+> build/windows-debug` **22 个测试目标全绿**（`tst_keys` 新增
+> `rejectsUppercaseLetterNames`、`tst_send_script` 新增
+> `bracedUppercaseLetterIsRejected`、`tst_config` 新增
+> `uppercaseLetterKeysAreRejected`（和弦、`remap` 的 `to`、选单 `key`）、`tst_lua` 新增
+> `uppercaseLetterKeysAreRejected`；`tst_engine`/`tst_lua` 里原本拿大写字母
+> 当种子和弦的用例改成小写）。
+> `flowkeyd --check --config flowkeyd.lua.example` →
+> `OK (43 hotkey(s), 3 remap(s), 7 window rule(s))`、零警告；按新规则改过小写的
+> 真实配置（内容不在这里记录，见工作约定第 12 条）也 `--check` 通过、零警告。
+> `scripts/acceptance.ps1`（只跑 release；跑前先把常驻 `--quit`、跑完从
+> `build\dist-release` 重新拉起）先用 `-Phase config` 验了它自己生成的配置，
+> 再跑完整脚本 **116 项、0 失败**（第一次跑在帮助弹窗“点一行复制”那一步抛了一个
+> 环境异常并提前中止，重跑即绿；脚本这次只把 `keys = "Win+S"` 改成了 `"Win+s"`）。
+> **行为变化**：字母键名（`keys` 的按键、`remap` 的 `from`/`to`、发送脚本 `{...}`
+> 里的键名、选单条目的 `key`）必须小写，写大写会被 `--check` 拒绝并提示
+> ``letter key names must be lowercase: write `h` instead of `H` (for the
+> uppercase key write `Shift+h`)``；`send` 脚本里的裸字符保持 AutoHotkey 语义
+> （`send("A")` = Shift+A，`send("Hello")` 照旧能打）。`nameFromKey()` 与
+> `--list-keys` 现在输出小写，所以默认绑定名与 `--list` 里也是小写
+> （`Win+s`、`Ctrl+Alt+t`）。实现见第 2 节第 17 条。
+> README（和弦语法一节新增小写规则与示例、所有示例改成小写）与
+> `flowkeyd.lua.example`（全部字母键改小写、`send("#+{S}")` → `send("#+{s}")`）
+> 已同步；同时按工作约定第 12 条删掉了 `README.md` 的「本机现在常驻的是
+> flowkeyd」一节与本节原来的「本机真实配置」清单。
+> 本次没有改钩子/引擎/分发/窗口后端，但因改了验收脚本自己用的一次性配置，
+> 还是把完整脚本跑了一遍。
+
 ---
 
 ## 12. 本期不做的（有意留白）与后续工作
@@ -3793,6 +3862,10 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、
   展开出来的条目排在全局 `hotkey{}` / `window_rule{}` 之后
   （见第 2 节第 15 条）；声明式写法叫 `apps`。
 * 和弦语法：`~` 放行原始按键、`*` 忽略额外修饰键；`Numpad*` 与主键盘同名键不同。
+* **单个字母的键名必须小写**（`a` 是 A 键，大写键写 `Shift+a`）：适用于 `keys`、
+  `remap.from`/`to`、发送脚本 `{...}` 里的键名、选单条目的 `key`；大写的单个
+  字母会被 `--check` 拒绝。例外的只有 `send` 脚本里的**裸字符**
+  （`send("A")` = 打出大写 A），见第 2 节第 17 条。
 * 动作：`run`/`send`/`type`/`open`/`volume`/`media`/`clipboard`/`window`/
   `notify`/`menu`/`help`/`power`/`desktop`/`caps_lock`/`suspend`/`reload`/
   `quit`/`none`，字段逐条见 `README.md` 的动作表。
@@ -3815,77 +3888,13 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、
   （首尾相接，视图不跟着走），后者只动显示器（保留最大化，否则保持大小并居中，
   不循环）。它们都不套用 `toggle`、不接受 `launch`，见第 2 节第 16 条。
 
-### 本机真实配置（也是验收的清单）
+### 本机真实配置不进仓库（2026-09 起）
 
-**这份配置住在 `%USERPROFILE%\.config\flowkeyd\config.lua`**。
-`flowkeyd --check`（走默认搜寻）→ `OK (28 hotkey(s), 0 remap(s), 4 window rule(s))`，
-零警告。
-
-**2026-09（新增窗口挪动）**：新增 `Win+U` / `Win+I` / `Win+Y` / `Win+O` 四条绑定，
-把**当前窗口**挪到上一张 / 下一张虚拟桌面、或左 / 右显示器上（`window` 动作的四个
-新 op，见第 2 节第 16 条）。这四个 op 不写 `target`/`process`（目标是前台窗口），
-不套用 `toggle`、不接受 `launch`。
-
-**2026-09：五个「同一个程序的快捷键 + 窗口摆放」合并成了 `app{...}`**
-（`Win+S` → WezTerm、`Win+1` → Chrome、`Win+2` → VS Code、`Win+3` → WPS、
-`Win+W` → 微信）—— `process` 只写一遍，`window` 子表就是那条 `window_rule`。
-这是纯书写上的合并：展开后的 24 条快捷键与 4 条窗口规则与合并前逐条一致，
-`--check` 的计数与零警告都不变。只有两处能从外面观察到：
-
-* `--list` 里这 5 条快捷键排到了全局 `hotkey{}` 之后（app 展开的条目总是排在
-  最后，见第 2 节第 15 条），窗口规则的顺序变成 app 的声明顺序；
-* 窗口规则的**名字**不再是 `chrome-on-1-2` 那种，而是跟着 app 的名字
-  （默认取 `process`）变成 `chrome` / `code` / `wps` / `wezterm` ——
-  项目所有者 2026-09 选的（规则名不必再重复 desktop/monitor 信息）。
-  连带 VS Code 那条的**绑定名**从 `vscode` 变成 `code`（它写了 `comment`，
-  所以 `--list` 与帮助窗口显示的都是 comment，看不出区别）。
-
-**2026-09（launch 提级）**：这五条 app 的 `launch` 从动作搬到了 app 上（启动参数
-是这个程序自己的属性），动作只剩下 `window("activate", { wait_ms = … })`。
-`--check`（`OK (24 hotkey(s), 0 remap(s), 4 window rule(s))`、零警告）与 `--list`
-的输出**逐字节不变**（`--list` 只显示 `(launch if missing)`，不看 `wait_ms`），
-合并出来的 `launch` 也一样。
-
-`%USERPROFILE%\.config\flowkeyd\config.lua` 里的绑定（★ = 来自 `app{}`）：
-
-| 快捷键                 | 动作                                                                              |
-| ---------------------- | --------------------------------------------------------------------------------- |
-| `CapsLock`             | `caps_lock("off")` + `send("^{Space}")`                                           |
-| `Alt+H/J/K/L`          | `send("{Left}")`/`{Down}`/`{Up}`/`{Right}`                                        |
-| `Alt+Space`            | `send("{F14}")`                                                                   |
-| `LWin+Q`               | `send("{F24}")`                                                                   |
-| `LWin+F1..F4`          | `desktop(1..4)`（用 Lua `for` 循环生成）                                          |
-| `Win+U`                | `window("move_prev_desktop")`：当前窗口去上一张虚拟桌面（首尾相接）                |
-| `Win+I`                | `window("move_next_desktop")`：当前窗口去下一张虚拟桌面（首尾相接）                |
-| `Win+Y`                | `window("move_left_monitor")`：当前窗口到左边显示器（保留最大化，否则居中）        |
-| `Win+O`                | `window("move_right_monitor")`：当前窗口到右边显示器（没有更右时只记日志）         |
-| ★ `Win+S`              | `window("activate", { wait_ms = … })`，process 与 launch 由 app 继承（`wezterm`） |
-| ★ `Win+1/2/3`          | `window("activate", { wait_ms = … })`，process 与 launch 继承自 `chrome`/`code`/`wps` |
-| ★ `Win+W`              | `window("activate", { wait_ms = … })`，process 与 launch 继承自 `weixin`          |
-| `Win+X`                | `menu{ title = "电源", items = { sleep/shutdown/restart/lock/screen_off/取消 } }` |
-| `Win+/`                | `help()`                                                                          |
-| 小键盘 `-`/`+`/`*` | `volume("down"/"up"/"toggle")`，前两个 `repeatable`（静音用 `NumpadMult`） |
-| `Ctrl+Alt+F12`         | `suspend("toggle")`                                                               |
-| `Ctrl+Alt+F5`          | `reload()`                                                                        |
-| `Ctrl+Alt+F4`          | `quit()`                                                                          |
-
-**没有** `remap{}`。`settings` 里只有 `log_level = "info"`。
-
-窗口摆放规则（2026-09 起写在 `app{}` 的 `window` 子表里；
-`window_rule{}` 全局注册入口仍然可用，只是本机现在没有单独的规则了）：
-
-| app（`process`） | 快捷键  | desktop | monitor | all_desktops |
-| ---------------- | ------- | ------- | ------- | ------------ |
-| `wezterm`        | `Win+S` |         |         | true         |
-| `chrome`         | `Win+1` | 1       | 2       |              |
-| `code`           | `Win+2` | 2       | 2       |              |
-| `wps`            | `Win+3` | 3       | 2       |              |
-| `weixin`         | `Win+W` | —— 没有窗口规则，只有快捷键 —— |      |              |
-
-（`monitor = 2` 在本机是 `\\.\DISPLAY2`，也就是右边那块 1920x1080；
-没写位置/大小时默认最大化。`wezterm` 只钉在所有虚拟桌面上、不摆几何。
-`--check` → `OK (28 hotkey(s), 0 remap(s), 4 window rule(s))`、
-零警告。仅供用户自己手工验证行为，没有进 `acceptance.ps1`。）
+**不要在本仓库里记录某台机器上真实使用的配置文件内容**：绑定的清单、`--check`
+的计数、配置文件路径、以及“本机现在跑的是哪一个 exe”这类东西都不写。仓库里只放
+产品文档与参考配置（`README.md`、`flowkeyd.lua.example`）；真实配置是用户自己的
+东西，**改了它不需要同步 README 或本文件**。历史上这里有过一张「本机真实配置」
+的清单，已删除 —— 需要看当前绑定时直接看那份配置文件本身与 `flowkeyd --list`。
 
 ---
 

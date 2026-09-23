@@ -27,6 +27,7 @@ private slots:
     void unknownActionShorthandIsReported();
     void emptyActionListIsReported();
     void badChordIsReportedWithContext();
+    void uppercaseLetterKeysAreRejected();
     void twoPlainKeysAreNotAChord();
     void disabledHotkeysAreDropped();
     void duplicateChordsWarn();
@@ -57,11 +58,11 @@ private slots:
 void TestConfig::minimalConfig()
 {
     Config config;
-    config.hotkeys.push_back(hotkey(QStringLiteral("Ctrl+Alt+T"),
+    config.hotkeys.push_back(hotkey(QStringLiteral("Ctrl+Alt+t"),
                                     specOne(runAction(QStringLiteral("wt.exe")))));
     const auto compiled = compileOrDie(config);
     QCOMPARE(compiled->bindings.size(), std::size_t(1));
-    QCOMPARE(compiled->bindings.at(0).name, QStringLiteral("Ctrl+Alt+T"));
+    QCOMPARE(compiled->bindings.at(0).name, QStringLiteral("Ctrl+Alt+t"));
     QVERIFY(compiled->bindings.at(0).swallow);
     QCOMPARE(compiled->bindings.at(0).press.size(), std::size_t(1));
     QVERIFY(compiled->remaps.empty());
@@ -182,7 +183,7 @@ void TestConfig::destructiveActionsAreFlagged()
     QCOMPARE(isDestructive(actionOf(Action::Kind::Help)), false);
 
     // **`menu` 不算危险**：它只是把选单弹出来，真正的危险条目在选单里还有一次
-    // 选择（用户的 `Win+X` 电源选单因此可以放心地从帮助窗口打开）。
+    // 选择（用户的 `Win+x` 电源选单因此可以放心地从帮助窗口打开）。
     Action menu = actionOf(Action::Kind::Menu);
     menu.items.push_back(menuItem(QStringLiteral("sleep")));
     menu.items.back().action = std::make_shared<ActionSpec>(specOne(powerAction(PowerOp::Sleep)));
@@ -227,6 +228,44 @@ void TestConfig::badChordIsReportedWithContext()
     const QString text = error->toString();
     QVERIFY2(text.contains(QStringLiteral("weird")), qPrintable(text));
     QVERIFY2(text.contains(QStringLiteral("Nope")), qPrintable(text));
+}
+
+void TestConfig::uppercaseLetterKeysAreRejected()
+{
+    // 字母键名一律小写；大写要写 `Shift+`。大写的单个字母不是键名，
+    // 因此 `keys = "Alt+H"` 必须在加载时报错（并带上下文）。
+    Config config;
+    config.hotkeys.push_back(hotkeyNamed(QStringLiteral("shout"),
+                                         QStringLiteral("Alt+H"),
+                                         specOne(noneAction())));
+    const auto error = compileConfig(config);
+    QVERIFY(error.has_value());
+    const QString text = error->toString();
+    QVERIFY2(text.contains(QStringLiteral("shout")), qPrintable(text));
+    QVERIFY2(text.contains(QStringLiteral("lowercase")), qPrintable(text));
+    QVERIFY2(text.contains(QStringLiteral("Shift+h")), qPrintable(text));
+
+    // 小写才是正确的写法。
+    Config good;
+    good.hotkeys.push_back(hotkeyNamed(QStringLiteral("shout"),
+                                       QStringLiteral("Alt+h"),
+                                       specOne(noneAction())));
+    const auto compiled = compileOrDie(good);
+    QCOMPARE(compiled->bindings.at(0).chords.at(0).render(), QStringLiteral("Alt+h"));
+
+    // `remap` 的 `to` 里的单个字母也是键名：小写才行（大写会被当成
+    // “发送脚本里的裸字符”，所以必须显式拒绝）。
+    Config remapBad;
+    remapBad.remaps.push_back(remap(QStringLiteral("CapsLock"), QStringLiteral("H")));
+    const auto remapError = compileConfig(remapBad);
+    QVERIFY(remapError.has_value());
+    QVERIFY2(remapError->toString().contains(QStringLiteral("lowercase")),
+             qPrintable(remapError->toString()));
+
+    Config remapGood;
+    remapGood.remaps.push_back(remap(QStringLiteral("CapsLock"), QStringLiteral("h")));
+    const auto remapCompiled = compileOrDie(remapGood);
+    QCOMPARE(remapCompiled->remaps.at(0).press.at(0), SendOp::keyDown(static_cast<Vk>(u'H')));
 }
 
 void TestConfig::twoPlainKeysAreNotAChord()
@@ -367,13 +406,24 @@ void TestConfig::menuProblemsAreReportedAtLoadTime()
 
     Action duplicate = actionOf(Action::Kind::Menu);
     duplicate.items.push_back(menuItem(QStringLiteral("a"), QStringLiteral("s")));
-    duplicate.items.push_back(menuItem(QStringLiteral("b"), QStringLiteral("S")));
+    duplicate.items.push_back(menuItem(QStringLiteral("b"), QStringLiteral("s")));
     Config duplicateConfig;
     duplicateConfig.hotkeys.push_back(hotkeyNamed(QStringLiteral("dup"), QStringLiteral("F1"),
                                                   specOne(duplicate)));
     error = compileConfig(duplicateConfig);
     QVERIFY(error.has_value());
     QVERIFY2(error->toString().contains(QStringLiteral("already used")),
+             qPrintable(error->toString()));
+
+    // 选单的键名也是单字母键名，所以大写要报错。
+    Action uppercaseKey = actionOf(Action::Kind::Menu);
+    uppercaseKey.items.push_back(menuItem(QStringLiteral("a"), QStringLiteral("S")));
+    Config uppercaseKeyConfig;
+    uppercaseKeyConfig.hotkeys.push_back(hotkeyNamed(QStringLiteral("upper"), QStringLiteral("F1"),
+                                                     specOne(uppercaseKey)));
+    error = compileConfig(uppercaseKeyConfig);
+    QVERIFY(error.has_value());
+    QVERIFY2(error->toString().contains(QStringLiteral("must be lowercase")),
              qPrintable(error->toString()));
 
     // 嵌套的选单。
@@ -404,9 +454,9 @@ void TestConfig::menuProblemsAreReportedAtLoadTime()
     QVERIFY2(error->toString().contains(QStringLiteral("menu item #2")), qPrintable(error->toString()));
     QVERIFY2(error->toString().contains(QStringLiteral("Nope")), qPrintable(error->toString()));
 
-    // 正常情况：大小写不敏感，key 统一按小写存。
+    // 正常情况：key 统一按小写存。
     Action ok = actionOf(Action::Kind::Menu);
-    ok.items.push_back(menuItem(QStringLiteral("睡眠"), QStringLiteral("S")));
+    ok.items.push_back(menuItem(QStringLiteral("睡眠"), QStringLiteral("s")));
     ok.items.push_back(menuItem(QStringLiteral("取消")));
     Config okConfig;
     okConfig.hotkeys.push_back(hotkey(QStringLiteral("F1"), specOne(ok)));
@@ -721,7 +771,7 @@ void TestConfig::appWindowActionsKeepExplicitFields()
     app.process = QStringLiteral("wezterm");
     app.title = QStringLiteral("project");
     HotkeyDef def;
-    def.keys = QStringList{QStringLiteral("Win+S")};
+    def.keys = QStringList{QStringLiteral("Win+s")};
     Action explicitAction = windowAction(WindowOp::Activate);
     explicitAction.process = QStringLiteral("kitty");
     explicitAction.target = QStringLiteral("scratch");
@@ -808,12 +858,12 @@ void TestConfig::appNamesDefaultToProcess()
     HotkeyDef first;
     first.keys = QStringList{QStringLiteral("Win+2")};
     HotkeyDef second;
-    second.keys = QStringList{QStringLiteral("Ctrl+Alt+C")};
+    second.keys = QStringList{QStringLiteral("Ctrl+Alt+c")};
     multi.hotkeys = {first, second};
     many.apps.push_back(multi);
     const auto compiledMulti = compileOrDie(many);
     QCOMPARE(compiledMulti->bindings.at(0).name, QStringLiteral("Win+2"));
-    QCOMPARE(compiledMulti->bindings.at(1).name, QStringLiteral("Ctrl+Alt+C"));
+    QCOMPARE(compiledMulti->bindings.at(1).name, QStringLiteral("Ctrl+Alt+c"));
 }
 
 void TestConfig::appMenuItemsInheritToo()
@@ -851,7 +901,7 @@ void TestConfig::appLaunchIsInheritedAndOverridden()
     launch.waitMs = 5000;
     app.launch = launch;
     HotkeyDef def;
-    def.keys = QStringList{QStringLiteral("Win+S")};
+    def.keys = QStringList{QStringLiteral("Win+s")};
     def.action = specOne(windowAction(WindowOp::Activate));
     app.hotkeys.push_back(def);
     config.apps.push_back(app);
@@ -867,7 +917,7 @@ void TestConfig::appLaunchIsInheritedAndOverridden()
     Config override;
     AppDef term = app;
     HotkeyDef faster;
-    faster.keys = QStringList{QStringLiteral("Win+S")};
+    faster.keys = QStringList{QStringLiteral("Win+s")};
     Action fasterAction = windowAction(WindowOp::Activate);
     fasterAction.waitMs = 8000;
     faster.action = specOne(fasterAction);
@@ -886,7 +936,7 @@ void TestConfig::appLaunchIsInheritedAndOverridden()
     Config partial;
     AppDef partialApp = app;
     HotkeyDef tweak;
-    tweak.keys = QStringList{QStringLiteral("Win+S")};
+    tweak.keys = QStringList{QStringLiteral("Win+s")};
     Action tweaked = windowAction(WindowOp::Activate);
     LaunchSpec own;
     own.args = QStringList{QStringLiteral("--new-window")};

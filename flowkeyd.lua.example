@@ -22,7 +22,7 @@
 --   2) 声明式：直接 return 一张表，字段里的条目排在脚本体注册的条目之后
 --         return {
 --           settings     = { swallow = true },
---           hotkeys      = { { keys = "Ctrl+Alt+T", action = run("wt.exe") } },
+--           hotkeys      = { { keys = "Ctrl+Alt+t", action = run("wt.exe") } },
 --           remaps       = { { from = "CapsLock", to = "Esc" } },
 --           window_rules = { { process = "wezterm", monitor = 2 } },
 --           apps         = { { process = "code", window = { monitor = 2 } } },
@@ -51,12 +51,12 @@ settings{
   -- 除非快捷键以 `~` 开头，否则 AutoHotkey 就是这么做的。
   swallow = true,
 
-  -- false：按住 Alt 时 "Ctrl+H" 依然会触发（AutoHotkey 行为）。
+  -- false：按住 Alt 时 "Ctrl+h" 依然会触发（AutoHotkey 行为）。
   -- true： 修饰键集合必须完全一致。
   exact_modifiers = false,
 
   -- 执行 `send`/`type` 动作前先松开用户按住的修饰键，
-  -- 这样 Ctrl+Alt+T -> send("^{c}") 真的会发出 Ctrl+C，而不是 Ctrl+Alt+C。
+  -- 这样 Ctrl+Alt+t -> send("^{c}") 真的会发出 Ctrl+c，而不是 Ctrl+Alt+c。
   release_modifiers = true,
 
   -- 长按重复的默认参数，供 `trigger = "repeat"` / `repeatable = true` 使用。
@@ -85,7 +85,7 @@ settings{
 -- 快捷键
 -- =============================================================================
 -- keys       一个和弦，或一组和弦。
---            "Ctrl+Alt+T"、"^!t"（AutoHotkey 语法：^ Ctrl、! Alt、+ Shift、
+--            "Ctrl+Alt+t"、"^!t"（AutoHotkey 语法：^ Ctrl、! Alt、+ Shift、
 --            # Win）、"~F4"（~ 表示放行原始按键）、"*F1"（* 表示即使额外
 --            按住了其它修饰键也触发）。
 --            `Numpad*` 指小键盘上的键，与主键盘的同名键是不同的键：
@@ -110,32 +110,32 @@ settings{
 
 hotkey{
   name = "terminal",
-  comment = "Ctrl+Alt+T 在当前目录打开 Windows Terminal",
-  keys = "Ctrl+Alt+T",
+  comment = "Ctrl+Alt+t 在当前目录打开 Windows Terminal",
+  keys = "Ctrl+Alt+t",
   action = run("wt.exe", { "-w", "0" }),
 }
 
 hotkey{
   name = "explorer-here",
-  keys = "Ctrl+Alt+E",
+  keys = "Ctrl+Alt+e",
   action = run("explorer.exe", { "." }, { show = "normal" }),
 }
 
 hotkey{
   name = "screenshot-region",
-  comment = "Win+Shift+S 是系统截图工具；这里演示如何串联多个动作",
-  keys = "Ctrl+Alt+S",
+  comment = "Win+Shift+s 是系统截图工具；这里演示如何串联多个动作",
+  keys = "Ctrl+Alt+s",
   action = {
-    send("#+{S}"),
+    send("#+{s}"),
     notify("Snipping", "Select the region to copy"),
   },
 }
 
--- 复制当前选中内容、转成大写、再粘贴回去。{selection} 会合成一次 Ctrl+C
+-- 复制当前选中内容、转成大写、再粘贴回去。{selection} 会合成一次 Ctrl+c
 -- 并等待剪贴板。
 hotkey{
   name = "uppercase-selection",
-  keys = "Ctrl+Alt+U",
+  keys = "Ctrl+Alt+u",
   action = {
     clipboard("set", { text = "{selection}" }),
     run("cmd.exe", { "/c", "echo not-a-real-example" }),
@@ -146,14 +146,14 @@ hotkey{
 -- 运行一条 shell 命令并等待它结束。
 hotkey{
   name = "git-status",
-  keys = "Ctrl+Alt+G",
+  keys = "Ctrl+Alt+g",
   action = run("git status --short", { shell = true, wait = true }),
 }
 
 -- 打开一个常用位置（`[[...]]` 是 Lua 的长字符串：反斜杠不用转义）。
 hotkey{
   name = "open-projects",
-  keys = "Ctrl+Alt+P",
+  keys = "Ctrl+Alt+p",
   action = open([[%USERPROFILE%\source]]),
 }
 
@@ -161,14 +161,14 @@ hotkey{
 -- desktop: volume: media: clipboard: window: power:，以及裸关键字 reload / quit / none。
 hotkey{
   name = "open-docs",
-  keys = "Ctrl+Alt+D",
+  keys = "Ctrl+Alt+d",
   action = "open:https://learn.microsoft.com/windows/win32/winmsg/lowlevelkeyboardproc",
 }
 
 -- 用 Unicode 注入输入字面字符串（与键盘布局无关）。
 hotkey{
   name = "type-signature",
-  keys = "Ctrl+Alt+I",
+  keys = "Ctrl+Alt+i",
   action = type_text("Best regards,\n{USERPROFILE}"),
 }
 
@@ -200,7 +200,7 @@ hotkey{
 
 hotkey{
   name = "mute",
-  keys = "Ctrl+Alt+M",
+  keys = "Ctrl+Alt+m",
   action = volume("toggle"),
 }
 
@@ -265,27 +265,27 @@ hotkey{
 -- 想让某一条绑定保留动画就写 `animate = true`。
 hotkey{
   name = "maximize",
-  keys = "Ctrl+Alt+F",
+  keys = "Ctrl+Alt+f",
   comment = "最大化（这一条保留系统动画，作为 animate = true 的例子）",
   action = window("maximize", { animate = true }),
 }
 
 hotkey{
   name = "always-on-top",
-  keys = "Ctrl+Alt+A",
+  keys = "Ctrl+Alt+a",
   action = window("toggle_topmost"),
 }
 
 hotkey{
   name = "minimize",
-  keys = "Ctrl+Alt+W",
+  keys = "Ctrl+Alt+w",
   action = window("minimize"),
 }
 
 hotkey{
   name = "focus-notepad",
   comment = "激活第一个标题包含该文本的可见窗口（始终只往前抬，不收起）",
-  keys = "Ctrl+Alt+N",
+  keys = "Ctrl+Alt+n",
   action = window("activate", { target = "Notepad", toggle = false }),
 }
 
@@ -307,8 +307,8 @@ hotkey{
 -- 不算“已经在前台”：按下去会切到它所在的那张桌面并激活它。
 hotkey{
   name = "focus-wezterm",
-  comment = "Win+S 唤起 WezTerm；没在运行时先启动它。",
-  keys = "Win+S",
+  comment = "Win+s 唤起 WezTerm；没在运行时先启动它。",
+  keys = "Win+s",
   action = window("activate", {
     process = "wezterm",
     launch = {
@@ -323,7 +323,7 @@ hotkey{
 -- 与文件关联。
 hotkey{
   name = "focus-vscode",
-  keys = "Ctrl+Alt+X",
+  keys = "Ctrl+Alt+x",
   action = window("activate", {
     process = "Code",
     launch = { program = "code", args = { "." }, wait_ms = 5000 },
@@ -391,20 +391,20 @@ end
 -- 剪贴板辅助。
 hotkey{
   name = "copy-path",
-  keys = "Ctrl+Alt+C",
+  keys = "Ctrl+Alt+c",
   action = clipboard("set", { text = "{config_dir}" }),
 }
 
 hotkey{
   name = "clipboard-info",
-  keys = "Ctrl+Alt+V",
+  keys = "Ctrl+Alt+v",
   action = clipboard("get"),
 }
 
 -- 把剪贴板内容作为命令行参数传出去。
 hotkey{
   name = "search-clipboard",
-  keys = "Ctrl+Alt+B",
+  keys = "Ctrl+Alt+b",
   action = run("cmd.exe", { "/c", "start", "https://www.bing.com/search?q={clipboard}" }),
 }
 
@@ -452,13 +452,13 @@ hotkey{
 -- `screen_off` 走的是 Windows 自己那条“屏幕超时后关屏”的路径：系统、应用和
 -- 钩子都继续运行（不是睡眠），任意按键或鼠标动作都会把所有显示器重新点亮。
 --
--- 下面把 Win+X 从系统的“快捷链接菜单”变成电源选单（S 睡眠、P 关机、R 重启、
+-- 下面把 Win+x 从系统的“快捷链接菜单”变成电源选单（S 睡眠、P 关机、R 重启、
 -- L 锁定、O 关屏，Esc 关闭），和使用者自己按托盘菜单/开始菜单里的电源是同一回事。
--- 吞掉 Win+X 是预期的：和这里的 Win+S 取代系统搜索一样。
+-- 吞掉 Win+x 是预期的：和这里的 Win+s 取代系统搜索一样。
 hotkey{
   name = "power-menu",
-  comment = "Win+X：电源选单（S 睡眠 / P 关机 / R 重启 / L 锁定 / O 关屏 / Esc 关闭）",
-  keys = "Win+X",
+  comment = "Win+x：电源选单（S 睡眠 / P 关机 / R 重启 / L 锁定 / O 关屏 / Esc 关闭）",
+  keys = "Win+x",
   action = menu{
     title = "电源",
     items = {
@@ -487,8 +487,8 @@ hotkey{
 -- 这份示例配置有几十条绑定，正好用它看看全貌；卡片顶部的标题可以换：
 -- `help("我的快捷键")`，简写 `action = "help"` 等价于 `help()`。
 --
--- `Win+/` 会吞掉 Windows 自己那个“表情/输入法”面板快捷键，和上面的 Win+S /
--- Win+X 是同一回事；不想吞就换一个键。
+-- `Win+/` 会吞掉 Windows 自己那个“表情/输入法”面板快捷键，和上面的 Win+s /
+-- Win+x 是同一回事；不想吞就换一个键。
 hotkey{
   name = "help",
   comment = "Win+/：列出当前所有快捷键（可输入筛选、Enter 执行）",
@@ -642,7 +642,7 @@ app{
   launch = { program = [[C:\tools\epic.exe]] },
   window = { monitor = "DISPLAY2" },
   hotkeys = {
-    { keys = "Ctrl+Alt+K", action = window("activate", { wait_ms = 8000 }) },
+    { keys = "Ctrl+Alt+k", action = window("activate", { wait_ms = 8000 }) },
   },
 }
 

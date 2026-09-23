@@ -57,6 +57,7 @@ private slots:
     void errors();
     void holdSplitRemaps();
     void danglingModifierIsAnError();
+    void bracedUppercaseLetterIsRejected();
     void charToKeySpotChecks();
 };
 
@@ -184,6 +185,24 @@ void TestSendScript::danglingModifierIsAnError()
     const auto error = parseSendScript(QStringLiteral("^"), &ops);
     QVERIFY(error.has_value());
     QCOMPARE(error->message(), QStringLiteral("send script ends with a dangling modifier"));
+}
+
+void TestSendScript::bracedUppercaseLetterIsRejected()
+{
+    // 大括号里的是**键名**，所以单个字母必须小写；要 Shift+S 就写 `{+s}`。
+    // 脚本里的裸字符不受影响（上面的 `scriptOf("A")` 仍然是 Shift+A）。
+    QVector<SendOp> ops;
+    const auto error = parseSendScript(QStringLiteral("{S}"), &ops);
+    QVERIFY(error.has_value());
+    QCOMPARE(error->kind, KeyError::Kind::UppercaseLetter);
+    QVERIFY2(error->message().contains(QStringLiteral("lowercase")), qPrintable(error->message()));
+
+    QVERIFY(!parseSendScript(QStringLiteral("{s}"), &ops).has_value());
+    QCOMPARE(ops, (QVector<SendOp>{down(static_cast<Vk>(u'S')), up(static_cast<Vk>(u'S'))}));
+    // 显式的 Shift 仍然可以（前缀写在花括号外）：`+s` 就是 Shift+S。
+    QVERIFY(!parseSendScript(QStringLiteral("+s"), &ops).has_value());
+    QCOMPARE(ops, (QVector<SendOp>{down(vk::LSHIFT), down(static_cast<Vk>(u'S')),
+                                   up(static_cast<Vk>(u'S')), up(vk::LSHIFT)}));
 }
 
 void TestSendScript::charToKeySpotChecks()

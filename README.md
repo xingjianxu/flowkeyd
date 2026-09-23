@@ -23,7 +23,7 @@ flowkeyd 是 **oskeyd**（Rust 参考实现）的 **Qt 6 / C++ 复刻版**：它
 ```lua
 hotkey{
   name = "terminal",
-  keys = "Ctrl+Alt+T",
+  keys = "Ctrl+Alt+t",
   action = run("wt.exe"),
 }
 
@@ -266,36 +266,6 @@ flowkeyd 都会以管理员权限起来，**不弹 UAC**。
 没有在跑的实例时它返回 1，不算错误。
 事件对象带 Low 完整性标签，所以**不提权**的调用方也能请提权的守护进程退出。
 
-### 本机现在常驻的是 flowkeyd（2026-09，阶段 10）
-
-这台机器以前由 `D:\prj\oskeyd\target\release\oskeyd.exe` 提供 `Win+S`、
-`Win+1..3`、`Win+W`、`Win+X`、`Win+/`、`CapsLock`、`Alt+H/J/K/L`、
-`Alt+Space`、`LWin+Q`、`LWin+F1..F4`、小键盘 `-`/`+`/`Enter` 这些绑定。
-2026-09 起改由 flowkeyd 顶替，**oskeyd 不再常驻**（接管当时它本来就没在跑：
-机器重启后它没有自启项，也就没被拉起来）。两边读写的是同一套配置 schema，
-本机那份配置已经搬到 `%USERPROFILE%\.config\flowkeyd\config.lua`（绑定一个字
-都没改），`flowkeyd --check` 通过：24 个快捷键、0 个重映射、零警告。
-
-2026-09 起本机也**有**自启了：常驻实例从
-`D:\prj\flowkeyd\build\dist-release\flowkeyd.exe` 运行，由计划任务 `flowkeyd`
-（登录时 + 最高权限 + 15 秒延迟）拉起 —— 任务由程序自己注册，指向的就是那个路径。
-
-```powershell
-# 干净退出（不提权也行）
-& 'D:\prj\flowkeyd\build\dist-release\flowkeyd.exe' --quit
-
-# 手动启动 / 查看任务（重新启动时会自动把任务刷新成这个路径）
-Start-Process 'D:\prj\flowkeyd\build\dist-release\flowkeyd.exe'
-Start-ScheduledTask -TaskName flowkeyd
-Get-ScheduledTask -TaskName flowkeyd
-
-# 回滚到 oskeyd（同样是提权启动）
-Start-Process -Verb RunAs -FilePath 'D:\prj\oskeyd\target\release\oskeyd.exe'
-```
-
-回滚前先 `--quit` 并 `--remove-autostart`（否则两边同时常驻会抢同一批快捷键，
-而任何一次手动启动都会把自启任务重新注册回来）。
-
 ## 命令行
 
 ```
@@ -371,7 +341,7 @@ D:\prj\flowkeyd\flowkeyd.lua.example: OK (43 hotkey(s), 3 remap(s), 7 window rul
 -- 1) 命令式：在脚本体里逐个注册。条目顺序就是匹配顺序（先注册者优先）。
 settings{ swallow = true, tick_ms = 15 }
 
-hotkey{ name = "terminal", keys = "Ctrl+Alt+T", action = run("wt.exe") }
+hotkey{ name = "terminal", keys = "Ctrl+Alt+t", action = run("wt.exe") }
 
 -- 循环生成是 Lua 配置最直接的收益
 for i = 1, 4 do
@@ -396,7 +366,7 @@ app{
 -- 2) 声明式：把一张表 return 出去（排在脚本体注册的条目之后）。
 return {
   settings = { swallow = true },
-  hotkeys = { { keys = "Ctrl+Alt+T", action = run("wt.exe") } },
+  hotkeys = { { keys = "Ctrl+Alt+t", action = run("wt.exe") } },
   remaps = { { from = "CapsLock", to = "Esc" } },
   window_rules = { { process = "wezterm", desktop = 2, monitor = 2 } },
   apps = { { process = "wps", window = { desktop = 3, monitor = 2 } } },
@@ -490,7 +460,7 @@ elevate = false
 
 [[hotkey]]
 name = "wezterm"
-keys = "Win+S"
+keys = "Win+s"
 action = { type = "window", op = "activate", process = "wezterm",
            launch = { program = '{USERPROFILE}\scoop\shims\wezterm.exe', args = ["start"], wait_ms = 5000 } }
 ```
@@ -502,7 +472,7 @@ settings{ elevate = false }
 
 hotkey{
   name = "wezterm",
-  keys = "Win+S",
+  keys = "Win+s",
   action = window("activate", {
     process = "wezterm",
     launch = {
@@ -546,7 +516,7 @@ settings{ log_level = "info", swallow = true, tick_ms = 15 }
 | -------------------- | -------- | -------------------------------------------------------------------------------------------- |
 | `log_level`          | `"info"` | `trace`、`debug`、`info`、`warn`、`error`、`off`                                             |
 | `swallow`            | `true`   | 默认是否把匹配到的按键对前台应用隐藏                                                         |
-| `exact_modifiers`    | `false`  | `false` 时即使同时按着 Alt 也触发 `Ctrl+H`（AutoHotkey 行为）；`true` 要求修饰键集合完全一致 |
+| `exact_modifiers`    | `false`  | `false` 时即使同时按着 Alt 也触发 `Ctrl+h`（AutoHotkey 行为）；`true` 要求修饰键集合完全一致 |
 | `release_modifiers`  | `true`   | 在执行 `send`/`type` 前先松开你按住的修饰键，随后再按回去                                    |
 | `repeat_interval_ms` | `50`     | 默认重复间隔                                                                                 |
 | `repeat_delay_ms`    | `400`    | 默认的重复开始前延迟                                                                         |
@@ -570,7 +540,7 @@ hotkey{
 
 | 键           | 含义                                                          |
 | ------------ | ------------------------------------------------------------- |
-| `keys`       | 一个和弦或一组和弦：`"Ctrl+Alt+T"`、`"^!t"`、`{ "^!t", "^!j" }` |
+| `keys`       | 一个和弦或一组和弦：`"Ctrl+Alt+t"`、`"^!t"`、`{ "^!t", "^!j" }` |
 | `name`       | 日志与 `{hotkey}` 模板中使用的标签（默认取第一个和弦）        |
 | `trigger`    | 何时触发：`press`（默认）、`release`、`repeat`（见下表）      |
 | `action`     | 按下时执行什么（`press` 和 `on_press` 是别名）                |
@@ -596,13 +566,29 @@ hotkey{
 
 | 语法                | 含义                                  |
 | ------------------- | ------------------------------------- |
-| `Ctrl+Alt+H`、`^!h` | 修饰键在前，按键在后                  |
+| `Ctrl+Alt+h`、`^!h` | 修饰键在前，按键在后                  |
 | `^!h`               | `^` Ctrl、`!` Alt、`+` Shift、`#` Win |
 | `~F4`               | 即使快捷键触发也放行该按键            |
 | `*F1`               | 即使额外按住了修饰键也触发            |
 
 只有修饰键的和弦也能用：`Ctrl+Shift` 会在 Ctrl 按着时、Shift 按下时触发，
 而通用的 `Shift`/`Ctrl`/`Alt` 名称会匹配键盘的任意一侧。
+
+**单个字母的键名一律小写。** `h` 就是 H 键；想表达“按住 Shift 的 h”要显式写
+`Shift+h`，直接写成大写的 `H` 会被 `--check` 拒绝：
+
+```lua
+keys = "h"            -- H 键（不按修饰键）
+keys = "Alt+h"        -- Alt+H
+keys = "Alt+Shift+h"  -- 按住 Shift 才是大写 H
+keys = "Alt+H"        -- 报错：字母键名要小写（写 Shift+h）
+```
+
+同一条规则也适用于 `remap` 的 `from`/`to`、发送脚本里 `{...}` 中的键名
+（`send("{S}")` 要写成 `send("{s}")`），以及选单条目的 `key`。
+**发送脚本里的裸字符不受影响**：`send("A")` 仍然是 AutoHotkey 语义下的
+“打出大写 A”（等价于 `send("+a")`）；要按字面输入任意文本用 `type("...")`
+或 `send("{Text}...")`。
 
 一个和弦里**只能有一个按键**（其余片段必须是修饰键），所以「两个普通键一起按」
 是**不支持**的：`keys = "NumpadSub+NumpadAdd"` 会被拒绝，
@@ -657,10 +643,10 @@ hotkey{
 shell 决定打印的任意内容。
 
 ```lua
--- Win+S 唤起 WezTerm，没有它的窗口时先启动它。
+-- Win+s 唤起 WezTerm，没有它的窗口时先启动它。
 hotkey{
   name = "wezterm",
-  keys = "Win+S",
+  keys = "Win+s",
   action = window("activate", {
     process = "wezterm",
     launch = {
@@ -726,10 +712,10 @@ VS Code 的窗口属于 `Code.exe`。
 的 `op`，用来把窗口搬到相邻的位置：
 
 ```lua
-hotkey{ keys = "Win+U", action = window("move_prev_desktop") }   -- 上一张虚拟桌面
-hotkey{ keys = "Win+I", action = window("move_next_desktop") }   -- 下一张虚拟桌面
-hotkey{ keys = "Win+Y", action = window("move_left_monitor") }   -- 左边的显示器
-hotkey{ keys = "Win+O", action = window("move_right_monitor") }  -- 右边的显示器
+hotkey{ keys = "Win+u", action = window("move_prev_desktop") }   -- 上一张虚拟桌面
+hotkey{ keys = "Win+i", action = window("move_next_desktop") }   -- 下一张虚拟桌面
+hotkey{ keys = "Win+y", action = window("move_left_monitor") }   -- 左边的显示器
+hotkey{ keys = "Win+o", action = window("move_right_monitor") }  -- 右边的显示器
 ```
 
 * `move_prev_desktop` / `move_next_desktop` 只动**虚拟桌面**，窗口在显示器上的
@@ -756,7 +742,7 @@ flowkeyd 触发的窗口状态变化默认**不播放动画**：`minimize` 不�
 可以给某一条绑定把动画要回来：
 
 ```lua
-hotkey{ keys = "Ctrl+Alt+F", action = window("maximize", { animate = true }) }
+hotkey{ keys = "Ctrl+Alt+f", action = window("maximize", { animate = true }) }
 ```
 
 实现用的是**按窗口**的 `DwmSetWindowAttribute(hwnd,
@@ -786,8 +772,8 @@ DWMWA_TRANSITIONS_FORCEDISABLED, TRUE)`：调 `ShowWindow` 前设上、调完立
 ```lua
 hotkey{
   name = "power-menu",
-  comment = "Win+X：电源选单（S 睡眠 / P 关机 / R 重启 / L 锁定 / O 关屏 / Esc 关闭）",
-  keys = "Win+X",
+  comment = "Win+x：电源选单（S 睡眠 / P 关机 / R 重启 / L 锁定 / O 关屏 / Esc 关闭）",
+  keys = "Win+x",
   action = menu{
     title = "电源",
     items = {
@@ -836,7 +822,7 @@ hotkey{
 关机、重启、注销需要管理员权限（flowkeyd 默认就是提权运行的）；没提权时会在日志里
 写一行错误并弹一个托盘气泡说明原因。睡眠、休眠、锁定与关屏不需要权限。
 
-上面那条 `Win+X` 会吞掉 Windows 自己的“快捷链接菜单”，和例子里的 `Win+S` 取代系统
+上面那条 `Win+x` 会吞掉 Windows 自己的“快捷链接菜单”，和例子里的 `Win+s` 取代系统
 搜索是同一回事；想保留系统菜单就换一个键。
 
 ### 快捷键帮助
@@ -874,11 +860,11 @@ hotkey{
   这几类不会一按就执行 —— 第一次 `Enter`/双击只是把它标成「待确认」
   （那一行变色，底部提示换成确认文案），再按一次才真的执行。
   `Esc`、上下换行、改筛选都会取消确认。
-* **复制**：左键点某一行把它的按键文本复制到剪贴板，例如 `Win+S`。
+* **复制**：左键点某一行把它的按键文本复制到剪贴板，例如 `Win+s`。
 * 列表由配置本身生成（`--list` 看的就是同一批绑定，加上重映射），
   所以 `help()` 不需要任何参数；卡片顶部的标题可以换：`help("我的快捷键")`。
 * 一次只会有一个帮助窗口：再按一次快捷键只是把它拿到前面并清空筛选。
-* 和 `Win+X`/`Win+S` 一样，`Win+/` 会吞掉 Windows 自己的那个快捷键
+* 和 `Win+x`/`Win+s` 一样，`Win+/` 会吞掉 Windows 自己的那个快捷键
   （表情/输入法面板）；想保留就换一个键。
 
 ### 模板
@@ -888,7 +874,7 @@ hotkey{
 | 占位符                                                          | 取值                                               |
 | --------------------------------------------------------------- | -------------------------------------------------- |
 | `{clipboard}`                                                   | 剪贴板文本（按需读取）                             |
-| `{selection}`                                                   | 选中文本：flowkeyd 发送 Ctrl+C、等待，然后读取剪贴板 |
+| `{selection}`                                                   | 选中文本：flowkeyd 发送 Ctrl+c、等待，然后读取剪贴板 |
 | `{hotkey}` / `{name}`                                           | 快捷键的名字                                       |
 | `{date}`、`{time}`、`{datetime}`、`{timestamp}`                 | 本地时间（`{timestamp}` 适合做文件名）             |
 | `{unix}`                                                        | 自纪元起的秒数                                     |
@@ -1085,9 +1071,9 @@ app 规则匹配。
   `trigger = "repeat"`（或 `repeatable = true`），那套重复是 flowkeyd 自己的、
   由 `SetTimer`/`WM_TIMER` 驱动。
 * **触发时机默认是按下。** 和弦的最后一个按键一到就派发动作，包括被吞掉的
-  `Win+…` 和弦——`Win+S` 唤起窗口不会等到你松开 Windows 键。遮断标记（见
+  `Win+…` 和弦——`Win+s` 唤起窗口不会等到你松开 Windows 键。遮断标记（见
   [已知限制](#已知限制)）仍然在 Windows 键松开时注入，那是外壳唯一会看它的时刻。
-* **发送前后会释放修饰键。** 否则 `Ctrl+Alt+T -> send:^{c}` 会发出 Ctrl+Alt+C。
+* **发送前后会释放修饰键。** 否则 `Ctrl+Alt+t -> send:^{c}` 会发出 Ctrl+Alt+c。
   flowkeyd 会松开你按住的修饰键、注入、再按回去，并且按注入层的规矩在中间补一次
   菜单遮断空按键（`ModifierGuard` 注入的真实 key-up 引擎看不到）。
 * **日志窗口是同一个进程里的 QML 窗口。** 它只通过日志文件与守护进程交接：
@@ -1140,7 +1126,7 @@ $env:FLOWKEYD_ALLOW_INTERACTIVE_TESTS = '1'
 * **交互式测试**（`FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`，默认 skip，10 个用例）真的碰
   这台机器的剪贴板/音量/前台窗口：剪贴板往返、音量读写与钳位并恢复原值、
   启动记事本并按标题找到它、激活→最小化→恢复→关闭（这一步用测试进程自己的
-  顶层窗口，理由见下）、`{selection}` 的 Ctrl+C 往返、
+  顶层窗口，理由见下）、`{selection}` 的 Ctrl+c 往返、
   虚拟桌面的只读探测 + 一次可逆的切换（切走再切回来），
   以及 `window_rule` 的三条真机验证：把窗口移到另一个虚拟桌面再移回来
   （用**已公开**的 `GetWindowDesktopId` 确认桌面 GUID 真的变了）、
@@ -1159,7 +1145,7 @@ $env:FLOWKEYD_ALLOW_INTERACTIVE_TESTS = '1'
   证据：它用一个一次性配置起一个非提权的守护进程，从另一个上下文用 `SendInput`
   注入按键，再用一个获得焦点的 WinForms 窗口观察按键到底有没有到达前台
   （未绑定的键做正对照，所以“焦点没拿到”不会被误会成“吞键成功”）。
-  它跑 116 项检查：吞键、被吞掉的 `Win+S`（常规 / 0 ms 轻按 / 一次、两次
+  它跑 116 项检查：吞键、被吞掉的 `Win+s`（常规 / 0 ms 轻按 / 一次、两次
   Windows 键自动重复）、自动重复只派发一次、重映射 hold/tap/`CapsLock -> Esc`、
   `send` 的修饰键释放、小键盘与主键盘互不触发、`window` 的
   启动→激活→收起→恢复、`menu` 弹窗的键盘选择、**鼠标悬停与左键单击一行**、
@@ -1219,7 +1205,7 @@ $env:FLOWKEYD_ALLOW_INTERACTIVE_TESTS = '1'
   位于另一个虚拟桌面上的窗口仍然无法被唤起。
 * 被吞掉的 `Win+…` 快捷键会在 Windows 键松开时注入一个未分配的按键
   （`VK 0xE8`）。没有它，外壳会看到一个“被单独按下”的 Windows 键，
-  并在松开时打开开始菜单（对 `Win+S` 是搜索框）；这个遮断必须是外壳在 keyup
+  并在松开时打开开始菜单（对 `Win+s` 是搜索框）；这个遮断必须是外壳在 keyup
   之前看到的*最后*一件事，因为和弦键之后的 Windows 键自动重复会重新武装它。
   遮断只影响外壳怎么看那个修饰键：动作本身在按键按下时就跑了（`trigger = "press"`，
   默认），只有 `trigger = "release"` 的绑定才会等到松开。AutoHotkey 的 `#MenuMaskKey`
@@ -1312,7 +1298,7 @@ $env:FLOWKEYD_ALLOW_INTERACTIVE_TESTS = '1'
    （吞键、重映射、自动重复、挂起/重载/退出、`window`、`menu`/`help`、小键盘）；
    还缺的是动画的屏幕采样、托盘菜单点击、自提权的 UAC 流程，
    以及把日志窗口那一套从外面断言。
-4. 延迟修饰键抑制，让 `Ctrl+Alt+H` 也隐藏 Ctrl 和 Alt。
+4. 延迟修饰键抑制，让 `Ctrl+Alt+h` 也隐藏 Ctrl 和 Alt。
 5. 托盘图标跟随 explorer 重启（`TaskbarCreated`）并支持自定义图标。
 6. 通过 `WH_MOUSE_LL` 支持鼠标按键与滚轮快捷键。
 7. 配置文件变化时热重载（去抖的 `ReadDirectoryChangesW`）。

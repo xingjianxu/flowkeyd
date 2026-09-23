@@ -87,7 +87,7 @@ void TestEngine::firesOnChordAndSwallows()
 {
     Config config;
     config.hotkeys.push_back(hotkeyNamed(QStringLiteral("term"),
-                                         QStringLiteral("Ctrl+Alt+T"),
+                                         QStringLiteral("Ctrl+Alt+t"),
                                          specOne(runAction(QStringLiteral("wt.exe")))));
     Engine engine = engineOf(config);
 
@@ -110,7 +110,7 @@ void TestEngine::windowsChordsKeepTheShellFromOpeningStart()
 {
     Config config;
     config.hotkeys.push_back(hotkeyNamed(QStringLiteral("wezterm"),
-                                         QStringLiteral("Win+S"),
+                                         QStringLiteral("Win+s"),
                                          specOne(noneAction())));
     Engine engine = engineOf(config);
 
@@ -136,7 +136,7 @@ void TestEngine::windowsChordsKeepTheShellFromOpeningStart()
     // 这里 `S` 单独绑定，而用户恰好按着 Win。
     Config plain;
     plain.hotkeys.push_back(hotkeyNamed(QStringLiteral("plain"),
-                                        QStringLiteral("S"),
+                                        QStringLiteral("s"),
                                         specOne(noneAction())));
     Engine plainEngine = engineOf(plain);
     press(&plainEngine, {vk::LWIN});
@@ -147,10 +147,10 @@ void TestEngine::windowsChordsKeepTheShellFromOpeningStart()
     press(&plainEngine, {vk::RWIN});
     QVERIFY(plainEngine.onKey(KeyEvent::keyUp(vk::RWIN), 0).inject.empty());
 
-    // ……除此之外什么也不注入，因此普通的 `~Win+S` 不受影响。
+    // ……除此之外什么也不注入，因此普通的 `~Win+s` 不受影响。
     Config passthrough;
     passthrough.hotkeys.push_back(hotkeyNamed(QStringLiteral("wezterm"),
-                                              QStringLiteral("~Win+S"),
+                                              QStringLiteral("~Win+s"),
                                               specOne(noneAction())));
     Engine passthroughEngine = engineOf(passthrough);
     press(&passthroughEngine, {vk::LWIN});
@@ -168,7 +168,7 @@ void TestEngine::theMenuMaskSurvivesAWindowsKeyAutoRepeat()
 {
     Config config;
     config.hotkeys.push_back(hotkeyNamed(QStringLiteral("wezterm"),
-                                         QStringLiteral("Win+S"),
+                                         QStringLiteral("Win+s"),
                                          specOne(noneAction())));
     Engine engine = engineOf(config);
 
@@ -185,7 +185,7 @@ void TestEngine::theMenuMaskWaitsForTheLastMenuKey()
 {
     Config config;
     config.hotkeys.push_back(hotkeyNamed(QStringLiteral("wezterm"),
-                                         QStringLiteral("Win+Alt+S"),
+                                         QStringLiteral("Win+Alt+s"),
                                          specOne(noneAction())));
     Engine engine = engineOf(config);
 
@@ -201,7 +201,7 @@ void TestEngine::aSwallowedAltChordMasksTheAltKeyup()
 {
     Config config;
     config.hotkeys.push_back(hotkeyNamed(QStringLiteral("menu"),
-                                         QStringLiteral("Alt+F"),
+                                         QStringLiteral("Alt+f"),
                                          specOne(noneAction())));
     Engine engine = engineOf(config);
 
@@ -262,11 +262,11 @@ void TestEngine::onReleaseFires()
 void TestEngine::mostSpecificChordWins()
 {
     Config config;
-    config.hotkeys.push_back(hotkeyNamed(QStringLiteral("plain"), QStringLiteral("H"),
+    config.hotkeys.push_back(hotkeyNamed(QStringLiteral("plain"), QStringLiteral("h"),
                                          specOne(noneAction())));
-    config.hotkeys.push_back(hotkeyNamed(QStringLiteral("ctrl"), QStringLiteral("Ctrl+H"),
+    config.hotkeys.push_back(hotkeyNamed(QStringLiteral("ctrl"), QStringLiteral("Ctrl+h"),
                                          specOne(noneAction())));
-    config.hotkeys.push_back(hotkeyNamed(QStringLiteral("ctrl-alt"), QStringLiteral("Ctrl+Alt+H"),
+    config.hotkeys.push_back(hotkeyNamed(QStringLiteral("ctrl-alt"), QStringLiteral("Ctrl+Alt+h"),
                                          specOne(noneAction())));
     Engine engine = engineOf(config);
 
@@ -284,9 +284,9 @@ void TestEngine::mostSpecificChordWins()
 
 void TestEngine::extraModifiersAreToleratedButWildcardPrefersExact()
 {
-    // `Ctrl+H` 在 Alt 也按着时依旧触发（AutoHotkey 行为）。
+    // `Ctrl+h` 在 Alt 也按着时依旧触发（AutoHotkey 行为）。
     Config tolerant;
-    tolerant.hotkeys.push_back(hotkey(QStringLiteral("Ctrl+H"), specOne(noneAction())));
+    tolerant.hotkeys.push_back(hotkey(QStringLiteral("Ctrl+h"), specOne(noneAction())));
     Engine tolerantEngine = engineOf(tolerant);
     QCOMPARE(press(&tolerantEngine, {CTRL, ALT, static_cast<Vk>(u'H')}).triggers.size(),
              std::size_t(1));
@@ -294,13 +294,13 @@ void TestEngine::extraModifiersAreToleratedButWildcardPrefersExact()
     // 启用 exact_modifiers 后就不触发了。
     Config exact;
     exact.settings.exactModifiers = true;
-    exact.hotkeys.push_back(hotkey(QStringLiteral("Ctrl+H"), specOne(noneAction())));
+    exact.hotkeys.push_back(hotkey(QStringLiteral("Ctrl+h"), specOne(noneAction())));
     Engine exactEngine = engineOf(exact);
     QVERIFY(press(&exactEngine, {CTRL, ALT, static_cast<Vk>(u'H')}).isEmpty());
 
     // 通配和弦无视额外的修饰键，总是触发。
     Config wildcard;
-    wildcard.hotkeys.push_back(hotkey(QStringLiteral("*H"), specOne(noneAction())));
+    wildcard.hotkeys.push_back(hotkey(QStringLiteral("*h"), specOne(noneAction())));
     Engine wildcardEngine = engineOf(wildcard);
     QCOMPARE(press(&wildcardEngine, {CTRL, ALT, vk::LSHIFT, static_cast<Vk>(u'H')}).triggers.size(),
              std::size_t(1));

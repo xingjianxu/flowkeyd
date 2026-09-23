@@ -69,6 +69,7 @@ private slots:
     void helpHelperTakesAnOptionalTitle();
     void shorthandStringsStillWork();
     void chordListsAndAliasesWork();
+    void uppercaseLetterKeysAreRejected();
     void inlineFunctionsAreRejectedWithAHint();
     void syntaxErrorsPointAtTheLine();
     void runtimeErrorsPointAtTheLine();
@@ -95,14 +96,14 @@ void TestLua::imperativeAndDeclarativeStylesAgree()
 {
     const auto imperative = parse(R"(
         settings{ swallow = false }
-        hotkey{ name = "t", keys = "Ctrl+Alt+T", action = run("wt.exe", { "-w", "0" }) }
+        hotkey{ name = "t", keys = "Ctrl+Alt+t", action = run("wt.exe", { "-w", "0" }) }
         remap{ from = "CapsLock", to = "Esc" }
     )");
     QVERIFY(imperative.has_value());
     const auto declarative = parse(R"(
         return {
           settings = { swallow = false },
-          hotkeys = { { name = "t", keys = "Ctrl+Alt+T", action = { type = "run", program = "wt.exe", args = { "-w", "0" } } } },
+          hotkeys = { { name = "t", keys = "Ctrl+Alt+t", action = { type = "run", program = "wt.exe", args = { "-w", "0" } } } },
           remaps = { { from = "CapsLock", to = "Esc" } },
         }
     )");
@@ -179,10 +180,10 @@ void TestLua::helpersBuildTheSameTablesAsTheRawForm()
 void TestLua::movingWindowOpsAreConverted()
 {
     const auto c = parse(R"(
-        hotkey{ keys = "Win+U", action = window("move_prev_desktop") }
-        hotkey{ keys = "Win+I", action = window("move_next_desktop") }
-        hotkey{ keys = "Win+Y", action = window("move_left_monitor") }
-        hotkey{ keys = "Win+O", action = window("move_right_monitor") }
+        hotkey{ keys = "Win+u", action = window("move_prev_desktop") }
+        hotkey{ keys = "Win+i", action = window("move_next_desktop") }
+        hotkey{ keys = "Win+y", action = window("move_left_monitor") }
+        hotkey{ keys = "Win+o", action = window("move_right_monitor") }
     )");
     QVERIFY(c.has_value());
     QCOMPARE(c->bindings.size(), std::size_t(4));
@@ -211,7 +212,7 @@ void TestLua::runWithoutArgsAndWithEmptyArgs()
 void TestLua::menuAndPowerHelpersBuildTheExpectedTables()
 {
     const auto c = parse(R"(
-        hotkey{ keys = "Win+X", action = menu{
+        hotkey{ keys = "Win+x", action = menu{
           title = "电源",
           items = {
             { key = "s", label = "睡眠", hint = "Sleep", action = power("sleep") },
@@ -278,6 +279,14 @@ void TestLua::chordListsAndAliasesWork()
     QCOMPARE(b.chords[0].mods.bits(), core::Modifiers::Ctrl.unioned(core::Modifiers::Alt).bits());
     QCOMPARE(b.press[0].summary(), QStringLiteral("send a"));
     QCOMPARE(b.release[0].summary(), QStringLiteral("send b"));
+}
+
+void TestLua::uppercaseLetterKeysAreRejected()
+{
+    // 字母键名一律小写：Lua 层要把 core 的报错原样带出来（带条目名）。
+    const QString message = failure(R"(hotkey{ keys = "Ctrl+Alt+T", action = none() })");
+    QVERIFY2(message.contains(QStringLiteral("lowercase")), qPrintable(message));
+    QVERIFY2(message.contains(QStringLiteral("Shift+t")), qPrintable(message));
 }
 
 void TestLua::inlineFunctionsAreRejectedWithAHint()
@@ -410,12 +419,12 @@ void TestLua::luaIsActuallyLua()
     const auto c = parse(R"(
         local names = { "a", "b" }
         for _, name in ipairs(names) do
-          hotkey{ name = name, keys = "Ctrl+Alt+" .. string.upper(name), action = send("{" .. name .. "}") }
+          hotkey{ name = string.upper(name), keys = "Ctrl+Alt+" .. name, action = send("{" .. name .. "}") }
         end
     )");
     QVERIFY(c.has_value());
     QCOMPARE(c->bindings.size(), std::size_t(2));
-    QCOMPARE(c->bindings[0].chords[0].render(), QStringLiteral("Ctrl+Alt+A"));
+    QCOMPARE(c->bindings[0].chords[0].render(), QStringLiteral("Ctrl+Alt+a"));
 }
 
 void TestLua::longStringsKeepWindowsPathsIntact()
@@ -603,7 +612,7 @@ void TestLua::appLaunchIsHoistedToTheApp()
         app{
           process = "wezterm",
           launch = { program = [[C:\tools\wezterm.exe]], args = { "start" }, wait_ms = 5000 },
-          hotkeys = { { keys = "Win+S", action = window("activate") } },
+          hotkeys = { { keys = "Win+s", action = window("activate") } },
         }
     )");
     QVERIFY(c.has_value());

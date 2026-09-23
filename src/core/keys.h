@@ -142,12 +142,14 @@ public:
         Empty,
         /// 不认识的按键名。
         UnknownKey,
+        /// 单个字母写成了大写。键名一律小写；想要大写键要显式写 `Shift+`。
+        UppercaseLetter,
         /// 语法错（没有按键、悬空的修饰键……）。
         Syntax,
     };
 
     Kind kind = Kind::Empty;
-    /// `UnknownKey` 时是按键名；`Syntax` 时是完整错误信息。
+    /// `UnknownKey`/`UppercaseLetter` 时是按键名；`Syntax` 时是完整错误信息。
     QString detail;
 
     KeyError() = default;
@@ -155,6 +157,7 @@ public:
 
     static KeyError empty() { return KeyError(Kind::Empty, QString()); }
     static KeyError unknownKey(const QString &name) { return KeyError(Kind::UnknownKey, name); }
+    static KeyError uppercaseLetter(const QString &name) { return KeyError(Kind::UppercaseLetter, name); }
     static KeyError syntax(const QString &message) { return KeyError(Kind::Syntax, message); }
 
     /// 与 oskeyd 一致的英文错误文案。
@@ -218,7 +221,7 @@ struct Chord
     /// `*` 前缀：即使额外按住了其它修饰键也触发。
     bool wildcard = false;
 
-    /// 人类可读的渲染，例如 `Ctrl+Alt+H`。
+    /// 人类可读的渲染，例如 `Ctrl+Alt+h`。
     QString render() const;
 
     friend bool operator==(const Chord &a, const Chord &b) = default;
@@ -251,12 +254,26 @@ struct SendOp
 };
 
 /// 把按键名规范化，使其对大小写、空格、短横线和下划线不敏感。
+///
+/// 这只是查表用的规范化（`Enter`、`capslock`、`volume up` 都能找到）。
+/// **单个字母作为键名仍必须小写**，由 `keyFromName()` 负责。
 QString normalizeKeyName(const QString &name);
 
-/// 把按键名（`"Enter"`、`"f4"`、`"volume_up"`、`"a"`）解析为 VK 码。
+/// 一个“键名”是不是被写成了单个大写 ASCII 字母（`A`..`Z`）？
+///
+/// 键名一律小写；是这种形状时返回它的小写形式（报错文案用得到），否则返回
+/// `std::nullopt`。`parseChord`/`parseSendScript` 与 `remap` 的 `to` 用它做检查；
+/// **`send` 脚本里的裸字符不走这里**（`send("A")` 仍然是“打出大写 A”）。
+std::optional<QChar> uppercaseLetterKey(const QString &name);
+
+/// 把按键名（`"Enter"`、`"F4"`、`"volume_up"`、`"a"`）解析为 VK 码。
+///
+/// **单个字母必须是 小写**：`"a"` 是 A 键，而 `"A"` 不是一个键名（返回
+/// `std::nullopt`）—— 想要大写键请写成 `Shift+a`。多字母的名字（`Enter`、
+/// `CapsLock`、`Volume_Up`……）照旧对大小写不敏感。
 std::optional<Vk> keyFromName(const QString &name);
 
-/// VK 码的规范显示名（`"F4"`、`"Volume_Up"`、`"A"`）。
+/// VK 码的规范显示名（`"F4"`、`"Volume_Up"`、`"a"`）。
 QString nameFromKey(Vk vk);
 
 /// 该 VK 是否需要 `SendInput` 的 `KEYEVENTF_EXTENDEDKEY`。
@@ -277,7 +294,10 @@ std::pair<Vk, bool> nativeKey(Vk vk);
 /// 用户可以书写的所有名称，已排序，供 `--list-keys` 使用。
 QStringList allKeyNames();
 
-/// 解析和弦，例如 `"Ctrl+Alt+H"`、`"^!h"`、`"~F4"`、`"*NumpadAdd"`。
+/// 解析和弦，例如 `"Ctrl+Alt+h"`、`"^!h"`、`"~F4"`、`"*NumpadAdd"`。
+///
+/// 和弦里的单个字母必须是 小写；写成大写会返回 `KeyError::Kind::UppercaseLetter`
+/// （想表达大写键要写 `Shift+h`）。
 std::optional<KeyError> parseChord(const QString &input, Chord *out);
 
 /// 把可打印字符映射为在 US 布局下产生它的 `(VK, 是否需要 Shift)`。
@@ -294,6 +314,9 @@ std::optional<KeyError> parseSendScript(const QString &input, QVector<SendOp> *o
 /// `"Esc"` 表示 Escape 键（如同 AutoHotkey 的 `CapsLock::Esc`），绝不会被
 /// 当成字母 E、s、c。任何含有脚本语法（`{}^!+#`）的字符串都交给
 /// `parseSendScript()`。
+///
+/// 单个字母按**键名规则**处理：小写（`"a"`）才是键名；大写的单个字母不是
+/// 键名，于是整串按发送脚本文本解释（`"A"` 就是“打出大写 A”，即 `Shift+a`）。
 std::optional<KeyError> parseKeyOrScript(const QString &input, QVector<SendOp> *out);
 
 /// 把发送脚本拆成“要按下什么”和“要松开什么”，`remap` 正是用它实现

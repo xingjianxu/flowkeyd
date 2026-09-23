@@ -69,7 +69,7 @@ local function registration(t, what)
   return t
 end
 
--- 注册一个快捷键：hotkey{ keys = "Ctrl+Alt+T", action = run("wt.exe") }
+-- 注册一个快捷键：hotkey{ keys = "Ctrl+Alt+t", action = run("wt.exe") }
 function hotkey(t)
   state.hotkeys[#state.hotkeys + 1] = registration(t, "hotkey")
 end

@@ -419,7 +419,7 @@ hotkey { name = "accept-once", comment = "once", keys = "F15",
   action = run("cmd.exe", { "/c", [[echo once>>$onceLog]] }, { wait = true }) }
 
 -- 3. 被吞掉的 Win 和弦：动作必须在*按下*时就派发（那时 Win 还按着）。
-hotkey { name = "accept-win", comment = "win chord", keys = "Win+S",
+hotkey { name = "accept-win", comment = "win chord", keys = "Win+s",
   action = clipboard("set", { text = "WIN-S-OK" }) }
 
 -- 4. window 动作 + 默认的 toggle。

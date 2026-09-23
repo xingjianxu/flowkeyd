@@ -17,6 +17,10 @@ QString KeyError::message() const
         return QStringLiteral("empty key or chord");
     case Kind::UnknownKey:
         return QStringLiteral("unknown key name `%1` (see `flowkeyd --list-keys`)").arg(detail);
+    case Kind::UppercaseLetter:
+        return QStringLiteral("letter key names must be lowercase: write `%1` instead of `%2` "
+                              "(for the uppercase key write `Shift+%1`)")
+            .arg(detail.toLower(), detail);
     case Kind::Syntax:
         return detail;
     }
@@ -188,10 +192,29 @@ QString normalizeKeyName(const QString &name)
     return out;
 }
 
+std::optional<QChar> uppercaseLetterKey(const QString &name)
+{
+    const QString trimmed = name.trimmed();
+    if (trimmed.size() != 1) {
+        return std::nullopt;
+    }
+    const char16_t c = trimmed.at(0).unicode();
+    if (c >= u'A' && c <= u'Z') {
+        return QChar(static_cast<char16_t>(c - u'A' + u'a'));
+    }
+    return std::nullopt;
+}
+
 std::optional<Vk> keyFromName(const QString &name)
 {
     const QString trimmed = name.trimmed();
     if (trimmed.isEmpty()) {
+        return std::nullopt;
+    }
+    // 单个字母必须是 小写。大写的 `"A"` 不是一个键名；想要大写键要写 `Shift+a`。
+    // 这里返回 `nullopt`，让 `parseKeyOrScript()` 把大写的单个字母当成发送
+    // 脚本文本（`"A"` = 打出大写 A）。
+    if (uppercaseLetterKey(trimmed).has_value()) {
         return std::nullopt;
     }
 
@@ -312,7 +335,8 @@ QString nameFromKey(Vk vkCode)
         }
     }
     if (vkCode >= 0x41 && vkCode <= 0x5A) {
-        return QString(QChar(static_cast<char16_t>(vkCode)));
+        // 字母键的规范名是小写（配置里也一律写小写）。
+        return QString(QChar(static_cast<char16_t>(vkCode - 0x41 + u'a')));
     }
     if (vkCode >= 0x30 && vkCode <= 0x39) {
         return QString(QChar(static_cast<char16_t>(vkCode)));
@@ -353,7 +377,7 @@ QStringList allKeyNames()
     for (const KeyName &entry : kKeyTable) {
         names.append(QString::fromLatin1(entry.name));
     }
-    for (char16_t c = u'A'; c <= u'Z'; ++c) {
+    for (char16_t c = u'a'; c <= u'z'; ++c) {
         names.append(QString(QChar(c)));
     }
     for (char16_t c = u'0'; c <= u'9'; ++c) {
@@ -485,6 +509,9 @@ std::optional<KeyError> parseChord(const QString &input, Chord *out)
         if (segment.isEmpty()) {
             return KeyError::syntax(QStringLiteral("chord `%1` has an empty modifier").arg(raw));
         }
+        if (uppercaseLetterKey(segment).has_value()) {
+            return KeyError::uppercaseLetter(segment);
+        }
         const std::optional<Vk> asKey = keyFromName(segment);
         if (!asKey.has_value()) {
             return KeyError::unknownKey(segment);
@@ -498,6 +525,9 @@ std::optional<KeyError> parseChord(const QString &input, Chord *out)
         }
     }
 
+    if (uppercaseLetterKey(keySegment).has_value()) {
+        return KeyError::uppercaseLetter(keySegment.trimmed());
+    }
     const std::optional<Vk> key = keyFromName(keySegment);
     if (!key.has_value()) {
         return KeyError::unknownKey(keySegment.trimmed());
@@ -782,6 +812,14 @@ std::optional<KeyError> parseSendScript(const QString &input, QVector<SendOp> *o
                                                                  : std::nullopt;
             if (name.isEmpty()) {
                 return KeyError::syntax(QStringLiteral("empty `{}` in send script"));
+            }
+
+            // `{S}` 里大括号中的字母是**键名**，所以必须小写。这与脚本里的裸
+            // 字符不同 —— `send("A")` 里的 `A` 是文本，照旧表示“打出大写 A”。
+            // 要显式按下 Shift 就把前缀写在花括号**外面**：`send("+s")`
+            // （`+s` 是 Shift+S；`{+s}` 不是合法的键名）。
+            if (uppercaseLetterKey(name).has_value()) {
+                return KeyError::uppercaseLetter(name.trimmed());
             }
 
             if (name.compare(QLatin1String("text"), Qt::CaseInsensitive) == 0) {
