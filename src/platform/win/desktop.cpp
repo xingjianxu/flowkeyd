@@ -321,7 +321,10 @@ public:
     bool waitForDesktopChange(HWND hwnd, const std::optional<QString> &before) const;
 
     /// 已公开的 `IVirtualDesktopManager::GetWindowDesktopId`（只读）。
-    std::optional<QString> windowDesktopId(HWND hwnd) const;
+    ///
+    /// 可以重试 `attempts` 次（每次间隔 20 ms）：这个调用会因为窗口正处于过渡状态
+    /// 而失败（见实现）；默认不重试。
+    std::optional<QString> windowDesktopId(HWND hwnd, int attempts = 1) const;
 
     /// `hwnd` 所在桌面在 `desktops` 里的下标。
     std::optional<std::size_t> desktopIndexOfWindow(HWND hwnd,
@@ -633,10 +636,11 @@ std::optional<std::size_t> Session::desktopIndexOfWindow(HWND hwnd,
                                                         const std::vector<ComPtr> &desktops,
                                                         QString *error) const
 {
-    const std::optional<QString> wanted = windowDesktopId(hwnd);
+    const std::optional<QString> wanted = windowDesktopId(hwnd, 3);
     if (!wanted.has_value()) {
         if (error != nullptr) {
-            *error = QStringLiteral("could not read the desktop id of the window");
+            *error = QStringLiteral("could not read the desktop id of the window (hwnd %1)")
+                         .arg(reinterpret_cast<quintptr>(hwnd));
         }
         return std::nullopt;
     }
@@ -919,8 +923,15 @@ bool Session::moveWindowToAdjacent(HWND hwnd,
         }
         return false;
     }
+    const std::optional<QString> beforeId = windowDesktopId(hwnd, 5);
     if (!moveViewToDesktopIndex(hwnd, desktops, *target, detail, error)) {
         return false;
+    }
+    // `MoveViewToDesktop` 异步生效：等窗口真的落到目标桌面再返回。否则紧接着的
+    // 第二次移动会读到*旧*桌面、把目标算错（`move_next` 连按两次会变成原地不动，
+    // 带 `follow` 的 `move_prev` 会绕到别的桌面）。
+    if (beforeId.has_value()) {
+        waitForDesktopChange(hwnd, beforeId);
     }
     // `follow`：把视图也切到刚才那张桌面。用的是同一个会话、已知的目标下标，
     // 所以不依赖“异步搬迁已经生效”（那会像 `switchToWindowDesktop` 一样
@@ -938,24 +949,37 @@ bool Session::moveWindowToAdjacent(HWND hwnd,
     return true;
 }
 
-std::optional<QString> Session::windowDesktopId(HWND hwnd) const
+std::optional<QString> Session::windowDesktopId(HWND hwnd, int attempts) const
 {
     if (m_publicManager.get() == nullptr) {
         return std::nullopt;
     }
-    GUID id{};
-    const HRESULT hr = vtableOf<IVirtualDesktopManagerVtbl>(m_publicManager.get())
-                           ->getWindowDesktopId(m_publicManager.get(), hwnd, &id);
-    if (FAILED(hr)) {
-        return std::nullopt;
+    HRESULT last = E_FAIL;
+    for (int attempt = 0; attempt < attempts; ++attempt) {
+        GUID id{};
+        last = vtableOf<IVirtualDesktopManagerVtbl>(m_publicManager.get())
+                   ->getWindowDesktopId(m_publicManager.get(), hwnd, &id);
+        if (SUCCEEDED(last)) {
+            return guidText(id);
+        }
+        // 实测：窗口正处于过渡状态、或它根本不是 shell 登记的那种窗口时，
+        // `GetWindowDesktopId` 会返回 `TYPE_E_ELEMENTNOTFOUND`（0x8002802b）。
+        // 花几毫秒重试一次几乎不要钱，比直接让动作失败好。
+        if (attempt + 1 < attempts) {
+            Sleep(20);
+        }
     }
-    return guidText(id);
+    logDebug(QStringLiteral("GetWindowDesktopId failed after %1 attempt(s) for hwnd %2: %3")
+                 .arg(attempts)
+                 .arg(reinterpret_cast<quintptr>(hwnd))
+                 .arg(hresultText(last)));
+    return std::nullopt;
 }
 
 bool Session::waitForDesktopChange(HWND hwnd, const std::optional<QString> &before) const
 {
     for (int attempt = 0; attempt < 10; ++attempt) {
-        const std::optional<QString> after = windowDesktopId(hwnd);
+        const std::optional<QString> after = windowDesktopId(hwnd, 3);
         if (after.has_value() && *after != *before) {
             return true;
         }
@@ -1240,7 +1264,7 @@ bool moveWindowToDesktop(HWND hwnd,
         if (!session.open(api, version, &localError)) {
             return;
         }
-        const std::optional<QString> before = session.windowDesktopId(hwnd);
+        const std::optional<QString> before = session.windowDesktopId(hwnd, 5);
         ok = session.moveWindowToDesktop(hwnd, index, &localDetail, &localError);
         if (!ok) {
             return;
@@ -1253,7 +1277,7 @@ bool moveWindowToDesktop(HWND hwnd,
         }
         logDebug(QStringLiteral("window desktop id %1 -> %2")
                      .arg(before.value_or(QStringLiteral("?")),
-                          session.windowDesktopId(hwnd).value_or(QStringLiteral("?"))));
+                          session.windowDesktopId(hwnd, 5).value_or(QStringLiteral("?"))));
     });
     if (!ok) {
         if (error != nullptr) {
@@ -1304,12 +1328,12 @@ bool moveWindowToAdjacentDesktop(HWND hwnd,
         if (!session.open(api, version, &localError)) {
             return;
         }
-        const std::optional<QString> before = session.windowDesktopId(hwnd);
+        const std::optional<QString> before = session.windowDesktopId(hwnd, 5);
         ok = session.moveWindowToAdjacent(hwnd, delta, follow, &localDetail, &localError);
         if (ok) {
             logDebug(QStringLiteral("window desktop id %1 -> %2")
                          .arg(before.value_or(QStringLiteral("?")),
-                              session.windowDesktopId(hwnd).value_or(QStringLiteral("?"))));
+                              session.windowDesktopId(hwnd, 5).value_or(QStringLiteral("?"))));
         }
     });
     if (!ok) {

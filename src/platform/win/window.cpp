@@ -165,6 +165,45 @@ bool isForegroundOnThisDesktop(HWND hwnd)
     return isOnCurrentDesktop(hwnd);
 }
 
+/// 覆盖层窗口（不是用户真正在用的那个窗口）。
+///
+/// 范例：**PowerToys 的「快捷键指南」**（`PowerToys.ShortcutGuide.exe`，按住 Win
+/// 约一秒就会弹出来）。它是 `WS_EX_TOOLWINDOW | WS_EX_TOPMOST`，弹出后会成为
+/// `GetForegroundWindow()`，于是“对前台窗口做动作”的 `window` 快捷键就会去操控这个
+/// 覆盖层（实测报 `could not read the desktop id of the window` —— 覆盖层不属于
+/// 任何虚拟桌面）。用户看到的现象是“按住 Win 连按下一个和弦就没反应了，松手再按才行”。
+///
+/// 与 `topLevelWindows()` / `window_rule` 的过滤一致：工具窗口不是用户想要的目标。
+bool isOverlayWindow(HWND hwnd)
+{
+    return (GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) != 0;
+}
+
+/// 沿 Z 序往下找第一个“主窗口”：可见、无属主、非工具窗口、有标题、尺寸非零。
+/// 找不到时返回 `nullptr`。
+HWND firstMainWindowBelow(HWND hwnd)
+{
+    for (HWND current = GetWindow(hwnd, GW_HWNDNEXT); current != nullptr;
+         current = GetWindow(current, GW_HWNDNEXT)) {
+        if (IsWindowVisible(current) == 0 || GetWindow(current, GW_OWNER) != nullptr) {
+            continue;
+        }
+        if ((GetWindowLongPtrW(current, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) != 0) {
+            continue;
+        }
+        if (windowTitle(current) == QStringLiteral("<untitled>")) {
+            continue;
+        }
+        RECT rect{};
+        if (GetWindowRect(current, &rect) == 0 || rect.right <= rect.left
+            || rect.bottom <= rect.top) {
+            continue;
+        }
+        return current;
+    }
+    return nullptr;
+}
+
 } // namespace
 
 QString windowTitle(HWND hwnd)
@@ -184,6 +223,19 @@ HWND find(const core::WindowQuery &query)
 {
     if (query.isForeground()) {
         HWND hwnd = GetForegroundWindow();
+        // 前台窗口是个覆盖层时（例如按住 Win 弹出来的 PowerToys「快捷键指南」）
+        // 它不是用户真正在用的窗口。它是 topmost 的工具窗口，所以沿 Z 序往下
+        // 找第一个“主窗口”。
+        if (hwnd != nullptr && isOverlayWindow(hwnd)) {
+            if (HWND below = firstMainWindowBelow(hwnd); below != nullptr) {
+                logDebug(QStringLiteral("foreground %1 (%2) is an overlay; using %3 (%4) instead")
+                             .arg(core::rustDebug(windowTitle(hwnd)),
+                                  reinterpret_cast<quintptr>(hwnd))
+                             .arg(core::rustDebug(windowTitle(below)),
+                                  reinterpret_cast<quintptr>(below)));
+                return below;
+            }
+        }
         return hwnd;
     }
     Finder finder;

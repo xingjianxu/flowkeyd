@@ -752,6 +752,19 @@ hotkey{ keys = "Win+o", action = window("move_right_monitor") }
   （与 `window_rule` 的 `desktop` 同一套），跨显示器走 `SetWindowPlacement`
   （与 `window_rule` 的几何摆放同一套），所以两者的已知限制也一样。
 
+### 前台窗口与覆盖层
+
+不写 `target`/`process` 的 `window` 动作作用于**前台窗口**（`GetForegroundWindow()`），
+但有一个例外：如果它是个**覆盖层**（`WS_EX_TOOLWINDOW`），flowkeyd 会沿 Z 序往下
+找到第一个真正的主窗口（可见、无属主、非工具窗口、有标题、尺寸非零）再动手。
+
+最典型的覆盖层是 **PowerToys 的「快捷键指南」**（`PowerToys.ShortcutGuide.exe`）：
+按住 Win 约一秒它就会弹出来并成为 `GetForegroundWindow()`。以前这时按
+`Win+i` / `Win+u` 这类“对前台窗口”的快捷键会去操控那个覆盖层（它不属于任何
+虚拟桌面，跨桌面移动会报 `could not read the desktop id of the window`），
+现象就是**按住 Win 连按下一个和弦没反应、把 Win 和那个键都松开再按才行**。
+现在 flowkeyd 会跳过覆盖层，继续作用在你刚才那个窗口上。
+
 ### 窗口动画
 
 flowkeyd 触发的窗口状态变化默认**不播放动画**：`minimize` 不再“缩”到任务栏，
@@ -1304,6 +1317,12 @@ $env:FLOWKEYD_ALLOW_INTERACTIVE_TESTS = '1'
   已经开着的窗口 ——
   想重新归位就按一下 `reload`（会重新读配置，但不会重摆已有窗口）或重启
   flowkeyd。
+
+* **前台窗口可以是个“覆盖层”。** 例如按住 Win 弹出的 PowerToys「快捷键指南」
+  （`WS_EX_TOOLWINDOW`）会变成 `GetForegroundWindow()`。`window` 动作会跳过它、
+  沿 Z 序找第一个真正的主窗口；如果你的某个正常窗口本身就是工具窗口，
+  它的快捷键可能就会落到别的窗口上（这是刻意与 `window_rule` 的“主窗口”判据
+  保持一致）。
 
 ## 路线图
 

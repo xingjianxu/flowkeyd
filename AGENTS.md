@@ -418,6 +418,29 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
       `tst_interactive::movesAWindowToTheAdjacentDesktopAndFollows`
       （真机：视图跟过去、窗口在前台、再跟回来且桌面复原）。
 
+19. **前台窗口是覆盖层时跳过它（项目所有者 2026-09 报的问题）。** 不写
+    `target`/`process` 的 `window` 动作作用于 `GetForegroundWindow()`；但按住 Win
+    约一秒会弹出 **PowerToys 的「快捷键指南」**（`PowerToys.ShortcutGuide.exe`，
+    `WS_EX_TOOLWINDOW | WS_EX_TOPMOST`）并成为 `GetForegroundWindow()`。以前这时
+    按 `Win+i` / `Win+u` 这类动作会去操控那个覆盖层（它不属于任何虚拟桌面，
+    跨桌面移动直接报 `could not read the desktop id of the window`），用户看到的
+    现象是“**按住 Win 连按下一个和弦没反应，把 Win 和那个键都松开再按才行**”
+    （松开 Win 会让覆盖层消失）。现在 `window::find(foreground)` 发现前台是别的
+    工具窗口时，沿 Z 序往下找第一个“主窗口”（可见、无属主、非工具窗口、有标题、
+    尺寸非零）——与 `window_rule` / `topLevelWindows()` 的判据一致。
+    真机验证：`tst_interactive::foregroundQuerySkipsOverlayWindows`。
+
+    顺手把 `desktop` 层收紧了两处（都是这次调出来的）：
+    * `Session::windowDesktopId(hwnd, attempts)` 可以重试（默认 1 次；
+      `desktopIndexOfWindow` 用 3 次）。`GetWindowDesktopId` 在
+      `MoveViewToDesktop` / `SwitchDesktop` 之后、或窗口正处于某种过渡状态时会
+      返回 `TYPE_E_ELEMENTNOTFOUND`（0x8002802b）——**本机实测这个 HRESULT
+      主要出现在工具窗口 / 覆盖层上**，但短暂重试的成本几乎为零。
+    * `Session::moveWindowToAdjacent()` 搬完**等桌面 GUID 真的变了再返回**
+      （`moveWindowToDesktop` 在 `changed` 被请求时本来就是这么做的）。
+      `MoveViewToDesktop` 是异步生效的，不等的话紧接着的第二次移动会读到旧桌面、
+      把目标算错（按住 Win 连按两次挪窗口时就是这个场景）。
+
 ---
 
 ## 3. 环境与工具链
@@ -522,7 +545,7 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `src/platform/win/hook.h/.cpp`            | 钩子回调、**钩子线程自己的 Win32 消息循环**、`SetTimer`、控制消息、重载；另外还负责 `window_rule` 的两个监听：`SetWinEventHook`（`EVENT_OBJECT_SHOW` / `DESTROY`，按 HWND 去重）与一个 350 ms 的显示器轮询定时器。**定时器 id 必须用 `SetTimer` 的返回值**，见第 10 节 |
 | `src/platform/win/audio.h/.cpp`           | Core Audio `IAudioEndpointVolume`，手写 COM vtable（**高风险**）                                                                                                                                                            |
 | `src/platform/win/clipboard.h/.cpp`       | 剪贴板读写（`CF_UNICODETEXT`）                                                                                                                                                                                              |
-| `src/platform/win/window.h/.cpp`          | 窗口查找（标题子串/可执行文件名）、激活/最小化/最大化/还原/关闭/置顶、前台锁绕行、启动回退、`TransitionGuard`（RAII 恢复动画开关）、`setTopmost`（`window_rule` 的 `topmost` 与 `window` 的 `toggle_topmost` 共用）。**“是否已经激活”还要看虚拟桌面**：被 `window_rule` 搬到别的桌面的窗口仍被 shell 当前台窗口（见第 2 节第 14 条），`raiseWindow` 在这时先显式切到它那一张桌面。                  |
+| `src/platform/win/window.h/.cpp`          | 窗口查找（标题子串/可执行文件名）、激活/最小化/最大化/还原/关闭/置顶、前台锁绕行、启动回退、`TransitionGuard`（RAII 恢复动画开关）、`setTopmost`（`window_rule` 的 `topmost` 与 `window` 的 `toggle_topmost` 共用）。**“是否已经激活”还要看虚拟桌面**：被 `window_rule` 搬到别的桌面的窗口仍被 shell 当前台窗口（见第 2 节第 14 条），`raiseWindow` 在这时先显式切到它那一张桌面。**前台查询会跳过 `WS_EX_TOOLWINDOW` 覆盖层**（如 PowerToys「快捷键指南」，见第 2 节第 19 条）。                  |
 | `src/platform/win/desktop.h/.cpp`         | 虚拟桌面切换、**窗口移动**与**钉在所有桌面**：`CLSID_ImmersiveShell` → `IServiceProvider::QueryService` → 未公开的 `IVirtualDesktopManagerInternal`（按 `build.revision` 查表）+ 未公开的 `IVirtualDesktopPinnedApps`（IID 不随版本变，所以不进表）；`moveWindowToDesktop` 走 `MoveViewToDesktop`（vtable 下标 4，三种布局一致，`changed` 出参报告“真的换了桌面吗”）、`setWindowPinned`/`isWindowPinned` 走 `PinView`/`UnpinView`/`IsViewPinned`（下标 7/8/6）、`switchToWindowDesktop` 把视图切到**某个窗口所在**的桌面（未公开的 `IVirtualDesktop::GetID` 下标 4 与已公开的 `GetWindowDesktopId` 逐个比对，对不上就只报错），并用**已公开**的 `IVirtualDesktopManager::GetWindowDesktopId` / `IsWindowOnCurrentVirtualDesktop` 做验证与诊断 |
 | `src/platform/win/power.h/.cpp`           | `powrprof!SetSuspendState`、`user32!ExitWindowsEx`、`LockWorkStation`、`WM_SYSCOMMAND`/`SC_MONITORPOWER` 广播，外加 `SeShutdownPrivilege`                                                                                   |
 | `src/platform/win/tray.h/.cpp`            | 托盘图标 + 气泡提示 + 右键菜单（查看日志/挂起/重载/打开配置/版本/退出）+ 悬停提示（构建版本 + 挂起状态）。图标是构造时传进来的应用图标（`app::applicationIcon()`，见 `app/app_icon.*`）；拿不到时退回系统图标，免得托盘上什么都没有 |
@@ -2995,6 +3018,49 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   验证 qrc 那一半靠 `flowkeyd --list` 不行（托盘图标只有真跑起来才画），
   本次是构建 + 单元测试全绿，托盘效果由项目所有者自己看一眼。
 
+#### 2026-09 修复：按住 Win 连按和弦时被 PowerToys「快捷键指南」截走
+
+* **现象**（项目所有者报）：「`Win+i` 移动窗口后，必须把 Win 和 i 都放开，
+  再按 `Win+u` 才能继续移动窗口；只放开 i 不行。」听起来像引擎要求“所有键都
+  松开才重新匹配”。
+* **先怀疑引擎，结果错了。** 用一个只给测试用的配置（`Win+F20/F21` 绑
+  `move_next_desktop` / `move_prev_desktop`，`FLOWKEYD_ACCEPT_INJECTED=1`）
+  注入按键：**引擎每次都正常匹配**，`held=[LWin]` 一直保持，第二个和弦照样触发。
+  为了看到“为什么没效果”，临时在 `hook.cpp` 的 `processHookEvent` 里加了一条
+  **trace 级**的键事件日志（`key LWin down swallow=… held=…`，现在留着了，
+  `--log-level trace` 才输出），一眼就能看出“键到了没有、吞没吞、引擎认为哪些键
+  按着”。
+* **真正的证据在用户自己的日志里**（`%USERPROFILE%\.config\flowkeyd\flowkeyd.log`）：
+  ```
+  16:39:34 INFO  `move-window-prev-desktop-follow` -> MovePrevDesktop "...VS Code..." (desktop 3/4, view followed)
+  16:39:35 ERROR `move-window-prev-desktop-follow` window: could not read the desktop id of the window
+  ```
+  **和弦触发了，是动作失败。** stress 复现里失败的那个句柄不是测试窗口，而是
+  `hwnd 67214` —— `PowerToys.ShortcutGuide.exe` 的 `WinUIDesktopWin32WindowClass`
+  （标题就是「快捷键指南」）。
+* **根因**：PowerToys 的 Shortcut Guide 在**按住 Win 约一秒**后弹出，并且
+  **成为 `GetForegroundWindow()`**（`WS_EX_TOOLWINDOW | WS_EX_TOPMOST`，style
+  实测 `0x14800000` / ex `0x00000088`）。于是不写 `target`/`process` 的 `window`
+  动作（`move_*_desktop`、`activate`…）就去操控这个覆盖层了；它不是任何虚拟桌面
+  的窗口，跨桌面移动直接报 `could not read the desktop id`（`GetWindowDesktopId`
+  返回 `TYPE_E_ELEMENTNOTFOUND` = `0x8002802b`）。时间线完全对得上：
+  `gap=60/150/300 ms` 时指南还没弹出来（正常），`gap=700 ms` 时弹出来了（失败）。
+  用户“松开 Win 再按就好了”也是因为**松开 Win 会让指南消失**。
+* **修法**：`window::find()` 的前台查询改为——前台窗口是 `WS_EX_TOOLWINDOW` 时，
+  沿 Z 序往下找第一个“主窗口”（可见、无属主、非工具窗口、有标题、尺寸非零）。
+  与 `window_rule` / `topLevelWindows()` 的判据一致。真机验证
+  `tst_interactive::foregroundQuerySkipsOverlayWindows`（建一个正常的顶层窗口
+  与一个 `WS_EX_TOOLWINDOW` 覆盖层，把它激活成前台，断言 `find(foreground)`
+  返回前者）。
+* **诊断手法（值得收藏）**：
+  * 想复现“按住 Win 再按第二个和弦”必须**真的按住 Win**：`SendInput` 只发 Win
+    的 key-down、不发 key-up，并且要**等 ~700 ms** 让覆盖层弹出来。第一版注入
+    脚本把 `INPUT` 结构体按“四个字段平铺”声明（x64 上必须是 40 字节：
+    4 + 4 padding + 32 的联合体），`SendInput` 直接不投递事件；正确写法在
+    `tmp/chain-*.ps1`（`LayoutKind.Explicit, Size = 40`，`wVk` 在偏移 8）。
+  * 复现出来的错误句柄一定要打出来（把它加进 `desktopIndexOfWindow` 的报错文本
+    才定位到的），“窗口不对”与“窗口读不出来”看着一模一样。
+
 ---
 
 ## 11. 完成定义（DoD）细则
@@ -3719,6 +3785,29 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > 按工作约定第 11 条：常驻实例已 `--quit` → 构建 release → 从
 > `build\dist-release` 重新拉起（日志 `30 hotkey(s)`、`keyboard hook installed`，
 > 自启任务仍指向那个路径）。
+
+> **2026-09 修复（按住 Win 连按和弦时被 PowerToys「快捷键指南」截走）的 DoD**：
+> `windows-debug` 与 `windows-release` 都是 `build exit 0`、零编译警告
+> （release 里那句 `dxcompiler.dll` 是 `windeployqt` 自己的提示）；
+> `ctest --test-dir build/windows-debug` **22 个测试目标全绿**
+> （`tst_interactive` 新增 `foregroundQuerySkipsOverlayWindows`，需要真机；
+> `TestWindow` 多了一个 `exStyle` 参数）。
+> `tst_interactive`（`FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`）**16 项全绿**。
+> `scripts/acceptance.ps1`（只跑 release；跑前先 `--quit` 常驻）**116 项、0 失败**。
+> `flowkeyd --check --config flowkeyd.lua.example` → `OK (45 hotkey(s), 3 remap(s),
+> 7 window rule(s))`、零警告。
+> 真机复现与回归：用一次性配置（`Win+F20/F21` → `move_next/prev_desktop`，
+> `FLOWKEYD_ACCEPT_INJECTED=1`）做 stress（`Win` 持续按住，间隔
+> 700/300/150/60 ms 连按两次挪窗口，四轮）：修前 gap=700 每次都失败、
+> 其余成功（0x8002802b，句柄是 PowerToys Shortcut Guide）；修后 16/16 全部回到
+> 原桌面、日志零 ERROR。
+> **行为变化**：前台窗口是 `WS_EX_TOOLWINDOW` 覆盖层时，不写 `target`/`process`
+> 的 `window` 动作会沿 Z 序往下取第一个真正的“主窗口”；新增 trace 级键事件日志
+> （`--log-level trace`）；`desktop` 层加了 `windowDesktopId` 的有限重试与
+> 相邻移动后的“等桌面真的变了再返回”（见第 2 节第 19 条与第 10 节的修复记录）。
+> README（新增「前台窗口与覆盖层」一节、已知限制）与第 2 / 10 节已同步。
+> 按工作约定第 11 条：常驻实例已 `--quit` → 构建 release → 从
+> `build\dist-release` 重新拉起。
 
 ---
 

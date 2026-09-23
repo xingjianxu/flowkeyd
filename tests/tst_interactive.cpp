@@ -55,7 +55,7 @@ bool interactiveEnabled()
 class TestWindow
 {
 public:
-    explicit TestWindow(const QString &title);
+    explicit TestWindow(const QString &title, DWORD exStyle = 0);
     ~TestWindow();
     TestWindow(const TestWindow &) = delete;
     TestWindow &operator=(const TestWindow &) = delete;
@@ -93,10 +93,10 @@ void registerTestWindowClass()
     registered = true;
 }
 
-TestWindow::TestWindow(const QString &title)
+TestWindow::TestWindow(const QString &title, DWORD exStyle)
 {
     registerTestWindowClass();
-    m_hwnd = CreateWindowExW(0, L"FlowkeydInteractiveTestWindow",
+    m_hwnd = CreateWindowExW(exStyle, L"FlowkeydInteractiveTestWindow",
                              reinterpret_cast<const wchar_t *>(title.utf16()),
                              WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 720, 480,
                              nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
@@ -141,6 +141,7 @@ private slots:
     void movesAWindowToTheAdjacentMonitor();
     void pinsAWindowToAllDesktops();
     void topmostIsAppliedAndCleared();
+    void foregroundQuerySkipsOverlayWindows();
 };
 
 void TestInteractive::clipboardRoundTrip()
@@ -1008,6 +1009,48 @@ void TestInteractive::topmostIsAppliedAndCleared()
     QVERIFY2(platform::win::window::setTopmost(hwnd, false, &error), qPrintable(error));
     QVERIFY2((GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST) == 0,
              "setTopmost(false) did not clear WS_EX_TOPMOST");
+}
+
+/// 「对前台窗口做动作」时，`WS_EX_TOOLWINDOW` 的覆盖层（实机上的例子：**PowerToys
+/// 的「快捷键指南」**，按住 Win 约一秒就弹出来并成为 `GetForegroundWindow()`）不能被
+/// 当成用户的目标：它不是用户真正在用的窗口，而且它不属于任何虚拟桌面，
+/// 位置无关的 `window` 动作会在它身上失败。`window::find(foreground)` 必须
+/// 沿 Z 序往下找到真正的主窗口。
+void TestInteractive::foregroundQuerySkipsOverlayWindows()
+{
+    if (!interactiveEnabled()) {
+        QSKIP("set FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1 to run the interactive tests");
+    }
+    const QString marker = QStringLiteral("flowkeyd-fg-%1").arg(QCoreApplication::applicationPid());
+    TestWindow main(marker);
+    TestWindow overlay(marker + QStringLiteral(" overlay"), WS_EX_TOOLWINDOW);
+    QVERIFY2(main.hwnd() != nullptr, "the main test window was not created");
+    QVERIFY2(overlay.hwnd() != nullptr, "the overlay test window was not created");
+    QVERIFY2((GetWindowLongPtrW(overlay.hwnd(), GWL_EXSTYLE) & WS_EX_TOOLWINDOW) != 0,
+             "the overlay is not a tool window");
+
+    QString error;
+    // Keep both in the topmost band, with the overlay above the main window, so the
+    // Z-order walk finds the test window deterministically (no other topmost main
+    // windows are expected on the machine).
+    QVERIFY2(platform::win::window::setTopmost(main.hwnd(), true, &error), qPrintable(error));
+    QVERIFY2(platform::win::window::setTopmost(overlay.hwnd(), true, &error), qPrintable(error));
+
+    const core::WindowQuery foreground = core::WindowQuery::make(std::nullopt, std::nullopt);
+
+    // A normal foreground window is returned as-is.
+    QVERIFY2(platform::win::window::raiseWindow(main.hwnd()), "could not raise the test window");
+    QCOMPARE(reinterpret_cast<quintptr>(GetForegroundWindow()),
+             reinterpret_cast<quintptr>(main.hwnd()));
+    QCOMPARE(reinterpret_cast<quintptr>(platform::win::window::find(foreground)),
+             reinterpret_cast<quintptr>(main.hwnd()));
+
+    // With the overlay in the foreground the query must skip it.
+    QVERIFY2(platform::win::window::raiseWindow(overlay.hwnd()), "could not raise the overlay");
+    QCOMPARE(reinterpret_cast<quintptr>(GetForegroundWindow()),
+             reinterpret_cast<quintptr>(overlay.hwnd()));
+    QCOMPARE(reinterpret_cast<quintptr>(platform::win::window::find(foreground)),
+             reinterpret_cast<quintptr>(main.hwnd()));
 }
 
 QTEST_MAIN(TestInteractive)

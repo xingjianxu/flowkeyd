@@ -234,6 +234,22 @@ bool HookThread::processHookEvent(WPARAM message, KBDLLHOOKSTRUCT *info)
 
     m_keyEvents.fetch_add(1);
     const core::Reaction reaction = m_engine->onKey(event, monotonicMs());
+    if (currentLogLevel() >= LogLevel::Trace) {
+        QStringList triggers;
+        for (const core::Trigger &trigger : reaction.triggers) {
+            triggers.append(QStringLiteral("%1:%2")
+                                .arg(trigger.index)
+                                .arg(trigger.phase == core::Phase::Press ? QStringLiteral("press")
+                                                                          : QStringLiteral("release")));
+        }
+        logTrace(QStringLiteral("key %1 %2 swallow=%3 inject=%4 triggers=[%5] | %6")
+                     .arg(core::nameFromKey(event.vk),
+                          event.down ? QStringLiteral("down") : QStringLiteral("up"),
+                          reaction.swallow ? QStringLiteral("yes") : QStringLiteral("no"))
+                     .arg(reaction.inject.size())
+                     .arg(triggers.join(QLatin1Char(',')))
+                     .arg(m_engine->stateSummary()));
+    }
     applyReaction(reaction);
     return reaction.swallow;
 }
