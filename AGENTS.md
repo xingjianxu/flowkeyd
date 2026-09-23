@@ -441,6 +441,33 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
       `MoveViewToDesktop` 是异步生效的，不等的话紧接着的第二次移动会读到旧桌面、
       把目标算错（按住 Win 连按两次挪窗口时就是这个场景）。
 
+20. **托盘图标的主体是「当前是第几号虚拟桌面」（项目所有者 2026-09 要求）。**
+    托盘通知区域里的图标不再一直是应用图标：守护进程读到当前桌面后，把它换成
+    一个**数字徽标**，一眼就能看出现在在哪张桌面上。拍板的细节：
+
+    * **画法**：蓝色渐变圆角方块（`logo.svg` 的 `#00d2ff` → `#3a7bd5`，圆角比例
+      照抄它的 `rx = 56/256`）+ 白色粗体数字居中。项目所有者在这三种里选了它：
+      「蓝底白字」「深蓝底青字（与 logo 同色）」「logo + 右下角数字角标」——
+      角标在 16 逻辑像素的托盘图标上根本看不清。数字按**字形墨迹**居中
+      （按含行距的方框居中会明显偏高）。
+    * **两位数一律显示 `9+`**（项目所有者拍板）：16 px 上两位数挤成一团，
+      宁可表达“还有更多”。画什么字、用什么字号是纯逻辑
+      （`core::desktop_badge`，`tst_desktop_badge` 盯着），图片是
+      `app::desktopIcon()`（9 个尺寸各自渲染，不缩放位图）。
+    * **查不到时退回应用图标**（锁屏、非交互会话、版本表对不上）：
+      不画 `0`，也不留空白图标；悬停提示里的 `（桌面 N/M）` 也跟着消失。
+    * **来源是 500 ms 的轮询**，因为虚拟桌面没有任何“切换了”的通知：Windows 自己的
+      `Win+Ctrl+←/→`、`desktop` 动作、`window_rule` 跟随窗口都会改它。
+      轮询放在**动作线程**上（`Dispatcher::startDesktopWatch()`，由
+      `Runtime::start()` 排队投进去——`QTimer` 必须在它自己那条线程上创建），
+      查到的值经 `Runtime::reportDesktop()` 投回 GUI 线程换图标，
+      **绝不在 GUI 线程上做 COM**。查失败只在状态翻转时写一条 debug 日志，
+      并**保留上一次的数字**，免得锁屏时图标来回闪。
+    * `desktop::currentDesktopIndex()` 是给这条轮询用的精简只读查询（同一条
+      一次性 STA 会话），`windowsVersion()` 的结果因此改成**进程内缓存**
+      （否则每 500 ms 读一次注册表的 `UBR`）。
+    * 与 `desktop` 动作共用同一张未公开的版本表，所以**只有能读到桌面时**才有数字。
+
 ---
 
 ## 3. 环境与工具链
@@ -522,11 +549,12 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `assets/icons/flowkeyd-<n>.png`           | 运行时 `QIcon` 的 9 个尺寸（16/20/24/32/40/48/64/128/256），编在 exe 自己的 qrc 里（`:/icons/…`，见 `src/app/app_icon.*`）。**要提交**                                        |
 | `assets/flowkeyd.rc.in`                   | 图标资源的 .rc 模板（`*.rc` 在 `.gitignore` 里，所以模板后缀是 `.in`）：CMake 在配置时把它展开成 `build/<preset>/generated/flowkeyd.rc`，`.ico` 写**绝对路径**（windres 不把 `ICON` 的相对路径当相对 .rc 文件）。纯 ASCII |
 | `tools/icon_gen/main.cpp`                 | 一次性工具（`flowkeyd_icon_gen` + `icons` 目标，`EXCLUDE_FROM_ALL`，需要 Qt6::Svg）：把 `logo.svg` 光栅化成上面那两个产物。两条 profile 的正常构建都不碰它（见第 10 节）
-| `src/main.cpp`                            | `AttachConsole` + CLI 分发 + 日志初始化 + **提权之前的单实例预检（“已在运行”原生提示框）** + 开机自启的确认框 + 组装 Runtime + Qt 事件循环                                                                                                                                               |
+| `src/main.cpp`                            | `AttachConsole` + CLI 分发 + 日志初始化 + **提权之前的单实例预检（“已在运行”原生提示框）** + 开机自启的确认框 + 组装 Runtime + **把 `Runtime::desktopChanged` 接到 `Tray::setDesktop`（图标在这里现画）** + Qt 事件循环                                                                                                                                               |
 | `src/cli.h/.cpp`                          | 参数解析 + 中文帮助文本（手写，不用 CLI11）；`--quit` 走单独的早期分支：不装钩子、不提权，也不在 `isOfflineCommand()` 里（它确实要去碰另一个进程）；`helpText()`/`versionText()` 都接收 `core::buildVersion()` 给出的构建版本号                                                                                                                                                                                 |
 | `src/core/`                               | **纯逻辑层：不碰 Win32、不碰 Qt GUI**（只用 QtCore 的类型），因此能被 Qt Test 直接测                                                                                                                                        |
 | `src/core/keys.h/.cpp`                    | 键名 ↔ `VK` 表、`Modifiers`、`Chord`、AutoHotkey 发送脚本解析、小键盘 Enter 的内部伪码 `0x100`、`key_from_hook()`/`native_key()`                                                                                            |
 | `src/core/config.h/.cpp`                  | 配置结构体、严格校验（未知字段要报错）、编译成 `Compiled`/`Binding`/`CompiledRemap`、配置文件搜寻与旧 TOML 的迁移提示。`AppDef` 与 `compile()` 里的 `expandApps`/`applyWindowDefaults` 负责把 `app{...}` 展开成普通的 `WindowRuleDef` + `HotkeyDef`，并把 `process`/`title`/`launch` 逐字段继承下去（见第 2 节第 15 条）                                                                                                       |
+| `src/core/desktop_badge.h/.cpp`           | 托盘数字徽标的**纯逻辑**（只用 QtCore、可单测）：`desktopBadgeText(number)`（`1..9` 就是数字，`>= 10` 一律 `9+`，`<= 0` 返回空串表示“读不到”）与 `desktopBadgeFontPixels(iconSize, characters)`。图标本身画在 `app/app_icon.cpp`，见第 2 节第 20 条 |
 | `src/core/engine.h/.cpp`                  | 快捷键状态机：匹配、优先级、吞键、自动重复抑制、长按重复、挂起、重映射 hold/tap、Win/Alt 菜单遮断按键                                                                                                                       |
 | `src/core/template.h/.cpp`                | `{clipboard}`、`{selection}`、`{date}` 等占位符展开                                                                                                                                                                         |
 | `src/core/action.h/.cpp`                  | 声明式动作的表示 + 摘要文本（`--list` 与 `help()` 都用它）+ `isDestructive()`（帮助窗口要靠它决定“要不要再确认一次”）                                                                                                        |
@@ -546,24 +574,24 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `src/platform/win/audio.h/.cpp`           | Core Audio `IAudioEndpointVolume`，手写 COM vtable（**高风险**）                                                                                                                                                            |
 | `src/platform/win/clipboard.h/.cpp`       | 剪贴板读写（`CF_UNICODETEXT`）                                                                                                                                                                                              |
 | `src/platform/win/window.h/.cpp`          | 窗口查找（标题子串/可执行文件名）、激活/最小化/最大化/还原/关闭/置顶、前台锁绕行、启动回退、`TransitionGuard`（RAII 恢复动画开关）、`setTopmost`（`window_rule` 的 `topmost` 与 `window` 的 `toggle_topmost` 共用）。**“是否已经激活”还要看虚拟桌面**：被 `window_rule` 搬到别的桌面的窗口仍被 shell 当前台窗口（见第 2 节第 14 条），`raiseWindow` 在这时先显式切到它那一张桌面。**前台查询会跳过 `WS_EX_TOOLWINDOW` 覆盖层**（如 PowerToys「快捷键指南」，见第 2 节第 19 条）。                  |
-| `src/platform/win/desktop.h/.cpp`         | 虚拟桌面切换、**窗口移动**与**钉在所有桌面**：`CLSID_ImmersiveShell` → `IServiceProvider::QueryService` → 未公开的 `IVirtualDesktopManagerInternal`（按 `build.revision` 查表）+ 未公开的 `IVirtualDesktopPinnedApps`（IID 不随版本变，所以不进表）；`moveWindowToDesktop` 走 `MoveViewToDesktop`（vtable 下标 4，三种布局一致，`changed` 出参报告“真的换了桌面吗”）、`setWindowPinned`/`isWindowPinned` 走 `PinView`/`UnpinView`/`IsViewPinned`（下标 7/8/6）、`switchToWindowDesktop` 把视图切到**某个窗口所在**的桌面（未公开的 `IVirtualDesktop::GetID` 下标 4 与已公开的 `GetWindowDesktopId` 逐个比对，对不上就只报错），并用**已公开**的 `IVirtualDesktopManager::GetWindowDesktopId` / `IsWindowOnCurrentVirtualDesktop` 做验证与诊断 |
+| `src/platform/win/desktop.h/.cpp`         | 虚拟桌面切换、**窗口移动**与**钉在所有桌面**：`CLSID_ImmersiveShell` → `IServiceProvider::QueryService` → 未公开的 `IVirtualDesktopManagerInternal`（按 `build.revision` 查表）+ 未公开的 `IVirtualDesktopPinnedApps`（IID 不随版本变，所以不进表）；`moveWindowToDesktop` 走 `MoveViewToDesktop`（vtable 下标 4，三种布局一致，`changed` 出参报告“真的换了桌面吗”）、`setWindowPinned`/`isWindowPinned` 走 `PinView`/`UnpinView`/`IsViewPinned`（下标 7/8/6）、`switchToWindowDesktop` 把视图切到**某个窗口所在**的桌面（未公开的 `IVirtualDesktop::GetID` 下标 4 与已公开的 `GetWindowDesktopId` 逐个比对，对不上就只报错），并用**已公开**的 `IVirtualDesktopManager::GetWindowDesktopId` / `IsWindowOnCurrentVirtualDesktop` 做验证与诊断。另外 `currentDesktopIndex()` 是托盘数字图标用的精简只读查询（与 `probe()` 同一条会话），`windowsVersion()` 的结果在进程内缓存（500 ms 一次的轮询不反复读注册表），见第 2 节第 20 条 |
 | `src/platform/win/power.h/.cpp`           | `powrprof!SetSuspendState`、`user32!ExitWindowsEx`、`LockWorkStation`、`WM_SYSCOMMAND`/`SC_MONITORPOWER` 广播，外加 `SeShutdownPrivilege`                                                                                   |
-| `src/platform/win/tray.h/.cpp`            | 托盘图标 + 气泡提示 + 右键菜单（查看日志/挂起/重载/打开配置/版本/退出）+ 悬停提示（构建版本 + 挂起状态）。图标是构造时传进来的应用图标（`app::applicationIcon()`，见 `app/app_icon.*`）；拿不到时退回系统图标，免得托盘上什么都没有 |
+| `src/platform/win/tray.h/.cpp`            | 托盘图标 + 气泡提示 + 右键菜单（查看日志/挂起/重载/打开配置/版本/退出）+ 悬停提示（构建版本 + 当前虚拟桌面 + 挂起状态）。图标平时是构造时传进来的应用图标（`app::applicationIcon()`，见 `app/app_icon.*`）；`setDesktop()` 之后换成**当前桌面号的数字徽标**（`app::desktopIcon()` 画出来的，`number <= 0` 或徽标为空则退回应用图标），见第 2 节第 20 条；拿不到应用图标时退回系统图标，免得托盘上什么都没有 |
 | `src/platform/win/logging.h/.cpp`         | 控制台/文件日志器（英文、分级别、可选 ANSI 颜色），`--log-level`/`--log-file`/`--no-color`                                                                                                                                  |
 | `src/platform/win/single_instance.h/.cpp` | 按配置路径散列命名的互斥体（含提权重启后的重试）；`instanceRunning`（`OpenMutexW`，不获取所有权，**提权之前**的「已在运行」检查）；**`--quit` 的命名事件通道**：`quitEventName`/`createQuitEvent`（带 Low 完整性标签的 SDDL，让不提权的调用方也能 `SetEvent`）/`requestQuit`/`quitEventExists` |
 | `src/platform/win/elevate.h/.cpp`         | `ShellExecuteW("runas")` 自提权 + UAC 被拒时降级继续 + `--elevated` 标记 + 命令行/工作目录转发（`quote_arg`）                                                                                                               |
 | `src/platform/win/autostart.h/.cpp`       | 开机自启的计划任务：`buildTaskXml`/`taskXmlCommand`/`decodeTaskOutput`/`sameExecutablePath` 是**纯函数**（可单测），`query/register/removeAutostartTask` 走隐藏的 `schtasks.exe /Create /XML`，`ensureAutostart(spec, confirm)` 是启动时的“缺失或指向别的 exe 就**先问用户、同意后**刷新成当前路径”策略（`confirm` 为空表示不问）。**不写任何安装目录**（见第 2 节第 10 条与第 10 节） |
 | `src/app/`                                | 组装层：把 core / lua / platform 串起来，并拥有 Qt 对象                                                                                                                                                                     |
-| `src/app/app_icon.h/.cpp`                 | 应用图标：把 qrc 里的 9 张 PNG 帧拼成一个多尺寸 `QIcon`（`applicationIcon()`），托盘、全部 QML 窗口与 Qt 消息框都用它。用 PNG 而不用 SVG 是为了不依赖 `Qt6Svg` 与 `imageformats/qsvg` 插件（见第 10 节） |
-| `src/app/dispatcher.h/.cpp`               | **动作工作线程**（`QThread`）：执行动作列表，含 `window` 的“先启动再激活”与默认开的 `toggle` 收起、`menu` 的窗口请求、`help` 的窗口请求 + 每一行的“执行目标”（绑定是 press+release 两串动作，`remap` 是直接注入目标按键）；还执行 `window_rule`（窗口出现 / 显示器重新接入 / 启动时各跑一次，`isPlaceableWindow()` 判“主窗口”；**只有“窗口出现”那一遍**会在规则真的搬迁窗口时把视图跟过去并重新激活，见第 2 节第 14 条） |
-| `src/app/runtime.h/.cpp`                  | 引擎 + 钩子 + 分发 + 托盘 + 弹窗的总装，`ControlCmd`（suspend/reload/quit）通道；还持有 `--quit` 的事件句柄并用 `QWinEventNotifier` 在 GUI 线程上监听（收到就走 `performShutdown`）                                                       |
+| `src/app/app_icon.h/.cpp`                 | 应用图标：把 qrc 里的 9 张 PNG 帧拼成一个多尺寸 `QIcon`（`applicationIcon()`），托盘、全部 QML 窗口与 Qt 消息框都用它。用 PNG 而不用 SVG 是为了不依赖 `Qt6Svg` 与 `imageformats/qsvg` 插件（见第 10 节）。另外 `desktopIcon(number)` 现画托盘上的**桌面号徽标**（蓝色渐变圆角底 + 白色粗体数字，每个尺寸单独渲染、按字形墨迹居中），见第 2 节第 20 条 |
+| `src/app/dispatcher.h/.cpp`               | **动作工作线程**（`QThread`）：执行动作列表，含 `window` 的“先启动再激活”与默认开的 `toggle` 收起、`menu` 的窗口请求、`help` 的窗口请求 + 每一行的“执行目标”（绑定是 press+release 两串动作，`remap` 是直接注入目标按键）；还执行 `window_rule`（窗口出现 / 显示器重新接入 / 启动时各跑一次，`isPlaceableWindow()` 判“主窗口”；**只有“窗口出现”那一遍**会在规则真的搬迁窗口时把视图跟过去并重新激活，见第 2 节第 14 条）；另外 `startDesktopWatch()`/`pollDesktop()` 在这条线程上每 500 ms 查一次当前虚拟桌面并通知 GUI 线程换托盘图标（只能在这条线程上调用，见第 2 节第 20 条） |
+| `src/app/runtime.h/.cpp`                  | 引擎 + 钩子 + 分发 + 托盘 + 弹窗的总装，`ControlCmd`（suspend/reload/quit）通道；还持有 `--quit` 的事件句柄并用 `QWinEventNotifier` 在 GUI 线程上监听（收到就走 `performShutdown`）；`reportDesktop()`/`desktopChanged` 把工作线程查到的“第几号虚拟桌面”投回 GUI 线程（托盘数字图标用），见第 2 节第 20 条                                                       |
 | `src/app/log_model.h/.cpp`                | 日志窗口的模型：尾随日志文件（增量、半行、被截断的多字节 UTF-8）、最多 1000 行、按级别配色、子串过滤                                                                                                                        |
 | `src/app/menu_model.h/.cpp`               | `menu` 选单的**纯逻辑**（`QAbstractListModel`，只用 QtCore）：卡片外框几何（宽高、标题、底部提示）、高亮移动（到边界回绕）、单字符选中、`Esc`/`Enter` 语义，以及给 QML 排版用的几个常量（`listTop`/`rowHeight`/`rowSpacing`/`rowInset`/`badgeSize`）。**行几何与鼠标命中不归它管**：列表是真正的 QML `ListView` + 标准 `ItemDelegate`（见第 2 节第 9 条与第 10 节），所以它没有 `rowRect`/`hitTest`，也**没有** `highlighted`/`hovered` 角色（那两个名字被标准委托占了）。悬停仍由模型持有（`hover`/`setHover`），因为「`Enter` 选光标下那一条」是选单的语义 |
 | `src/app/help_model.h/.cpp`               | `help` 帮助的**纯逻辑**（同上）：筛选（和弦/`comment`/`name`/动作摘要）、`可见/总数` 计数、键盘选中项（**高亮就是它**，鼠标悬停不改高亮）、`Enter`/双击该执行还是先武装（危险动作两次确认）、三级 `Esc`，以及鼠标点选用的 `setSelected()`（**可单测**）。**列表的滚动、行几何与鼠标命中都不归它管**：那是一个真正的 QML `ListView` + `ItemDelegate` + Qt 自带的 `ScrollBar`（见第 2 节第 9 条）。`handleKey()` 只接导航键与 `Enter`/`Esc`，字符/退格/`Home`/`End` 放行给标准 `TextField` |
 | `src/app/popup_layout.h/.cpp`             | 两个弹窗共用的几何类型（`PopupRect`/`PopupPoint`）与纯函数 `centrePopup()`（先在工作区居中、再夹进屏幕；**可单测**） |
 | `src/app/popup_host.h/.cpp`               | 把上面的模型挂到 QML 窗口上；抢前台（`requestActivate` + `win::window::raiseWindow` 的前台锁绕行）；在 Qt GUI 线程上创建/复用窗口；用户选完（或按 `Enter`/双击帮助里的一行）把活儿回投工作线程；`helpRun()` 负责把**可见行下标**换算成条目下标，并且**先把窗口藏起来再执行**（**GUI 线程亲和**） |
 | `src/qml/`                                | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`（三个文件都在开头写了 `pragma ComponentBehavior: Bound`）；配色一律用 `palette`，没有单独的 `Style.qml`；中文一律 `font.family: "Microsoft YaHei"`（默认族 `Segoe UI Variable` 没有中文字形，不管会回退到宋体，见第 10 节）。`HelpPopup.qml` 与 `MenuPopup.qml` 里除了卡片外框与按键徽标全是标准控件：帮助的筛选框是 `TextField`、列表是 `ListView` + Qt 自带 `ScrollBar` + `ItemDelegate`（列表只占行区域，不再需要表头/底部的遮罩）；选单的列表同样是 `ListView` + `ItemDelegate`（不滚动，所以没有滚动条；悬停与点击全部由委托提供） |
-| `tests/`                                  | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_log_tail`、`tst_audio`、`tst_autostart`（自启的纯逻辑：XML 渲染/解析、输出解码、路径比较；**不碰真实计划任务**）、`tst_interactive`（需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`，否则 skip；含剪贴板/音量/窗口后端/虚拟桌面/钉在所有桌面/置顶的真机验证）、`tst_menu_model`、`tst_help_model`、`tst_power_table`、`tst_desktop_table`、`tst_placement`（`window_rule` 的纯逻辑：显示器排序/选择、重连检测、摆放几何、匹配与摘要）、`tst_layout`、`tst_version`（构建时间戳与版本字符串的纯逻辑；只碰临时文件） |
+| `tests/`                                  | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_log_tail`、`tst_audio`、`tst_autostart`（自启的纯逻辑：XML 渲染/解析、输出解码、路径比较；**不碰真实计划任务**）、`tst_interactive`（需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`，否则 skip；含剪贴板/音量/窗口后端/虚拟桌面/钉在所有桌面/置顶的真机验证）、`tst_menu_model`、`tst_help_model`、`tst_power_table`、`tst_desktop_table`、`tst_placement`（`window_rule` 的纯逻辑：显示器排序/选择、重连检测、摆放几何、匹配与摘要）、`tst_layout`、`tst_version`（构建时间戳与版本字符串的纯逻辑；只碰临时文件）、`tst_desktop_badge`（托盘数字徽标的文字与字号） |
 | `scripts/acceptance.ps1`                  | 桌面行为的验收脚本（注入按键 + 焦点捕捉窗口的外部观察，116 项检查：含弹窗滚轮/滚动条拖动/鼠标点选与点筛选框/鼠标点选单条目/`Enter` 与双击真的执行动作/危险动作两次确认）；需交互式桌面，**不属于 `ctest`**，见第 5 节与阶段 9。它用 `--no-elevate` 起临时守护进程，所以**不会**碰真实的自启计划任务 |
 
 > `scripts/install.ps1` / `scripts/uninstall.ps1` **已删除**（2026-09）：自启的注册、
@@ -3061,6 +3089,30 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   * 复现出来的错误句柄一定要打出来（把它加进 `desktopIndexOfWindow` 的报错文本
     才定位到的），“窗口不对”与“窗口读不出来”看着一模一样。
 
+#### 2026-09 新增：托盘上的「第几号虚拟桌面」数字徽标
+
+* **怎么从外面看见托盘图标变了**（这种改动没法用单测盯）：用 `SetCursorPos` +
+  一次**相对**的 `mouse_event(MOUSEEVENTF_MOVE)` 真的把光标推到屏幕左边缘，
+  自动隐藏的任务栏才会滑出来——只 `SetCursorPos` 到任务栏矩形中间（或者干脆
+  不碰鼠标）抓到的只是桌面背景，两张截图会一模一样（`changed=0`），
+  很容易误判成“图标没换”。拿到 `Shell_TrayWnd` 的矩形之后 `CopyFromScreen`
+  整条任务栏，再用像素差求包围盒，就知道变的到底是哪一块。
+* **新起的实例，托盘图标会落进「隐藏的图标」溢出弹窗里。** Windows 11 默认把
+  新图标塞进溢出区，所以用临时守护进程做验证时，可见的任务栏上看到的其实是
+  **常驻实例**的图标（旧构建 → 还是应用图标），临时实例的数字徽标要打开
+  「^」弹窗才看得到。要看真实效果就**重启常驻实例**（跑新构建）再看，
+  比在溢出弹窗里找稳得多。
+* **别急着给“托盘图标没变”下定论**：先 `diff` 两次截图求差异包围盒
+  （`changed=0` 说明那条带上什么都没变），再对着进程日志看
+  （`virtual desktop N/M; updating the tray icon` 只在 debug 级别），
+  才能分清“程序没换图标”和“我截错了地方”。
+* **本机（与很多机器一样）任务栏是自动隐藏的**，而且这台机器的任务栏是
+  **竖条**（`Shell_TrayWnd` 的矩形是 `0,0,96,2160`，`TrayNotifyWnd` 在里面
+  偏下的位置）。抓图脚本里的坐标要与这个事实对齐，不要照抄笔记本/平板的布局。
+* **临时验证脚本一律纯 ASCII**（与前面那一条同一回事）：中文注释会让没有 BOM 的
+  `.ps1` 被 PowerShell 5.1 按 GBK 解码，`Add-Type` 里的 C# 源码会直接编译失败
+  （报的却是一句“命名空间里没有类型”）。
+
 ---
 
 ## 11. 完成定义（DoD）细则
@@ -3806,6 +3858,39 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > （`--log-level trace`）；`desktop` 层加了 `windowDesktopId` 的有限重试与
 > 相邻移动后的“等桌面真的变了再返回”（见第 2 节第 19 条与第 10 节的修复记录）。
 > README（新增「前台窗口与覆盖层」一节、已知限制）与第 2 / 10 节已同步。
+> 按工作约定第 11 条：常驻实例已 `--quit` → 构建 release → 从
+> `build\dist-release` 重新拉起。
+
+> **2026-09 新增（托盘图标上的「第几号虚拟桌面」数字徽标）的 DoD**：
+> `windows-debug` 与 `windows-release` 都是 `build exit 0`、零编译警告
+> （release 里那两句 `dxcompiler.dll` 是 `windeployqt` 自己的提示）；
+> `ctest --test-dir build/windows-debug` **23 个测试目标全绿**
+> （新增 `tst_desktop_badge` 6 项：数字文本、`9+` 截断、读不到桌面时为空串、
+> 两位数缩字号、字号随图标尺寸增长、9 个尺寸上都不小于 6 像素也不超出图标；
+> `tst_interactive::desktopBackendProbesAndSwitches` 加了一条断言：托盘用的
+> `currentDesktopIndex()` 必须与 `probe()` 给出同一组数字）。
+> `flowkeyd --check --config flowkeyd.lua.example` → `OK (45 hotkey(s), 3 remap(s),
+> 7 window rule(s))`、零警告；用户真实配置（不带 `--config`）→
+> `OK (30 hotkey(s), 0 remap(s), 4 window rule(s))`、零警告。
+> 徽标本身先用一个临时工具（`tmp/iconpreview/`，直接编 `app/app_icon.cpp` +
+> `core/desktop_badge.cpp`）把 1/2/3/9/10 渲染成 PNG 看过：16 px 放大 8 倍后
+> 数字清楚、`9+` 也认得出（`tmp/iconpreview/small-16-x8.png`）。
+> 端到端：一次性实例（`--no-elevate --allow-multi --log-level debug` + 临时配置）
+> 的日志里，启动时是 `virtual desktop 1/4; updating the tray icon`，注入
+> `Win+Ctrl+→` 之后变成 `2/4`，切回来又是 `1/4`。
+> **真实任务栏上的图标**：常驻实例重启到新构建后抓图确认 —— 桌面 1 时图标是
+> 蓝底白字的「1」，注入 `Win+Ctrl+→` 之后变成「2」，切回后又是「1」
+> （抓图手法与两个坑记在第 10 节：自动隐藏的任务栏要先用相对鼠标移动把光标推到
+> 边缘，新实例的图标会落进溢出弹窗）。
+> 行为变化：托盘图标在能读到当前虚拟桌面时是**数字徽标**（`1..9`，两位数显示
+> `9+`），读不到时（锁屏、非交互会话、版本表对不上）退回应用图标；
+> 悬停提示多了 `（桌面 N/M）`。这个数字来自动作线程上 500 ms 一次的轮询
+> （`desktop` 动作与轮询共用那张未公开的版本表），所以最多晚半秒。
+> README（快速上手、工作原理、验证、已知限制）与第 2 / 4 / 10 节已同步；
+> `flowkeyd.lua.example` 无需改动（它不含托盘相关配置）。
+> `scripts/acceptance.ps1`（只跑 release 的产物；跑前先 `--quit` 常驻、跑完从
+> `build\dist-release` 重新拉起）**116 项、0 失败**（与上次持平：脚本本身没动，
+> 但动作线程上多了一个 500 ms 的轮询，所以按第 11 节第 3 条重跑了一遍）。
 > 按工作约定第 11 条：常驻实例已 `--quit` → 构建 release → 从
 > `build\dist-release` 重新拉起。
 

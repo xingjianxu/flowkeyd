@@ -73,6 +73,10 @@ bool Runtime::start(const QString &configPath,
     }
     m_started = true;
 
+    // 托盘的虚拟桌面号：动作线程上每 500 ms 查一次，变了就投回 GUI 线程换图标
+    // （`startDesktopWatch` 必须在它自己那条线程上建定时器，所以用排队调用）。
+    QMetaObject::invokeMethod(m_dispatcher, &Dispatcher::startDesktopWatch, Qt::QueuedConnection);
+
     // 启动时按 `window_rule` 把已有窗口归位一次（用户要求）。工作线程已经起来，
     // 所以这里只是投一个队列任务。
     if (m_dispatcher != nullptr && m_hook != nullptr) {
@@ -191,6 +195,15 @@ void Runtime::reportSuspended(bool suspended)
     // 就会在正确的线程上跑。
     QMetaObject::invokeMethod(
         this, [this, suspended]() { emit suspendedChanged(suspended); }, Qt::QueuedConnection);
+}
+
+void Runtime::reportDesktop(int number, int count)
+{
+    // 与 `reportSuspended` 同一个道理：工作线程只负责“说话”，换图标由 GUI 线程做。
+    QMetaObject::invokeMethod(
+        this,
+        [this, number, count]() { emit desktopChanged(number, count); },
+        Qt::QueuedConnection);
 }
 
 void Runtime::showMenuFromAnyThread(MenuRequest request)

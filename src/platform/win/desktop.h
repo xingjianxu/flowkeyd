@@ -80,6 +80,9 @@ struct WindowsVersion
 
 /// `RtlGetVersion`（build）+ 注册表的 `UBR`（revision）。
 ///
+/// 结果在进程内**缓存**（系统版本一辈子不会变），所以 500 ms 一次的托盘轮询
+/// 不会反复读注册表；那条「读不到 UBR」的 warning 也只出现一次。
+///
 /// 修订号读不到时退化成 0：也许就会选到旧一条的 IID，但至少还能干活；
 /// 同时打一条 warning，免得将来只看到一句莫名其妙的 `E_NOINTERFACE`。
 WindowsVersion windowsVersion();
@@ -103,6 +106,14 @@ struct Snapshot
 
 /// 读出桌面数量与当前桌面，不做任何切换。
 bool probe(Snapshot *out, QString *error);
+
+/// 只读：当前是第几号虚拟桌面（从 1 开始）以及一共有几张。
+///
+/// 与 `probe()` 是同一条 COM 会话，只是不返回那堆诊断字段。托盘的**数字图标**
+/// 就是靠它（守护进程在工作线程上每 500 ms 问一次，见 `app/dispatcher` 与
+/// `platform/win/tray`）。失败时（锁屏、非交互会话、版本表对不上）返回 false，
+/// 调用方应当**保留上一次的数字**，不要退回应用图标后再来回闪。
+bool currentDesktopIndex(std::uint32_t *index, std::uint32_t *count, QString *error);
 
 /// 切到第 `index` 个虚拟桌面（从 1 开始）。成功时 `detail` 是
 /// `"desktop 2/4"` / `"already on desktop 1/4"` 之类的一行说明。

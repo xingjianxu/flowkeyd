@@ -1144,24 +1144,31 @@ QString guidText(const GUID &guid)
 
 WindowsVersion windowsVersion()
 {
-    WindowsVersion version;
-    if (const RtlGetVersionFn fn = rtlGetVersion(); fn != nullptr) {
-        RtlOsVersionInfoW info{};
-        info.size = sizeof(info);
-        if (fn(&info) >= 0) {
-            version.build = info.build;
+    // 读一次注册表的 `UBR` 不贵，但也不便宜：托盘的数字图标每 500 ms 就要查一次
+    // 当前桌面（见 `currentDesktopIndex`），而系统版本在一个进程的生命周期里不会变，
+    // 所以缓存一份。这样那条「读不到 UBR」的 warning 也只会出现一次。
+    static const WindowsVersion cached = []() {
+        WindowsVersion version;
+        if (const RtlGetVersionFn fn = rtlGetVersion(); fn != nullptr) {
+            RtlOsVersionInfoW info{};
+            info.size = sizeof(info);
+            if (fn(&info) >= 0) {
+                version.build = info.build;
+            }
         }
-    }
-    if (const std::optional<std::uint32_t> revision = updateRevision(); revision.has_value()) {
-        version.revision = *revision;
-    } else {
-        // 宁可退化成 0，也不要因此不干活；但必须说出来，否则将来只会看到
-        // 一条莫名其妙的 E_NOINTERFACE。
-        logWarn(QStringLiteral(
-            "could not read the Windows update revision (UBR) from the registry; "
-            "the virtual desktop interface table may pick the wrong entry"));
-    }
-    return version;
+        if (const std::optional<std::uint32_t> revision = updateRevision();
+            revision.has_value()) {
+            version.revision = *revision;
+        } else {
+            // 宁可退化成 0，也不要因此不干活；但必须说出来，否则将来只会看到
+            // 一条莫名其妙的 E_NOINTERFACE。
+            logWarn(QStringLiteral(
+                "could not read the Windows update revision (UBR) from the registry; "
+                "the virtual desktop interface table may pick the wrong entry"));
+        }
+        return version;
+    }();
+    return cached;
 }
 
 bool probe(Snapshot *out, QString *error)
@@ -1189,6 +1196,32 @@ bool probe(Snapshot *out, QString *error)
         return false;
     }
     *out = result;
+    return true;
+}
+
+bool currentDesktopIndex(std::uint32_t *index, std::uint32_t *count, QString *error)
+{
+    Snapshot snapshot;
+    if (!probe(&snapshot, error)) {
+        return false;
+    }
+    if (snapshot.current == 0) {
+        // `GetCurrentDesktop` 拿到的对象不在 `GetDesktops` 的结果里：版本表大概没对上。
+        // `probe()` 自己不管这一条（它允许 current = 0），但这里必须躲开，否则托盘
+        // 会拿到一个“第 0 号桌面”。
+        if (error != nullptr) {
+            *error = QStringLiteral(
+                "the current virtual desktop is not in the shell's desktop list; "
+                "the IVirtualDesktop layout does not match this build");
+        }
+        return false;
+    }
+    if (index != nullptr) {
+        *index = snapshot.current;
+    }
+    if (count != nullptr) {
+        *count = snapshot.count;
+    }
     return true;
 }
 

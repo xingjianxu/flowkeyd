@@ -16,6 +16,7 @@ Tray::Tray(const QIcon &icon, QObject *parent) : QObject(parent)
         // 总比托盘上什么都没有强。
         m_icon->setIcon(QApplication::style()->standardIcon(QStyle::SP_ComputerIcon));
     }
+    m_appIcon = m_icon->icon();
     m_buildVersion = QStringLiteral("unknown");
     updateToolTip();
 
@@ -63,6 +64,16 @@ void Tray::setSuspended(bool suspended)
     updateToolTip();
 }
 
+void Tray::setDesktop(int number, int count, const QIcon &badgeIcon)
+{
+    m_desktopNumber = number;
+    m_desktopCount = count;
+    // 读不到当前桌面（或调用方没做徽标）时退回应用图标：宁可看不出是第几号，
+    // 也不要画一个误导性的 `0`，更不要留一个空白图标。
+    m_icon->setIcon(number > 0 && !badgeIcon.isNull() ? badgeIcon : m_appIcon);
+    updateToolTip();
+}
+
 void Tray::setBuildVersion(const QString &version)
 {
     m_buildVersion = version;
@@ -73,6 +84,9 @@ void Tray::setBuildVersion(const QString &version)
 void Tray::updateToolTip()
 {
     QString tip = QStringLiteral("flowkeyd %1").arg(m_buildVersion);
+    if (m_desktopNumber > 0 && m_desktopCount > 0) {
+        tip += QStringLiteral("（桌面 %1/%2）").arg(m_desktopNumber).arg(m_desktopCount);
+    }
     if (m_suspended) {
         tip += QStringLiteral("（已挂起）");
     }

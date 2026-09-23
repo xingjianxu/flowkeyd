@@ -150,6 +150,8 @@ add_library(flowkeyd_core STATIC
     src/core/action.h
     src/core/config.cpp
     src/core/config.h
+    src/core/desktop_badge.cpp
+    src/core/desktop_badge.h
     src/core/engine.cpp
     src/core/engine.h
     src/core/keys.cpp
@@ -453,6 +455,7 @@ flowkeyd_add_test(tst_config)
 flowkeyd_add_test(tst_engine)
 flowkeyd_add_test(tst_template)
 flowkeyd_add_test(tst_version)
+flowkeyd_add_test(tst_desktop_badge)
 flowkeyd_add_test(tst_lua LIBS flowkeyd_lua)
 flowkeyd_add_test(tst_autostart LIBS flowkeyd_platform)
 flowkeyd_add_test(tst_layout LIBS flowkeyd_platform)

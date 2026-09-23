@@ -66,6 +66,9 @@ public:
     void notifyFromAnyThread(const QString &title, const QString &body);
     /// 工作线程调用：把动作触发的挂起状态变化广播给 GUI 线程（托盘提示用）。
     void reportSuspended(bool suspended);
+    /// 工作线程调用：把「当前是第几号虚拟桌面」广播给 GUI 线程（托盘的数字图标用，
+    /// 见 `Dispatcher::startDesktopWatch`）。
+    void reportDesktop(int number, int count);
     /// 工作线程调用：在 GUI 线程上弹出选单。
     void showMenuFromAnyThread(MenuRequest request);
     /// 工作线程调用：在 GUI 线程上弹出帮助窗口。
@@ -75,6 +78,9 @@ signals:
     void notificationRequested(const QString &title, const QString &body);
     void reloadFinished(const QString &summary);
     void suspendedChanged(bool suspended);
+    /// 当前虚拟桌面变了（`number` 从 1 开始，`count` 是桌面总数）：GUI 线程用它
+    /// 把托盘图标换成对应的数字徽标，并把 `桌面 N/M` 写进悬停提示。
+    void desktopChanged(int number, int count);
     /// 退出流程已经走完（钩子卸掉、动作线程停下）。
     void finished();
 

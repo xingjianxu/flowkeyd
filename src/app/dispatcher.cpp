@@ -20,6 +20,7 @@
 #include <QCoreApplication>
 #include <QFileInfo>
 #include <QThread>
+#include <QTimer>
 
 #include <optional>
 #include <utility>
@@ -921,6 +922,55 @@ void executeAction(Runtime *runtime,
 Dispatcher::Dispatcher(Runtime *runtime, QObject *parent)
     : QObject(parent), m_runtime(runtime)
 {
+}
+
+void Dispatcher::startDesktopWatch()
+{
+    if (m_desktopTimer != nullptr) {
+        return;
+    }
+    // 定时器要在它自己的线程上创建并启动（Qt 的要求）：`startDesktopWatch()` 正是由
+    // `Runtime::start()` 排队投进动作线程的，所以这里已经是那条线程。
+    m_desktopTimer = new QTimer(this);
+    m_desktopTimer->setInterval(500);
+    connect(m_desktopTimer, &QTimer::timeout, this, &Dispatcher::pollDesktop);
+    m_desktopTimer->start();
+    // 启动时立刻问一次（不等第一个 500 ms），托盘上的数字一下就到位。
+    pollDesktop();
+}
+
+void Dispatcher::pollDesktop()
+{
+    std::uint32_t index = 0;
+    std::uint32_t count = 0;
+    QString error;
+    if (!win::desktop::currentDesktopIndex(&index, &count, &error)) {
+        // 锁屏 / shell 正忙 / 版本表对不上时查不到是正常的：保留上一次的数字，
+        // 不要退回应用图标后再来回闪。日志只在状态翻转时写一行。
+        if (!m_desktopWatchFailed) {
+            m_desktopWatchFailed = true;
+            win::logDebug(QStringLiteral("cannot read the current virtual desktop: %1")
+                              .arg(error));
+        }
+        return;
+    }
+    if (m_desktopWatchFailed) {
+        m_desktopWatchFailed = false;
+        win::logDebug(QStringLiteral("the current virtual desktop is readable again"));
+    }
+    const int number = static_cast<int>(index);
+    const int total = static_cast<int>(count);
+    if (number == m_desktopNumber && total == m_desktopCount) {
+        return;
+    }
+    m_desktopNumber = number;
+    m_desktopCount = total;
+    win::logDebug(QStringLiteral("virtual desktop %1/%2; updating the tray icon")
+                      .arg(number)
+                      .arg(total));
+    if (m_runtime != nullptr) {
+        m_runtime->reportDesktop(number, total);
+    }
 }
 
 void Dispatcher::submit(std::shared_ptr<const core::Compiled> config, core::Trigger trigger)

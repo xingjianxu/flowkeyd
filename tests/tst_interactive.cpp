@@ -395,6 +395,15 @@ void TestInteractive::desktopBackendProbesAndSwitches()
                       << "api" << snapshot.apiBuild << "layout" << snapshot.layout << "manager"
                       << snapshot.managerIid;
 
+    // 托盘数字图标用的那个精简接口必须与 `probe()` 给出同一组数字（它俩走的是
+    // 同一条 COM 会话，但读错一个字段就会把托盘上的数字画错）。
+    std::uint32_t index = 0;
+    std::uint32_t count = 0;
+    QVERIFY2(platform::win::desktop::currentDesktopIndex(&index, &count, &error),
+             qPrintable(error));
+    QCOMPARE(index, snapshot.current);
+    QCOMPARE(count, snapshot.count);
+
     if (snapshot.count < 2) {
         QSKIP("only one virtual desktop exists; nothing to switch to");
     }

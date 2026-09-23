@@ -20,6 +20,11 @@ flowkeyd 是 **oskeyd**（Rust 参考实现）的 **Qt 6 / C++ 复刻版**：它
 如果要给同一个程序同时配「窗口规则」与「唤起它的快捷键」，用 `app{...}` 写到
 一起即可，`process` / `title` 只写一遍。
 
+托盘通知区域里的图标平时是应用图标，但**主体内容是当前是第几号虚拟桌面**：
+守护进程每 500 ms 问一次 shell 现在在第几张桌面，把图标换成对应的数字
+（蓝底白字，`10` 以上显示 `9+`），悬停提示里也写着 `桌面 2/4` ——
+一眼就能看出现在在哪张桌面上。查不到当前桌面时（锁屏、非交互会话）退回应用图标。
+
 ```lua
 hotkey{
   name = "terminal",
@@ -1117,6 +1122,12 @@ app 规则匹配。
   不执行动作（帮助窗口只是在把活儿交出去之前先把自己藏起来，好让 `send`/`type`
   打在原来的前台应用上）。因为守护进程通常不持有前台锁，弹窗抢焦点走的是
   `requestActivate()` → `SetForegroundWindow` → `AttachThreadInput` 的三级绕行。
+* **托盘图标上的数字来自一次 500 ms 的轮询。** 虚拟桌面没有任何“切换了”的通知
+  （Windows 自己的 `Win+Ctrl+←/→`、`desktop` 动作、以及 `window_rule` 跟随窗口时的
+  视图切换都会改它），所以动作线程上有一个定时器在问
+  `IVirtualDesktopManagerInternal` 当前是第几张桌面，变了就投回 GUI 线程把图标
+  换成对应的数字（画什么字由 `core::desktopBadgeText` 决定，画出来是
+  `app::desktopIcon`）。查不到时保留上一次的数字，不会来回闪。
 * **未公开 API 是可选的，并且会被探测。** `win32u!NtUserSendInput`、
   `NtUserGetAsyncKeyState` 用 `LoadLibraryW`/`GetProcAddress` 解析，
   `NtUserSendInput` 在使用前会用一次零输入调用验证。任何失败都会回退到 `user32`。
@@ -1135,14 +1146,14 @@ app 规则匹配。
 $C = 'C:\Qt\Tools\CMake_64\bin\cmake.exe'
 & $C --build --preset debug
 & $C --build --preset release
-& ctest --test-dir build/windows-debug --output-on-failure     # 22 个测试目标
+& ctest --test-dir build/windows-debug --output-on-failure     # 23 个测试目标
 
 # 真实桌面后端（剪贴板 / 音量 / 窗口 / 虚拟桌面）
 $env:FLOWKEYD_ALLOW_INTERACTIVE_TESTS = '1'
 & build\windows-debug\tst_interactive.exe
 ```
 
-* **单元测试**（Qt Test，22 个目标）覆盖按键/和弦解析、发送脚本解析、模板展开、
+* **单元测试**（Qt Test，23 个目标）覆盖按键/和弦解析、发送脚本解析、模板展开、
   配置校验（含 `menu` 的结构与条目动作、`help` 的标题、`window_rule` 的字段与
   几何默认值）、Lua 脚本的求值与转换
   （两种写法、DSL 构造器、内联函数被拒绝、空动作列表、UTF-8 BOM、`menu`/`power`/
@@ -1152,13 +1163,15 @@ $env:FLOWKEYD_ALLOW_INTERACTIVE_TESTS = '1'
   半行、被截断的多字节
   UTF-8）、跨 `SendInput` 的结构体布局（`INPUT` 必须是 40 字节）、
   音量步进/钳位、窗口匹配、显示器选择与窗口摆放几何（`tst_placement`）、
+  托盘数字徽标的文字与字号（`tst_desktop_badge`）、
   电源与虚拟桌面的纯逻辑表。
-* **交互式测试**（`FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`，默认 skip，10 个用例）真的碰
+* **交互式测试**（`FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`，默认 skip，14 个用例）真的碰
   这台机器的剪贴板/音量/前台窗口：剪贴板往返、音量读写与钳位并恢复原值、
   启动记事本并按标题找到它、激活→最小化→恢复→关闭（这一步用测试进程自己的
   顶层窗口，理由见下）、`{selection}` 的 Ctrl+c 往返、
-  虚拟桌面的只读探测 + 一次可逆的切换（切走再切回来），
-  以及 `window_rule` 的三条真机验证：把窗口移到另一个虚拟桌面再移回来
+  虚拟桌面的只读探测 + 一次可逆的切换（切走再切回来；托盘数字图标用的那个
+  精简接口必须与 `probe()` 给出同一组数字），
+  以及 `window_rule` 的真机验证：把窗口移到另一个虚拟桌面再移回来
   （用**已公开**的 `GetWindowDesktopId` 确认桌面 GUID 真的变了）、
   跨桌面唤醒（把窗口搬到别的桌面后 `window::isActive` 必须为假、
   `window::raiseWindow` 必须把视图切回去并让它拿到前台 —— 本机实测
@@ -1267,6 +1280,11 @@ $env:FLOWKEYD_ALLOW_INTERACTIVE_TESTS = '1'
   一条日志和一个气泡提示。睡眠/休眠与锁定不挑权限。
 * 托盘菜单里的动作和控制台快捷键动作走同一条控制通道，但**菜单**本身没有自动化
   覆盖（那需要 UI 自动化）；自提权的 UAC 流程也只能手工验证。
+* **托盘图标上的数字是轮询出来的**（每 500 ms 一次，见[工作原理](#工作原理)），
+  所以拿它当“切成功了吗”的反馈时最多会晚半秒。它和 `desktop` 动作共用同一张
+  未公开的版本表：锁屏、非交互会话或接口对不上时查不到当前桌面，这时图标退回
+  应用图标、悬停提示里也没有桌面信息。桌面到两位数时显示 `9+`（16 逻辑像素的
+  图标上两位数已经挤成一团），所以看不出具体是第几张。
 * 托盘图标还不跟随 explorer 重启（没有处理 `TaskbarCreated`）。也因为这个，计划任务的登录触发器加了 15 秒延迟：
   启动得太早会拿不到托盘图标，而且本版本不会在 explorer 回来后自己补上。
 * **计划任务的失败是静默的**：任务里的 exe 路径失效、单实例冲突、任务被禁用……
