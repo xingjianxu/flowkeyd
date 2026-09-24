@@ -62,6 +62,7 @@ class TestWindowListModel : public QObject
 
 private slots:
     void itemsExposeRolesAndGeometry();
+    void cardHasNoTitleRow();
     void filterMatchesProcessPrefixOnly();
     void titlesDoNotParticipateInTheFilter();
     void uniqueMatchAutoChoosesTheItem();
@@ -81,15 +82,16 @@ private slots:
 void TestWindowListModel::itemsExposeRolesAndGeometry()
 {
     app::WindowListModel model;
-    model.setItems(std::optional<QString>(QStringLiteral("窗口")), sampleItems());
+    model.setItems(std::nullopt, sampleItems());
 
     QCOMPARE(model.rowCount(), 4);
     QCOMPARE(model.totalCount(), 4);
     QCOMPARE(model.visibleCount(), 4);
-    QCOMPARE(model.title(), QStringLiteral("窗口"));
     QCOMPARE(model.countText(), QStringLiteral("4 个窗口"));
     QCOMPARE(model.cardWidth(), 560);
     QCOMPARE(model.selected(), 0);
+    // 卡片里没有标题行了，名字只出现在**窗口标题**里（外面用它断言）。
+    QCOMPARE(model.caption(), QStringLiteral("flowkeyd 窗口 — 4 个"));
 
     const int titleRole = roleOf(model, "windowTitle");
     const int processRole = roleOf(model, "windowProcess");
@@ -111,6 +113,29 @@ void TestWindowListModel::itemsExposeRolesAndGeometry()
     // 卡片高度 = listTop + 行数 * (行高 + 空隙) + listBottom。
     QCOMPARE(model.cardHeight(),
              model.listTop() + 4 * (model.rowHeight() + model.rowSpacing()) + model.listBottom());
+}
+
+void TestWindowListModel::cardHasNoTitleRow()
+{
+    app::WindowListModel model;
+    model.setItems(std::nullopt, sampleItems());
+
+    // 卡片里只有筛选框、列表与底部提示：筛选框就是第一行，列表紧贴在它下面。
+    const app::PopupRect filter = model.filterRect();
+    QCOMPARE(filter.y, 12); // 卡片上内边距
+    QCOMPARE(model.listTop(), filter.y + filter.height + 8);
+    QCOMPARE(model.cardHeight(),
+             model.listTop() + 4 * (model.rowHeight() + model.rowSpacing()) + model.listBottom());
+    QCOMPARE(model.footerRect().y + model.footerRect().height + 12, model.cardHeight());
+
+    // 原来在标题行右边的「N / M 个窗口」现在在底部提示里（QML 的 `ListView`
+    // 左右与宽度都用 `filterRect`，所以列表比之前窄、与输入框对齐）。
+    QVERIFY(model.footerText().startsWith(QStringLiteral("4 个窗口")));
+    QCOMPARE(model.listTop(), 50);
+
+    // `windows("切换窗口")` 给的名字只用在窗口标题上。
+    model.setItems(std::optional<QString>(QStringLiteral("切换窗口")), sampleItems());
+    QCOMPARE(model.caption(), QStringLiteral("切换窗口 — 4 个"));
 }
 
 void TestWindowListModel::filterMatchesProcessPrefixOnly()

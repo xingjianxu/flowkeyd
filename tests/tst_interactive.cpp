@@ -29,6 +29,7 @@
 #include "platform/win/desktop.h"
 #include "platform/win/dwm.h"
 #include "platform/win/ffi.h"
+#include "platform/win/ime.h"
 #include "platform/win/input.h"
 #include "platform/win/monitor.h"
 #include "platform/win/process.h"
@@ -153,6 +154,99 @@ bool setWindowCloaked(HWND hwnd, bool cloaked)
     return SUCCEEDED(set(hwnd, 13 /* DWMWA_CLOAK */, &value, sizeof(value)));
 }
 
+/// 测试用的 IMM32 探针（只给“输入法切换”那条用例用）。
+///
+/// 生产代码只需要「切到英文」这一个方向（`platform/win/ime.*`），所以“切成中文”
+/// 与“读回当前模式”的解析代码就留在测试里 —— 与上面的 `setWindowCloaked` 同一个
+/// 道理（那边也只读不写的那半在产品里）。
+class ImeProbe
+{
+public:
+    ImeProbe()
+    {
+        // 模块在进程生命周期内保持加载：不 FreeLibrary，免得指针悬空。
+        HMODULE module = LoadLibraryW(L"imm32.dll");
+        if (module == nullptr) {
+            return;
+        }
+        m_getContext = resolve<GetContextFn>(module, "ImmGetContext");
+        m_releaseContext = resolve<ReleaseContextFn>(module, "ImmReleaseContext");
+        m_getConversionStatus = resolve<GetConversionStatusFn>(module, "ImmGetConversionStatus");
+        m_setConversionStatus = resolve<SetConversionStatusFn>(module, "ImmSetConversionStatus");
+    }
+
+    bool available() const
+    {
+        return m_getContext != nullptr && m_releaseContext != nullptr
+               && m_getConversionStatus != nullptr && m_setConversionStatus != nullptr;
+    }
+
+    /// 读“现在是不是中文（`NATIVE`）模式”；拿不到输入上下文时是 `nullopt`。
+    std::optional<bool> isNative(HWND hwnd) const
+    {
+        std::optional<bool> result;
+        withContext(hwnd, [this, &result](void *context) {
+            DWORD conversion = 0;
+            DWORD sentence = 0;
+            if (m_getConversionStatus(context, &conversion, &sentence) != FALSE) {
+                result = (conversion & kConversionModeNative) != 0;
+            }
+        });
+        return result;
+    }
+
+    /// 把输入法切成中文（`native = true`）或英文；拿不到上下文 / 写失败时 false。
+    bool setNative(HWND hwnd, bool native) const
+    {
+        bool written = false;
+        withContext(hwnd, [this, native, &written](void *context) {
+            const DWORD mode = native ? kConversionModeNative : 0;
+            written = m_setConversionStatus(context, mode, 0) != FALSE;
+        });
+        return written;
+    }
+
+private:
+    using GetContextFn = void *(WINAPI *)(HWND);
+    using ReleaseContextFn = BOOL(WINAPI *)(HWND, void *);
+    using GetConversionStatusFn = BOOL(WINAPI *)(void *, LPDWORD, LPDWORD);
+    using SetConversionStatusFn = BOOL(WINAPI *)(void *, DWORD, DWORD);
+
+    static constexpr DWORD kConversionModeNative = 0x0001;
+
+    template <typename Fn>
+    static Fn resolve(HMODULE module, const char *name)
+    {
+        const FARPROC proc = GetProcAddress(module, name);
+        if (proc == nullptr) {
+            return nullptr;
+        }
+        Fn fn = nullptr;
+        std::memcpy(&fn, &proc, sizeof(fn));
+        return fn;
+    }
+
+    /// 取到输入上下文就跑 `body`，无论成败都配上 `ImmReleaseContext`。
+    template <typename Body>
+    void withContext(HWND hwnd, Body body) const
+    {
+        if (!available() || hwnd == nullptr) {
+            return;
+        }
+        void *context = m_getContext(hwnd);
+        if (context == nullptr) {
+            return;
+        }
+        body(context);
+        m_releaseContext(hwnd, context);
+    }
+
+    GetContextFn m_getContext = nullptr;
+    ReleaseContextFn m_releaseContext = nullptr;
+    GetConversionStatusFn m_getConversionStatus = nullptr;
+    SetConversionStatusFn m_setConversionStatus = nullptr;
+};
+
 } // namespace
 
 class TestInteractive : public QObject
@@ -177,6 +271,7 @@ private slots:
     void listsMainWindowsButSkipsOurOwn();
     void cloakedWindowsAreHiddenFromTheSwitcher();
     void cloakedWindowsOnOtherDesktopsStaySwitchable();
+    void switchesTheInputMethodToEnglish();
 };
 
 void TestInteractive::clipboardRoundTrip()
@@ -1243,6 +1338,46 @@ void TestInteractive::cloakedWindowsOnOtherDesktopsStaySwitchable()
     QVERIFY2(back, "the window did not come back to the current desktop");
     QVERIFY2(setWindowCloaked(hwnd, false), "could not uncloak the test window");
     QVERIFY(platform::win::window::isSwitchableWindow(hwnd));
+}
+
+/// 窗口切换器的输入法切换（`platform/win/ime.*`）：卡片一出来（以及输入框拿到
+/// 焦点时）要把输入法切成**英文**，否则筛选框里打的是中文候选字，进程名前缀
+/// 一条都筛不出来。
+///
+/// 真机上验证：先用测试自己的 IMM32 探针把这个线程的输入法切到中文（`NATIVE`，
+/// 也就是用户按 Shift 之前的那个状态），再让产品把它切回来。
+void TestInteractive::switchesTheInputMethodToEnglish()
+{
+    if (!interactiveEnabled()) {
+        QSKIP("set FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1 to run the interactive tests");
+    }
+    const ImeProbe probe;
+    if (!probe.available()) {
+        QSKIP("imm32 is unavailable on this machine");
+    }
+    TestWindow window(QStringLiteral("flowkeyd-ime-%1").arg(QCoreApplication::applicationPid()));
+    QVERIFY(window.hwnd() != nullptr);
+
+    // 模拟“用户开着中文输入法时按了轻碰 Win”。这台机器上没装输入法（或输入法
+    // 拒绝切成中文）时跳过 —— 那不是产品的事。
+    if (!probe.setNative(window.hwnd(), true)) {
+        QSKIP("this machine has no IME to switch (no input context)");
+    }
+    if (!probe.isNative(window.hwnd()).value_or(false)) {
+        QSKIP("this machine's IME refuses to switch to the native (chinese) mode");
+    }
+
+    const platform::win::ime::ModeSwitch result =
+        platform::win::ime::useAlphanumericMode(window.hwnd());
+    QVERIFY2(result.ok, qPrintable(result.detail));
+    QVERIFY2(result.changed, qPrintable(result.detail));
+    QVERIFY(!probe.isNative(window.hwnd()).value_or(true));
+
+    // 已经是英文就不应该再写一次（输入框反复拿到焦点时不会有副作用）。
+    const platform::win::ime::ModeSwitch again =
+        platform::win::ime::useAlphanumericMode(window.hwnd());
+    QVERIFY2(again.ok, qPrintable(again.detail));
+    QVERIFY(!again.changed);
 }
 
 QTEST_MAIN(TestInteractive)

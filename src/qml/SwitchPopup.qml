@@ -10,6 +10,10 @@ import QtQuick.Controls.FluentWinUI3
 // 之外全是标准控件 —— 筛选框是真正的 `TextField`，列表是 `ListView` +
 // 标准 `ItemDelegate`，滚动由 Qt 自带的 `ScrollBar` 负责。
 //
+// **卡片没有标题行**（项目所有者 2026-09 要求）：筛选框就是第一行，列表紧跟在
+// 它下面而且**宽度与筛选框一致**（`filterRect`）。所以窗口计数在底部提示里
+// （和键盘提示同一行），给外面看的计数仍在窗口标题（`caption`）里。
+//
 // 逻辑全在 `app::WindowListModel`（纯逻辑、有单测）：筛选（进程名前缀）、
 // `可见/总数` 计数、键盘选中项、`Enter`/`Esc`，以及「只剩一个窗口就直接激活」。
 // QML 只做两件事：
@@ -19,6 +23,10 @@ import QtQuick.Controls.FluentWinUI3
 // **数字选择模式**：筛到一个进程、而它开了好几个窗口时，每一行左边会出现一个
 // 数字徽标（`1`..`9`、`0`，超过 10 个窗口的只到第 10 个），按数字直接跳过去。
 // 数字键在那种模式下被模型吃掉（`handleKey`），所以不会跑进筛选框里。
+//
+// **输入法**：一打开就把输入法切成英文（`host.switchUseEnglishInput()`，见
+// `platform/win/ime.*`）—— 筛选框匹配的是进程名（ASCII），中文输入法的候选字
+// 一条都筛不出来。输入框拿到焦点时再确认一次（鼠标点进来也算）。
 Window {
     id: root
 
@@ -141,37 +149,8 @@ Window {
             }
         }
 
-        Label {
-            z: 1
-            x: root.switchModel ? root.switchModel.titleRect.x : 0
-            y: root.switchModel ? root.switchModel.titleRect.y : 0
-            width: root.switchModel ? root.switchModel.titleRect.width : 0
-            height: root.switchModel ? root.switchModel.titleRect.height : 0
-            text: root.switchModel ? root.switchModel.title : ""
-            color: root.palette.text
-            font.family: root.uiFontFamily
-            font.pointSize: 12.5
-            font.bold: true
-            verticalAlignment: Text.AlignVCenter
-            elide: Text.ElideRight
-        }
-
-        Label {
-            z: 1
-            x: root.switchModel ? root.switchModel.countRect.x : 0
-            y: root.switchModel ? root.switchModel.countRect.y : 0
-            width: root.switchModel ? root.switchModel.countRect.width : 0
-            height: root.switchModel ? root.switchModel.countRect.height : 0
-            text: root.switchModel ? root.switchModel.countText : ""
-            color: root.palette.placeholderText
-            font.family: root.uiFontFamily
-            font.pointSize: 8.5
-            horizontalAlignment: Text.AlignRight
-            verticalAlignment: Text.AlignVCenter
-            elide: Text.ElideRight
-        }
-
-        // 筛选框：标准 `TextField`，直接摆在模型给的矩形里。
+        // 筛选框：标准 `TextField`，直接摆在模型给的矩形里。**卡片没有标题行**
+        // （项目所有者 2026-09 要求），所以它就是卡片的第一行。
         TextField {
             id: filterField
 
@@ -185,6 +164,13 @@ Window {
             placeholderText: root.switchModel ? root.switchModel.filterPlaceholder : ""
             selectByMouse: true
             focus: true
+
+            // 输入框拿到焦点就再确认一次输入法是英文（窗口打开时 `host` 那里
+            // 已经设过；鼠标点进来、或用户中途切回中文时这一下补上）。
+            onActiveFocusChanged: {
+                if (activeFocus && root.host)
+                    root.host.switchUseEnglishInput()
+            }
 
             // 文本一变就回给模型；`setFilter` 若回一个「只剩一个窗口」的决定，
             // 就立刻激活它（这就是“输入到唯一匹配时自动切过去”）。
@@ -202,12 +188,14 @@ Window {
         }
 
         // 列表：Qt 自己的 `ListView` + 自带滚动条；每一行是标准 `ItemDelegate`。
+        // **左右与宽度都跟筛选框一致**（项目所有者 2026-09 要求）：行的高亮底、
+        // 滚动条都落在输入框的那条竖线上，不再比输入框宽出一截。
         ListView {
             id: listView
 
-            x: 0
+            x: root.switchModel ? root.switchModel.filterRect.x : 0
             y: root.listTop
-            width: parent.width
+            width: root.switchModel ? root.switchModel.filterRect.width : 0
             height: Math.max(parent.height - root.listTop - root.listBottom, 0)
             clip: true
             focus: false

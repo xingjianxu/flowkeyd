@@ -233,6 +233,8 @@ add_library(flowkeyd_platform STATIC
     src/platform/win/ffi.h
     src/platform/win/hook.cpp
     src/platform/win/hook.h
+    src/platform/win/ime.cpp
+    src/platform/win/ime.h
     src/platform/win/input.cpp
     src/platform/win/input.h
     src/platform/win/logging.cpp

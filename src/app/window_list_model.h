@@ -20,6 +20,11 @@
 // `{ decision = "choose", index }`，QML 立刻把它交给宿主去激活。这样用户输入到
 // 唯一匹配时窗口就换了，不必再按 `Enter`。空的筛选（刚打开时）绝不自动激活。
 //
+// **卡片没有标题行**（项目所有者 2026-09 要求）：筛选框就是卡片的第一行，列表
+// 紧跟在它下面，宽与筛选框**一样**。原来标题右边那个「N / M 个窗口」的计数挪到了
+// 底部提示里（那里正好可以省掉与筛选框重复的「输入筛选」那句）；给外面看的
+// 计数仍在 `caption()`（窗口标题，无边框窗口用户看不到）里。
+//
 // **数字选择模式**（项目所有者 2026-09 要求）：筛选串非空、命中的窗口**全都
 // 属于同一个进程名**、而且不止一个窗口时，进入「窗口选择模式」—— 前 10 行各
 // 分到一个数字快捷键（`1`..`9`、`0`），按下就直接跳到那个窗口。超过 10 个的
@@ -61,14 +66,12 @@ class WindowListModel : public QAbstractListModel
 {
     Q_OBJECT
 
-    Q_PROPERTY(QString title READ title NOTIFY itemsChanged)
     Q_PROPERTY(QString caption READ caption NOTIFY stateChanged)
     Q_PROPERTY(QString countText READ countText NOTIFY stateChanged)
     Q_PROPERTY(int cardWidth READ cardWidth NOTIFY stateChanged)
     Q_PROPERTY(int cardHeight READ cardHeight NOTIFY stateChanged)
     Q_PROPERTY(int cardRadius READ cardRadius CONSTANT)
-    Q_PROPERTY(QRect titleRect READ titleRect NOTIFY stateChanged)
-    Q_PROPERTY(QRect countRect READ countRect NOTIFY stateChanged)
+    // **没有 `titleRect` / `countRect`**：卡片里已经没有标题行了（见文件头）。
     Q_PROPERTY(QRect filterRect READ filterRect NOTIFY stateChanged)
     Q_PROPERTY(QRect footerRect READ footerRect NOTIFY stateChanged)
     Q_PROPERTY(QString filter READ filter NOTIFY stateChanged)
@@ -89,6 +92,8 @@ class WindowListModel : public QAbstractListModel
     Q_PROPERTY(int rowHeight READ rowHeight CONSTANT)
     /// 行与行之间的空隙；`ListView` 的委托高度是 `rowHeight + rowSpacing`。
     Q_PROPERTY(int rowSpacing READ rowSpacing CONSTANT)
+    /// 列表顶边（筛选框底边 + 一点空隙）。列表的左右与宽度都用
+    /// `filterRect`，所以行的高亮底与输入框对齐。
     Q_PROPERTY(int listTop READ listTop CONSTANT)
     Q_PROPERTY(int listBottom READ listBottom CONSTANT)
     Q_PROPERTY(int rowInset READ rowInset CONSTANT)
@@ -120,14 +125,11 @@ public:
     /// 给定一块工作区的高度，最多能放几行（与 `help_model` 同源，纯算术）。
     static int rowsForAvailableHeight(int availableHeight);
 
-    QString title() const;
     QString caption() const;
     QString countText() const;
     int cardWidth() const;
     int cardHeight() const { return m_cardHeight; }
     int cardRadius() const;
-    PopupRect titleRect() const { return m_titleRect; }
-    PopupRect countRect() const { return m_countRect; }
     PopupRect filterRect() const { return m_filterRect; }
     PopupRect footerRect() const { return m_footerRect; }
     QString filter() const { return m_filter; }
@@ -216,8 +218,6 @@ private:
     int m_selected = 0;
 
     int m_cardHeight = 0;
-    PopupRect m_titleRect;
-    PopupRect m_countRect;
     PopupRect m_filterRect;
     PopupRect m_footerRect;
 };

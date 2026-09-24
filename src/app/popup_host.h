@@ -130,6 +130,16 @@ public:
     Q_INVOKABLE void helpDismiss();
     Q_INVOKABLE void switchChoose(int index);
     Q_INVOKABLE void switchDismiss();
+    /// 把窗口切换器所在窗口的输入法切成英文（字母数字）模式。
+    ///
+    /// 为什么需要：筛选框匹配的是**进程名**（ASCII），而用户可能正开着中文
+    /// 输入法 —— 那样打进去的是候选字，列表一条都筛不出来。详见
+    /// `platform/win/ime.h`（Qt 在 Windows 上不看 `ImhPreferLatin`，只能自己调）。
+    ///
+    /// 真实弹出时由 `showSwitch()` 调一次；输入框自己拿到焦点时 QML 再调一次
+    /// （鼠标点进来、或用户中途切回中文时补上）。**预热期间不调**：那时窗口在
+    /// 屏幕外，用户并没有要用切换器。
+    Q_INVOKABLE void switchUseEnglishInput();
 
 private:
     void showMenu(MenuRequest request);

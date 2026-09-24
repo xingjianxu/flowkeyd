@@ -11,8 +11,6 @@ namespace {
 // 好放下「标题 —— 进程名」）。
 constexpr int kCardWidth = 560;
 constexpr int kPad = 12;
-constexpr int kHeaderHeight = 30;
-constexpr int kFilterGap = 8;
 constexpr int kFilterHeight = 30;
 constexpr int kListGap = 8;
 constexpr int kRowHeight = 46;
@@ -25,8 +23,11 @@ constexpr int kMaxRows = 12;
 /// 数字选择模式下一共分配多少个快捷键：`1`..`9`、`0`（第 10 个）。
 constexpr int kNumberedKeys = 10;
 
-/// 列表区顶部：表头 + 间距 + 筛选框 + 间距。
-constexpr int kListTop = kPad + kHeaderHeight + kFilterGap + kFilterHeight + kListGap;
+/// 列表区顶部：卡片内边距 + 筛选框 + 间距。
+///
+/// **卡片没有标题行**（项目所有者 2026-09 要求）：筛选框就是第一行，所以这里
+/// 没有表头那一项。
+constexpr int kListTop = kPad + kFilterHeight + kListGap;
 /// 列表区底部：底部提示 + 它上面的空隙 + 卡片内边距。
 constexpr int kListBottom = kFooterGap + kFooterHeight + kPad;
 
@@ -111,23 +112,22 @@ void WindowListModel::setMaxRows(int rows)
 
 int WindowListModel::rowsForAvailableHeight(int availableHeight)
 {
-    // 卡片上下内边距 + 标题 + 筛选框（含间距）+ 底部提示（含它上面的空隙）。
-    const int chrome = kPad * 2 + kHeaderHeight + kFilterGap + kFilterHeight + kListGap
-                       + kFooterGap + kFooterHeight;
+    // 卡片上下内边距 + 筛选框（含它下面的空隙）+ 底部提示（含它上面的空隙）。
+    const int chrome =
+        kPad * 2 + kFilterHeight + kListGap + kFooterGap + kFooterHeight;
     // 上下各留一点，让卡片不与屏幕边缘贴住。
     const int available = availableHeight - chrome - 48;
     const int fits = available / (kRowHeight + kRowGap);
     return std::clamp(std::max(fits, 1), 1, kMaxRows);
 }
 
-QString WindowListModel::title() const
-{
-    return m_title.value_or(tr("窗口"));
-}
-
 QString WindowListModel::caption() const
 {
-    return tr("flowkeyd 窗口 — %1 个").arg(visibleCount());
+    // 卡片里没有标题行了（项目所有者 2026-09 要求）：这行字只是**窗口标题**
+    // （无边框窗口，用户看不到）。外面（验收 / 诊断脚本）靠它读「现在列了几个
+    // 窗口」；`windows("切换窗口")` 给的名字也出现在这里。
+    const QString name = m_title.value_or(tr("flowkeyd 窗口"));
+    return tr("%1 — %2 个").arg(name).arg(visibleCount());
 }
 
 QString WindowListModel::countText() const
@@ -160,10 +160,12 @@ QString WindowListModel::emptyMessage() const
 
 QString WindowListModel::footerText() const
 {
+    // 卡片没有标题行，原来在标题右边的「N / M 个窗口」就挪到了这里；顺手去掉
+    // 原先那句「输入筛选」—— 筛选框自己有占位文本，那句是重复的。
     if (m_numbered) {
-        return tr("数字键直接切换    ↑↓ 选择    Enter 切换    Esc 关闭");
+        return tr("%1    数字键直接切换    ↑↓ 选择    Enter 切换    Esc 关闭").arg(countText());
     }
-    return tr("输入筛选    ↑↓ 选择    Enter 切换    Esc 关闭");
+    return tr("%1    ↑↓ 选择    Enter 切换    Esc 关闭").arg(countText());
 }
 
 int WindowListModel::rowHeight() const
@@ -426,9 +428,7 @@ void WindowListModel::relayout()
     // + footer(listBottom)。这样「内容放不下」就等价于「可见条数 > 能画的行数」。
     m_cardHeight = kListTop + m_rows * (kRowHeight + kRowGap) + kListBottom;
     const int inner = kCardWidth - 2 * kPad - 2 * kInset;
-    m_titleRect = PopupRect{kPad + kInset, kPad, inner * 6 / 10, kHeaderHeight};
-    m_countRect = PopupRect{kPad + kInset, kPad, inner, kHeaderHeight};
-    m_filterRect = PopupRect{kPad + kInset, kPad + kHeaderHeight + kFilterGap, inner, kFilterHeight};
+    m_filterRect = PopupRect{kPad + kInset, kPad, inner, kFilterHeight};
     m_footerRect =
         PopupRect{kPad + kInset, m_cardHeight - kPad - kFooterHeight, inner, kFooterHeight};
 }

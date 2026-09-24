@@ -558,6 +558,38 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
     * 验收脚本新增两条检查（“选单/帮助窗口不在任务栏里”），用
       `IsTaskbarWindow()`（可见 + 无属主 + 无 `WS_EX_TOOLWINDOW`）从外面断言。
 
+24. **窗口切换器卡片的三处调整：不要标题行、列表与输入框同宽、打开时把输入法
+    切成英文（项目所有者 2026-09 要求）。**
+    * **没有标题行**：卡片里只剩筛选框、列表与底部提示三样；筛选框就是第一行，
+      列表紧跟在它下面。`WindowListModel` 里 `titleRect` / `countRect` 与
+      `title()` 一起删了，`listTop` 从 `88` 变成 **`50`**（`kPad 12 + 筛选框 30
+      + 间隙 8`），卡片高度跟着从 `276` 变成 `238`（3 行时）。原来标题右边那个
+      「N / M 个窗口」的计数挪到了**底部提示**里（那里正好可以省掉与筛选框占位
+      文本重复的「输入筛选」）；`countText()` 保留。
+    * **`windows()` 的 `title` 参数现在只用作窗口标题**（`caption()` =
+      `<title> — N 个`，不写时仍是 `flowkeyd 窗口 — N 个`）：卡片是无边框窗口，
+      用户看不到它，但验收 / 诊断脚本靠它读“现在列了几个窗口”。
+    * **列表宽度 = 筛选框宽度**：QML 里 `ListView` 的 `x` / `width` 直接用
+      `filterRect`（22 / 516），所以行的高亮底与输入框左右对齐，不再比输入框宽
+      出一截（实测见第 10 节：高亮 26..534 = 列表 22..538 内缩 4，正是标准
+      `ItemDelegate` 给的高亮边距）。
+    * **打开时切英文输入法**：筛选框匹配的是**进程名**（ASCII），而用户经常正
+      开着中文输入法 —— 打进去的是候选字，一条都筛不出来。实现是新模块
+      `platform/win/ime.*`（**运行时解析** `imm32.dll`，见第 3 节的依赖政策）：
+      读 `ImmGetConversionStatus`，`NATIVE`（`IME_CMODE_NATIVE`，语言栏上的「中」）
+      置位时把它清掉（其余标志与句模式原样保留，等价于用户按一下 `Shift`）。
+      Qt 在 Windows 上**不看** `Qt.ImhPreferLatin`（`QWindowsInputContext` 只用
+      `ImEnabled` 决定要不要 `ImmAssociateContext`），所以 QML 里写提示是没用的。
+      调用点两处：`PopupHost::showSwitch()` 弹出后一次（`switchUseEnglishInput()`），
+      以及筛选框 `onActiveFocusChanged` 时一次（鼠标点回来 / 用户中途切回中文）；
+      **预热期间不调**（那时窗口在屏幕外，用户并没有要用切换器）。
+      只影响 flowkeyd 自己这个线程的输入模式（TSF 的输入模式是按线程的），
+      不影响用户在别的应用里的中/英文状态，关上卡片也不需要还原。
+    * 验证：`tst_window_list_model` 新增 `cardHasNoTitleRow`（几何 + 底部计数 +
+      `caption()`）；`tst_interactive` 新增 `switchesTheInputMethodToEnglish`
+      （先由测试自己的 IMM32 探针把本线程切成中文，再断言产品把它切回字母数字、
+      且第二次是幂等的）；真机端到端见第 10 节与第 11 节的 DoD 记录。
+
 ---
 
 ## 3. 环境与工具链
@@ -660,6 +692,7 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `src/platform/win/dwm.h/.cpp`             | **运行时解析**的 `dwmapi` 两个导出：`DwmSetWindowAttribute`（按窗口关掉过渡动画，`window` 的 `animate`）与 `DwmGetWindowAttribute`（读 `DWMWA_CLOAKED`：`isCloaked()`，窗口到底显示了没有 —— 窗口切换器靠它排掉 shell 藏起来的假窗口，见第 2 节第 21 条与第 10 节）。拿不到 dwmapi 时只是保留动画 / 按“它在显示”处理，动作不失败 |
 | `src/platform/win/monitor.h/.cpp`         | 显示器枚举（`EnumDisplayMonitors` → `core::MonitorDescription`）、窗口当前在哪块屏、`applyPlacement`（`SetWindowPlacement` + `SetWindowPos`，带 `SWP_NOACTIVATE`，最大化时先还原再最大化）。**几何判断不在这一层** |
 | `src/platform/win/input.h/.cpp`           | 按键注入（`SendInput`/`NtUserSendInput`）、按键状态、`ModifierGuard`（含菜单遮断标记）、`FLOWKEYD_ACCEPT_INJECTED` 测试后门（见第 5 节与阶段 9）                                                                                |
+| `src/platform/win/ime.h/.cpp`             | **运行时解析**的 `imm32.dll`（不在允许静态链接的那批里，见第 3 节）：`useAlphanumericMode(hwnd)` 把本线程的输入法切成**英文/字母数字**（读 `ImmGetConversionStatus`，`IME_CMODE_NATIVE` 置位时把它清掉，其余标志与句模式原样保留）——窗口切换器一打开就靠它，否则筛选框里打的是中文候选字。拿不到 `imm32` / 没有输入上下文时不当错误（键盘本来就直输英文）。为什么不能用 Qt 的 `inputMethodHints`、为什么不需要还原，见第 2 节第 24 条与第 10 节 |
 | `src/platform/win/hook.h/.cpp`            | 钩子回调、**钩子线程自己的 Win32 消息循环**、`SetTimer`、控制消息、重载；另外还负责 `window_rule` 的两个监听：`SetWinEventHook`（`EVENT_OBJECT_SHOW` / `DESTROY`，按 HWND 去重）与一个 350 ms 的显示器轮询定时器。**定时器 id 必须用 `SetTimer` 的返回值**，见第 10 节 |
 | `src/platform/win/audio.h/.cpp`           | Core Audio `IAudioEndpointVolume`，手写 COM vtable（**高风险**）                                                                                                                                                            |
 | `src/platform/win/clipboard.h/.cpp`       | 剪贴板读写（`CF_UNICODETEXT`）                                                                                                                                                                                              |
@@ -678,11 +711,11 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `src/app/log_model.h/.cpp`                | 日志窗口的模型：尾随日志文件（增量、半行、被截断的多字节 UTF-8）、最多 1000 行、按级别配色、子串过滤                                                                                                                        |
 | `src/app/menu_model.h/.cpp`               | `menu` 选单的**纯逻辑**（`QAbstractListModel`，只用 QtCore）：卡片外框几何（宽高、标题、底部提示）、高亮移动（到边界回绕）、单字符选中、`Esc`/`Enter` 语义，以及给 QML 排版用的几个常量（`listTop`/`rowHeight`/`rowSpacing`/`rowInset`/`badgeSize`）。**行几何与鼠标命中不归它管**：列表是真正的 QML `ListView` + 标准 `ItemDelegate`（见第 2 节第 9 条与第 10 节），所以它没有 `rowRect`/`hitTest`，也**没有** `highlighted`/`hovered` 角色（那两个名字被标准委托占了）。悬停仍由模型持有（`hover`/`setHover`），因为「`Enter` 选光标下那一条」是选单的语义 |
 | `src/app/help_model.h/.cpp`               | `help` 帮助的**纯逻辑**（同上）：筛选（和弦/`comment`/`name`/动作摘要）、`可见/总数` 计数、键盘选中项（**高亮就是它**，鼠标悬停不改高亮）、`Enter`/双击该执行还是先武装（危险动作两次确认）、三级 `Esc`，以及鼠标点选用的 `setSelected()`（**可单测**）。**列表的滚动、行几何与鼠标命中都不归它管**：那是一个真正的 QML `ListView` + `ItemDelegate` + Qt 自带的 `ScrollBar`（见第 2 节第 9 条）。`handleKey()` 只接导航键与 `Enter`/`Esc`，字符/退格/`Home`/`End` 放行给标准 `TextField` |
-| `src/app/window_list_model.h/.cpp`        | 窗口切换器（`windows` 动作）的**纯逻辑**（只用 QtCore、可单测）：筛选（**进程名前缀**，标题只显示、不参与）、`可见/总数` 计数、键盘选中项（悬停即高亮）、`Enter`/`Esc`，**自动激活**（筛选非空且只剩一个窗口时 `setFilter()` 直接返回 `choose`）与**数字选择模式**（筛选到一个进程名的多个窗口时前 10 行分到 `1`..`9`/`0`，见第 2 节第 22 条）。窗口枚举与激活不在这里（见 `platform/win/window` 与 `app/dispatcher`），列表的滚动/行几何/鼠标命中归标准 `ListView` + `ItemDelegate`（见第 2 节第 21 条） |
+| `src/app/window_list_model.h/.cpp`        | 窗口切换器（`windows` 动作）的**纯逻辑**（只用 QtCore、可单测）：筛选（**进程名前缀**，标题只显示、不参与）、`可见/总数` 计数、键盘选中项（悬停即高亮）、`Enter`/`Esc`，**自动激活**（筛选非空且只剩一个窗口时 `setFilter()` 直接返回 `choose`）与**数字选择模式**（筛选到一个进程名的多个窗口时前 10 行分到 `1`..`9`/`0`，见第 2 节第 22 条）。卡片**没有标题行**（`listTop = 50`，没有 `titleRect`/`countRect`，计数在 `footerText` 里；`windows()` 的 `title` 只用作 `caption()`＝窗口标题），QML 的 `ListView` 左右与宽度都用 `filterRect`，见第 2 节第 24 条。窗口枚举与激活不在这里（见 `platform/win/window` 与 `app/dispatcher`），列表的滚动/行几何/鼠标命中归标准 `ListView` + `ItemDelegate`（见第 2 节第 21 条） |
 | `src/app/popup_layout.h/.cpp`             | 三个弹窗共用的几何类型（`PopupRect`/`PopupPoint`）与纯函数 `centrePopup()`（先在工作区居中、再夹进屏幕；**可单测**） |
-| `src/app/popup_host.h/.cpp`               | 把上面的模型挂到 QML 窗口上（选单 / 帮助 / 窗口切换器三个窗口）；抢前台（`requestActivate` + `win::window::raiseWindow` 的前台锁绕行）；在 Qt GUI 线程上创建/复用窗口；用户选完（或按 `Enter`/双击帮助里的一行 / 在切换器里选中一个窗口）把活儿回投工作线程；`helpRun()` 负责把**可见行下标**换算成条目下标，并且**先把窗口藏起来再执行**（**GUI 线程亲和**）。另外 `preload()`（由 `main` 在事件循环第一个回合排队调用）把三个窗口建好、填假数据各渲染一帧再藏起来（透明度 0 + 屏幕外），把“进程首次渲染”的固定开销提到启动时（见第 2 节第 23 条）；顺带记两条 debug 日志：`popup `x` shown in N ms` 与 `painted its first frame N ms after the request` |
-| `src/qml/`                                | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`、`SwitchPopup.qml`（四个文件都在开头写了 `pragma ComponentBehavior: Bound`）；**三个弹窗的 `flags` 都带 `Qt.Tool`**（= `WS_EX_TOOLWINDOW`，不进任务栏/`Alt+Tab`；日志窗口故意不加，见第 2 节第 23 条）；配色一律用 `palette`，没有单独的 `Style.qml`；中文一律 `font.family: "Microsoft YaHei"`（默认族 `Segoe UI Variable` 没有中文字形，不管会回退到宋体，见第 10 节）。`HelpPopup.qml` 与 `MenuPopup.qml` 里除了卡片外框与按键徽标全是标准控件：帮助的筛选框是 `TextField`、列表是 `ListView` + Qt 自带 `ScrollBar` + `ItemDelegate`（列表只占行区域，不再需要表头/底部的遮罩）；选单的列表同样是 `ListView` + `ItemDelegate`（不滚动，所以没有滚动条；悬停与点击全部由委托提供）；窗口切换器（`SwitchPopup.qml`）与帮助同一套骨架，每行显示窗口标题 + 进程名（数字选择模式下行首还有一个数字冒标） |
-| `tests/`                                  | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_log_tail`、`tst_audio`、`tst_autostart`（自启的纯逻辑：XML 渲染/解析、输出解码、路径比较；**不碰真实计划任务**）、`tst_interactive`（需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`，否则 skip；含剪贴板/音量/窗口后端/虚拟桌面/钉在所有桌面/置顶的真机验证）、`tst_menu_model`、`tst_help_model`、`tst_window_list_model`（窗口切换器的纯逻辑：进程名前缀筛选、标题不参与、唯一匹配自动激活、`Enter`/`Esc`、悬停高亮）、`tst_power_table`、`tst_desktop_table`、`tst_placement`（`window_rule` 的纯逻辑：显示器排序/选择、重连检测、摆放几何、匹配与摘要）、`tst_layout`、`tst_version`（构建时间戳与版本字符串的纯逻辑；只碰临时文件）、`tst_desktop_badge`（托盘数字徽标的文字与字号） |
+| `src/app/popup_host.h/.cpp`               | 把上面的模型挂到 QML 窗口上（选单 / 帮助 / 窗口切换器三个窗口）；抢前台（`requestActivate` + `win::window::raiseWindow` 的前台锁绕行）；在 Qt GUI 线程上创建/复用窗口；用户选完（或按 `Enter`/双击帮助里的一行 / 在切换器里选中一个窗口）把活儿回投工作线程；`helpRun()` 负责把**可见行下标**换算成条目下标，并且**先把窗口藏起来再执行**（**GUI 线程亲和**）。另外 `preload()`（由 `main` 在事件循环第一个回合排队调用）把三个窗口建好、填假数据各渲染一帧再藏起来（透明度 0 + 屏幕外），把“进程首次渲染”的固定开销提到启动时（见第 2 节第 23 条）；顺带记两条 debug 日志：`popup `x` shown in N ms` 与 `painted its first frame N ms after the request`。另外 `switchUseEnglishInput()`（`Q_INVOKABLE`，`QML` 的筛选框拿到焦点时会调）把切换器所在窗口的输入法切成英文 —— 真实弹出时 `showSwitch()` 自己也会调一次，**预热期间不调**（见第 2 节第 24 条） |
+| `src/qml/`                                | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`、`SwitchPopup.qml`（四个文件都在开头写了 `pragma ComponentBehavior: Bound`）；**三个弹窗的 `flags` 都带 `Qt.Tool`**（= `WS_EX_TOOLWINDOW`，不进任务栏/`Alt+Tab`；日志窗口故意不加，见第 2 节第 23 条）；配色一律用 `palette`，没有单独的 `Style.qml`；中文一律 `font.family: "Microsoft YaHei"`（默认族 `Segoe UI Variable` 没有中文字形，不管会回退到宋体，见第 10 节）。`HelpPopup.qml` 与 `MenuPopup.qml` 里除了卡片外框与按键徽标全是标准控件：帮助的筛选框是 `TextField`、列表是 `ListView` + Qt 自带 `ScrollBar` + `ItemDelegate`（列表只占行区域，不再需要表头/底部的遮罩）；选单的列表同样是 `ListView` + `ItemDelegate`（不滚动，所以没有滚动条；悬停与点击全部由委托提供）；窗口切换器（`SwitchPopup.qml`）与帮助同一套骨架，每行显示窗口标题 + 进程名（数字选择模式下行首还有一个数字冒标）；**它没有标题行**，`ListView` 的 `x`/`width` 直接用 `filterRect`（与筛选框同宽），筛选框拿到焦点时会调 `host.switchUseEnglishInput()`（见第 2 节第 24 条） |
+| `tests/`                                  | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_log_tail`、`tst_audio`、`tst_autostart`（自启的纯逻辑：XML 渲染/解析、输出解码、路径比较；**不碰真实计划任务**）、`tst_interactive`（需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`，否则 skip；含剪贴板/音量/窗口后端/虚拟桌面/钉在所有桌面/置顶/输入法切换的真机验证）、`tst_menu_model`、`tst_help_model`、`tst_window_list_model`（窗口切换器的纯逻辑：进程名前缀筛选、标题不参与、唯一匹配自动激活、`Enter`/`Esc`、悬停高亮、没有标题行的几何与窗口标题）、`tst_power_table`、`tst_desktop_table`、`tst_placement`（`window_rule` 的纯逻辑：显示器排序/选择、重连检测、摆放几何、匹配与摘要）、`tst_layout`、`tst_version`（构建时间戳与版本字符串的纯逻辑；只碰临时文件）、`tst_desktop_badge`（托盘数字徽标的文字与字号） |
 | `scripts/acceptance.ps1`                  | 桌面行为的验收脚本（注入按键 + 焦点捕捉窗口的外部观察，118 项检查：含弹窗滚轮/滚动条拖动/鼠标点选与点筛选框/鼠标点选单条目/`Enter` 与双击真的执行动作/危险动作两次确认/两个弹窗不在任务栏里）；需交互式桌面，**不属于 `ctest`**，见第 5 节与阶段 9。它用 `--no-elevate` 起临时守护进程，所以**不会**碰真实的自启计划任务 |
 
 > `scripts/install.ps1` / `scripts/uninstall.ps1` **已删除**（2026-09）：自启的注册、
@@ -3385,6 +3418,58 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   `arg(QString("Windows IME"), quintptr(0x20602))` → `len=132633`、尾串
   `"Windows IME (%2, cloaked)"`，而第二个参数写 `QString::number(...)` 就正常。
 
+#### 2026-09 新增：窗口切换器没有标题行、列表同宽、打开时切英文输入法
+
+* **Qt 在 Windows 上不看 `Qt::ImhPreferLatin`。** 读 `qwindowsinputcontext.cpp`
+  （6.8 / dev 都一样）可以确认：`QWindowsInputContext::updateEnabled()` 只用
+  `inputMethodAccepted()`（即焦点对象的 `Qt::ImEnabled`）决定 `ImmAssociateContextEx(
+  handle, nullptr, IACE_DEFAULT)` 还是 `ImmAssociateContext(handle, nullptr)`，
+  **提示位一概不看**。所以「筛选框默认英文输入法」只能自己调 IMM32，在 QML 里
+  写 `inputMethodHints` 是白写（本仓库因此没有写它）。
+* **要改的是 `IME_CMODE_NATIVE` 那一位，而且模式是“按线程”的。** 语言栏上的
+  「中/英」在 TSF 里是 `GUID_COMPARTMENT_KEYBOARD_INPUTMODE_CONVERSION` 里的
+  `TF_CONVERSIONMODE_NATIVE`，而 IMM32 的 `ImmGet/SetConversionStatus` 读写的就是
+  同一个东西（`IME_CMODE_*` 与 `TF_CONVERSIONMODE_*` 等价、`NATIVE` 就是 `0x1`）。
+  微软自己的 Q&A 里说得很清楚：这些状态**按线程**隔离（“the issue is not that the
+  IME hides the state, but rather how the TSF architecture handles scope ...
+  strictly managed on a per-thread basis”）。两个直接后果：
+  1. 只影响 flowkeyd 自己这个线程（弹窗自己的），**不会**动用户在别的应用里的
+     中/英状态，关上卡片也**不需要**还原；
+  2. 从另一个进程去 `ImmGetContext` 那个窗口在本机**拿不到上下文**（实测一直返回
+     `no-context`，连 `AttachThreadInput` 也救不回来）—— 想验证只能在自己进程内
+     做，或者用“注入 `Shift` 把 IME 切成中文”这种间接手段（见下）。
+* **写什么值**：只把 `NATIVE` 位清掉（`conversion & ~0x1`），其余标志与句模式
+  原样传回 —— 这正是用户按一下 `Shift` 干的事（MS 拼音就是翻那一位），比直接写
+  `IME_CMODE_ALPHANUMERIC`（0）保守，不会顺手把全角/标点之类的设置重置掉。
+  本机实测（MS 拼音，fallback 到 IMM32 那条路）：中 → 英是 `0x11 → 0x10`；
+  英文状态下读出来是 `0x10`（另一次预热后的读数是 `0x8a0`，一样是 `NATIVE` 未置位）。
+* **`imm32.dll` 走运行时解析**（`LoadLibraryW` + `GetProcAddress`）：它不在
+  第 3 节允许静态链接的那批 DLL 里，而我们只用到四个入口。拿不到时**不算错误**：
+  没装输入法的机器上键盘本来就直输英文，所以 `useAlphanumericMode()` 返回
+  `ok = true, changed = false` 并带一句 detail（“the window has no input context”）。
+* **调用点与预热的关系**：`PopupHost::switchUseEnglishInput()` 在真实弹出
+  （`showSwitch()`，抢到前台之后）调一次，筛选框 `onActiveFocusChanged` 时再调一次
+  （鼠标点回来、或用户中途按 `Shift` 切回中文）。**预热期间必须跳过**
+  （`m_warming.contains(m_switchWindow)`）：那时窗口在屏幕外、全透明，用户并没有
+  要用切换器，而我们的线程只有两个筛选框共用这个输入模式。
+* **端到端验证手法**（`tmp/switch-look.ps1` + `tmp/switch-look.lua`，一次性配置 +
+  `FLOWKEYD_ACCEPT_INJECTED=1`）：注入 `LWin` 轻碰打开卡片 → 注入一次 `Shift`
+  （引擎没有绑它，所以它被放行到筛选框，MS 拼音把它切成「中」）→ `Esc`、再打开：
+  日志里出现
+  `window switcher: input method set to english (switched from conversion 0x11 to 0x10)`，
+  紧跟着筛选框拿焦点那次是 `already english (conversion 0x10)`。
+  另有用例 `tst_interactive::switchesTheInputMethodToEnglish`：测试自己用 IMM32
+  探针把线程切成中文，再断言产品把它切回字母数字，而且第二次是幂等的
+  （`changed == false`）；本机（zh-Hans-CN + 微软拼音）跑绿。
+* **怎么从截图里量卡片几何**（这次也顺手做了）：`PrintWindow` 抓下来的就是窗口本身，
+  所以 `图像宽 / 560` 就是 DPI 缩放（本机 2.0）；卡片背景 `#2d2d2d`、筛选框填充
+  `#393939`，沿一行扫描“与背景差得最多”的像素质就得到了筛选框的 x 范围
+  （逻辑 22..537.5 = `filterRect`），第一行高亮的范围是 26..533.5 —— 正好是列表
+  （22..538）内缩 4，也就是标准 `ItemDelegate` 给的高亮边距。卡片实际尺寸
+  560x238 与模型的 `listTop 50 + 3*48 + listBottom 44` 完全对得上。
+  （一开始用逐通道容差 3 得到“整行都不同”的假象，是因为卡片的圆角/描边像素也不等
+  于背景；阈值取 8 就干净了。）
+
 ---
 
 ## 11. 完成定义（DoD）细则
@@ -4312,6 +4397,40 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > 不是回归）：`tst_interactive::windowBackendLaunchesActivatesAndCloses` 的
 > 「activate 拿到前台」偶发失败（3 次里挂 1 次，第 10 节写过的前台锁环境问题）。
 
+> **2026-09 调整（窗口切换器：没有标题行 + 列表与输入框同宽 + 打开时切英文输入法）
+> 的 DoD**：`windows-debug` 与 `windows-release` 都是 `build exit 0`、零编译警告
+> （release 里那句 `dxcompiler.dll` 仍是 `windeployqt` 自己的提示，其余无输出）；
+> `ctest --test-dir build/windows-debug` **24 个测试目标全绿**
+> （`tst_window_list_model` 新增 `cardHasNoTitleRow`，`itemsExposeRolesAndGeometry`
+> 改成断言 `caption()` 与底部计数；`tst_interactive` 新增 opt-in 的
+> `switchesTheInputMethodToEnglish`，本机真机跑绿）。
+> `qmllint -I C:\Qt\6.11.2\mingw_64\qml src\qml\SwitchPopup.qml` 零警告；
+> `flowkeyd --check --config flowkeyd.lua.example` →
+> `OK (46 hotkey(s), 3 remap(s), 7 window rule(s))`、零警告。
+> 真机端到端（`tmp/switch-look.ps1` + `tmp/switch-look.lua`，debug 构建 + 一次性
+> 配置 + `FLOWKEYD_ACCEPT_INJECTED=1`）：注入 `LWin` 轻碰打开卡片，标题
+> `flowkeyd 窗口 — 3 个`；截图像素测量（`tmp/switch-look-analyze.ps1`）：卡片
+> **560x238** 逻辑像素（图像 1120x476、缩放 2.0），筛选框 x **22..537.5**、
+> 第一行高亮 x **26..533.5**（= 列表 22..538 内缩 4，正是标准 `ItemDelegate`
+> 的高亮边距）；注入一次 `Shift` 把 IME 切成「中」再重开卡片，日志是
+> `window switcher: input method set to english (switched from conversion 0x11 to 0x10)`，
+> 随后筛选框拿到焦点那次是 `already english (conversion 0x10)`。
+> `scripts/acceptance.ps1`（只跑 release；跑前先 `--quit` 常驻、跑完从
+> `build\dist-release` 重新拉起）**118 项、0 失败**（与上次持平：脚本本身没动，
+> 但它跑的 popup 宿主与切换器共用同一套代码，所以重跑了一遍）。
+> 行为变化：卡片不再显示标题行（`windows()` 的 `title` 只用作窗口标题，计数播到
+> 底部提示里），列表与筛选框同宽，卡片一打开就把 flowkeyd 自己这个线程的输入法
+> 切成英文（新模块 `src/platform/win/ime.*`，运行时解析 `imm32.dll`，
+> **没有**新增静态链接依赖）。README（`windows` 动作表、窗口切换器、已知限制）
+> 与本文件第 2 / 4 / 10 节已同步。
+> 两张截图也把高度对上了：改动前 `tmp/switch-digits-badge.png` 是 1120x552
+> （= 560x276 逻辑，旧 `listTop 88`），改动后 `tmp/switch-look.png` 是 1120x476
+> （= 560x238，新 `listTop 50`）。
+> 本次提交（收尾时 `--version`/启动日志里报的就是它的短哈希，这里不写死）之后
+> 又重建了一次 release 并把常驻实例重新拉起，所以它跑的就是这份改动。
+> 按工作约定第 11 条：常驻实例已 `--quit` → 构建 release → 从
+> `build\dist-release` 重新拉起（自启任务仍指向那个路径）。
+
 ---
 
 ## 12. 本期不做的（有意留白）与后续工作
@@ -4528,8 +4647,10 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、
   窗口（**只列真正有窗口的进程**：工具窗口、无标题窗口与 shell 藏起来的“假窗口”
   不列，判据与 Alt+Tab 一致），输入按**进程名前缀**筛选（标题只显示、不参与），
   只剩一个窗口时直接激活它；筛到一个进程名而它开了多个窗口时进入**数字选择模式**
-  （前 10 行依次是 `1`..`9`、`0`，按数字直接跳过去，见第 2 节第 22 条）。常见绑法是
-  `keys = "LWin"` + `trigger = "release"`（「轻碰 Win」）。
+  （前 10 行依次是 `1`..`9`、`0`，按数字直接跳过去，见第 2 节第 22 条）。卡片
+  **没有标题行**（列表与筛选框同宽，计数在底部提示里），`title` 只用作窗口标题；
+  打开时会把 flowkeyd 自己这个线程的输入法切成英文（见第 2 节第 24 条）。
+  常见绑法是 `keys = "LWin"` + `trigger = "release"`（「轻碰 Win」）。
 * **完全没有动作**的快捷键就是一个按键屏蔽器（会吞掉它匹配到的按键）。
 * `window` 的 `toggle`（默认**开**）只对 `op = "activate"` 有意义；
   `launch` 回退不套用它；显式 `toggle = false` 才关闭。

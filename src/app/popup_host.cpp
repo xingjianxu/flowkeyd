@@ -1,5 +1,6 @@
 #include "app/popup_host.h"
 
+#include "platform/win/ime.h"
 #include "platform/win/logging.h"
 #include "platform/win/window.h"
 
@@ -226,6 +227,32 @@ void PopupHost::switchDismiss()
     m_switchRequest = SwitchRequest{};
 }
 
+void PopupHost::switchUseEnglishInput()
+{
+    if (m_switchWindow == nullptr) {
+        return;
+    }
+    // 预热期间（窗口在屏幕外、全透明地画第一帧）不要去动输入法：那时用户并没有
+    // 要用切换器，而我们自己的线程只有两个筛选框共用它。
+    if (m_warming.contains(m_switchWindow)) {
+        return;
+    }
+    const HWND hwnd = reinterpret_cast<HWND>(m_switchWindow->winId());
+    const win::ime::ModeSwitch result = win::ime::useAlphanumericMode(hwnd);
+    // 每次都记（debug 级）：这条日志是「输入法是英文吗」的唯一现场 —— 输入框
+    // 拿到焦点时这个函数会再调一次，而两次之间可能夹着输入法自己的状态变化。
+    if (result.ok && result.changed) {
+        win::logDebug(
+            QStringLiteral("window switcher: input method set to english (%1)").arg(result.detail));
+    } else if (result.ok) {
+        win::logDebug(QStringLiteral("window switcher: input method already ok (%1)")
+                          .arg(result.detail));
+    } else {
+        win::logDebug(QStringLiteral("window switcher: could not switch the input method: %1")
+                          .arg(result.detail));
+    }
+}
+
 void PopupHost::noteShown(const QString &name, bool created)
 {
     win::logDebug(QStringLiteral("popup `%1` shown in %2 ms%3")
@@ -437,6 +464,8 @@ void PopupHost::showSwitch(SwitchRequest request)
         centreOnCursorScreen(window, m_switchModel->cardWidth(), m_switchModel->cardHeight());
     }
     activateWindow(window);
+    // 卡片一出来就把输入法切成英文（筛选框匹配的是进程名，不是中文）。
+    switchUseEnglishInput();
     noteShown(QStringLiteral("switch"), created);
 }
 
