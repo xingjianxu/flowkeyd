@@ -1,6 +1,6 @@
-// 窗口切换器模型（`app::WindowListModel`）的纯逻辑测试：筛选（进程名 + 标题）、
-// `可见/总数` 计数、「只剩一个窗口就直接激活」、`Enter`/`Esc`/方向键、
-// 悬停即高亮、几何与角色名。
+// 窗口切换器模型（`app::WindowListModel`）的纯逻辑测试：筛选（进程名前缀，
+// 标题不参与）、`可见/总数` 计数、「只剩一个窗口就直接激活」、
+// `Enter`/`Esc`/方向键、悬停即高亮、几何与角色名。
 //
 // **窗口枚举与真正的激活不在这里**：那是 `platform/win/window` 与
 // `app::Dispatcher` 的活儿，需要真实桌面。
@@ -61,7 +61,8 @@ class TestWindowListModel : public QObject
 
 private slots:
     void itemsExposeRolesAndGeometry();
-    void filterMatchesProcessAndTitle();
+    void filterMatchesProcessPrefixOnly();
+    void titlesDoNotParticipateInTheFilter();
     void uniqueMatchAutoChoosesTheItem();
     void emptyFilterNeverAutoChooses();
     void multipleMatchesDoNotAutoChoose();
@@ -103,25 +104,50 @@ void TestWindowListModel::itemsExposeRolesAndGeometry()
              model.listTop() + 4 * (model.rowHeight() + model.rowSpacing()) + model.listBottom());
 }
 
-void TestWindowListModel::filterMatchesProcessAndTitle()
+void TestWindowListModel::filterMatchesProcessPrefixOnly()
 {
     app::WindowListModel model;
     model.setItems(std::nullopt, sampleItems());
 
-    // 进程名（`chrome` 命中 `chrome.exe`）。
+    // 完整进程名（`chrome` 是 `chrome.exe` 的前缀）。
     QCOMPARE(decisionOf(model.setFilter(QStringLiteral("chrome"))), QStringLiteral("choose"));
     QCOMPARE(model.visibleCount(), 1);
     QCOMPARE(model.selected(), 0);
 
-    // 标题也参与匹配（`visual` 命中条目 3 的标题）。
-    model.setFilter(QStringLiteral("visual"));
-    QCOMPARE(model.visibleCount(), 1);
-    QCOMPARE(indexOf(model.setFilter(QStringLiteral("visual"))), -1);
-    QCOMPARE(model.itemIndexForVisible(0), std::optional<int>(2));
+    // 多个进程共享同一个前缀时都得留下。
+    QCOMPARE(decisionOf(model.setFilter(QStringLiteral("c"))), QStringLiteral("none"));
+    QCOMPARE(model.visibleCount(), 2);
+    QCOMPARE(model.itemIndexForVisible(0), std::optional<int>(1));
+    QCOMPARE(model.itemIndexForVisible(1), std::optional<int>(2));
 
-    // 大小写无关。
-    model.setFilter(QStringLiteral("CHROME"));
+    // 前缀而不是子串：`hrome` 不是任何进程名的开头。
+    QCOMPARE(decisionOf(model.setFilter(QStringLiteral("hrome"))), QStringLiteral("none"));
+    QCOMPARE(model.visibleCount(), 0);
+    QVERIFY(!model.hasMatches());
+
+    // 大小写无关；首尾空白会被 trim 掉。
+    QCOMPARE(decisionOf(model.setFilter(QStringLiteral("CHROME"))), QStringLiteral("choose"));
     QCOMPARE(model.visibleCount(), 1);
+    QCOMPARE(decisionOf(model.setFilter(QStringLiteral("  code.exe  "))),
+             QStringLiteral("choose"));
+    QCOMPARE(model.itemIndexForVisible(0), std::optional<int>(2));
+}
+
+void TestWindowListModel::titlesDoNotParticipateInTheFilter()
+{
+    app::WindowListModel model;
+    model.setItems(std::nullopt, sampleItems());
+
+    // `visual` 只在条目 2 的标题里，`flowkeyd` 在三条标题里：都不该命中。
+    QCOMPARE(decisionOf(model.setFilter(QStringLiteral("visual"))), QStringLiteral("none"));
+    QCOMPARE(model.visibleCount(), 0);
+    QCOMPARE(decisionOf(model.setFilter(QStringLiteral("flowkeyd"))), QStringLiteral("none"));
+    QCOMPARE(model.visibleCount(), 0);
+
+    // 进程名里的子串也不命中（前缀才行）。
+    QCOMPARE(decisionOf(model.setFilter(QStringLiteral("notepad.exe"))),
+             QStringLiteral("choose"));
+    QCOMPARE(model.itemIndexForVisible(0), std::optional<int>(3));
 }
 
 void TestWindowListModel::uniqueMatchAutoChoosesTheItem()
@@ -130,9 +156,9 @@ void TestWindowListModel::uniqueMatchAutoChoosesTheItem()
     model.setItems(std::nullopt, sampleItems());
 
     // 先筛掉一部分（还剩两条），再筛到唯一：返回的必须是**条目**下标，不是行下标。
-    QCOMPARE(decisionOf(model.setFilter(QStringLiteral("flowkeyd"))), QStringLiteral("none"));
-    QCOMPARE(model.visibleCount(), 3);
-    const QVariantMap chosen = model.setFilter(QStringLiteral("notepad"));
+    QCOMPARE(decisionOf(model.setFilter(QStringLiteral("c"))), QStringLiteral("none"));
+    QCOMPARE(model.visibleCount(), 2);
+    const QVariantMap chosen = model.setFilter(QStringLiteral("n"));
     QCOMPARE(decisionOf(chosen), QStringLiteral("choose"));
     QCOMPARE(indexOf(chosen), 3);
 }
@@ -163,8 +189,12 @@ void TestWindowListModel::multipleMatchesDoNotAutoChoose()
     QCOMPARE(decisionOf(model.setFilter(QStringLiteral("chrome"))), QStringLiteral("none"));
     QCOMPARE(model.visibleCount(), 2);
 
-    // 补一个标题片段才唯一。
-    const QVariantMap chosen = model.setFilter(QStringLiteral("b"));
+    // 标题不参与筛选，所以同一个程序的多个窗口不能再靠打字区分，
+    // 只能 `↑`/`↓` + `Enter`（或鼠标点选）。
+    QCOMPARE(decisionOf(model.setFilter(QStringLiteral("b"))), QStringLiteral("none"));
+    QCOMPARE(model.visibleCount(), 0);
+    QCOMPARE(decisionOf(model.setFilter(QStringLiteral("chrome"))), QStringLiteral("none"));
+    const QVariantMap chosen = model.activate(1);
     QCOMPARE(decisionOf(chosen), QStringLiteral("choose"));
     QCOMPARE(indexOf(chosen), 1);
 }
@@ -190,17 +220,16 @@ void TestWindowListModel::activateReturnsTheItemIndex()
 {
     app::WindowListModel model;
     model.setItems(std::nullopt, sampleItems());
-    model.setFilter(QStringLiteral("flowkeyd")); // 命中 wezterm / chrome / notepad 三条
+    model.setFilter(QStringLiteral("c")); // 命中 chrome.exe 与 code.exe 两条
 
-    QCOMPARE(model.visibleCount(), 3);
-    QCOMPARE(model.itemIndexForVisible(0), std::optional<int>(0));
-    QCOMPARE(model.itemIndexForVisible(1), std::optional<int>(1));
-    QCOMPARE(model.itemIndexForVisible(2), std::optional<int>(3));
+    QCOMPARE(model.visibleCount(), 2);
+    QCOMPARE(model.itemIndexForVisible(0), std::optional<int>(1));
+    QCOMPARE(model.itemIndexForVisible(1), std::optional<int>(2));
 
-    const QVariantMap chosen = model.activate(2);
+    const QVariantMap chosen = model.activate(1);
     QCOMPARE(decisionOf(chosen), QStringLiteral("choose"));
-    QCOMPARE(indexOf(chosen), 3);
-    QCOMPARE(model.selected(), 2);
+    QCOMPARE(indexOf(chosen), 2);
+    QCOMPARE(model.selected(), 1);
 
     // 空结果时没有可激活的。
     model.setFilter(QStringLiteral("zzz"));

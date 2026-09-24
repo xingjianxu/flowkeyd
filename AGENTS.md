@@ -469,19 +469,21 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
     * 与 `desktop` 动作共用同一张未公开的版本表，所以**只有能读到桌面时**才有数字。
 
 21. **窗口切换器 `windows()` 与「轻碰 Win」（项目所有者 2026-09 要求）。**
-    `windows()` 弹出一张卡片，列出当前打开的程序窗口；输入就把**进程名 / 窗口标题**
-    筛掉，筛选到**只剩一个窗口时直接激活它**。它有自己的一套纯逻辑模型与 QML 卡片
-    （`app/window_list_model.*` + `qml/SwitchPopup.qml`），走 `PopupHost` 那条既有
-    分工：窗口枚举与激活在动作线程上做，弹窗只在 GUI 线程上显示，选中之后把活儿投
-    回动作线程（`Dispatcher::submitCall`）。拍板的细节：
+    `windows()` 弹出一张卡片，列出当前打开的程序窗口；输入就按**进程名前缀**
+    把窗口筛掉，筛选到**只剩一个窗口时直接激活它**。它有自己的一套纯逻辑模型与
+    QML 卡片（`app/window_list_model.*` + `qml/SwitchPopup.qml`），走 `PopupHost`
+    那条既有分工：窗口枚举与激活在动作线程上做，弹窗只在 GUI 线程上显示，选中
+    之后把活儿投回动作线程（`Dispatcher::submitCall`）。拍板的细节：
     * 枚举判据是 `win::window::listOpenWindows()`：可见、无属主、非
       `WS_EX_TOOLWINDOW`、有标题、尺寸非零、不是外壳的 `Progman`，并且**跳过
       flowkeyd 自己的进程**。同一套判据抽成了 `win::window::isMainWindow()`
       （`window_rule` 的 `isPlaceableWindow` 也改用它）。列表按 Z 序（最近用过的
       在前），跨虚拟桌面的窗口也会列出来（激活走 `raiseWindow`，会把视图切过去）。
-    * 筛选是**子串匹配**（进程名 + 标题），**不是模糊搜索**；自动激活的判据是
-      「只剩一个窗口」，不是「只剩一个进程」——同一进程有多个窗口时可以继续打标题
-      里的词，或用 `↑`/`↓` + `Enter` / 鼠标点选（悬停即高亮）。
+    * 筛选是**进程名的大小写无关前缀匹配**（项目所有者 2026-09 拍板：“只按进程名
+      前缀”，标题只显示、不参与），**不是子串、也不是模糊搜索**：打 `chr` 命中
+      `chrome.exe`，打 `hrome` 不命中。自动激活的判据是「只剩一个窗口」，不是
+      「只剩一个进程」——同一进程有多个窗口时改用 `↑`/`↓` + `Enter` / 鼠标点选
+      （悬停即高亮），**不能再靠打字区分**（标题不再参与匹配）。
     * **「轻碰 Win」= 单个修饰键 + `trigger = "release"`。** 引擎对这种和弦采用
       「tap」语义（`Engine::m_pendingTaps`）：按下修饰键本身**放行**（因此 `Win+E` /
       `Win+L` 这些没被接管的系统组合不受影响），期间只要有别的按键按下就作废，
@@ -612,11 +614,11 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `src/app/log_model.h/.cpp`                | 日志窗口的模型：尾随日志文件（增量、半行、被截断的多字节 UTF-8）、最多 1000 行、按级别配色、子串过滤                                                                                                                        |
 | `src/app/menu_model.h/.cpp`               | `menu` 选单的**纯逻辑**（`QAbstractListModel`，只用 QtCore）：卡片外框几何（宽高、标题、底部提示）、高亮移动（到边界回绕）、单字符选中、`Esc`/`Enter` 语义，以及给 QML 排版用的几个常量（`listTop`/`rowHeight`/`rowSpacing`/`rowInset`/`badgeSize`）。**行几何与鼠标命中不归它管**：列表是真正的 QML `ListView` + 标准 `ItemDelegate`（见第 2 节第 9 条与第 10 节），所以它没有 `rowRect`/`hitTest`，也**没有** `highlighted`/`hovered` 角色（那两个名字被标准委托占了）。悬停仍由模型持有（`hover`/`setHover`），因为「`Enter` 选光标下那一条」是选单的语义 |
 | `src/app/help_model.h/.cpp`               | `help` 帮助的**纯逻辑**（同上）：筛选（和弦/`comment`/`name`/动作摘要）、`可见/总数` 计数、键盘选中项（**高亮就是它**，鼠标悬停不改高亮）、`Enter`/双击该执行还是先武装（危险动作两次确认）、三级 `Esc`，以及鼠标点选用的 `setSelected()`（**可单测**）。**列表的滚动、行几何与鼠标命中都不归它管**：那是一个真正的 QML `ListView` + `ItemDelegate` + Qt 自带的 `ScrollBar`（见第 2 节第 9 条）。`handleKey()` 只接导航键与 `Enter`/`Esc`，字符/退格/`Home`/`End` 放行给标准 `TextField` |
-| `src/app/window_list_model.h/.cpp`        | 窗口切换器（`windows` 动作）的**纯逻辑**（只用 QtCore、可单测）：筛选（进程名 + 窗口标题的子串）、`可见/总数` 计数、键盘选中项（悬停即高亮）、`Enter`/`Esc`，以及**自动激活**（筛选非空且只剩一个窗口时 `setFilter()` 直接返回 `choose`）。窗口枚举与激活不在这里（见 `platform/win/window` 与 `app/dispatcher`），列表的滚动/行几何/鼠标命中归标准 `ListView` + `ItemDelegate`（见第 2 节第 21 条） |
+| `src/app/window_list_model.h/.cpp`        | 窗口切换器（`windows` 动作）的**纯逻辑**（只用 QtCore、可单测）：筛选（**进程名前缀**，标题只显示、不参与）、`可见/总数` 计数、键盘选中项（悬停即高亮）、`Enter`/`Esc`，以及**自动激活**（筛选非空且只剩一个窗口时 `setFilter()` 直接返回 `choose`）。窗口枚举与激活不在这里（见 `platform/win/window` 与 `app/dispatcher`），列表的滚动/行几何/鼠标命中归标准 `ListView` + `ItemDelegate`（见第 2 节第 21 条） |
 | `src/app/popup_layout.h/.cpp`             | 三个弹窗共用的几何类型（`PopupRect`/`PopupPoint`）与纯函数 `centrePopup()`（先在工作区居中、再夹进屏幕；**可单测**） |
 | `src/app/popup_host.h/.cpp`               | 把上面的模型挂到 QML 窗口上（选单 / 帮助 / 窗口切换器三个窗口）；抢前台（`requestActivate` + `win::window::raiseWindow` 的前台锁绕行）；在 Qt GUI 线程上创建/复用窗口；用户选完（或按 `Enter`/双击帮助里的一行 / 在切换器里选中一个窗口）把活儿回投工作线程；`helpRun()` 负责把**可见行下标**换算成条目下标，并且**先把窗口藏起来再执行**（**GUI 线程亲和**） |
 | `src/qml/`                                | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`、`SwitchPopup.qml`（四个文件都在开头写了 `pragma ComponentBehavior: Bound`）；配色一律用 `palette`，没有单独的 `Style.qml`；中文一律 `font.family: "Microsoft YaHei"`（默认族 `Segoe UI Variable` 没有中文字形，不管会回退到宋体，见第 10 节）。`HelpPopup.qml` 与 `MenuPopup.qml` 里除了卡片外框与按键徽标全是标准控件：帮助的筛选框是 `TextField`、列表是 `ListView` + Qt 自带 `ScrollBar` + `ItemDelegate`（列表只占行区域，不再需要表头/底部的遮罩）；选单的列表同样是 `ListView` + `ItemDelegate`（不滚动，所以没有滚动条；悬停与点击全部由委托提供）；窗口切换器（`SwitchPopup.qml`）与帮助同一套骨架，每行显示窗口标题 + 进程名 |
-| `tests/`                                  | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_log_tail`、`tst_audio`、`tst_autostart`（自启的纯逻辑：XML 渲染/解析、输出解码、路径比较；**不碰真实计划任务**）、`tst_interactive`（需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`，否则 skip；含剪贴板/音量/窗口后端/虚拟桌面/钉在所有桌面/置顶的真机验证）、`tst_menu_model`、`tst_help_model`、`tst_window_list_model`（窗口切换器的纯逻辑：筛选、唯一匹配自动激活、`Enter`/`Esc`、悬停高亮）、`tst_power_table`、`tst_desktop_table`、`tst_placement`（`window_rule` 的纯逻辑：显示器排序/选择、重连检测、摆放几何、匹配与摘要）、`tst_layout`、`tst_version`（构建时间戳与版本字符串的纯逻辑；只碰临时文件）、`tst_desktop_badge`（托盘数字徽标的文字与字号） |
+| `tests/`                                  | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_log_tail`、`tst_audio`、`tst_autostart`（自启的纯逻辑：XML 渲染/解析、输出解码、路径比较；**不碰真实计划任务**）、`tst_interactive`（需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`，否则 skip；含剪贴板/音量/窗口后端/虚拟桌面/钉在所有桌面/置顶的真机验证）、`tst_menu_model`、`tst_help_model`、`tst_window_list_model`（窗口切换器的纯逻辑：进程名前缀筛选、标题不参与、唯一匹配自动激活、`Enter`/`Esc`、悬停高亮）、`tst_power_table`、`tst_desktop_table`、`tst_placement`（`window_rule` 的纯逻辑：显示器排序/选择、重连检测、摆放几何、匹配与摘要）、`tst_layout`、`tst_version`（构建时间戳与版本字符串的纯逻辑；只碰临时文件）、`tst_desktop_badge`（托盘数字徽标的文字与字号） |
 | `scripts/acceptance.ps1`                  | 桌面行为的验收脚本（注入按键 + 焦点捕捉窗口的外部观察，116 项检查：含弹窗滚轮/滚动条拖动/鼠标点选与点筛选框/鼠标点选单条目/`Enter` 与双击真的执行动作/危险动作两次确认）；需交互式桌面，**不属于 `ctest`**，见第 5 节与阶段 9。它用 `--no-elevate` 起临时守护进程，所以**不会**碰真实的自启计划任务 |
 
 > `scripts/install.ps1` / `scripts/uninstall.ps1` **已删除**（2026-09）：自启的注册、
@@ -2608,6 +2610,11 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   * 客户端 `--quit` 先 `OpenEventW`，找不到就是“没有在跑的实例”（不是错误）；
     然后 `SetEvent`，再轮询 `OpenEventW`（**关掉自己的句柄之后**，因为句柄本身
     会吊住对象）直到对象消失 —— 那就是“真的退干净了”，脚本可以接着替换 exe。
+  * **`--quit` 的事件名按“传进去的配置路径字符串”命名**，所以停一个开发实例必须
+    用与启动时**同一个拼写**：本机实测 `--config tmp\switcher.lua` 停不掉那个用
+    `--config D:\prj\flowkeyd\tmp\switcher.lua` 启动的实例（它只会报一句
+    `no running instance`、退出码 1，看上去像“守护进程已经自己退了”），
+    换成绝对路径立刻就停干净了。脚本里一律传绝对路径。
   * **坑：完整性级别的 “no write up”。** 默认安全描述符建出来的对象带着创建者
     的完整性标签（提权的守护进程是 High），而 `SetEvent` 要的
     `EVENT_MODIFY_STATE` 算**写**权限 —— 非提权的 `--quit` 会直接吃
@@ -3985,6 +3992,32 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > `build\dist-release` 重新拉起（日志 `31 hotkey(s)`、`keyboard hook installed`，
 > 自启任务仍指向那个路径）。
 
+> **2026-09 变更（窗口切换器的筛选改成「进程名前缀」）的 DoD**：项目所有者要求
+> “根据用户输入的内容匹配窗口进程的前缀进行过滤”，并拍板**只按进程名前缀**
+> （窗口标题只显示、不参与）。`windows-debug` 与 `windows-release` 都是
+> `build exit 0`、零编译警告（release 里那两句 `dxcompiler.dll` 是 `windeployqt`
+> 自己的提示）；`ctest --test-dir build/windows-debug` **24 个测试目标全绿**
+> （`tst_window_list_model`：`filterMatchesProcessAndTitle` 换成
+> `filterMatchesProcessPrefixOnly`，新增 `titlesDoNotParticipateInTheFilter`，
+> `uniqueMatchAutoChoosesTheItem` / `multipleMatchesDoNotAutoChoose` /
+> `activateReturnsTheItemIndex` 改成前缀语义下的样本。
+> `qmllint -I C:\Qt\6.11.2\mingw_64\qml src\qml\SwitchPopup.qml` 零警告；
+> `flowkeyd --check --config flowkeyd.lua.example` → `OK (46 hotkey(s), 3 remap(s),
+> 7 window rule(s))`、零警告。端到端（一次性配置 `tmp/switcher.lua` +
+> `FLOWKEYD_ACCEPT_INJECTED=1` + `tmp/switch-verify.ps1`，5 项检查全绿）：
+> 枚举到 9 个窗口、打开的卡片标题是 `flowkeyd 窗口 — 9 个`（与外部枚举一致）；
+> 注入 `rome`（`chrome.exe` 的子串但不是前缀）→ `— 0 个`，**旧实现会命中**，
+> 这就是本次行为变化的直接证据；Esc 后重开回到 9 个（筛选复位）；注入 `chr`
+> → 只剩 1 个并**自动激活 Chrome**（卡片关掉，守护进程日志是
+> `` `window-switcher` -> Activate "... - Google Chrome" (from the window switcher) ``）。
+> `scripts/acceptance.ps1` **没跑**：它不覆盖窗口切换器（脚本里没有任何 switch
+> 相关的检查），而本次只动了一个模型 + QML，没碰钩子/引擎/分发/窗口后端。
+> 行为变化：窗口切换器的筛选从「进程名 + 标题的子串」改成「**进程名的
+> 大小写无关前缀**」；标题不再参与匹配，同一个程序的多个窗口改用 `↑`/`↓` 或
+> 鼠标点选（自动激活的判据仍是“只剩一个窗口”）。README（快速上手、动作表、
+> 「窗口切换器」一节、已知限制）、本文件第 2 节第 21 条、第 4 节代码地图与
+> 第 14 节已同步。
+
 ---
 
 ## 12. 本期不做的（有意留白）与后续工作
@@ -4198,8 +4231,8 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、
   `"volume:up"`、`"media:next"`、`"clipboard:get"`、`"window:minimize"`、
   `"desktop:1"`、`"power:sleep"`、裸关键字 `reload`/`quit`/`help`/`windows`/`none`。
 * `windows([title])` 是**窗口切换器**（见第 2 节第 21 条）：列出当前打开的程序
-  窗口，输入按进程名 / 标题筛选，只剩一个窗口时直接激活它；常见绑法是
-  `keys = "LWin"` + `trigger = "release"`（「轻碰 Win」）。
+  窗口，输入按**进程名前缀**筛选（标题只显示、不参与），只剩一个窗口时直接
+  激活它；常见绑法是 `keys = "LWin"` + `trigger = "release"`（「轻碰 Win」）。
 * **完全没有动作**的快捷键就是一个按键屏蔽器（会吞掉它匹配到的按键）。
 * `window` 的 `toggle`（默认**开**）只对 `op = "activate"` 有意义；
   `launch` 回退不套用它；显式 `toggle = false` 才关闭。

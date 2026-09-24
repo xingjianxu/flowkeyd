@@ -28,16 +28,13 @@ constexpr int kListTop = kPad + kHeaderHeight + kFilterGap + kFilterHeight + kLi
 /// 列表区底部：底部提示 + 它上面的空隙 + 卡片内边距。
 constexpr int kListBottom = kFooterGap + kFooterHeight + kPad;
 
-/// 一个窗口参与筛选的文本（小写，只在装载时算一次）。
+/// 一个窗口的进程名（小写，只在装载时算一次）。
 ///
-/// 进程名排在前面，标题跟在后面：两者都能匹配（`proc` 命中 `chrome.exe`，
-/// 也可以直接打标题里的词），但进程名是用户最常用的入口。
-QString haystack(const WindowListEntry &entry)
+/// **筛选只看进程名**（前缀匹配，标题不参与）：打 `chr` 命中 `chrome.exe`；
+/// 标题只用于卡片上显示，让用户自己分辨同一个程序的多个窗口。
+QString processKey(const WindowListEntry &entry)
 {
-    QString text = entry.process;
-    text += QLatin1Char(' ');
-    text += entry.title;
-    return text.toLower();
+    return entry.process.toLower();
 }
 
 QVariantMap noneDecision()
@@ -62,10 +59,10 @@ void WindowListModel::setItems(std::optional<QString> title, std::vector<WindowL
     beginResetModel();
     m_title = std::move(title);
     m_items = std::move(items);
-    m_haystacks.clear();
-    m_haystacks.reserve(m_items.size());
+    m_processes.clear();
+    m_processes.reserve(m_items.size());
     for (const WindowListEntry &entry : m_items) {
-        m_haystacks.push_back(haystack(entry));
+        m_processes.push_back(processKey(entry));
     }
     m_filter.clear();
     refilter();
@@ -129,7 +126,7 @@ int WindowListModel::cardRadius() const
 
 QString WindowListModel::filterPlaceholder() const
 {
-    return tr("输入进程名或标题筛选…");
+    return tr("输入进程名前缀筛选…");
 }
 
 QString WindowListModel::emptyMessage() const
@@ -349,10 +346,12 @@ QHash<int, QByteArray> WindowListModel::roleNames() const
 
 void WindowListModel::refilter()
 {
+    // 大小写无关的**前缀**匹配：`chr` 命中 `chrome.exe`，`hrome` 不命中。
+    // 标题不参与（见头文件的说明）。
     const QString needle = m_filter.trimmed().toLower();
     m_visible.clear();
-    for (std::size_t index = 0; index < m_haystacks.size(); ++index) {
-        if (needle.isEmpty() || m_haystacks[index].contains(needle)) {
+    for (std::size_t index = 0; index < m_processes.size(); ++index) {
+        if (needle.isEmpty() || m_processes[index].startsWith(needle)) {
             m_visible.push_back(static_cast<int>(index));
         }
     }

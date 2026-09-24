@@ -4,14 +4,14 @@ import QtQuick
 import QtQuick.Controls.FluentWinUI3
 
 // `windows` 动作弹出的**窗口切换器**：列出当前所有程序窗口，打字就把进程名
-// （窗口标题也参与）筛掉；只剩一个窗口时直接激活它。
+// 前缀匹配的窗口留下；只剩一个窗口时直接激活它。
 //
 // 与 `HelpPopup.qml` 同一套骨架：除了卡片外框（无边框圆角窗口总得有一块底）
 // 之外全是标准控件 —— 筛选框是真正的 `TextField`，列表是 `ListView` +
 // 标准 `ItemDelegate`，滚动由 Qt 自带的 `ScrollBar` 负责。
 //
-// 逻辑全在 `app::WindowListModel`（纯逻辑、有单测）：筛选、`可见/总数` 计数、
-// 键盘选中项、`Enter`/`Esc`，以及「只剩一个窗口就直接激活」。
+// 逻辑全在 `app::WindowListModel`（纯逻辑、有单测）：筛选（进程名前缀）、
+// `可见/总数` 计数、键盘选中项、`Enter`/`Esc`，以及「只剩一个窗口就直接激活」。
 // QML 只做两件事：
 //   * 把 `setFilter()` / `handleKey()` / `activate()` 给的决定执行掉；
 //   * 把模型的状态（筛选文本、选中行、计数）同步给控件。

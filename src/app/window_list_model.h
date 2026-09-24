@@ -5,6 +5,11 @@
 // 直接覆盖它们。窗口枚举（`EnumWindows`）与真正的激活动作都在 `platform` /
 // `app::Dispatcher` 里 —— 模型只认「标题 + 进程名」这两个字符串。
 //
+// **筛选 = 进程名的前缀匹配，窗口标题不参与**（项目所有者 2026-09 拍板，见
+// AGENTS.md 第 2 节第 21 条）：打 `chr` 命中 `chrome.exe`，打 `hrome` 不命中。
+// 标题只在卡片上显示，用来让用户自己分辨同一个程序的多个窗口（那种情况用
+// `↑`/`↓` 或鼠标点选，不再靠打字区分）。
+//
 // **界面上的交互全部交给标准控件**（与 `HelpPopup.qml` 同一条路线）：
 //   * 筛选框是真正的 `TextField`：光标、选区、输入法、鼠标点选全部由 Qt 负责，
 //     模型只在 `setFilter()` 里接收最终文本；
@@ -33,9 +38,10 @@ namespace flowkeyd::app {
 /// 切换器里显示的一个窗口（纯显示数据，句柄不在这里）。
 struct WindowListEntry
 {
-    /// 窗口标题。
+    /// 窗口标题（只用来显示，不参与筛选）。
     QString title;
     /// 属主进程的小写可执行文件名（`chrome.exe`）；拿不到时为空串。
+    /// 筛选就是拿用户输入与它做前缀匹配。
     QString process;
 };
 
@@ -131,6 +137,9 @@ public:
 
     /// 换筛选串。**QML 的筛选框直接调它**（`onTextChanged`）。
     ///
+    /// 匹配规则是「大小写无关的**进程名前缀**」（首尾空白先trim掉）；窗口标题
+    /// 不参与。空串表示不筛（全都可见）。
+    ///
     /// 返回值是一个决定：筛选非空且只剩一个窗口时是
     /// `{ decision: "choose", index }`（`index` 是**条目**下标），QML 立刻把
     /// 它交给宿主；否则是 `{ decision: "none", index: -1 }`。
@@ -177,8 +186,8 @@ private:
 
     std::optional<QString> m_title;
     std::vector<WindowListEntry> m_items;
-    /// 与 `m_items` 一一对应的可搜索文本（小写：进程名 + 标题）。
-    std::vector<QString> m_haystacks;
+    /// 与 `m_items` 一一对应的可匹配文本（小写进程名，装载时算一次）。
+    std::vector<QString> m_processes;
     /// 用户输入的筛选串（原样保留大小写）。
     QString m_filter;
     /// 当前筛选结果在 `m_items` 里的下标。
