@@ -4524,6 +4524,9 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > cycle 3 close : input method restored (...) + Activate ...   <- 选一个窗口的路径也还原
 > cycle 4 open  : already english (conversion 0xc00)
 > ```
+> release 版（`build\windows-release\flowkeyd.exe`，与 `dist-release` 同一份二进制）
+> 跑了同一份脚本，结果逐行一致（只是标志位这次是 `0xab0`/`0xab1` —— 又一次印证
+> “不同窗口报出的标志位不一样”，`NATIVE` 那一位才是我们要的）。
 > 另有一个探究性实验（`tmp/ime-help.ps1`）确认了「本进程的几个窗口互相看得见
 > 这个模式」（在帮助窗口里按 `Shift` 切成中文之后，切换器窗口读到的转换状态就带
 > `NATIVE` 位：`0xfb1`，字母数字时是 `0xfb0`）以及**别的进程完全不受影响**；
