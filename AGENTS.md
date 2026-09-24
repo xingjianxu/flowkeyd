@@ -142,7 +142,7 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | 日志窗口   | **进程内的 QML 窗口**（FluentWinUI3），尾随同一个日志文件                                                     |
 | 选单/帮助  | **QML 窗口**（FluentWinUI3），跑在 Qt GUI 线程上                                                              |
 | 示例配置   | `flowkeyd.lua.example`                                                                                        |
-| 自动化测试 | Qt Test 单元测试 + **`scripts/acceptance.ps1`**（116 项检查，注入按键 + 高亮/弹窗滚轮/拖动滚动条/“滚动不改键盘选中项”/鼠标点选与点筛选框/鼠标点选单条目/`Enter` 与双击真的执行动作/危险动作两次确认的外部验收；`--simulate`/`--selftest`/`--probe` 本期不做，见第 12 节） |
+| 自动化测试 | Qt Test 单元测试 + **`scripts/acceptance.ps1`**（118 项检查，注入按键 + 高亮/弹窗滚轮/拖动滚动条/“滚动不改键盘选中项”/鼠标点选与点筛选框/鼠标点选单条目/`Enter` 与双击真的执行动作/危险动作两次确认/三个弹窗不进任务栏的外部验收；`--simulate`/`--selftest`/`--probe` 本期不做，见第 12 节） |
 | 依赖管理   | CMake Presets + Ninja，`vendor/lua` 静态编进二进制                                                            |
 
 ---
@@ -175,7 +175,7 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
    `--check` / `--list` / `--list-keys` 保留（它们是产品功能，也是手工验证的
    主要工具）。
    → **阶段 9 补充（2026-09）**：这三个开关仍然不做，但“手工冒烟清单”已经
-   自动化成了 **`scripts/acceptance.ps1`**（116 项检查），它靠一个
+   自动化成了 **`scripts/acceptance.ps1`**（118 项检查），它靠一个
    **只给测试用的后门** `FLOWKEYD_ACCEPT_INJECTED=1` 抬升“丢弃注入输入”
    那道过滤（见第 5 节与阶段 9）。
    这是对一个“当时无法验证”的条款的修订，不是推翻：不变量 2 本身没动，
@@ -519,6 +519,31 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
       `powershell.exe` 开三个窗口，注入 `LWin` → 打字 `swwinhost` → 按 `2`/`3`，
       对日志里的 `Activate "…"` 断言映射正确），截图看徽标与底部提示。
 
+23. **三个弹窗不进任务栏，而且启动时就预热好（项目所有者 2026-09 要求：
+    “所有的弹出窗口，弹出时，能否不在任务栏显示窗口？有没有办法提高其弹出速度，
+    尤其是首次弹出速度”）。** 两件事一起做：
+    * **不进任务栏**：`MenuPopup.qml` / `HelpPopup.qml` / `SwitchPopup.qml` 的
+      `flags` 都加了 `Qt.Tool`（Windows 上就是 `WS_EX_TOOLWINDOW`）。`Qt.Tool`
+      窗口仍然能被激活、能拿键盘焦点（验证过：注入和弦后
+      `GetForegroundWindow()` 就是弹窗），只是不加任务栏按钮、不进 `Alt+Tab`。
+      日志窗口**没有**改：它是用户主动打开的普通窗口，留在任务栏里是对的
+      （项目所有者选的“只三个弹窗”）。
+    * **首次弹出不再现场付钱**：`PopupHost::preload()` 在启动后的第一个事件
+      循环回合被 `main` 排队调用，把三个窗口建出来、填一份假数据各渲染一帧
+      （**透明度 0 + 屏幕之外**，用户看不到也点不到），首帧到了就藏起来。
+      实测（`build/windows-debug`，见第 10 节）：冷启动第一次弹出要 **224 ms**
+      才画出第一帧（其中 ~170 ms 是进程首次渲染的固定开销：QRhi/D3D11 设备、
+      交换链、Quick 的材质着色器首次编译；~50 ms 是该窗口的 QML 加载与样式装配），
+      预热之后第一次弹出 **~30 ms**（三个弹窗都测了：menu 27 ms、help 59 ms、
+      switch 52 ms 首帧，后续 13–37 ms）。
+    * 预热用的假数据**不需要**清理：每次真实弹出都会先 `setItems` 覆盖。行数写得多
+      于一屏（menu 8 行、help/switch 14 行）是为了让 `ListView` 把一屏的
+      `ItemDelegate` 与 `ScrollBar` 也装配一遍。
+    * 预热窗口是**屏幕之外**的：它虽然透明度 0，但仍然是置顶窗口，留在屏幕里
+      万一赶上鼠标点击就会把那次点击吃掉。
+    * 验收脚本新增两条检查（“选单/帮助窗口不在任务栏里”），用
+      `IsTaskbarWindow()`（可见 + 无属主 + 无 `WS_EX_TOOLWINDOW`）从外面断言。
+
 ---
 
 ## 3. 环境与工具链
@@ -600,7 +625,7 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `assets/icons/flowkeyd-<n>.png`           | 运行时 `QIcon` 的 9 个尺寸（16/20/24/32/40/48/64/128/256），编在 exe 自己的 qrc 里（`:/icons/…`，见 `src/app/app_icon.*`）。**要提交**                                        |
 | `assets/flowkeyd.rc.in`                   | 图标资源的 .rc 模板（`*.rc` 在 `.gitignore` 里，所以模板后缀是 `.in`）：CMake 在配置时把它展开成 `build/<preset>/generated/flowkeyd.rc`，`.ico` 写**绝对路径**（windres 不把 `ICON` 的相对路径当相对 .rc 文件）。纯 ASCII |
 | `tools/icon_gen/main.cpp`                 | 一次性工具（`flowkeyd_icon_gen` + `icons` 目标，`EXCLUDE_FROM_ALL`，需要 Qt6::Svg）：把 `logo.svg` 光栅化成上面那两个产物。两条 profile 的正常构建都不碰它（见第 10 节）
-| `src/main.cpp`                            | `AttachConsole` + CLI 分发 + 日志初始化 + **提权之前的单实例预检（“已在运行”原生提示框）** + 开机自启的确认框 + 组装 Runtime + **把 `Runtime::desktopChanged` 接到 `Tray::setDesktop`（图标在这里现画）** + Qt 事件循环                                                                                                                                               |
+| `src/main.cpp`                            | `AttachConsole` + CLI 分发 + 日志初始化 + **提权之前的单实例预检（“已在运行”原生提示框）** + 开机自启的确认框 + 组装 Runtime + **把 `Runtime::desktopChanged` 接到 `Tray::setDesktop`（图标在这里现画）** + **在事件循环第一个回合排队 `PopupHost::preload()`（弹窗预热）** + Qt 事件循环                                                                                                                                               |
 | `src/cli.h/.cpp`                          | 参数解析 + 中文帮助文本（手写，不用 CLI11）；`--quit` 走单独的早期分支：不装钩子、不提权，也不在 `isOfflineCommand()` 里（它确实要去碰另一个进程）；`helpText()`/`versionText()` 都接收 `core::buildVersion()` 给出的构建版本号                                                                                                                                                                                 |
 | `src/core/`                               | **纯逻辑层：不碰 Win32、不碰 Qt GUI**（只用 QtCore 的类型），因此能被 Qt Test 直接测                                                                                                                                        |
 | `src/core/keys.h/.cpp`                    | 键名 ↔ `VK` 表、`Modifiers`、`Chord`、AutoHotkey 发送脚本解析、小键盘 Enter 的内部伪码 `0x100`、`key_from_hook()`/`native_key()`                                                                                            |
@@ -641,10 +666,10 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `src/app/help_model.h/.cpp`               | `help` 帮助的**纯逻辑**（同上）：筛选（和弦/`comment`/`name`/动作摘要）、`可见/总数` 计数、键盘选中项（**高亮就是它**，鼠标悬停不改高亮）、`Enter`/双击该执行还是先武装（危险动作两次确认）、三级 `Esc`，以及鼠标点选用的 `setSelected()`（**可单测**）。**列表的滚动、行几何与鼠标命中都不归它管**：那是一个真正的 QML `ListView` + `ItemDelegate` + Qt 自带的 `ScrollBar`（见第 2 节第 9 条）。`handleKey()` 只接导航键与 `Enter`/`Esc`，字符/退格/`Home`/`End` 放行给标准 `TextField` |
 | `src/app/window_list_model.h/.cpp`        | 窗口切换器（`windows` 动作）的**纯逻辑**（只用 QtCore、可单测）：筛选（**进程名前缀**，标题只显示、不参与）、`可见/总数` 计数、键盘选中项（悬停即高亮）、`Enter`/`Esc`，**自动激活**（筛选非空且只剩一个窗口时 `setFilter()` 直接返回 `choose`）与**数字选择模式**（筛选到一个进程名的多个窗口时前 10 行分到 `1`..`9`/`0`，见第 2 节第 22 条）。窗口枚举与激活不在这里（见 `platform/win/window` 与 `app/dispatcher`），列表的滚动/行几何/鼠标命中归标准 `ListView` + `ItemDelegate`（见第 2 节第 21 条） |
 | `src/app/popup_layout.h/.cpp`             | 三个弹窗共用的几何类型（`PopupRect`/`PopupPoint`）与纯函数 `centrePopup()`（先在工作区居中、再夹进屏幕；**可单测**） |
-| `src/app/popup_host.h/.cpp`               | 把上面的模型挂到 QML 窗口上（选单 / 帮助 / 窗口切换器三个窗口）；抢前台（`requestActivate` + `win::window::raiseWindow` 的前台锁绕行）；在 Qt GUI 线程上创建/复用窗口；用户选完（或按 `Enter`/双击帮助里的一行 / 在切换器里选中一个窗口）把活儿回投工作线程；`helpRun()` 负责把**可见行下标**换算成条目下标，并且**先把窗口藏起来再执行**（**GUI 线程亲和**） |
-| `src/qml/`                                | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`、`SwitchPopup.qml`（四个文件都在开头写了 `pragma ComponentBehavior: Bound`）；配色一律用 `palette`，没有单独的 `Style.qml`；中文一律 `font.family: "Microsoft YaHei"`（默认族 `Segoe UI Variable` 没有中文字形，不管会回退到宋体，见第 10 节）。`HelpPopup.qml` 与 `MenuPopup.qml` 里除了卡片外框与按键徽标全是标准控件：帮助的筛选框是 `TextField`、列表是 `ListView` + Qt 自带 `ScrollBar` + `ItemDelegate`（列表只占行区域，不再需要表头/底部的遮罩）；选单的列表同样是 `ListView` + `ItemDelegate`（不滚动，所以没有滚动条；悬停与点击全部由委托提供）；窗口切换器（`SwitchPopup.qml`）与帮助同一套骨架，每行显示窗口标题 + 进程名（数字选择模式下行首还有一个数字冒标） |
+| `src/app/popup_host.h/.cpp`               | 把上面的模型挂到 QML 窗口上（选单 / 帮助 / 窗口切换器三个窗口）；抢前台（`requestActivate` + `win::window::raiseWindow` 的前台锁绕行）；在 Qt GUI 线程上创建/复用窗口；用户选完（或按 `Enter`/双击帮助里的一行 / 在切换器里选中一个窗口）把活儿回投工作线程；`helpRun()` 负责把**可见行下标**换算成条目下标，并且**先把窗口藏起来再执行**（**GUI 线程亲和**）。另外 `preload()`（由 `main` 在事件循环第一个回合排队调用）把三个窗口建好、填假数据各渲染一帧再藏起来（透明度 0 + 屏幕外），把“进程首次渲染”的固定开销提到启动时（见第 2 节第 23 条）；顺带记两条 debug 日志：`popup `x` shown in N ms` 与 `painted its first frame N ms after the request` |
+| `src/qml/`                                | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`、`SwitchPopup.qml`（四个文件都在开头写了 `pragma ComponentBehavior: Bound`）；**三个弹窗的 `flags` 都带 `Qt.Tool`**（= `WS_EX_TOOLWINDOW`，不进任务栏/`Alt+Tab`；日志窗口故意不加，见第 2 节第 23 条）；配色一律用 `palette`，没有单独的 `Style.qml`；中文一律 `font.family: "Microsoft YaHei"`（默认族 `Segoe UI Variable` 没有中文字形，不管会回退到宋体，见第 10 节）。`HelpPopup.qml` 与 `MenuPopup.qml` 里除了卡片外框与按键徽标全是标准控件：帮助的筛选框是 `TextField`、列表是 `ListView` + Qt 自带 `ScrollBar` + `ItemDelegate`（列表只占行区域，不再需要表头/底部的遮罩）；选单的列表同样是 `ListView` + `ItemDelegate`（不滚动，所以没有滚动条；悬停与点击全部由委托提供）；窗口切换器（`SwitchPopup.qml`）与帮助同一套骨架，每行显示窗口标题 + 进程名（数字选择模式下行首还有一个数字冒标） |
 | `tests/`                                  | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_log_tail`、`tst_audio`、`tst_autostart`（自启的纯逻辑：XML 渲染/解析、输出解码、路径比较；**不碰真实计划任务**）、`tst_interactive`（需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`，否则 skip；含剪贴板/音量/窗口后端/虚拟桌面/钉在所有桌面/置顶的真机验证）、`tst_menu_model`、`tst_help_model`、`tst_window_list_model`（窗口切换器的纯逻辑：进程名前缀筛选、标题不参与、唯一匹配自动激活、`Enter`/`Esc`、悬停高亮）、`tst_power_table`、`tst_desktop_table`、`tst_placement`（`window_rule` 的纯逻辑：显示器排序/选择、重连检测、摆放几何、匹配与摘要）、`tst_layout`、`tst_version`（构建时间戳与版本字符串的纯逻辑；只碰临时文件）、`tst_desktop_badge`（托盘数字徽标的文字与字号） |
-| `scripts/acceptance.ps1`                  | 桌面行为的验收脚本（注入按键 + 焦点捕捉窗口的外部观察，116 项检查：含弹窗滚轮/滚动条拖动/鼠标点选与点筛选框/鼠标点选单条目/`Enter` 与双击真的执行动作/危险动作两次确认）；需交互式桌面，**不属于 `ctest`**，见第 5 节与阶段 9。它用 `--no-elevate` 起临时守护进程，所以**不会**碰真实的自启计划任务 |
+| `scripts/acceptance.ps1`                  | 桌面行为的验收脚本（注入按键 + 焦点捕捉窗口的外部观察，118 项检查：含弹窗滚轮/滚动条拖动/鼠标点选与点筛选框/鼠标点选单条目/`Enter` 与双击真的执行动作/危险动作两次确认/两个弹窗不在任务栏里）；需交互式桌面，**不属于 `ctest`**，见第 5 节与阶段 9。它用 `--no-elevate` 起临时守护进程，所以**不会**碰真实的自启计划任务 |
 
 > `scripts/install.ps1` / `scripts/uninstall.ps1` **已删除**（2026-09）：自启的注册、
 > 刷新与删除现在全在 `src/platform/win/autostart.*` 里，由守护进程自己在启动时做。
@@ -833,7 +858,7 @@ QML 模块注册之后，两条 profile 都要重新全量构建一次**。
 清单在下面（12 条），**从阶段 9 起有了自动化版本**：
 
 ```powershell
-# 116 项检查，约三分钟，会持续注入按键/抢焦点；按工作约定第 6 条先提醒用户
+# 118 项检查，约三分钟，会持续注入按键/抢焦点；按工作约定第 6 条先提醒用户
 # 只跑 release 那一份产物（见工作约定第 2 条，脚本默认 -Exe 就是它）
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance.ps1
 powershell.exe ... -Phase config                              # 只看配置，不注入按键
@@ -3202,6 +3227,85 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   `tst_interactive` 只能断言“测试自己的窗口不在列表里”，不能拿它验证“列表里有
   我的窗口”。
 
+#### 2026-09 新增：三个弹窗不进任务栏 + 启动预热（首次弹出不再卡一下）
+
+* **需求**（项目所有者）：“所有的弹出窗口，弹出时，能否不在任务栏显示窗口？
+  有没有办法提高其弹出速度，尤其是首次弹出速度”。拍板选了「只三个弹窗
+  （日志窗口不动）」+「启动后台预热」。
+* **`Qt.Tool` = Windows 的 `WS_EX_TOOLWINDOW`（先用一个一次性小程序量过）。**
+  `tmp/popflags`（一个只建 `QWindow`、40 行的探针）打印四种标志组合的
+  `GWL_EXSTYLE` / `GWL_STYLE` / 属主：
+
+  ```
+  Window|Frameless|OnTop   ex=0x00000008 toolwindow=0 owner=0  taskbar=1
+  +Tool                    ex=0x00000088 toolwindow=1 owner=0  taskbar=0
+  Tool only                ex=0x00000180 toolwindow=1 owner=0  taskbar=0
+  Popup / ToolTip          ex=0x00000088 toolwindow=1 owner=0  taskbar=0
+  ```
+
+  所以只要在 QML 的 `flags` 里加一个 `Qt.Tool`（`Qt.Window | Qt.Tool` 与
+  `Qt.Tool` 等价：`Qt.Tool` 自己就含 `Qt.Window` 那一位）。它**仍然能被激活、
+  能拿键盘焦点**（实测注入和弦之后 `GetForegroundWindow()` 就是弹窗、
+  `focused=1`），没有破坏“弹窗必须拿到键盘”那条不变量（第 7 节第 17 条）。
+  选 `Qt.Tool` 而不是 `Qt.Popup`：`Qt.Popup` 要抓鼠标、点外面自动关，而这两个
+  窗口的关闭逻辑在 QML 的 `onActiveChanged` 里。
+  **日志窗口不加**：它是用户主动打开的普通窗口，留在任务栏里是对的。
+* **冷启动的第一次弹出慢在哪（先量，再改）。** 在 `popup_host.cpp` 里加了两条
+  debug 日志（`popup \`x\` shown in N ms`、`popup \`x\` painted its first
+  frame N ms after the request`），配一个脚本 `tmp/popup-perf.ps1`
+  （一次性配置 + `--no-elevate --allow-multi --no-autostart --no-prompt`
+  + `FLOWKEYD_ACCEPT_INJECTED=1`，注入 `Ctrl+Alt+F9/F8/F7` 打开三个弹窗，
+  **从进程外**用 `EnumWindows` 忙轮询到弹窗可见的毫秒数，再把日志里的计时打出来）：
+
+  ```
+  冷启动（没开日志窗口）：menu  shown in 57 ms (created) → first frame 224 ms
+  对照（先开了日志窗口）：menu  shown in 13 ms (created) → first frame  56 ms
+  预热之后：              menu 27 ms / help 59 ms / switch 52 ms（首帧）
+  之后的第二、三次：      13–37 ms
+  ```
+
+  结论：**约 170 ms 是「进程第一次渲染」的固定开销**（QRhi/D3D11 设备 +
+  交换链 + Quick 自己那批材质着色器的首次编译），跟是哪个弹窗无关 —— 先开一个
+  日志窗口就能吃掉一大半；剩下的约 50 ms 才是这个窗口自己的 QML 加载/实例化与
+  `ItemDelegate`/`TextField`/`ScrollBar` 的装配。
+* **预热就是把这两笔钱提到启动时交。** `PopupHost::preload()`（由 `main` 用
+  `QTimer::singleShot(0, &popupHost, &app::PopupHost::preload)` 排队，所以
+  不拖慢“钩子已装好、快捷键可用”那一刻）把三个窗口建出来、填一份假数据、
+  **透明度 0 + 屏幕之外**显示，各自的 `frameSwapped` 到了就藏起来并恢复透明度。
+  实测预热本身只多花约 310 ms（`windows built in 80 ms`，三个窗口的首帧一起在
+  启动后约 310 ms 到），而第一次弹出从 224 ms 变成 27 ms。
+* **为什么是「透明度 0 + 屏幕外」，而不是只 `visible = false`**：隐藏的窗口
+  不渲染，`frameSwapped` 永远不来，等于什么都没预热。**屏幕外是必须的**：
+  透明度 0 的置顶窗口仍然可能吃掉鼠标点击（它就盖在桌面上），放到
+  `QGuiApplication::screens()` 并集的右边 64 px 就不用担心了。实测屏幕外的窗口
+  照样出帧（没有出现“永远等不到首帧”），但代码里仍留了一条 2 秒的兜底定时器
+  （超时就藏起来并记一条 warning），免得某个合成器/驱动真的不合成它。
+* **真实弹出要先取消预热**（`cancelPreload()`）：用户可能在启动后的那 300 ms 里
+  就按了快捷键，而那个窗口此刻在屏幕外、透明度 0、`isVisible()` 还是 true ——
+  不特判就会把窗口停在屏幕外（位置只在 `!wasVisible` 时才算），或者干脆看不见
+  （透明度没还原）。取消用 `QSet<QQuickWindow*> m_warming` 判断，**不要用全局的
+  “代”号**：它会把另外两个还在正常预热的窗口的首帧回调一起废掉，那两个就再也
+  收不了尾了。
+* **假数据不用清**：每次真实弹出都会先 `setItems`（三个模型的 `setItems()` 都会
+  把筛选/高亮/选中复位），所以预热那几行永远不会被用户看到。行数写得多于一屏
+  （menu 8 行、help/switch 14 行）是为了让 `ListView` 把一屏的 `ItemDelegate`
+  与 `ScrollBar` 也装配一遍。
+* **计时器必须用 `QElapsedTimer`，不能用 `GetTickCount64`/`monotonicMs()`。**
+  后者的粒度是系统时钟中断（约 15.6 ms）：第一版日志把 39 ms 的真实耗时报成了
+  “78 ms”（两个端点各被量化一次），差点把结论带偏。
+* **早期那几次“第二次打开也要 265 ms”是测量脚本自己造成的**：脚本第一次注入
+  和弦时弹窗还没拿到前台（冷路径的首帧还没画完），随后的 `Esc` 因此没关掉窗口，
+  脚本的兜底就走了 `WM_CLOSE`；那个窗口是**真的被销毁重建**的，于是又付了一次
+  “新原生窗口 + 新交换链”的钱。改成“重新按快捷键之前先确认窗口已经消失”之后
+  数字就对上了（7–9 ms）。**读到异常数字先怀疑测量方法。**
+* **验收脚本补了两条外部断言**（C# 侧新增 `IsTaskbarWindow()`：可见 + 无属主 +
+  无 `WS_EX_TOOLWINDOW`），一条看选单、一条看帮助（各自那一段里开窗之后立刻
+  断言），检查数 116 → 118。
+* **预热窗口在启动后那约 300 ms 里是 `IsWindowVisible == true` 的**（透明、
+  屏幕外）。验收脚本靠“标题前缀 + 可见”找弹窗，所以**别在守护进程刚起的那一
+  瞬间去找**；脚本实际是守护进程起来 + `FocusCatcher` 之后才做弹窗检查，那时
+  预热早已收尾。
+
 ---
 
 ## 11. 完成定义（DoD）细则
@@ -4069,6 +4173,38 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > 的改动。
 > 行为变化：见第 2 节第 22 条。README（快速上手、动作表、「窗口切换器」一节、
 > 已知限制）、`flowkeyd.lua.example`、本文件第 2 / 4 / 14 节已同步。
+
+> **2026-09 新增（三个弹窗不进任务栏 + 启动预热）的 DoD**：`windows-debug` 与
+> `windows-release` 都是 `build exit 0`、零编译警告（release 里那两句
+> `dxcompiler.dll` 是 `windeployqt` 自己的提示）；
+> `ctest --test-dir build/windows-debug` **24 个测试目标全绿**（本次没有新增纯逻辑，
+> 数量不变）；`flowkeyd --check --config flowkeyd.lua.example` →
+> `OK (46 hotkey(s), 3 remap(s), 7 window rule(s))`、零警告。
+> `scripts/acceptance.ps1`（只跑 release；跑前先把常驻 `--quit` 掉）
+> **118 项、0 失败**（`checks: 118, failures: 0`；上一次是 116）：新增
+> 「选单窗口不在任务栏里（Qt.Tool）」与「帮助窗口不在任务栏里（Qt.Tool）」
+> 两条，用的是 C# 侧的 `IsTaskbarWindow()`（可见 + 无属主 + 无
+> `WS_EX_TOOLWINDOW`）。之前 116 项里的弹窗焦点、滚轮、拖动、点选、`Enter`/
+> 双击执行、危险动作两次确认全部照旧通过 —— 也就是说 `Qt.Tool` 没有影响
+> “弹窗必须拿到键盘焦点”。
+> 实测（`tmp/popup-perf.ps1` + 日志里的计时，debug 与 release 都跑过）：
+> 冷启动第一次弹出首帧 **224 ms** → 预热之后 **27/36 ms**（menu）、
+> **59 ms**（help）、**52 ms**（switch），后续 13–40 ms；从进程外量到的
+> “和弦按下 → 弹窗可见”是 31–47 ms，而且**每一次**都 `toolwindow=1 owner=0
+> taskbar=0 focused=1`（release 跑的那一次也一样）。预热本身让启动多花约
+> 310 ms（`windows built in 80 ms` + 三个首帧）。
+> 内存（release 构建，同一份一次性配置，启动后 5/15/40 s 都量过，数值稳定）：
+> 不预热 **43 MB** 工作集 / 19 MB private；预热 **128 MB** / 209 MB。
+> 参考组：旧构建 + `--log-window`（只多一个已经渲染过的窗口）是 **157 MB**，
+> 所以这笔钱主要是“进程真的开始渲染 Qt Quick”的固定成本（用户只要开过一次
+> 日志窗口或弹窗也要付），预热只是把它搬到启动时。
+> 行为变化：见第 2 节第 23 条；README（快速上手、选单与电源、快捷键帮助、
+> 窗口切换器、工作原理、已知限制）与本文件第 2 / 4 / 10 节已同步。
+> 按工作约定第 11 条：常驻实例已 `--quit` → 构建 release → 从
+> `build\dist-release` 重新拉起（自启任务仍指向那个路径）。
+> 附带产出：`popup_host.cpp` 多了两条 debug 计时日志
+> （`popup `x` shown in N ms` / `painted its first frame N ms after the
+> request`），以后接到“弹出卡”的反馈先看它们。
 
 ---
 

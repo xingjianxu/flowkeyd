@@ -20,8 +20,14 @@ import QtQuick.Controls.FluentWinUI3
 Window {
     id: root
 
-    // 无边框 + 始终置顶；`color` 必须是 transparent，否则看不到圆角。
-    flags: Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
+    // 无边框 + 始终置顶 + **不进任务栏**；`color` 必须是 transparent，否则看不到圆角。
+    //
+    // `Qt.Tool` 在 Windows 上就是 `WS_EX_TOOLWINDOW`（实测 `Qt::Window` 是
+    // `0x08`、加上 `Qt.Tool` 是 `0x88`），于是这张卡片既不出现在任务栏、也不进
+    // Alt+Tab —— 它本来就是一个按快捷键临时弹出、按完就没的卡片，
+    // 在任务栏里留一个按钮只会打断用户（项目所有者 2026-09 要求）。
+    // 它仍然能被激活、能拿键盘焦点（弹出后的键盘处理全靠这一条）。
+    flags: Qt.Window | Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
     color: "transparent"
     visible: false
     title: qsTr("flowkeyd 选单")

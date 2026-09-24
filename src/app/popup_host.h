@@ -15,7 +15,10 @@
 #include "app/menu_model.h"
 #include "app/window_list_model.h"
 
+#include <QElapsedTimer>
 #include <QObject>
+#include <QPoint>
+#include <QSet>
 #include <QString>
 
 #include <functional>
@@ -86,6 +89,27 @@ public:
     /// 弹出窗口切换器；已经开着时只是前置、清空筛选并把窗口列表换成最新的。
     void requestSwitch(SwitchRequest request);
 
+    /// 启动后台预热（**GUI 线程**）：把三个弹窗窗口建出来、填一份假数据各渲染
+    /// 一帧，然后再藏起来。
+    ///
+    /// 为什么要有这一步（2026-09 实测，`build/windows-debug`，一次性实例 + 注入
+    /// 和弦、从外面轮询窗口什么时候可见）：冷启动的第一次弹出里，真正让用户
+    /// 等待的是**首帧**——`QQuickWindow` 的第一次 `frameSwapped` 在请求之后
+    /// **224 ms** 才到（另一次同一个 exe 先开了日志窗口的对照里只要 **56 ms**）。
+    /// 那 170 ms 是进程首次渲染的固定开销：QRhi/D3D11 设备、交换链、Quick 自己
+    /// 那批材质着色器的首次编译。剩下的 50 ms 才是这个窗口自己的 QML 组件加载与
+    /// 实例化，以及 `ListView` ／ `ItemDelegate` ／ `TextField` ／ `ScrollBar`
+    /// 这些 FluentWinUI3 件的装配。预热把两者都提前付掉：同一份测量里，预热之后
+    /// 第一次弹出只要 **30–60 ms**（menu 27 / help 59 / switch 52，后续 13–37），
+    /// 而预热本身只让启动多花约 310 ms（三个窗口的首帧，全在后台）。
+    ///
+    /// 守护进程是长期运行的，启动时多花这一点看不见；而“按了快捷键等四分之一秒
+    /// 才看到卡片”每次都看得见。
+    ///
+    /// 预热窗口是**全透明 + 屏幕之外**的，用户看不到、也点不到；等它们各自的
+    /// 首帧到了（或 2 秒兜底超时）就藏起来。必须在 GUI 线程上调用。
+    void preload();
+
     // ---- 以下只在 GUI 线程调用 ----
 
     /// 关掉所有弹窗并把未完成的请求丢掉。
@@ -117,6 +141,24 @@ private:
     void placePopup(QQuickWindow *window, int width, int height);
     void activate(QQuickWindow *window);
 
+    /// 记一次「弹窗已经显示出来」的 debug 日志（耗时 + 这次是否新建了窗口）。
+    /// 同时把「还要等首帧」的标记立起来，`noteFirstFrame()` 收到首帧时再补一条。
+    /// 这两条日志是排查「弹出很慢」的唯一现场（第一次弹出要现场加载 QML 组件、
+    /// 装配 FluentWinUI3 样式、创建原生窗口并初始化 RHI，后面几次只是显示）。
+    /// 计时器用 `QElapsedTimer` 而不是 `GetTickCount64`：后者的粒度是系统时钟
+    /// 中断（~15.6 ms），这两个数字全在几十毫秒的量级，量化误差会把结论带偏。
+    void noteShown(const QString &name, bool created);
+    void noteFirstFrame();
+
+    /// 真实弹出前调用：如果这个窗口正在预热，就取消预热（它可能正透明地待在
+    /// 屏幕外）。返回 true 表示刚才在预热 —— 调用方要当「第一次弹出」处理：
+    /// 重新摆位置，并把透明度还回去。
+    bool cancelPreload(QQuickWindow *window);
+    /// 把 `window` 显示成「全透明 + 屏幕外」，等它画出第一帧之后自己藏起来。
+    void warmUpWindow(QQuickWindow *window, const QString &name, const QPoint &offscreen);
+    /// 预热收尾：藏起来、恢复透明度、写一条 debug 日志。
+    void finishWarmUp(QQuickWindow *window, const QString &name);
+
     QQmlEngine *m_engine = nullptr;
 
     QQuickWindow *m_menuWindow = nullptr;
@@ -130,6 +172,16 @@ private:
     QQuickWindow *m_switchWindow = nullptr;
     WindowListModel *m_switchModel = nullptr;
     SwitchRequest m_switchRequest;
+
+    // 首帧计时的状态（debug 日志用）：`m_frameName` 非空表示正在等那个弹窗的下一帧。
+    QString m_frameName;
+    QElapsedTimer m_frameTimer;
+
+    // 正在预热的窗口（通常三个）。真实弹出先从里面拿掉一个，于是它的首帧回调
+    // 不会再把它藏起来（用户已经把它打开了）。
+    QSet<QQuickWindow *> m_warming;
+    bool m_preloaded = false;
+    QElapsedTimer m_warmTimer;
 };
 
 } // namespace flowkeyd::app

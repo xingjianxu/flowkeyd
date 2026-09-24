@@ -236,6 +236,33 @@ public static class FlowInject {
         return false;
     }
 
+    [DllImport("user32.dll")] private static extern IntPtr GetWindow(IntPtr h, uint cmd);
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] private static extern IntPtr GetWindowLongPtr(IntPtr h, int index);
+
+    // 一个顶层窗口会进任务栏，当且仅当它可见、没有属主、并且不带
+    // WS_EX_TOOLWINDOW（GW_OWNER = 4，GWL_EXSTYLE = -20，WS_EX_TOOLWINDOW = 0x80）。
+    // 三个弹窗都是 `Qt.Tool`（= WS_EX_TOOLWINDOW）的卡片，所以不该在任务栏里
+    // 留按钮，也不该进 Alt+Tab（项目所有者 2026-09 要求）。
+    public static bool IsTaskbarWindow(int pid, string prefix) {
+        bool found = false;
+        EnumWindows(delegate(IntPtr h, IntPtr l) {
+            uint wpid;
+            GetWindowThreadProcessId(h, out wpid);
+            if (wpid != (uint)pid) { return true; }
+            if (!IsWindowVisible(h)) { return true; }
+            int n = GetWindowTextLengthW(h);
+            if (n <= 0) { return true; }
+            StringBuilder sb = new StringBuilder(n + 2);
+            GetWindowTextW(h, sb, sb.Capacity);
+            if (!sb.ToString().StartsWith(prefix)) { return true; }
+            if (GetWindow(h, 4) != IntPtr.Zero) { return true; }
+            if (((long)GetWindowLongPtr(h, -20) & 0x80L) != 0) { return true; }
+            found = true;
+            return false;
+        }, IntPtr.Zero);
+        return found;
+    }
+
     [DllImport("user32.dll")] private static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr h);
     [DllImport("user32.dll")] private static extern bool BringWindowToTop(IntPtr h);
@@ -809,6 +836,7 @@ try {
     CtrlAlt $VK_F9
     $menuUp = WaitUntil { [FlowInject]::HasWindowTitled($daemon.Id, $MENU_TITLE) } 5000
     Check '选单窗口出现了' $menuUp
+    Check '选单窗口不在任务栏里（Qt.Tool）' (-not [FlowInject]::IsTaskbarWindow($daemon.Id, $MENU_TITLE))
     $menuTitles = [FlowInject]::TitlesOfPid($daemon.Id)
     Write-Host "         daemon windows: $($menuTitles -join ' | ')"
     Check '选单窗口拿到了键盘焦点' (WaitUntil { [FlowInject]::ForegroundTitle() -eq $MENU_TITLE } 4000)
@@ -892,6 +920,7 @@ try {
 
     ClipSet 'SENTINEL'
     $helpRect = OpenHelp '第一次'
+    Check '帮助窗口不在任务栏里（Qt.Tool）' (-not [FlowInject]::IsTaskbarWindow($daemon.Id, $HELP_TITLE))
     $full = HelpCounts
     Write-Host "         help caption: $($full.Visible)/$($full.Total)"
     Check '标题里的可见/总数是满的' ($null -ne $full -and $full.Total -eq 18)

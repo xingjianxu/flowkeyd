@@ -10,8 +10,10 @@
 #include <QQuickWindow>
 #include <QScreen>
 #include <QThread>
+#include <QTimer>
 #include <QVariant>
 
+#include <memory>
 #include <utility>
 
 namespace flowkeyd::app {
@@ -224,13 +226,154 @@ void PopupHost::switchDismiss()
     m_switchRequest = SwitchRequest{};
 }
 
+void PopupHost::noteShown(const QString &name, bool created)
+{
+    win::logDebug(QStringLiteral("popup `%1` shown in %2 ms%3")
+                      .arg(name)
+                      .arg(m_frameTimer.elapsed())
+                      .arg(created ? QStringLiteral(" (the window had to be created first)")
+                                   : QString()));
+    m_frameName = name;
+}
+
+void PopupHost::noteFirstFrame()
+{
+    if (m_frameName.isEmpty()) {
+        return;
+    }
+    win::logDebug(QStringLiteral("popup `%1` painted its first frame %2 ms after the request")
+                      .arg(m_frameName)
+                      .arg(m_frameTimer.elapsed()));
+    m_frameName.clear();
+}
+
+void PopupHost::preload()
+{
+    if (m_preloaded) {
+        return;
+    }
+    m_preloaded = true;
+    m_warmTimer.start();
+
+    QQuickWindow *menu = ensureMenuWindow();
+    QQuickWindow *help = ensureHelpWindow();
+    QQuickWindow *switchWindow = ensureSwitchWindow();
+    if (menu == nullptr || help == nullptr || switchWindow == nullptr) {
+        return;
+    }
+
+    // 假数据：`help` / `switch` / `menu` 的列表里得有行，`ListView` 才会把
+    // `ItemDelegate` 建出来（`TextField` / `ScrollBar` 这些样式件也在这一步
+    // 装配）—— 它们同样是首次弹出要付的钱。行数故意多于一屏（`help` / `switch`
+    // 还会因此把 `ScrollBar` 的滑块也画出来），否则用户第一次打开一个真正列着
+    // 十几个窗口的卡片时还得现场建那十几个委托。
+    // 真正弹出时 `showXxx()` 会重新 `setItems` 覆盖掉，所以这几行**不需要**
+    // 在预热结束时清掉。
+    std::vector<MenuEntry> menuItems;
+    menuItems.reserve(8);
+    for (int i = 0; i < 8; ++i) {
+        menuItems.push_back(MenuEntry{QChar(static_cast<char16_t>(u'a' + i)),
+                                      QStringLiteral("preload"), QStringLiteral("preload")});
+    }
+    m_menuModel->setItems(QStringLiteral("flowkeyd"), std::move(menuItems));
+
+    std::vector<HelpEntry> helpItems;
+    helpItems.reserve(14);
+    for (int i = 0; i < 14; ++i) {
+        helpItems.push_back(HelpEntry{QStringList{QStringLiteral("Ctrl+Alt+F%1").arg(i + 1)},
+                                      QStringLiteral("preload"), QStringLiteral("none"), false});
+    }
+    m_helpModel->setItems(std::nullopt, std::move(helpItems));
+
+    std::vector<WindowListEntry> switchItems;
+    switchItems.reserve(14);
+    for (int i = 0; i < 14; ++i) {
+        switchItems.push_back(WindowListEntry{QStringLiteral("preload"),
+                                              QStringLiteral("preload.exe")});
+    }
+    m_switchModel->setItems(std::nullopt, std::move(switchItems));
+
+    // 屏幕之外 + 全透明。三个都是 `WindowStaysOnTopHint` 的卡片，留在屏幕里
+    // 万一赶上鼠标点击就会把那次点击吃掉（透明窗口仍然可能命中），所以放到
+    // 整个虚拟桌面右上角的外面去。
+    QRect desktop;
+    const QList<QScreen *> screens = QGuiApplication::screens();
+    for (QScreen *screen : screens) {
+        desktop = desktop.united(screen->geometry());
+    }
+    const QPoint offscreen(desktop.right() + 64, desktop.top());
+
+    warmUpWindow(menu, QStringLiteral("menu"), offscreen);
+    warmUpWindow(help, QStringLiteral("help"), offscreen);
+    warmUpWindow(switchWindow, QStringLiteral("switch"), offscreen);
+
+    win::logDebug(QStringLiteral("popup preload: windows built in %1 ms")
+                      .arg(m_warmTimer.elapsed()));
+}
+
+bool PopupHost::cancelPreload(QQuickWindow *window)
+{
+    const bool warming = m_warming.remove(window);
+    if (warming) {
+        window->setOpacity(1.0);
+    }
+    return warming;
+}
+
+void PopupHost::warmUpWindow(QQuickWindow *window, const QString &name, const QPoint &offscreen)
+{
+    m_warming.insert(window);
+    // 首帧到了就算预热完成。连接以 `this` 为上下文，所以 `PopupHost` 先死掉时
+    // 这个回调不会去碰已经失效的成员。
+    auto connection = std::make_shared<QMetaObject::Connection>();
+    *connection = QObject::connect(
+        window, &QQuickWindow::frameSwapped, this, [this, window, name, connection]() {
+            QObject::disconnect(*connection);
+            if (!m_warming.contains(window)) {
+                return; // 已经被一次真实弹出取消了
+            }
+            finishWarmUp(window, name);
+        });
+    // 兜底：万一这一帧永远不来（窗口在屏幕外，合成器可以不合成它），两秒之后
+    // 也要把它藏起来，免得留一个看不见的置顶窗口在桌面外。
+    QTimer::singleShot(2000, this, [this, window, name]() {
+        if (!m_warming.contains(window)) {
+            return;
+        }
+        win::logWarn(QStringLiteral("popup `%1` preload timed out; no frame was painted")
+                         .arg(name));
+        finishWarmUp(window, name);
+    });
+    window->setOpacity(0.0);
+    window->setPosition(offscreen);
+    window->setProperty("visible", true);
+}
+
+void PopupHost::finishWarmUp(QQuickWindow *window, const QString &name)
+{
+    if (!m_warming.remove(window)) {
+        return;
+    }
+    window->setProperty("visible", false);
+    window->setOpacity(1.0);
+    win::logDebug(QStringLiteral("popup `%1` preloaded in %2 ms").arg(name).arg(m_warmTimer.elapsed()));
+    if (m_warming.isEmpty()) {
+        win::logDebug(QStringLiteral("popup preload done in %1 ms").arg(m_warmTimer.elapsed()));
+    }
+}
+
 void PopupHost::showMenu(MenuRequest request)
 {
+    const bool created = m_menuWindow == nullptr;
+    m_frameTimer.start();
     QQuickWindow *window = ensureMenuWindow();
     if (window == nullptr) {
         return;
     }
-    const bool wasVisible = window->isVisible();
+    // 预热还没收尾时用户就按了快捷键：取消预热，把这次当成**第一次**弹出
+    // （窗口现在在屏幕外、全透明，位置与透明度都要重新弄）。
+    const bool warming = cancelPreload(window);
+    const bool wasVisible = window->isVisible() && !warming;
     m_menuRequest = std::move(request);
     m_menuModel->setItems(m_menuRequest.title, m_menuRequest.items);
     window->setProperty("visible", true);
@@ -239,15 +382,19 @@ void PopupHost::showMenu(MenuRequest request)
         centreOnCursorScreen(window, m_menuModel->cardWidth(), m_menuModel->cardHeight());
     }
     activateWindow(window);
+    noteShown(QStringLiteral("menu"), created);
 }
 
 void PopupHost::showHelp(HelpRequest request)
 {
+    const bool created = m_helpWindow == nullptr;
+    m_frameTimer.start();
     QQuickWindow *window = ensureHelpWindow();
     if (window == nullptr) {
         return;
     }
-    const bool wasVisible = window->isVisible();
+    const bool warming = cancelPreload(window);
+    const bool wasVisible = window->isVisible() && !warming;
     m_helpRequest = std::move(request);
     m_helpModel->setItems(m_helpRequest.title, m_helpRequest.items);
     QScreen *screen = QGuiApplication::screenAt(QCursor::pos());
@@ -262,15 +409,19 @@ void PopupHost::showHelp(HelpRequest request)
         centreOnCursorScreen(window, m_helpModel->cardWidth(), m_helpModel->cardHeight());
     }
     activateWindow(window);
+    noteShown(QStringLiteral("help"), created);
 }
 
 void PopupHost::showSwitch(SwitchRequest request)
 {
+    const bool created = m_switchWindow == nullptr;
+    m_frameTimer.start();
     QQuickWindow *window = ensureSwitchWindow();
     if (window == nullptr) {
         return;
     }
-    const bool wasVisible = window->isVisible();
+    const bool warming = cancelPreload(window);
+    const bool wasVisible = window->isVisible() && !warming;
     m_switchRequest = std::move(request);
     m_switchModel->setItems(m_switchRequest.title, m_switchRequest.items);
     QScreen *screen = QGuiApplication::screenAt(QCursor::pos());
@@ -286,6 +437,7 @@ void PopupHost::showSwitch(SwitchRequest request)
         centreOnCursorScreen(window, m_switchModel->cardWidth(), m_switchModel->cardHeight());
     }
     activateWindow(window);
+    noteShown(QStringLiteral("switch"), created);
 }
 
 QQuickWindow *PopupHost::ensureMenuWindow()
@@ -309,6 +461,7 @@ QQuickWindow *PopupHost::ensureMenuWindow()
     m_menuModel = new MenuModel(this);
     m_menuWindow->setProperty("menuModel", QVariant::fromValue(static_cast<QObject *>(m_menuModel)));
     m_menuWindow->setProperty("host", QVariant::fromValue(static_cast<QObject *>(this)));
+    QObject::connect(m_menuWindow, &QQuickWindow::frameSwapped, this, &PopupHost::noteFirstFrame);
     return m_menuWindow;
 }
 
@@ -333,6 +486,7 @@ QQuickWindow *PopupHost::ensureHelpWindow()
     m_helpModel = new HelpModel(this);
     m_helpWindow->setProperty("helpModel", QVariant::fromValue(static_cast<QObject *>(m_helpModel)));
     m_helpWindow->setProperty("host", QVariant::fromValue(static_cast<QObject *>(this)));
+    QObject::connect(m_helpWindow, &QQuickWindow::frameSwapped, this, &PopupHost::noteFirstFrame);
     return m_helpWindow;
 }
 
@@ -359,6 +513,7 @@ QQuickWindow *PopupHost::ensureSwitchWindow()
     m_switchWindow->setProperty("switchModel",
                                 QVariant::fromValue(static_cast<QObject *>(m_switchModel)));
     m_switchWindow->setProperty("host", QVariant::fromValue(static_cast<QObject *>(this)));
+    QObject::connect(m_switchWindow, &QQuickWindow::frameSwapped, this, &PopupHost::noteFirstFrame);
     return m_switchWindow;
 }
 

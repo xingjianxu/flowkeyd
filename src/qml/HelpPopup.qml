@@ -27,7 +27,9 @@ import QtQuick.Controls.FluentWinUI3
 Window {
     id: root
 
-    flags: Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
+    // 无边框 + 始终置顶 + **不进任务栏**（`Qt.Tool` = `WS_EX_TOOLWINDOW`，
+    // 与选单同一个理由，见 `MenuPopup.qml`）；`color` 必须是 transparent。
+    flags: Qt.Window | Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
     color: "transparent"
     visible: false
     // 标题里带着「可见/总数」，外面不用看窗口内部就知道筛选生效了

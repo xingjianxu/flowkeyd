@@ -10,6 +10,7 @@
 #include <QMessageBox>
 #include <QQmlApplicationEngine>
 #include <QQuickStyle>
+#include <QTimer>
 
 #include "app/app_icon.h"
 #include "app/log_window.h"
@@ -557,6 +558,12 @@ int main(int argc, char *argv[])
     if (options.logWindow) {
         logWindow.show();
     }
+
+    // 弹窗预热（见 `app::PopupHost::preload`）：事件循环一开始转就排队做掉，把
+    // “进程第一次渲染”那 ~170 ms 从“用户第一次按弹窗快捷键”搬到启动时。
+    // 排在 `runtime.start()`（钩子已装好、快捷键可用）与托盘之后，所以它不会
+    // 拖慢“能用了”的那一刻；预热窗口是全透明且屏幕外的，用户看不到。
+    QTimer::singleShot(0, &popupHost, &app::PopupHost::preload);
 
     const int code = QApplication::exec();
     runtime.shutdown();
