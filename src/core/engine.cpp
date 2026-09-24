@@ -55,6 +55,7 @@ std::vector<SendOp> Engine::setConfig(std::shared_ptr<const Compiled> config)
     m_activeBindings.clear();
     m_activeRemaps.clear();
     m_repeating.clear();
+    m_pendingTaps.clear();
     m_maskMenuKeyUp = false;
     return cleanup;
 }
@@ -63,6 +64,7 @@ std::vector<SendOp> Engine::setSuspended(bool suspended)
 {
     m_suspended = suspended;
     m_repeating.clear();
+    m_pendingTaps.clear();
     if (suspended) {
         return drainReleases();
     }
@@ -182,6 +184,11 @@ Reaction Engine::onKey(const KeyEvent &event, std::uint64_t nowMs)
         }
         m_physical.push_back(event.vk);
 
+        // 任何新的按键都让待定的「轻碰修饰键」作废：它已经不是「单独按一下」了。
+        for (PendingTap &tap : m_pendingTaps) {
+            tap.cancelled = true;
+        }
+
         const Modifiers held = heldModifiers();
         const bool exact = m_config->settings.exactModifiers;
 
@@ -189,6 +196,14 @@ Reaction Engine::onKey(const KeyEvent &event, std::uint64_t nowMs)
             const std::size_t index = best->first;
             const Chord chord = best->second;
             const Binding &binding = m_config->bindings.at(index);
+            // 「轻碰修饰键」：`keys = "LWin"` 配 `trigger = "release"`。
+            // 按下时**放行**（不吞、不派发），这样 Win+E / Win+L 这些系统组合
+            // 照常工作；只有期间没按过别的键、松开时才触发（见 `PendingTap`）。
+            if (chord.mods.isEmpty() && isModifierKey(chord.key)
+                && binding.trigger == TriggerMode::Release) {
+                m_pendingTaps.push_back(PendingTap{event.vk, index, false});
+                return reaction;
+            }
             const bool passthrough = chord.passthrough;
             const bool swallow = binding.swallow && !passthrough && !m_suspended;
             if (swallow) {
@@ -244,6 +259,25 @@ Reaction Engine::onKey(const KeyEvent &event, std::uint64_t nowMs)
         m_suppressed.erase(pos);
         reaction.swallow = true;
     }
+    // 「轻碰修饰键」：松开时若期间没按过别的键就触发。Win/Alt 的按下是放行的，
+    // 所以外壳确实把它看成了「单独按了一下」——顺手把遮断标记立起来，
+    // 让下面那段既有的逻辑注入标记按键（否则会弹出开始菜单 / 窗口菜单）。
+    std::vector<std::size_t> tapFired;
+    for (auto it = m_pendingTaps.begin(); it != m_pendingTaps.end();) {
+        if (it->key != event.vk) {
+            ++it;
+            continue;
+        }
+        if (!it->cancelled) {
+            if (const auto menuKey = Modifiers::fromVk(event.vk);
+                menuKey.has_value()
+                && (*menuKey == Modifiers::Win || *menuKey == Modifiers::Alt)) {
+                m_maskMenuKeyUp = true;
+            }
+            tapFired.push_back(it->binding);
+        }
+        it = m_pendingTaps.erase(it);
+    }
     // 如果某个被吞掉的和弦让 Win/Alt 键看起来像被单独按下，就在这里伪装它的
     // 松开。此时 `m_physical` 已不再包含该键，因此 `heldModifiers()` 回答的是
     // “是否还有别的菜单键按着”。两者在同一批 `SendInput` 中按此顺序发出，
@@ -288,6 +322,11 @@ Reaction Engine::onKey(const KeyEvent &event, std::uint64_t nowMs)
                       m_repeating.end());
 
     for (const std::size_t index : fired) {
+        if (index < m_config->bindings.size() && !m_config->bindings.at(index).release.empty()) {
+            reaction.triggers.push_back(Trigger{index, Phase::Release});
+        }
+    }
+    for (const std::size_t index : tapFired) {
         if (index < m_config->bindings.size() && !m_config->bindings.at(index).release.empty()) {
             reaction.triggers.push_back(Trigger{index, Phase::Release});
         }

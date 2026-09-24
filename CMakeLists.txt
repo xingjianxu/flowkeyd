@@ -203,6 +203,8 @@ add_library(flowkeyd_models STATIC
     src/app/menu_model.h
     src/app/popup_layout.cpp
     src/app/popup_layout.h
+    src/app/window_list_model.cpp
+    src/app/window_list_model.h
 )
 target_include_directories(flowkeyd_models PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(flowkeyd_models PUBLIC Qt6::Core)
@@ -268,6 +270,7 @@ set(FLOWKEYD_QML_FILES
     src/qml/LogWindow.qml
     src/qml/MenuPopup.qml
     src/qml/HelpPopup.qml
+    src/qml/SwitchPopup.qml
 )
 set_source_files_properties(src/qml/LogWindow.qml
     PROPERTIES QT_RESOURCE_ALIAS LogWindow.qml)
@@ -275,6 +278,8 @@ set_source_files_properties(src/qml/MenuPopup.qml
     PROPERTIES QT_RESOURCE_ALIAS MenuPopup.qml)
 set_source_files_properties(src/qml/HelpPopup.qml
     PROPERTIES QT_RESOURCE_ALIAS HelpPopup.qml)
+set_source_files_properties(src/qml/SwitchPopup.qml
+    PROPERTIES QT_RESOURCE_ALIAS SwitchPopup.qml)
 
 qt_add_executable(flowkeyd
     WIN32
@@ -469,6 +474,7 @@ flowkeyd_add_test(tst_audio LIBS flowkeyd_platform)
 flowkeyd_add_test(tst_interactive LIBS flowkeyd_platform)
 flowkeyd_add_test(tst_menu_model LIBS flowkeyd_models)
 flowkeyd_add_test(tst_help_model LIBS flowkeyd_models)
+flowkeyd_add_test(tst_window_list_model LIBS flowkeyd_models)
 flowkeyd_add_test(tst_desktop_table LIBS flowkeyd_platform)
 flowkeyd_add_test(tst_power_table LIBS flowkeyd_platform)
 

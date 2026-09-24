@@ -73,6 +73,8 @@ public:
     void showMenuFromAnyThread(MenuRequest request);
     /// 工作线程调用：在 GUI 线程上弹出帮助窗口。
     void showHelpFromAnyThread(HelpRequest request);
+    /// 工作线程调用：在 GUI 线程上弹出窗口切换器。
+    void showSwitchFromAnyThread(SwitchRequest request);
 
 signals:
     void notificationRequested(const QString &title, const QString &body);

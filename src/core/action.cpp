@@ -453,6 +453,11 @@ QString Action::summary() const
             return QStringLiteral("help %1").arg(rustDebug(*helpTitle));
         }
         return QStringLiteral("help");
+    case Kind::Windows:
+        if (windowsTitle.has_value()) {
+            return QStringLiteral("windows %1").arg(rustDebug(*windowsTitle));
+        }
+        return QStringLiteral("windows");
     case Kind::Power:
         return QStringLiteral("power %1").arg(powerOpName(powerOp));
     case Kind::Suspend:
@@ -628,6 +633,12 @@ std::optional<QString> parseActionShorthand(const QString &input, Action *out)
         out->kind = Action::Kind::Help;
         return std::nullopt;
     }
+    // `windows` 也是裸关键字：窗口列表来自当前枚举，标题可选（走 `windows(title)`）。
+    if (prefix == QLatin1String("windows") || prefix == QLatin1String("window_list")
+        || prefix == QLatin1String("switch_window")) {
+        out->kind = Action::Kind::Windows;
+        return std::nullopt;
+    }
     if (prefix == QLatin1String("none") || prefix == QLatin1String("noop")
         || prefix == QLatin1String("block")) {
         out->kind = Action::Kind::Noop;
@@ -635,7 +646,7 @@ std::optional<QString> parseActionShorthand(const QString &input, Action *out)
     }
     return bad(QStringLiteral("unknown action shorthand `%1:` (expected run:, send:, type:, open:, "
                               "notify:, desktop:, volume:, media:, clipboard:, window:, power:, "
-                              "reload, quit, help, none)")
+                              "reload, quit, help, windows, none)")
                    .arg(prefix));
 }
 

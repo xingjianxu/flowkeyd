@@ -67,6 +67,7 @@ private slots:
     void runWithoutArgsAndWithEmptyArgs();
     void menuAndPowerHelpersBuildTheExpectedTables();
     void helpHelperTakesAnOptionalTitle();
+    void windowsHelperTakesAnOptionalTitle();
     void shorthandStringsStillWork();
     void chordListsAndAliasesWork();
     void uppercaseLetterKeysAreRejected();
@@ -264,6 +265,32 @@ void TestLua::helpHelperTakesAnOptionalTitle()
     const auto shorthand = parse(R"(hotkey{ keys = "Win+/", action = "help" })");
     QVERIFY(shorthand.has_value());
     QCOMPARE(shorthand->bindings[0].press[0].kind, core::Action::Kind::Help);
+}
+
+void TestLua::windowsHelperTakesAnOptionalTitle()
+{
+    // 「轻碰一下 Win」：`trigger = "release"` 把动作挪到松开时执行。
+    const auto plain = parse(R"(
+        hotkey{ keys = "LWin", trigger = "release", action = windows() }
+    )");
+    QVERIFY(plain.has_value());
+    QCOMPARE(plain->bindings[0].trigger, core::TriggerMode::Release);
+    QCOMPARE(plain->bindings[0].release.size(), std::size_t(1));
+    QCOMPARE(plain->bindings[0].release[0].kind, core::Action::Kind::Windows);
+    QVERIFY(!plain->bindings[0].release[0].windowsTitle.has_value());
+    QCOMPARE(plain->bindings[0].release[0].summary(), QStringLiteral("windows"));
+
+    const auto titled = parse(R"(hotkey{ keys = "F1", action = windows("窗口") })");
+    QVERIFY(titled.has_value());
+    QVERIFY(titled->bindings[0].press[0].windowsTitle.has_value());
+    QCOMPARE(*titled->bindings[0].press[0].windowsTitle, QStringLiteral("窗口"));
+
+    const QString message = failure(R"(hotkey{ keys = "F1", action = windows(1) })");
+    QVERIFY(message.contains(QStringLiteral("optional title string")));
+
+    const auto shorthand = parse(R"(hotkey{ keys = "F1", action = "windows" })");
+    QVERIFY(shorthand.has_value());
+    QCOMPARE(shorthand->bindings[0].press[0].kind, core::Action::Kind::Windows);
 }
 
 void TestLua::shorthandStringsStillWork()

@@ -355,6 +355,11 @@ bool isExtended(Vk vkCode)
     return std::find(std::begin(kExtendedKeys), std::end(kExtendedKeys), vkCode) != std::end(kExtendedKeys);
 }
 
+bool isModifierKey(Vk vkCode)
+{
+    return Modifiers::fromVk(vkCode).has_value();
+}
+
 Vk keyFromHook(Vk vkCode, bool extended)
 {
     if (extended && vkCode == vk::RETURN) {

@@ -175,6 +175,7 @@ struct Action
         Desktop,
         Menu,
         Help,
+        Windows,
         Power,
         Suspend,
         Reload,
@@ -245,6 +246,9 @@ struct Action
     std::optional<QString> menuTitle;
     std::optional<QString> helpTitle;
 
+    // windows（窗口切换器）
+    std::optional<QString> windowsTitle;
+
     // power
     PowerOp powerOp = PowerOp::Sleep;
 
@@ -276,7 +280,7 @@ bool isDestructive(const std::vector<Action> &actions);
 ///
 /// 可识别的前缀：`run:`、`send:`、`type:`、`open:`、`notify:`、`volume:`、
 /// `media:`、`clipboard:`、`window:`、`desktop:`、`power:`，以及裸关键字
-/// `reload`、`quit`、`help`、`none`。
+/// `reload`、`quit`、`help`、`windows`、`none`。
 ///
 /// `menu:` 没有简写：一张选单至少要有条目，那写成一张表比塞进一个字符串清楚。
 ///

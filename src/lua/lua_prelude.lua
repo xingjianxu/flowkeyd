@@ -328,6 +328,21 @@ function help(title)
   return { type = "help", title = title }
 end
 
+-- 弹出窗口切换器：列出当前所有可见的程序窗口，直接输入就把**进程名**
+-- （以及窗口标题）筛选掉；只剩一个窗口时直接激活它，否则用 ↑/↓ + Enter
+-- 或鼠标点选（Esc 关闭）。
+--   windows()
+--   windows("窗口")
+-- 常见的绑法是「轻碰一下 Windows 键」：`keys = "LWin"` 配上
+-- `trigger = "release"`（按下 Win 本身**放行**，所以 Win+E / Win+L 这些系统
+-- 组合照常工作；只有单独按一下 Win 才会触发，见 README）。
+function windows(title)
+  if title ~= nil and type(title) ~= "string" then
+    error("windows() expects an optional title string, got " .. type(title), 2)
+  end
+  return { type = "windows", title = title }
+end
+
 function quit()
   return { type = "quit" }
 end
@@ -359,6 +374,7 @@ flowkeyd = {
   power = power,
   menu = menu,
   help = help,
+  windows = windows,
   reload = reload,
   quit = quit,
   none = none,

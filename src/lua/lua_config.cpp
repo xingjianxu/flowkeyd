@@ -571,6 +571,9 @@ core::Action convertAction(lua_State *L, int index)
     } else if (type == QLatin1String("help")) {
         action.kind = core::Action::Kind::Help;
         action.helpTitle = optString(L, index, "title");
+    } else if (type == QLatin1String("windows")) {
+        action.kind = core::Action::Kind::Windows;
+        action.windowsTitle = optString(L, index, "title");
     } else if (type == QLatin1String("power")) {
         action.kind = core::Action::Kind::Power;
         action.powerOp = *core::powerOpFromName(
@@ -597,7 +600,8 @@ core::Action convertAction(lua_State *L, int index)
                                   QStringLiteral("media"), QStringLiteral("clipboard"),
                                   QStringLiteral("window"), QStringLiteral("notify"),
                                   QStringLiteral("desktop"), QStringLiteral("menu"),
-                                  QStringLiteral("help"), QStringLiteral("power"),
+                                  QStringLiteral("help"), QStringLiteral("windows"),
+                                  QStringLiteral("power"),
                                   QStringLiteral("suspend"), QStringLiteral("reload"),
                                   QStringLiteral("quit"), QStringLiteral("none")})));
     }

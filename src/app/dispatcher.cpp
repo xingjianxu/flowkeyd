@@ -259,6 +259,47 @@ void openHelpAction(Runtime *runtime,
     win::logInfo(QStringLiteral("`%1` -> help (%2 entry(s))").arg(hotkey).arg(count));
 }
 
+/// 弹出窗口切换器（`windows` 动作）。
+///
+/// 窗口列表在**动作线程**上枚举（`EnumWindows` + 取进程名），随后经 `PopupHost`
+/// 在 GUI 线程上显示；用户选中第几项之后，回调把「激活那个 HWND」再投回动作
+/// 线程执行 —— 弹窗自己从不碰窗口后端（与 `menu` / `help` 同一条分工）。
+void openWindowsAction(Runtime *runtime,
+                       Dispatcher *dispatcher,
+                       const QString &hotkey,
+                       const core::Action &action)
+{
+    const std::vector<win::window::OpenWindow> windows = win::window::listOpenWindows();
+    SwitchRequest request;
+    request.title = action.windowsTitle;
+    std::vector<HWND> handles;
+    handles.reserve(windows.size());
+    request.items.reserve(windows.size());
+    for (const win::window::OpenWindow &entry : windows) {
+        request.items.push_back(WindowListEntry{entry.title, entry.process});
+        handles.push_back(entry.hwnd);
+    }
+    const int count = static_cast<int>(handles.size());
+    request.onChoose = [dispatcher, hotkey, handles = std::move(handles)](int index) {
+        if (index < 0 || index >= static_cast<int>(handles.size())) {
+            return;
+        }
+        const HWND hwnd = handles[static_cast<std::size_t>(index)];
+        dispatcher->submitCall([hwnd, hotkey]() {
+            QString detail;
+            QString error;
+            if (!win::window::applyTo(hwnd, core::WindowOp::Activate, false, &detail, &error)) {
+                win::logWarn(QStringLiteral("`%1` window switcher: %2").arg(hotkey, error));
+            } else {
+                win::logInfo(QStringLiteral("`%1` -> %2 (from the window switcher)")
+                                 .arg(hotkey, detail));
+            }
+        });
+    };
+    runtime->showSwitchFromAnyThread(std::move(request));
+    win::logInfo(QStringLiteral("`%1` -> windows (%2 window(s))").arg(hotkey).arg(count));
+}
+
 /// 一次触发的模板展开上下文：把剪贴板/选中文本的读取缓存起来。
 ///
 /// 只有在字符串里真的出现 `{clipboard}` / `{selection}` 时才去读，
@@ -482,29 +523,11 @@ QString windowClassName(HWND hwnd)
 
 /// 这个窗口是不是 `window_rule` 该摆的“主窗口”。
 ///
-/// 与 `window` 动作的前置过滤一致（可见、没有属主），再多三条：**工具窗口**
-/// （`WS_EX_TOOLWINDOW`，不出现在任务栏）、**0 尺寸**窗口、以及**没有标题**的
-/// 窗口（很多应用会拿它当消息汇 / 渲染宿主）。按 `process` 匹配时这些会一大堆，
-/// 真正的主窗口至少会写个标题。
+/// 判据（可见、没有属主、非工具窗口、有标题、尺寸非零、不是 Program Manager）
+/// 与窗口切换器共用，见 `platform/win/window.h` 的 `isMainWindow`。
 bool isPlaceableWindow(HWND hwnd)
 {
-    if (IsWindow(hwnd) == 0 || IsWindowVisible(hwnd) == 0) {
-        return false;
-    }
-    if (GetWindow(hwnd, GW_OWNER) != nullptr) {
-        return false;
-    }
-    if ((GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) != 0) {
-        return false;
-    }
-    if (GetWindowTextLengthW(hwnd) <= 0) {
-        return false;
-    }
-    RECT rect{};
-    if (GetWindowRect(hwnd, &rect) == 0) {
-        return false;
-    }
-    return rect.right > rect.left && rect.bottom > rect.top;
+    return win::window::isMainWindow(hwnd);
 }
 
 /// 按 `window_rule` 摆放一个窗口。
@@ -910,6 +933,9 @@ void executeAction(Runtime *runtime,
     case core::Action::Kind::Help:
         openHelpAction(runtime, dispatcher, config, hotkey, action);
         break;
+    case core::Action::Kind::Windows:
+        openWindowsAction(runtime, dispatcher, hotkey, action);
+        break;
     default:
         win::logWarn(QStringLiteral("`%1`: action `%2` is not implemented yet")
                          .arg(hotkey, action.summary()));
@@ -1002,6 +1028,15 @@ void Dispatcher::submitPlacement(std::shared_ptr<const core::Compiled> config,
             applyPlacementRules(config, event);
         },
         Qt::QueuedConnection);
+}
+
+void Dispatcher::submitCall(std::function<void()> work)
+{
+    if (!work) {
+        return;
+    }
+    QMetaObject::invokeMethod(
+        this, [work = std::move(work)]() { work(); }, Qt::QueuedConnection);
 }
 
 void Dispatcher::applyPlacementRules(const std::shared_ptr<const core::Compiled> &config,

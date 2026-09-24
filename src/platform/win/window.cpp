@@ -288,6 +288,69 @@ std::vector<HWND> topLevelWindows()
     return out;
 }
 
+bool isMainWindow(HWND hwnd)
+{
+    if (hwnd == nullptr || IsWindow(hwnd) == 0 || IsWindowVisible(hwnd) == 0) {
+        return false;
+    }
+    // 外壳自己的「Program Manager」（`Progman`）不是用户想切换到的程序窗口。
+    if (hwnd == GetShellWindow()) {
+        return false;
+    }
+    if (GetWindow(hwnd, GW_OWNER) != nullptr) {
+        return false;
+    }
+    if ((GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) != 0) {
+        return false;
+    }
+    if (GetWindowTextLengthW(hwnd) <= 0) {
+        return false;
+    }
+    RECT rect{};
+    if (GetWindowRect(hwnd, &rect) == 0) {
+        return false;
+    }
+    return rect.right > rect.left && rect.bottom > rect.top;
+}
+
+namespace {
+
+struct WindowCollector
+{
+    std::vector<OpenWindow> *out = nullptr;
+    DWORD self = 0;
+};
+
+BOOL CALLBACK collectOpenWindowProc(HWND hwnd, LPARAM param)
+{
+    auto *collector = reinterpret_cast<WindowCollector *>(param);
+    if (!isMainWindow(hwnd)) {
+        return TRUE;
+    }
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hwnd, &pid);
+    // 跳过 flowkeyd 自己的窗口（切换器 / 帮助 / 选单 / 日志）。
+    if (pid == 0 || pid == collector->self) {
+        return TRUE;
+    }
+    OpenWindow entry;
+    entry.hwnd = hwnd;
+    entry.title = windowTitle(hwnd);
+    entry.process = processImageName(pid).value_or(QString());
+    collector->out->push_back(std::move(entry));
+    return TRUE;
+}
+
+} // namespace
+
+std::vector<OpenWindow> listOpenWindows()
+{
+    std::vector<OpenWindow> out;
+    WindowCollector collector{&out, GetCurrentProcessId()};
+    EnumWindows(collectOpenWindowProc, reinterpret_cast<LPARAM>(&collector));
+    return out;
+}
+
 bool isActive(HWND hwnd)
 {
     return isForegroundOnThisDesktop(hwnd);

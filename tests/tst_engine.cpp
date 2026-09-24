@@ -82,6 +82,9 @@ private slots:
     void keyUpWithoutKeyDownIsHarmless();
     void modifierOnlyChordsDoNotFireTheirModifier();
     void modifierOnlyChordsWorkWithExactModifiers();
+    void loneModifierTapOnlyFiresWithoutOtherKeys();
+    void loneModifierTapIsCancelledByAnotherKey();
+    void loneModifierTapIsCancelledByAnUnboundKey();
 };
 
 void TestEngine::firesOnChordAndSwallows()
@@ -578,6 +581,75 @@ void TestEngine::modifierOnlyChordsWorkWithExactModifiers()
                                          specOne(noneAction())));
     Engine singleEngine = engineOf(single);
     QCOMPARE(press(&singleEngine, {vk::LWIN}).triggers.size(), std::size_t(1));
+}
+
+void TestEngine::loneModifierTapOnlyFiresWithoutOtherKeys()
+{
+    // `keys = "LWin"` + `trigger = "release"` 是「轻碰一下 Win」：按下放行、
+    // 不派发，单独松开才触发（窗口切换器就是靠它绑在 Win 键上的）。
+    Config config;
+    HotkeyDef tap = hotkeyNamed(QStringLiteral("switcher"),
+                                QStringLiteral("LWin"),
+                                specOne(noneAction()));
+    tap.trigger = TriggerMode::Release;
+    config.hotkeys.push_back(tap);
+    Engine engine = engineOf(config);
+
+    // 放行：Win+E / Win+L 这些没被接管的系统组合仍然能看到 Win 的按下。
+    const Reaction down = press(&engine, {vk::LWIN});
+    QVERIFY(!down.swallow);
+    QVERIFY(down.triggers.empty());
+
+    // 单独松开 → 触发，并注入标记按键遮断外壳的「单独按了一下 Win」判断。
+    const Reaction up = engine.onKey(KeyEvent::keyUp(vk::LWIN), 0);
+    QVERIFY(!up.swallow);
+    QCOMPARE(up.triggers, (std::vector<Trigger>{onRelease(0)}));
+    QCOMPARE(up.inject,
+             (std::vector<SendOp>{SendOp::keyDown(vk::UNASSIGNED),
+                                  SendOp::keyUp(vk::UNASSIGNED)}));
+}
+
+void TestEngine::loneModifierTapIsCancelledByAnotherKey()
+{
+    Config config;
+    HotkeyDef tap = hotkeyNamed(QStringLiteral("switcher"),
+                                QStringLiteral("LWin"),
+                                specOne(noneAction()));
+    tap.trigger = TriggerMode::Release;
+    config.hotkeys.push_back(tap);
+    config.hotkeys.push_back(hotkeyNamed(QStringLiteral("wezterm"),
+                                         QStringLiteral("Win+s"),
+                                         specOne(noneAction())));
+    Engine engine = engineOf(config);
+
+    press(&engine, {vk::LWIN});
+    // 按住 Win 再按 s：更具体的 Win+s 触发，轻碰作废。
+    QCOMPARE(press(&engine, {static_cast<Vk>(u'S')}).triggers,
+             (std::vector<Trigger>{onPress(1)}));
+    release(&engine, {static_cast<Vk>(u'S')});
+    const Reaction up = engine.onKey(KeyEvent::keyUp(vk::LWIN), 0);
+    // 只注入菜单遮断（被吞掉的 s 让外壳以为 Win 是单独按的），不再触发轻碰。
+    QCOMPARE(up.inject.size(), std::size_t(2));
+    QVERIFY(up.triggers.empty());
+}
+
+void TestEngine::loneModifierTapIsCancelledByAnUnboundKey()
+{
+    Config config;
+    HotkeyDef tap = hotkeyNamed(QStringLiteral("switcher"),
+                                QStringLiteral("LWin"),
+                                specOne(noneAction()));
+    tap.trigger = TriggerMode::Release;
+    config.hotkeys.push_back(tap);
+    Engine engine = engineOf(config);
+
+    press(&engine, {vk::LWIN});
+    // 未被绑定的键（比如 Win+E）：原样放行，轻碰作废，也不注入遮断标记 ——
+    // 外壳见过完整的 Win+E，不会去弹开始菜单。
+    QVERIFY(!press(&engine, {static_cast<Vk>(u'E')}).swallow);
+    const Reaction up = engine.onKey(KeyEvent::keyUp(vk::LWIN), 0);
+    QVERIFY(up.triggers.empty());
+    QVERIFY(up.inject.empty());
 }
 
 QTEST_MAIN(TestEngine)

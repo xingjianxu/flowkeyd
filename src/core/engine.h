@@ -92,6 +92,19 @@ private:
         std::uint32_t intervalMs = 0;
     };
 
+    /// 一个待定的「轻碰修饰键」绑定。
+    ///
+    /// `keys = "LWin"` 配上 `trigger = "release"` 时，按下修饰键本身**放行**
+    /// （这样 Win+E / Win+L 这些没被 flowkeyd 接管的系统组合仍然照常工作），
+    /// 只有「单独按一下、期间没有按过别的键」才在松开时触发。
+    /// 期间只要有任何一个新的按键按下，这一项就被标记 `cancelled`。
+    struct PendingTap
+    {
+        Vk key = 0;
+        std::size_t binding = 0;
+        bool cancelled = false;
+    };
+
     /// 当前按住的修饰键，基于钩子看到的物理按键。
     Modifiers heldModifiers() const;
 
@@ -124,6 +137,8 @@ private:
     /// 已为某个仍按住的按键触发的重映射，便于 hold 模式释放它。
     std::vector<std::pair<Vk, std::size_t>> m_activeRemaps;
     std::vector<RepeatState> m_repeating;
+    /// 正在等待松开的「轻碰修饰键」（见 `PendingTap`）。
+    std::vector<PendingTap> m_pendingTaps;
     bool m_suspended = false;
 
     /// 某个被吞掉的和弦让 Windows 或 Alt 键在外壳眼中显得“赤裸”，

@@ -921,6 +921,13 @@ void validateAction(const QString &label, const Action &action, QStringList *err
                                .arg(label));
         }
         break;
+    case Action::Kind::Windows:
+        if (action.windowsTitle.has_value() && action.windowsTitle->trimmed().isEmpty()) {
+            errors->append(QStringLiteral(
+                               "%1: `windows` title must not be empty; drop it to use the default")
+                               .arg(label));
+        }
+        break;
     default:
         break;
     }

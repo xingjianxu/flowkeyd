@@ -14,6 +14,7 @@
 #include <QObject>
 #include <QString>
 
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -48,6 +49,12 @@ public:
     /// 线程安全：窗口出现 / 显示器重新接入 / 启动时按 `window_rule` 归位。
     void submitPlacement(std::shared_ptr<const core::Compiled> config,
                          platform::win::PlacementEvent event);
+
+    /// 线程安全：把一段任意工作排入工作线程队列。
+    ///
+    /// 窗口切换器用它把「激活用户选中的那个窗口」拿回工作线程执行：弹窗的回调在
+    /// GUI 线程上，而窗口后端（`window::applyTo`）只在动作线程上跑。
+    void submitCall(std::function<void()> work);
 
     /// **只能在动作线程上调用**（`Runtime::start()` 用排队调用投进来）：起一个
     /// 定时器轮询「当前是第几号虚拟桌面」，变化时通知 GUI 线程去换托盘图标。

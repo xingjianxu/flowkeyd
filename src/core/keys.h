@@ -282,6 +282,12 @@ QString nameFromKey(Vk vk);
 /// 请用 `nativeKey()`。
 bool isExtended(Vk vk);
 
+/// 这个 VK 是不是一个修饰键（Ctrl/Alt/Shift/Win 的通用或分侧变体）？
+///
+/// 引擎用它识别「单个修饰键」的和弦（`keys = "LWin"`）：配合
+/// `trigger = "release"` 时那是「轻碰」语义（见 `Engine::m_pendingTaps`）。
+bool isModifierKey(Vk vk);
+
 /// 把低级钩子报告的一对 `(vkCode, LLKHF_EXTENDED)` 翻译成 flowkeyd 的键码。
 ///
 /// 只有小键盘的 Enter 需要翻译：它与主键盘的 Enter 共用 `VK_RETURN`，

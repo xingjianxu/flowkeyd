@@ -13,6 +13,7 @@
 
 #include "app/help_model.h"
 #include "app/menu_model.h"
+#include "app/window_list_model.h"
 
 #include <QObject>
 #include <QString>
@@ -57,7 +58,18 @@ struct HelpRequest
     std::function<void(int)> onRun;
 };
 
-/// `menu` / `help` 两个弹窗的宿主（GUI 线程亲和）。
+/// 打开窗口切换器需要的一切。
+struct SwitchRequest
+{
+    std::optional<QString> title;
+    std::vector<WindowListEntry> items;
+    /// 用户选中第 `index` 项（**条目**下标，不是筛选后的可见行下标）时调用。
+    /// 此时窗口已经在屏幕上消失，回调在 GUI 线程上执行；实现只应该把活儿转交
+    /// 给别处（`Dispatcher` 再投一次队列），不要阻塞。
+    std::function<void(int)> onChoose;
+};
+
+/// `menu` / `help` / 窗口切换器三个弹窗的宿主（GUI 线程亲和）。
 class PopupHost : public QObject
 {
     Q_OBJECT
@@ -71,6 +83,8 @@ public:
     void requestMenu(MenuRequest request);
     /// 弹出帮助窗口；已经开着时只是前置并清空筛选。
     void requestHelp(HelpRequest request);
+    /// 弹出窗口切换器；已经开着时只是前置、清空筛选并把窗口列表换成最新的。
+    void requestSwitch(SwitchRequest request);
 
     // ---- 以下只在 GUI 线程调用 ----
 
@@ -82,6 +96,7 @@ public:
 
     bool menuVisible() const;
     bool helpVisible() const;
+    bool switchVisible() const;
 
     // 供 QML 调用（GUI 线程）：模型只做判断，执行决定的是这几个方法。
     Q_INVOKABLE void menuChoose(int index);
@@ -89,12 +104,16 @@ public:
     Q_INVOKABLE void helpCopy(int index);
     Q_INVOKABLE void helpRun(int index);
     Q_INVOKABLE void helpDismiss();
+    Q_INVOKABLE void switchChoose(int index);
+    Q_INVOKABLE void switchDismiss();
 
 private:
     void showMenu(MenuRequest request);
     void showHelp(HelpRequest request);
+    void showSwitch(SwitchRequest request);
     QQuickWindow *ensureMenuWindow();
     QQuickWindow *ensureHelpWindow();
+    QQuickWindow *ensureSwitchWindow();
     void placePopup(QQuickWindow *window, int width, int height);
     void activate(QQuickWindow *window);
 
@@ -107,6 +126,10 @@ private:
     QQuickWindow *m_helpWindow = nullptr;
     HelpModel *m_helpModel = nullptr;
     HelpRequest m_helpRequest;
+
+    QQuickWindow *m_switchWindow = nullptr;
+    WindowListModel *m_switchModel = nullptr;
+    SwitchRequest m_switchRequest;
 };
 
 } // namespace flowkeyd::app

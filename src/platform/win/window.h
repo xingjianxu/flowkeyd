@@ -34,6 +34,33 @@ std::optional<QString> processName(HWND hwnd);
 /// flowkeyd 启动 / 显示器重新接入时，`window_rule` 就是遍历这批窗口。
 std::vector<HWND> topLevelWindows();
 
+/// 这个窗口是不是用户眼中的「主窗口」。
+///
+/// 判据：可见、没有属主、不是 `WS_EX_TOOLWINDOW`、有标题、尺寸非零，
+/// 并且不是外壳自己的「Program Manager」。很多程序会拿无标题 / 工具窗口当
+/// 消息汇或渲染宿主（拿 `process` 匹配时会一次命中一堆），真正的主窗口至少
+/// 会写个标题。
+///
+/// `window_rule` 与窗口切换器用的是同一条判据。
+bool isMainWindow(HWND hwnd);
+
+/// 当前打开的一个程序窗口（窗口切换器用）。
+struct OpenWindow
+{
+    HWND hwnd = nullptr;
+    /// 窗口标题。
+    QString title;
+    /// 属主进程的小写可执行文件名（`chrome.exe`）；拿不到时为空串。
+    QString process;
+};
+
+/// 当前所有「主窗口」（可见、无属主、非工具窗口、有标题、尺寸非零），
+/// 按 `EnumWindows` 的 Z 序（最近用过的在前）。
+///
+/// **不包含 flowkeyd 自己的窗口**（弹窗 / 日志窗口不该出现在切换器里），
+/// 也不含锁屏 / 隐藏窗口；跨虚拟桌面的窗口会被列出来（激活时会把视图切过去）。
+std::vector<OpenWindow> listOpenWindows();
+
 /// 窗口的可见标题（取不到时返回 `"<untitled>"` / `"<invalid window>"`）。
 QString windowTitle(HWND hwnd);
 

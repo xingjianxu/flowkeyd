@@ -142,6 +142,7 @@ private slots:
     void pinsAWindowToAllDesktops();
     void topmostIsAppliedAndCleared();
     void foregroundQuerySkipsOverlayWindows();
+    void listsMainWindowsButSkipsOurOwn();
 };
 
 void TestInteractive::clipboardRoundTrip()
@@ -1060,6 +1061,39 @@ void TestInteractive::foregroundQuerySkipsOverlayWindows()
              reinterpret_cast<quintptr>(overlay.hwnd()));
     QCOMPARE(reinterpret_cast<quintptr>(platform::win::window::find(foreground)),
              reinterpret_cast<quintptr>(main.hwnd()));
+}
+
+void TestInteractive::listsMainWindowsButSkipsOurOwn()
+{
+    if (!interactiveEnabled()) {
+        QSKIP("set FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1 to run the interactive tests");
+    }
+
+    // 窗口切换器（`windows` 动作）枚举的就是这批窗口。这里用测试自己的窗口验证
+    // 判据与过滤：普通顶层窗口算「主窗口」，工具窗口不算，而**自己进程的窗口
+    // 不进列表**（切换器不该列出 flowkeyd 自己的弹窗 / 日志窗口）。
+    const QString token =
+        QStringLiteral("flowkeyd-switch-%1").arg(QCoreApplication::applicationPid());
+    TestWindow normal(token);
+    QVERIFY(normal.hwnd() != nullptr);
+    QVERIFY(platform::win::window::isMainWindow(normal.hwnd()));
+
+    TestWindow tool(token + QStringLiteral("-tool"), WS_EX_TOOLWINDOW);
+    QVERIFY(tool.hwnd() != nullptr);
+    QVERIFY(!platform::win::window::isMainWindow(tool.hwnd()));
+
+    const std::vector<platform::win::window::OpenWindow> windows =
+        platform::win::window::listOpenWindows();
+    for (const platform::win::window::OpenWindow &entry : windows) {
+        QVERIFY2(entry.hwnd != normal.hwnd(), "the current process must not be listed");
+        QVERIFY(entry.title != token);
+        // 列出来的每一条都必须是「主窗口」，进程名是小写的可执行文件名
+        // （拿不到属主时可以是空串）。
+        QVERIFY(platform::win::window::isMainWindow(entry.hwnd));
+        if (!entry.process.isEmpty()) {
+            QCOMPARE(entry.process, entry.process.toLower());
+        }
+    }
 }
 
 QTEST_MAIN(TestInteractive)

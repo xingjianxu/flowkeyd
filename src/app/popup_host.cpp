@@ -92,6 +92,16 @@ void PopupHost::requestHelp(HelpRequest request)
     showHelp(std::move(request));
 }
 
+void PopupHost::requestSwitch(SwitchRequest request)
+{
+    if (QThread::currentThread() != thread()) {
+        QMetaObject::invokeMethod(
+            this, [this, request]() { showSwitch(request); }, Qt::QueuedConnection);
+        return;
+    }
+    showSwitch(std::move(request));
+}
+
 void PopupHost::closeAll()
 {
     if (m_menuWindow != nullptr) {
@@ -102,6 +112,10 @@ void PopupHost::closeAll()
         m_helpWindow->setProperty("visible", false);
     }
     m_helpRequest = HelpRequest{};
+    if (m_switchWindow != nullptr) {
+        m_switchWindow->setProperty("visible", false);
+    }
+    m_switchRequest = SwitchRequest{};
 }
 
 bool PopupHost::menuVisible() const
@@ -112,6 +126,11 @@ bool PopupHost::menuVisible() const
 bool PopupHost::helpVisible() const
 {
     return m_helpWindow != nullptr && m_helpWindow->isVisible();
+}
+
+bool PopupHost::switchVisible() const
+{
+    return m_switchWindow != nullptr && m_switchWindow->isVisible();
 }
 
 void PopupHost::menuChoose(int index)
@@ -182,6 +201,29 @@ void PopupHost::helpDismiss()
     m_helpRequest = HelpRequest{};
 }
 
+void PopupHost::switchChoose(int index)
+{
+    if (m_switchWindow == nullptr) {
+        return;
+    }
+    // 先把窗口藏起来再交出去（与 `menuChoose` / `helpRun` 一致）：激活动作作用在
+    // **前台窗口**上，不先关窗就会把前台算成切换器自己。
+    m_switchWindow->setProperty("visible", false);
+    SwitchRequest request = std::move(m_switchRequest);
+    m_switchRequest = SwitchRequest{};
+    if (request.onChoose && index >= 0 && index < static_cast<int>(request.items.size())) {
+        request.onChoose(index);
+    }
+}
+
+void PopupHost::switchDismiss()
+{
+    if (m_switchWindow != nullptr) {
+        m_switchWindow->setProperty("visible", false);
+    }
+    m_switchRequest = SwitchRequest{};
+}
+
 void PopupHost::showMenu(MenuRequest request)
 {
     QQuickWindow *window = ensureMenuWindow();
@@ -218,6 +260,30 @@ void PopupHost::showHelp(HelpRequest request)
     window->setProperty("visible", true);
     if (!wasVisible) {
         centreOnCursorScreen(window, m_helpModel->cardWidth(), m_helpModel->cardHeight());
+    }
+    activateWindow(window);
+}
+
+void PopupHost::showSwitch(SwitchRequest request)
+{
+    QQuickWindow *window = ensureSwitchWindow();
+    if (window == nullptr) {
+        return;
+    }
+    const bool wasVisible = window->isVisible();
+    m_switchRequest = std::move(request);
+    m_switchModel->setItems(m_switchRequest.title, m_switchRequest.items);
+    QScreen *screen = QGuiApplication::screenAt(QCursor::pos());
+    if (screen == nullptr) {
+        screen = QGuiApplication::primaryScreen();
+    }
+    m_switchModel->setMaxRows(screen != nullptr
+                                  ? WindowListModel::rowsForAvailableHeight(
+                                        screen->availableGeometry().height())
+                                  : 12);
+    window->setProperty("visible", true);
+    if (!wasVisible) {
+        centreOnCursorScreen(window, m_switchModel->cardWidth(), m_switchModel->cardHeight());
     }
     activateWindow(window);
 }
@@ -268,6 +334,32 @@ QQuickWindow *PopupHost::ensureHelpWindow()
     m_helpWindow->setProperty("helpModel", QVariant::fromValue(static_cast<QObject *>(m_helpModel)));
     m_helpWindow->setProperty("host", QVariant::fromValue(static_cast<QObject *>(this)));
     return m_helpWindow;
+}
+
+QQuickWindow *PopupHost::ensureSwitchWindow()
+{
+    if (m_switchWindow != nullptr) {
+        return m_switchWindow;
+    }
+    QQmlComponent component(m_engine);
+    component.loadFromModule(QStringLiteral("Flowkeyd"), QStringLiteral("SwitchPopup"));
+    if (component.isError()) {
+        win::logError(QStringLiteral("could not load SwitchPopup.qml: %1")
+                          .arg(component.errorString()));
+        return nullptr;
+    }
+    QObject *object = component.create();
+    m_switchWindow = qobject_cast<QQuickWindow *>(object);
+    if (m_switchWindow == nullptr) {
+        delete object;
+        win::logError(QStringLiteral("SwitchPopup.qml did not create a window"));
+        return nullptr;
+    }
+    m_switchModel = new WindowListModel(this);
+    m_switchWindow->setProperty("switchModel",
+                                QVariant::fromValue(static_cast<QObject *>(m_switchModel)));
+    m_switchWindow->setProperty("host", QVariant::fromValue(static_cast<QObject *>(this)));
+    return m_switchWindow;
 }
 
 } // namespace flowkeyd::app

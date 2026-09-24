@@ -220,6 +220,13 @@ void Runtime::showHelpFromAnyThread(HelpRequest request)
     }
 }
 
+void Runtime::showSwitchFromAnyThread(SwitchRequest request)
+{
+    if (m_popupHost != nullptr) {
+        m_popupHost->requestSwitch(std::move(request));
+    }
+}
+
 void Runtime::performShutdown()
 {
     if (m_shuttingDown) {

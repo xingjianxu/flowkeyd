@@ -515,6 +515,24 @@ hotkey{
   action = help(),
 }
 
+-- 窗口切换器：列出当前所有打开的程序窗口，输入就按**进程名 / 窗口标题**筛选，
+-- 筛选到只剩一个窗口时直接切过去（多条时 ↑/↓ + Enter 或鼠标点选，Esc 关闭）。
+--
+-- 这里绑在「轻碰一下 Windows 键」上：单个修饰键 + `trigger = "release"` 的语义
+-- 是 —— 按下 Win 本身**照常传给系统**（Win+E / Win+L / Win+Shift+S 这些系统组合
+-- 不受影响），期间没按过别的键、松开时才触发；触发时注入一个未分配的标记按键
+-- 挡掉 Windows 自己弹开始菜单。也就是说，只有“单独按一下 Win”被换成了窗口切换器。
+--
+-- 不想接管 Win 键就换一个正常和弦（例如 `keys = "Win+j"`，并去掉
+-- `trigger = "release"`）。
+hotkey{
+  name = "window-switcher",
+  comment = "轻碰一下 Win：窗口切换器（输入筛选，唯一匹配直接切换）",
+  keys = "LWin",
+  trigger = "release",
+  action = windows(),
+}
+
 -- 控制类快捷键。suspend 快捷键在挂起期间仍然可用。
 hotkey{
   name = "suspend-toggle",

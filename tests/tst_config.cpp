@@ -36,6 +36,7 @@ private slots:
     void repeatUsesSettingsDefaults();
     void menuProblemsAreReportedAtLoadTime();
     void helpTitleMustNotBeEmpty();
+    void windowsTitleMustNotBeEmpty();
     void windowToggleAndAnimateValidation();
     void movingWindowOpsAreValidated();
     void windowRulesCompile();
@@ -128,6 +129,11 @@ void TestConfig::summaries()
     QCOMPARE(help.summary(), QStringLiteral("help"));
     help.helpTitle = QStringLiteral("快捷键");
     QCOMPARE(help.summary(), QStringLiteral("help \"快捷键\""));
+
+    Action windows = actionOf(Action::Kind::Windows);
+    QCOMPARE(windows.summary(), QStringLiteral("windows"));
+    windows.windowsTitle = QStringLiteral("窗口");
+    QCOMPARE(windows.summary(), QStringLiteral("windows \"窗口\""));
 
     Action menu = actionOf(Action::Kind::Menu);
     menu.items.push_back(menuItem(QStringLiteral("a")));
@@ -472,6 +478,19 @@ void TestConfig::helpTitleMustNotBeEmpty()
     help.helpTitle = QStringLiteral("  ");
     Config config;
     config.hotkeys.push_back(hotkeyNamed(QStringLiteral("blank"), QStringLiteral("F1"), specOne(help)));
+    const auto error = compileConfig(config);
+    QVERIFY(error.has_value());
+    QVERIFY2(error->toString().contains(QStringLiteral("title must not be empty")),
+             qPrintable(error->toString()));
+}
+
+void TestConfig::windowsTitleMustNotBeEmpty()
+{
+    Action windows = actionOf(Action::Kind::Windows);
+    windows.windowsTitle = QStringLiteral("  ");
+    Config config;
+    config.hotkeys.push_back(
+        hotkeyNamed(QStringLiteral("blank"), QStringLiteral("F1"), specOne(windows)));
     const auto error = compileConfig(config);
     QVERIFY(error.has_value());
     QVERIFY2(error->toString().contains(QStringLiteral("title must not be empty")),
