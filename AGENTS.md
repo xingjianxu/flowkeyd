@@ -482,8 +482,9 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
     * 筛选是**进程名的大小写无关前缀匹配**（项目所有者 2026-09 拍板：“只按进程名
       前缀”，标题只显示、不参与），**不是子串、也不是模糊搜索**：打 `chr` 命中
       `chrome.exe`，打 `hrome` 不命中。自动激活的判据是「只剩一个窗口」，不是
-      「只剩一个进程」——同一进程有多个窗口时改用 `↑`/`↓` + `Enter` / 鼠标点选
-      （悬停即高亮），**不能再靠打字区分**（标题不再参与匹配）。
+      「只剩一个进程」；同一个进程有多个窗口时进入**数字选择模式**（见第 22 条），
+      也可以 `↑`/`↓` + `Enter` / 鼠标点选（悬停即高亮）—— 标题不参与匹配，所以
+      打字是分不开它们的。
     * **「轻碰 Win」= 单个修饰键 + `trigger = "release"`。** 引擎对这种和弦采用
       「tap」语义（`Engine::m_pendingTaps`）：按下修饰键本身**放行**（因此 `Win+E` /
       `Win+L` 这些没被接管的系统组合不受影响），期间只要有别的按键按下就作废，
@@ -493,6 +494,30 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
     * 单个修饰键配默认的 `trigger = "press"` **保持老行为**（按下即触发、可吞键），
       `Ctrl+Shift` 这类「只有修饰键的和弦」也不受影响 —— 引擎里已有的单测盯着它们。
     * 本机真实配置把它绑在 `LWin` 上（`keys = "LWin"` + `trigger = "release"`）。
+
+22. **窗口切换器的数字选择模式（项目所有者 2026-09 要求）。** 筛选串命中的窗口
+    **全属于同一个进程名**、而且不止一个时，卡片进入「窗口选择模式」：前 10 行
+    依次分到数字快捷键 `1`..`9`、`0`，用户按一下数字就直接跳到那个窗口；超过
+    10 个的窗口不分配（`rowKey` 是空串，那一行不画徽标）。拍板的细节：
+    * 触发的判据是「筛选串非空 + 可见窗口全属于同一个进程名 + 至少两个窗口」——
+      **空筛选绝不编号**（要求是“根据用户的输入”能匹配到一个进程名），命中多个
+      进程名时也不编号。它与 `setFilter()` 的「只剩一个窗口就直接激活」互不冲突
+      （那边是 1 个窗口，这边至少 2 个）。
+    * 数字归快捷键：这种模式下 `handleKey()` 先把 `Qt::Key_1`..`Qt::Key_9` /
+      `Qt::Key_0`（主键盘与小键盘在 Qt 里是同一个 key）接掉，所以它们**不会跑进
+      筛选框**；没有对应行的数字（比如只有 3 个窗口时按 `0`）被吃掉但什么都不做。
+      不在这种模式时数字键照旧放行给 `TextField`（`7zip` 这类进程名要能用数字筛）。
+    * 纯逻辑在 `WindowListModel`（`m_numbered` / `m_rowKeys`，角色 `rowKey`；
+      `footerText` 在这种模式下换成「数字键直接切换」那一句，所以它从 `CONSTANT`
+      改成了 `NOTIFY stateChanged`）。界面只是把 `rowKey` 画成行左侧的徽标
+      （标准 `ItemDelegate` 的 `contentItem` 里一块 `Rectangle` + `Label`，空串时
+      不占位，标题与进程名跟着缩进 30 px）。
+    * `↑`/`↓`/`PgUp`/`PgDn`/`Enter`/鼠标点选照旧可用，不强制按数字。
+    * 验证：`tst_window_list_model` 盯纯逻辑（编号条件、`1`..`9`/`0` 的映射、
+      超过 10 个窗口只有前 10 个有键、没有对应行时数字被吃掉而不进筛选串）；
+      真机端到端用 `tmp/switch-digits.ps1`（一个重命名成 `swwinhost.exe` 的
+      `powershell.exe` 开三个窗口，注入 `LWin` → 打字 `swwinhost` → 按 `2`/`3`，
+      对日志里的 `Activate "…"` 断言映射正确），截图看徽标与底部提示。
 
 ---
 
@@ -614,10 +639,10 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `src/app/log_model.h/.cpp`                | 日志窗口的模型：尾随日志文件（增量、半行、被截断的多字节 UTF-8）、最多 1000 行、按级别配色、子串过滤                                                                                                                        |
 | `src/app/menu_model.h/.cpp`               | `menu` 选单的**纯逻辑**（`QAbstractListModel`，只用 QtCore）：卡片外框几何（宽高、标题、底部提示）、高亮移动（到边界回绕）、单字符选中、`Esc`/`Enter` 语义，以及给 QML 排版用的几个常量（`listTop`/`rowHeight`/`rowSpacing`/`rowInset`/`badgeSize`）。**行几何与鼠标命中不归它管**：列表是真正的 QML `ListView` + 标准 `ItemDelegate`（见第 2 节第 9 条与第 10 节），所以它没有 `rowRect`/`hitTest`，也**没有** `highlighted`/`hovered` 角色（那两个名字被标准委托占了）。悬停仍由模型持有（`hover`/`setHover`），因为「`Enter` 选光标下那一条」是选单的语义 |
 | `src/app/help_model.h/.cpp`               | `help` 帮助的**纯逻辑**（同上）：筛选（和弦/`comment`/`name`/动作摘要）、`可见/总数` 计数、键盘选中项（**高亮就是它**，鼠标悬停不改高亮）、`Enter`/双击该执行还是先武装（危险动作两次确认）、三级 `Esc`，以及鼠标点选用的 `setSelected()`（**可单测**）。**列表的滚动、行几何与鼠标命中都不归它管**：那是一个真正的 QML `ListView` + `ItemDelegate` + Qt 自带的 `ScrollBar`（见第 2 节第 9 条）。`handleKey()` 只接导航键与 `Enter`/`Esc`，字符/退格/`Home`/`End` 放行给标准 `TextField` |
-| `src/app/window_list_model.h/.cpp`        | 窗口切换器（`windows` 动作）的**纯逻辑**（只用 QtCore、可单测）：筛选（**进程名前缀**，标题只显示、不参与）、`可见/总数` 计数、键盘选中项（悬停即高亮）、`Enter`/`Esc`，以及**自动激活**（筛选非空且只剩一个窗口时 `setFilter()` 直接返回 `choose`）。窗口枚举与激活不在这里（见 `platform/win/window` 与 `app/dispatcher`），列表的滚动/行几何/鼠标命中归标准 `ListView` + `ItemDelegate`（见第 2 节第 21 条） |
+| `src/app/window_list_model.h/.cpp`        | 窗口切换器（`windows` 动作）的**纯逻辑**（只用 QtCore、可单测）：筛选（**进程名前缀**，标题只显示、不参与）、`可见/总数` 计数、键盘选中项（悬停即高亮）、`Enter`/`Esc`，**自动激活**（筛选非空且只剩一个窗口时 `setFilter()` 直接返回 `choose`）与**数字选择模式**（筛选到一个进程名的多个窗口时前 10 行分到 `1`..`9`/`0`，见第 2 节第 22 条）。窗口枚举与激活不在这里（见 `platform/win/window` 与 `app/dispatcher`），列表的滚动/行几何/鼠标命中归标准 `ListView` + `ItemDelegate`（见第 2 节第 21 条） |
 | `src/app/popup_layout.h/.cpp`             | 三个弹窗共用的几何类型（`PopupRect`/`PopupPoint`）与纯函数 `centrePopup()`（先在工作区居中、再夹进屏幕；**可单测**） |
 | `src/app/popup_host.h/.cpp`               | 把上面的模型挂到 QML 窗口上（选单 / 帮助 / 窗口切换器三个窗口）；抢前台（`requestActivate` + `win::window::raiseWindow` 的前台锁绕行）；在 Qt GUI 线程上创建/复用窗口；用户选完（或按 `Enter`/双击帮助里的一行 / 在切换器里选中一个窗口）把活儿回投工作线程；`helpRun()` 负责把**可见行下标**换算成条目下标，并且**先把窗口藏起来再执行**（**GUI 线程亲和**） |
-| `src/qml/`                                | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`、`SwitchPopup.qml`（四个文件都在开头写了 `pragma ComponentBehavior: Bound`）；配色一律用 `palette`，没有单独的 `Style.qml`；中文一律 `font.family: "Microsoft YaHei"`（默认族 `Segoe UI Variable` 没有中文字形，不管会回退到宋体，见第 10 节）。`HelpPopup.qml` 与 `MenuPopup.qml` 里除了卡片外框与按键徽标全是标准控件：帮助的筛选框是 `TextField`、列表是 `ListView` + Qt 自带 `ScrollBar` + `ItemDelegate`（列表只占行区域，不再需要表头/底部的遮罩）；选单的列表同样是 `ListView` + `ItemDelegate`（不滚动，所以没有滚动条；悬停与点击全部由委托提供）；窗口切换器（`SwitchPopup.qml`）与帮助同一套骨架，每行显示窗口标题 + 进程名 |
+| `src/qml/`                                | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`、`SwitchPopup.qml`（四个文件都在开头写了 `pragma ComponentBehavior: Bound`）；配色一律用 `palette`，没有单独的 `Style.qml`；中文一律 `font.family: "Microsoft YaHei"`（默认族 `Segoe UI Variable` 没有中文字形，不管会回退到宋体，见第 10 节）。`HelpPopup.qml` 与 `MenuPopup.qml` 里除了卡片外框与按键徽标全是标准控件：帮助的筛选框是 `TextField`、列表是 `ListView` + Qt 自带 `ScrollBar` + `ItemDelegate`（列表只占行区域，不再需要表头/底部的遮罩）；选单的列表同样是 `ListView` + `ItemDelegate`（不滚动，所以没有滚动条；悬停与点击全部由委托提供）；窗口切换器（`SwitchPopup.qml`）与帮助同一套骨架，每行显示窗口标题 + 进程名（数字选择模式下行首还有一个数字冒标） |
 | `tests/`                                  | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_log_tail`、`tst_audio`、`tst_autostart`（自启的纯逻辑：XML 渲染/解析、输出解码、路径比较；**不碰真实计划任务**）、`tst_interactive`（需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`，否则 skip；含剪贴板/音量/窗口后端/虚拟桌面/钉在所有桌面/置顶的真机验证）、`tst_menu_model`、`tst_help_model`、`tst_window_list_model`（窗口切换器的纯逻辑：进程名前缀筛选、标题不参与、唯一匹配自动激活、`Enter`/`Esc`、悬停高亮）、`tst_power_table`、`tst_desktop_table`、`tst_placement`（`window_rule` 的纯逻辑：显示器排序/选择、重连检测、摆放几何、匹配与摘要）、`tst_layout`、`tst_version`（构建时间戳与版本字符串的纯逻辑；只碰临时文件）、`tst_desktop_badge`（托盘数字徽标的文字与字号） |
 | `scripts/acceptance.ps1`                  | 桌面行为的验收脚本（注入按键 + 焦点捕捉窗口的外部观察，116 项检查：含弹窗滚轮/滚动条拖动/鼠标点选与点筛选框/鼠标点选单条目/`Enter` 与双击真的执行动作/危险动作两次确认）；需交互式桌面，**不属于 `ctest`**，见第 5 节与阶段 9。它用 `--no-elevate` 起临时守护进程，所以**不会**碰真实的自启计划任务 |
 
@@ -4018,6 +4043,33 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > 「窗口切换器」一节、已知限制）、本文件第 2 节第 21 条、第 4 节代码地图与
 > 第 14 节已同步。
 
+> **2026-09 新增（窗口切换器的数字选择模式）的 DoD**：`windows-debug` 与
+> `windows-release` 都是 `build exit 0`、零编译警告（release 里那句
+> `dxcompiler.dll` 是 `windeployqt` 自己的提示）；
+> `ctest --test-dir build/windows-debug` **24 个测试目标全绿**
+> （`tst_window_list_model` 16 项：新增
+> `numberedKeysAppearForOneProcessWithSeveralWindows`、
+> `numberKeysActivateTheMatchingWindow`、`onlyTheFirstTenWindowsGetAKey`；
+> `itemsExposeRolesAndGeometry` 加了 `rowKey` 角色与「未筛选时没有徽标」）。
+> `qmllint -I C:\Qt\6.11.2\mingw_64\qml src\qml\SwitchPopup.qml` 零警告。
+> `flowkeyd --check --config flowkeyd.lua.example` → `OK (46 hotkey(s), 3 remap(s),
+> 7 window rule(s))`、零警告。
+> 真机端到端（`tmp/switch-digits.ps1`，10 项检查全绿；先把常驻 `--quit` 掉，
+> 跑完从 `build\dist-release` 重新拉起）：一个复制成 `swwinhost.exe` 的
+> `powershell.exe` 开出三个标题为 `SW-DIGIT-1..3` 的窗口，注入 `LWin` 轻碰并在
+> 筛选框里打 `swwinhost` → 卡片标题 `flowkeyd 窗口 — 3 个`、**没有自动激活**；
+> 按 `0`（只有 3 个窗口、没有第 10 行）→ 卡片不关、列表仍是 3 个（数字没有跑进
+> 筛选框）；按 `2` → 日志 `` `window-switcher` -> Activate "SW-DIGIT-2" (from the
+> window switcher) ``，前台就是它；重开后在 Z 序变成 `SW-DIGIT-2 | SW-DIGIT-3 |
+> SW-DIGIT-1` 的情况下按 `3` → 激活 `SW-DIGIT-1`（正是第三行）。
+> 截图 `tmp/switch-digits-badge.png`：三行左边分别是 `1`/`2`/`3` 徽标，底部提示是
+> `数字键直接切换  ↑↓ 选择  Enter 切换  Esc 关闭`。
+> `scripts/acceptance.ps1` **没跑**：它不覆盖窗口切换器，本次只动了一个模型 +
+> 一个 QML 文件（没碰钩子/引擎/分发/窗口后端），按第 11 节第 3 条不属于必须重跑
+> 的改动。
+> 行为变化：见第 2 节第 22 条。README（快速上手、动作表、「窗口切换器」一节、
+> 已知限制）、`flowkeyd.lua.example`、本文件第 2 / 4 / 14 节已同步。
+
 ---
 
 ## 12. 本期不做的（有意留白）与后续工作
@@ -4232,7 +4284,9 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、
   `"desktop:1"`、`"power:sleep"`、裸关键字 `reload`/`quit`/`help`/`windows`/`none`。
 * `windows([title])` 是**窗口切换器**（见第 2 节第 21 条）：列出当前打开的程序
   窗口，输入按**进程名前缀**筛选（标题只显示、不参与），只剩一个窗口时直接
-  激活它；常见绑法是 `keys = "LWin"` + `trigger = "release"`（「轻碰 Win」）。
+  激活它；筛到一个进程名而它开了多个窗口时进入**数字选择模式**（前 10 行依次是
+  `1`..`9`、`0`，按数字直接跳过去，见第 2 节第 22 条）。常见绑法是
+  `keys = "LWin"` + `trigger = "release"`（「轻碰 Win」）。
 * **完全没有动作**的快捷键就是一个按键屏蔽器（会吞掉它匹配到的按键）。
 * `window` 的 `toggle`（默认**开**）只对 `op = "activate"` 有意义；
   `launch` 回退不套用它；显式 `toggle = false` 才关闭。

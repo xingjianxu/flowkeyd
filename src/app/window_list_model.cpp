@@ -22,6 +22,8 @@ constexpr int kFooterGap = 8;
 constexpr int kInset = 10;
 constexpr int kCardRadius = 12;
 constexpr int kMaxRows = 12;
+/// 数字选择模式下一共分配多少个快捷键：`1`..`9`、`0`（第 10 个）。
+constexpr int kNumberedKeys = 10;
 
 /// 列表区顶部：表头 + 间距 + 筛选框 + 间距。
 constexpr int kListTop = kPad + kHeaderHeight + kFilterGap + kFilterHeight + kListGap;
@@ -44,6 +46,28 @@ QVariantMap noneDecision()
     result.insert(QStringLiteral("index"), -1);
     result.insert(QStringLiteral("handled"), true);
     return result;
+}
+
+/// 数字键对应的可见行下标：`1` -> 0 … `9` -> 8，`0` -> 9；不是数字键时是 -1。
+/// 数字小键盘与主键盘在 Qt 里都报 `Qt::Key_0`..`Qt::Key_9`，所以两边都算。
+int digitLineForKey(int key)
+{
+    if (key >= Qt::Key_1 && key <= Qt::Key_9) {
+        return key - Qt::Key_1;
+    }
+    if (key == Qt::Key_0) {
+        return kNumberedKeys - 1;
+    }
+    return -1;
+}
+
+/// 第 `line` 行的数字快捷键文本（`1`..`9`、`0`）；超出前 10 行时是空串。
+QString digitLabelForLine(int line)
+{
+    if (line < 0 || line >= kNumberedKeys) {
+        return QString();
+    }
+    return QString::number((line + 1) % 10);
 }
 
 } // namespace
@@ -136,6 +160,9 @@ QString WindowListModel::emptyMessage() const
 
 QString WindowListModel::footerText() const
 {
+    if (m_numbered) {
+        return tr("数字键直接切换    ↑↓ 选择    Enter 切换    Esc 关闭");
+    }
     return tr("输入筛选    ↑↓ 选择    Enter 切换    Esc 关闭");
 }
 
@@ -268,6 +295,14 @@ QVariantMap WindowListModel::activate(int line)
 
 QVariantMap WindowListModel::handleKey(int key)
 {
+    // 数字选择模式：数字键永远归快捷键（哪怕前 10 行不够用也不能漏给筛选框，
+    // 否则「5」会跑进筛选串里、把列表筛空）。
+    if (m_numbered) {
+        const int line = digitLineForKey(key);
+        if (line >= 0) {
+            return line < visibleCount() ? activate(line) : noneDecision();
+        }
+    }
     switch (key) {
     case Qt::Key_Escape: {
         QVariantMap result;
@@ -329,6 +364,9 @@ QVariant WindowListModel::data(const QModelIndex &index, int role) const
         return entry.process;
     case RowSelectedRole:
         return activeLine() == line;
+    case RowKeyRole:
+        // `m_rowKeys` 与 `m_visible` 一一对应，用可见行下标取。
+        return m_rowKeys[static_cast<std::size_t>(line)];
     default:
         break;
     }
@@ -341,6 +379,7 @@ QHash<int, QByteArray> WindowListModel::roleNames() const
         {WindowTitleRole, QByteArrayLiteral("windowTitle")},
         {WindowProcessRole, QByteArrayLiteral("windowProcess")},
         {RowSelectedRole, QByteArrayLiteral("rowSelected")},
+        {RowKeyRole, QByteArrayLiteral("rowKey")},
     };
 }
 
@@ -356,6 +395,27 @@ void WindowListModel::refilter()
         }
     }
     m_selected = 0;
+
+    // 数字选择模式：筛选非空、命中窗口全属于同一个进程名、而且不止一个窗口
+    // （见头文件）。前 10 行各分一个数字，剩下的窗口不分配。
+    m_numbered = false;
+    m_rowKeys.assign(m_visible.size(), QString());
+    if (!needle.isEmpty() && m_visible.size() >= 2) {
+        const QString &group = m_processes[static_cast<std::size_t>(m_visible.front())];
+        const bool oneProcess =
+            !group.isEmpty()
+            && std::all_of(m_visible.begin(), m_visible.end(), [this, &group](int index) {
+                   return m_processes[static_cast<std::size_t>(index)] == group;
+               });
+        if (oneProcess) {
+            m_numbered = true;
+            const int keys = std::min(visibleCount(), kNumberedKeys);
+            for (int line = 0; line < keys; ++line) {
+                m_rowKeys[static_cast<std::size_t>(line)] = digitLabelForLine(line);
+            }
+        }
+    }
+
     relayout();
 }
 

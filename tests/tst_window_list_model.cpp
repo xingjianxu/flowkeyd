@@ -1,5 +1,6 @@
 // 窗口切换器模型（`app::WindowListModel`）的纯逻辑测试：筛选（进程名前缀，
 // 标题不参与）、`可见/总数` 计数、「只剩一个窗口就直接激活」、
+// 「一个进程多个窗口」时的数字选择模式、
 // `Enter`/`Esc`/方向键、悬停即高亮、几何与角色名。
 //
 // **窗口枚举与真正的激活不在这里**：那是 `platform/win/window` 与
@@ -66,6 +67,9 @@ private slots:
     void uniqueMatchAutoChoosesTheItem();
     void emptyFilterNeverAutoChooses();
     void multipleMatchesDoNotAutoChoose();
+    void numberedKeysAppearForOneProcessWithSeveralWindows();
+    void numberKeysActivateTheMatchingWindow();
+    void onlyTheFirstTenWindowsGetAKey();
     void noMatchesShowsTheEmptyMessage();
     void activateReturnsTheItemIndex();
     void handleKeyNavigatesChoosesAndCancels();
@@ -90,14 +94,19 @@ void TestWindowListModel::itemsExposeRolesAndGeometry()
     const int titleRole = roleOf(model, "windowTitle");
     const int processRole = roleOf(model, "windowProcess");
     const int selectedRole = roleOf(model, "rowSelected");
+    const int keyRole = roleOf(model, "rowKey");
     QVERIFY(titleRole != -1);
     QVERIFY(processRole != -1);
     QVERIFY(selectedRole != -1);
+    QVERIFY(keyRole != -1);
 
     QCOMPARE(model.data(model.index(0), titleRole).toString(), QStringLiteral("π - flowkeyd"));
     QCOMPARE(model.data(model.index(0), processRole).toString(), QStringLiteral("wezterm-gui.exe"));
     QCOMPARE(model.data(model.index(0), selectedRole).toBool(), true);
     QCOMPARE(model.data(model.index(1), selectedRole).toBool(), false);
+    // 还没筛选（不在数字选择模式）：没有快捷键徽标。
+    QVERIFY(!model.numberedMode());
+    QCOMPARE(model.data(model.index(0), keyRole).toString(), QString());
 
     // 卡片高度 = listTop + 行数 * (行高 + 空隙) + listBottom。
     QCOMPARE(model.cardHeight(),
@@ -190,13 +199,113 @@ void TestWindowListModel::multipleMatchesDoNotAutoChoose()
     QCOMPARE(model.visibleCount(), 2);
 
     // 标题不参与筛选，所以同一个程序的多个窗口不能再靠打字区分，
-    // 只能 `↑`/`↓` + `Enter`（或鼠标点选）。
+    // 只能 ↑/↓ + Enter、鼠标点选、或者直接按数字键（见下面的数字选择模式）。
     QCOMPARE(decisionOf(model.setFilter(QStringLiteral("b"))), QStringLiteral("none"));
     QCOMPARE(model.visibleCount(), 0);
     QCOMPARE(decisionOf(model.setFilter(QStringLiteral("chrome"))), QStringLiteral("none"));
     const QVariantMap chosen = model.activate(1);
     QCOMPARE(decisionOf(chosen), QStringLiteral("choose"));
     QCOMPARE(indexOf(chosen), 1);
+
+    // 两条 chrome + 一条 code：前缀 `chrome` 落在同一个进程的两个窗口上，
+    // 于是进入数字选择模式（不再是“没法区分”）。
+    QCOMPARE(decisionOf(model.setFilter(QStringLiteral("chrome"))), QStringLiteral("none"));
+    QVERIFY(model.numberedMode());
+}
+
+void TestWindowListModel::numberedKeysAppearForOneProcessWithSeveralWindows()
+{
+    app::WindowListModel model;
+    model.setItems(std::nullopt,
+                   {entry(QStringLiteral("a"), QStringLiteral("chrome.exe")),
+                    entry(QStringLiteral("b"), QStringLiteral("chrome.exe")),
+                    entry(QStringLiteral("c"), QStringLiteral("code.exe"))});
+
+    // 空筛选（刚打开）：不编号 —— 要求是「根据**用户的输入**」能匹配到一个进程名。
+    QCOMPARE(decisionOf(model.setFilter(QString())), QStringLiteral("none"));
+    QVERIFY(!model.numberedMode());
+
+    // 前缀命中两个进程名（chrome.exe 两个 + code.exe 一个）：不编号。
+    QCOMPARE(decisionOf(model.setFilter(QStringLiteral("c"))), QStringLiteral("none"));
+    QCOMPARE(model.visibleCount(), 3);
+    QVERIFY(!model.numberedMode());
+    QVERIFY(!model.footerText().contains(QStringLiteral("数字键")));
+
+    // 命中一个进程名的两个窗口：进入数字选择模式，前 10 行依次拿到 1..9、0。
+    QCOMPARE(decisionOf(model.setFilter(QStringLiteral("chrome"))), QStringLiteral("none"));
+    QVERIFY(model.numberedMode());
+    QCOMPARE(model.visibleCount(), 2);
+    const int keyRole = roleOf(model, "rowKey");
+    QCOMPARE(model.data(model.index(0), keyRole).toString(), QStringLiteral("1"));
+    QCOMPARE(model.data(model.index(1), keyRole).toString(), QStringLiteral("2"));
+
+    // 底部提示换成数字键那一句；清掉筛选后回到普通提示、编号消失。
+    QVERIFY(model.footerText().contains(QStringLiteral("数字键")));
+    model.clearFilter();
+    QVERIFY(!model.numberedMode());
+    QCOMPARE(model.data(model.index(0), keyRole).toString(), QString());
+    QVERIFY(!model.footerText().contains(QStringLiteral("数字键")));
+}
+
+void TestWindowListModel::numberKeysActivateTheMatchingWindow()
+{
+    app::WindowListModel model;
+    model.setItems(std::nullopt,
+                   {entry(QStringLiteral("first"), QStringLiteral("chrome.exe")),
+                    entry(QStringLiteral("second"), QStringLiteral("chrome.exe")),
+                    entry(QStringLiteral("third"), QStringLiteral("chrome.exe"))});
+    model.setFilter(QStringLiteral("chrome"));
+    QCOMPARE(model.visibleCount(), 3);
+    QVERIFY(model.numberedMode());
+
+    // `1` -> 第 1 行（条目 0）。
+    QVariantMap chosen = model.handleKey(Qt::Key_1);
+    QCOMPARE(decisionOf(chosen), QStringLiteral("choose"));
+    QCOMPARE(indexOf(chosen), 0);
+
+    // `2` -> 第 2 行（条目 1）。
+    chosen = model.handleKey(Qt::Key_2);
+    QCOMPARE(decisionOf(chosen), QStringLiteral("choose"));
+    QCOMPARE(indexOf(chosen), 1);
+
+    // 没有对应行的数字（只有 3 个窗口）被吃掉但什么都不做：
+    // 不能漏给筛选框，否则「5」会把列表筛空。
+    const QVariantMap extra = model.handleKey(Qt::Key_5);
+    QCOMPARE(decisionOf(extra), QStringLiteral("none"));
+    QVERIFY(extra.value(QStringLiteral("handled")).toBool());
+    QCOMPARE(model.visibleCount(), 3);
+
+    // 不在数字选择模式时数字键放行（用户可能要按它筛 `7zip` 这类进程名）。
+    model.clearFilter();
+    const QVariantMap plain = model.handleKey(Qt::Key_1);
+    QVERIFY(!plain.value(QStringLiteral("handled")).toBool());
+}
+
+void TestWindowListModel::onlyTheFirstTenWindowsGetAKey()
+{
+    std::vector<app::WindowListEntry> items;
+    for (int index = 0; index < 12; ++index) {
+        items.push_back(entry(QStringLiteral("window %1").arg(index),
+                              QStringLiteral("chrome.exe")));
+    }
+    app::WindowListModel model;
+    model.setItems(std::nullopt, items);
+    model.setFilter(QStringLiteral("chrome"));
+    QVERIFY(model.numberedMode());
+    QCOMPARE(model.visibleCount(), 12);
+
+    const int keyRole = roleOf(model, "rowKey");
+    QCOMPARE(model.data(model.index(0), keyRole).toString(), QStringLiteral("1"));
+    QCOMPARE(model.data(model.index(8), keyRole).toString(), QStringLiteral("9"));
+    QCOMPARE(model.data(model.index(9), keyRole).toString(), QStringLiteral("0"));
+    // 第 11、12 个窗口不分配按键。
+    QCOMPARE(model.data(model.index(10), keyRole).toString(), QString());
+    QCOMPARE(model.data(model.index(11), keyRole).toString(), QString());
+
+    // `0` 是第 10 个窗口（条目 9）。
+    const QVariantMap tenth = model.handleKey(Qt::Key_0);
+    QCOMPARE(decisionOf(tenth), QStringLiteral("choose"));
+    QCOMPARE(indexOf(tenth), 9);
 }
 
 void TestWindowListModel::noMatchesShowsTheEmptyMessage()

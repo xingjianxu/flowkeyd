@@ -19,6 +19,14 @@
 // **自动激活**：`setFilter()` 在「筛选非空、且只剩一个窗口」时会返回
 // `{ decision = "choose", index }`，QML 立刻把它交给宿主去激活。这样用户输入到
 // 唯一匹配时窗口就换了，不必再按 `Enter`。空的筛选（刚打开时）绝不自动激活。
+//
+// **数字选择模式**（项目所有者 2026-09 要求）：筛选串非空、命中的窗口**全都
+// 属于同一个进程名**、而且不止一个窗口时，进入「窗口选择模式」—— 前 10 行各
+// 分到一个数字快捷键（`1`..`9`、`0`），按下就直接跳到那个窗口。超过 10 个的
+// 窗口不分配按键（`rowKey` 为空串）。这正是「进程名前缀筛到一个程序、而它开了
+// 好几个窗口」的常见场景：打字到这里就打不下去了（标题不参与筛选），数字键是
+// 最省事的第二段输入。`setFilter()` 的自动激活不会和它打架：那种情况是「只剩
+// 一个窗口」，而这里至少有两个。
 #pragma once
 
 #include "app/popup_layout.h"
@@ -66,8 +74,11 @@ class WindowListModel : public QAbstractListModel
     Q_PROPERTY(QString filter READ filter NOTIFY stateChanged)
     Q_PROPERTY(QString filterPlaceholder READ filterPlaceholder CONSTANT)
     Q_PROPERTY(QString emptyMessage READ emptyMessage NOTIFY stateChanged)
-    Q_PROPERTY(QString footerText READ footerText CONSTANT)
+    /// 底部提示：数字选择模式下换成「数字键直接切换」那一句。
+    Q_PROPERTY(QString footerText READ footerText NOTIFY stateChanged)
     Q_PROPERTY(bool hasMatches READ hasMatches NOTIFY stateChanged)
+    /// 是不是「数字选择模式」（见文件头）。
+    Q_PROPERTY(bool numberedMode READ numberedMode NOTIFY stateChanged)
     Q_PROPERTY(int totalCount READ totalCount NOTIFY itemsChanged)
     Q_PROPERTY(int visibleCount READ visibleCount NOTIFY stateChanged)
     /// 卡片一次最多能画出来的行数（`min(可见条数, maxRows)`，至少 1）。
@@ -92,6 +103,9 @@ public:
         /// 就有一个 `highlighted` 属性（标准样式用它画高亮），而委托里的
         /// `required property` 名字必须等于模型角色名 —— 撞名就声明不了。
         RowSelectedRole,
+        /// 这一行的数字快捷键（`1`..`9`、`0`）；不在数字选择模式或超出前 10 个
+        /// 窗口时是空串（委托据此决定要不要画徽标）。
+        RowKeyRole,
     };
     Q_ENUM(Role)
 
@@ -121,6 +135,7 @@ public:
     QString emptyMessage() const;
     QString footerText() const;
     bool hasMatches() const { return !m_visible.empty(); }
+    bool numberedMode() const { return m_numbered; }
     int totalCount() const { return static_cast<int>(m_items.size()); }
     int visibleCount() const { return static_cast<int>(m_visible.size()); }
     int visibleRows() const { return m_rows; }
@@ -186,6 +201,10 @@ private:
 
     std::optional<QString> m_title;
     std::vector<WindowListEntry> m_items;
+    /// 与 `m_visible` 一一对应的数字快捷键（不在选择模式时全是空串）。
+    std::vector<QString> m_rowKeys;
+    /// 当前是不是数字选择模式（见文件头）。
+    bool m_numbered = false;
     /// 与 `m_items` 一一对应的可匹配文本（小写进程名，装载时算一次）。
     std::vector<QString> m_processes;
     /// 用户输入的筛选串（原样保留大小写）。

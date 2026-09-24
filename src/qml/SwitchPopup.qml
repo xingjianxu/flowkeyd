@@ -15,6 +15,10 @@ import QtQuick.Controls.FluentWinUI3
 // QML 只做两件事：
 //   * 把 `setFilter()` / `handleKey()` / `activate()` 给的决定执行掉；
 //   * 把模型的状态（筛选文本、选中行、计数）同步给控件。
+//
+// **数字选择模式**：筛到一个进程、而它开了好几个窗口时，每一行左边会出现一个
+// 数字徽标（`1`..`9`、`0`，超过 10 个窗口的只到第 10 个），按数字直接跳过去。
+// 数字键在那种模式下被模型吃掉（`handleKey`），所以不会跑进筛选框里。
 Window {
     id: root
 
@@ -225,6 +229,8 @@ Window {
                 required property string windowProcess
                 // **不叫 `highlighted`**：`ItemDelegate` 自己就有这个属性。
                 required property bool rowSelected
+                // 数字选择模式下的快捷键（空串表示这一行没有快捷数字）。
+                required property string rowKey
 
                 width: listView.width
                 height: root.rowHeight + root.rowSpacing
@@ -242,32 +248,68 @@ Window {
                 onClicked: root.activateRow(rowItem.index)
 
                 contentItem: Item {
-                    Label {
-                        id: titleText
+                    // 数字选择模式下的快捷键徽标（`1`..`9`、`0`）；不在那种模式时
+                    // 整块不占位，标题与进程名顶到最左边。样式与帮助窗口的
+                    // 按键徽标一致（标准控件不画这个，它是模型让显示的提示）。
+                    Rectangle {
+                        id: keyBadge
 
-                        // 有进程名时标题占上面 55%；没有就占满整行。
-                        width: parent.width
-                        height: rowItem.windowProcess.length > 0 ? parent.height * 55 / 100
-                                                                 : parent.height
-                        text: rowItem.windowTitle
-                        color: root.palette.text
-                        font.family: root.uiFontFamily
-                        font.pointSize: 10.5
-                        verticalAlignment: Text.AlignVCenter
-                        elide: Text.ElideRight
+                        visible: rowItem.rowKey.length > 0
+                        width: 22
+                        height: 22
+                        radius: height / 4
+                        color: root.palette.alternateBase
+                        border.width: 1
+                        border.color: root.palette.mid
+                        anchors.left: parent.left
+                        anchors.verticalCenter: parent.verticalCenter
+
+                        Label {
+                            anchors.centerIn: parent
+                            text: rowItem.rowKey
+                            color: root.palette.text
+                            font.family: root.uiFontFamily
+                            font.pointSize: 9
+                        }
                     }
 
-                    Label {
-                        visible: rowItem.windowProcess.length > 0
-                        y: titleText.height
-                        width: parent.width
-                        height: parent.height - titleText.height
-                        text: rowItem.windowProcess
-                        color: root.palette.placeholderText
-                        font.family: root.uiFontFamily
-                        font.pointSize: 8.5
-                        verticalAlignment: Text.AlignVCenter
-                        elide: Text.ElideRight
+                    Item {
+                        id: textColumn
+
+                        anchors.left: parent.left
+                        // 22 宽的徽标 + 8 的间隔；没有徽标就不缩进。
+                        anchors.leftMargin: rowItem.rowKey.length > 0 ? 30 : 0
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+
+                        Label {
+                            id: titleText
+
+                            // 有进程名时标题占上面 55%；没有就占满整行。
+                            width: parent.width
+                            height: rowItem.windowProcess.length > 0 ? parent.height * 55 / 100
+                                                                    : parent.height
+                            text: rowItem.windowTitle
+                            color: root.palette.text
+                            font.family: root.uiFontFamily
+                            font.pointSize: 10.5
+                            verticalAlignment: Text.AlignVCenter
+                            elide: Text.ElideRight
+                        }
+
+                        Label {
+                            visible: rowItem.windowProcess.length > 0
+                            y: titleText.height
+                            width: parent.width
+                            height: parent.height - titleText.height
+                            text: rowItem.windowProcess
+                            color: root.palette.placeholderText
+                            font.family: root.uiFontFamily
+                            font.pointSize: 8.5
+                            verticalAlignment: Text.AlignVCenter
+                            elide: Text.ElideRight
+                        }
                     }
                 }
             }
