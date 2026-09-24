@@ -74,7 +74,40 @@ QString hexMode(DWORD value)
     return QStringLiteral("0x%1").arg(value, 0, 16);
 }
 
+/// 取到 `hwnd` 的输入上下文就跑 `body`，无论成败都配上 `ImmReleaseContext`。
+/// 返回 false 表示压根没拿到上下文（调用方自己决定这算不算错误）。
+template <typename Body>
+bool withContext(HWND hwnd, Body body)
+{
+    const Imm &api = imm();
+    if (!api.available() || hwnd == nullptr) {
+        return false;
+    }
+    InputContext context = api.getContext(hwnd);
+    if (context == nullptr) {
+        return false;
+    }
+    body(context);
+    api.releaseContext(hwnd, context);
+    return true;
+}
+
 } // namespace
+
+Mode readMode(HWND hwnd)
+{
+    Mode mode;
+    withContext(hwnd, [&mode](InputContext context) {
+        DWORD conversion = 0;
+        DWORD sentence = 0;
+        if (imm().getConversionStatus(context, &conversion, &sentence) != FALSE) {
+            mode.valid = true;
+            mode.conversion = conversion;
+            mode.sentence = sentence;
+        }
+    });
+    return mode;
+}
 
 ModeSwitch useAlphanumericMode(HWND hwnd)
 {
@@ -125,6 +158,55 @@ ModeSwitch useAlphanumericMode(HWND hwnd)
     result.changed = true;
     result.detail = QStringLiteral("switched from conversion %1 to %2")
                         .arg(hexMode(conversion), hexMode(next));
+    return result;
+}
+
+ModeSwitch restoreMode(HWND hwnd, const Mode &mode)
+{
+    ModeSwitch result;
+    if (!mode.valid) {
+        // 打开卡片之前就没读到状态（这台机器没有输入法上下文之类）：没有可还原的。
+        result.ok = true;
+        result.detail = QStringLiteral("no saved mode to restore");
+        return result;
+    }
+    DWORD current = 0;
+    DWORD sentence = 0;
+    bool read = false;
+    bool wantsWrite = false;
+    bool written = false;
+    const bool hadContext = withContext(hwnd, [&](InputContext context) {
+        const Imm &api = imm();
+        if (api.getConversionStatus(context, &current, &sentence) != FALSE) {
+            read = true;
+        }
+        if (read && current == mode.conversion && sentence == mode.sentence) {
+            return; // 已经是那个模式了：不再写一次（卡片反复开关不会有副作用）
+        }
+        wantsWrite = true;
+        written = api.setConversionStatus(context, mode.conversion, mode.sentence) != FALSE;
+    });
+    if (!hadContext) {
+        // 拿不到上下文就不算错误：没有输入法的机器上本来就没有状态可言。
+        result.ok = true;
+        result.detail = QStringLiteral("the window has no input context; nothing to restore");
+        return result;
+    }
+    if (!wantsWrite) {
+        result.ok = true;
+        result.detail = QStringLiteral("already back at conversion %1").arg(hexMode(current));
+        return result;
+    }
+    if (!written) {
+        result.detail = QStringLiteral("imm32!ImmSetConversionStatus failed (restoring %1)")
+                            .arg(hexMode(mode.conversion));
+        return result;
+    }
+    result.ok = true;
+    result.changed = true;
+    result.detail = QStringLiteral("restored conversion %1 (was %2)")
+                        .arg(hexMode(mode.conversion),
+                             read ? hexMode(current) : QStringLiteral("unknown"));
     return result;
 }
 

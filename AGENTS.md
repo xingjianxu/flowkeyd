@@ -583,12 +583,20 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
       调用点两处：`PopupHost::showSwitch()` 弹出后一次（`switchUseEnglishInput()`），
       以及筛选框 `onActiveFocusChanged` 时一次（鼠标点回来 / 用户中途切回中文）；
       **预热期间不调**（那时窗口在屏幕外，用户并没有要用切换器）。
-      只影响 flowkeyd 自己这个线程的输入模式（TSF 的输入模式是按线程的），
-      不影响用户在别的应用里的中/英文状态，关上卡片也不需要还原。
+      **关掉卡片时把**打开前那份模式**写回去**（`ime::readMode()` 拿到快照、
+      `ime::restoreMode()` 写回；调用点在 `switchChoose` / `switchDismiss` /
+      `closeAll` 三条关闭路径上）。快照只在真正弹出时记一次，所以 QML 那两次
+      反复调用不会把它覆盖成“卡片自己刚才改成的那份”。
+      只影响 flowkeyd 自己这个进程的输入模式，不影响用户在别的应用里的中/英文
+      状态；但**本进程的几个窗口会互相看见**（实测在帮助窗口里按 `Shift` 切成
+      中文之后，切换器窗口读到的状态也带 `NATIVE` 位）——所以留着英文就是给
+      help / 日志窗口留下痕迹，这正是用户要“关闭时还原”的原因。
     * 验证：`tst_window_list_model` 新增 `cardHasNoTitleRow`（几何 + 底部计数 +
       `caption()`）；`tst_interactive` 新增 `switchesTheInputMethodToEnglish`
       （先由测试自己的 IMM32 探针把本线程切成中文，再断言产品把它切回字母数字、
-      且第二次是幂等的）；真机端到端见第 10 节与第 11 节的 DoD 记录。
+      且第二次是幂等的；后面接着断言 `readMode` / `restoreMode` 的往返：快照 →
+      切英文 → 还原回中文 → 再还原一次是幂等的 → 没有快照时是空操作）；
+      真机端到端见第 10 节与第 11 节的 DoD 记录。
 
 ---
 
@@ -692,7 +700,7 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `src/platform/win/dwm.h/.cpp`             | **运行时解析**的 `dwmapi` 两个导出：`DwmSetWindowAttribute`（按窗口关掉过渡动画，`window` 的 `animate`）与 `DwmGetWindowAttribute`（读 `DWMWA_CLOAKED`：`isCloaked()`，窗口到底显示了没有 —— 窗口切换器靠它排掉 shell 藏起来的假窗口，见第 2 节第 21 条与第 10 节）。拿不到 dwmapi 时只是保留动画 / 按“它在显示”处理，动作不失败 |
 | `src/platform/win/monitor.h/.cpp`         | 显示器枚举（`EnumDisplayMonitors` → `core::MonitorDescription`）、窗口当前在哪块屏、`applyPlacement`（`SetWindowPlacement` + `SetWindowPos`，带 `SWP_NOACTIVATE`，最大化时先还原再最大化）。**几何判断不在这一层** |
 | `src/platform/win/input.h/.cpp`           | 按键注入（`SendInput`/`NtUserSendInput`）、按键状态、`ModifierGuard`（含菜单遮断标记）、`FLOWKEYD_ACCEPT_INJECTED` 测试后门（见第 5 节与阶段 9）                                                                                |
-| `src/platform/win/ime.h/.cpp`             | **运行时解析**的 `imm32.dll`（不在允许静态链接的那批里，见第 3 节）：`useAlphanumericMode(hwnd)` 把本线程的输入法切成**英文/字母数字**（读 `ImmGetConversionStatus`，`IME_CMODE_NATIVE` 置位时把它清掉，其余标志与句模式原样保留）——窗口切换器一打开就靠它，否则筛选框里打的是中文候选字。拿不到 `imm32` / 没有输入上下文时不当错误（键盘本来就直输英文）。为什么不能用 Qt 的 `inputMethodHints`、为什么不需要还原，见第 2 节第 24 条与第 10 节 |
+| `src/platform/win/ime.h/.cpp`             | **运行时解析**的 `imm32.dll`（不在允许静态链接的那批里，见第 3 节）：`readMode(hwnd)` 读一份输入模式快照、`useAlphanumericMode(hwnd)` 把输入法切成**英文/字母数字**（读 `ImmGetConversionStatus`，`IME_CMODE_NATIVE` 置位时把它清掉，其余标志与句模式原样保留）、`restoreMode(hwnd, mode)` 把快照写回去（已经是那个模式就不写）。窗口切换器一打开就靠它，否则筛选框里打的是中文候选字；关掉卡片时再还原成打开前的状态。拿不到 `imm32` / 没有输入上下文时不当错误（键盘本来就直输英文）。为什么不能用 Qt 的 `inputMethodHints`、为什么本进程别的窗口能看见它、为什么需要还原，见第 2 节第 24 条与第 10 节 |
 | `src/platform/win/hook.h/.cpp`            | 钩子回调、**钩子线程自己的 Win32 消息循环**、`SetTimer`、控制消息、重载；另外还负责 `window_rule` 的两个监听：`SetWinEventHook`（`EVENT_OBJECT_SHOW` / `DESTROY`，按 HWND 去重）与一个 350 ms 的显示器轮询定时器。**定时器 id 必须用 `SetTimer` 的返回值**，见第 10 节 |
 | `src/platform/win/audio.h/.cpp`           | Core Audio `IAudioEndpointVolume`，手写 COM vtable（**高风险**）                                                                                                                                                            |
 | `src/platform/win/clipboard.h/.cpp`       | 剪贴板读写（`CF_UNICODETEXT`）                                                                                                                                                                                              |
@@ -713,7 +721,7 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `src/app/help_model.h/.cpp`               | `help` 帮助的**纯逻辑**（同上）：筛选（和弦/`comment`/`name`/动作摘要）、`可见/总数` 计数、键盘选中项（**高亮就是它**，鼠标悬停不改高亮）、`Enter`/双击该执行还是先武装（危险动作两次确认）、三级 `Esc`，以及鼠标点选用的 `setSelected()`（**可单测**）。**列表的滚动、行几何与鼠标命中都不归它管**：那是一个真正的 QML `ListView` + `ItemDelegate` + Qt 自带的 `ScrollBar`（见第 2 节第 9 条）。`handleKey()` 只接导航键与 `Enter`/`Esc`，字符/退格/`Home`/`End` 放行给标准 `TextField` |
 | `src/app/window_list_model.h/.cpp`        | 窗口切换器（`windows` 动作）的**纯逻辑**（只用 QtCore、可单测）：筛选（**进程名前缀**，标题只显示、不参与）、`可见/总数` 计数、键盘选中项（悬停即高亮）、`Enter`/`Esc`，**自动激活**（筛选非空且只剩一个窗口时 `setFilter()` 直接返回 `choose`）与**数字选择模式**（筛选到一个进程名的多个窗口时前 10 行分到 `1`..`9`/`0`，见第 2 节第 22 条）。卡片**没有标题行**（`listTop = 50`，没有 `titleRect`/`countRect`，计数在 `footerText` 里；`windows()` 的 `title` 只用作 `caption()`＝窗口标题），QML 的 `ListView` 左右与宽度都用 `filterRect`，见第 2 节第 24 条。窗口枚举与激活不在这里（见 `platform/win/window` 与 `app/dispatcher`），列表的滚动/行几何/鼠标命中归标准 `ListView` + `ItemDelegate`（见第 2 节第 21 条） |
 | `src/app/popup_layout.h/.cpp`             | 三个弹窗共用的几何类型（`PopupRect`/`PopupPoint`）与纯函数 `centrePopup()`（先在工作区居中、再夹进屏幕；**可单测**） |
-| `src/app/popup_host.h/.cpp`               | 把上面的模型挂到 QML 窗口上（选单 / 帮助 / 窗口切换器三个窗口）；抢前台（`requestActivate` + `win::window::raiseWindow` 的前台锁绕行）；在 Qt GUI 线程上创建/复用窗口；用户选完（或按 `Enter`/双击帮助里的一行 / 在切换器里选中一个窗口）把活儿回投工作线程；`helpRun()` 负责把**可见行下标**换算成条目下标，并且**先把窗口藏起来再执行**（**GUI 线程亲和**）。另外 `preload()`（由 `main` 在事件循环第一个回合排队调用）把三个窗口建好、填假数据各渲染一帧再藏起来（透明度 0 + 屏幕外），把“进程首次渲染”的固定开销提到启动时（见第 2 节第 23 条）；顺带记两条 debug 日志：`popup `x` shown in N ms` 与 `painted its first frame N ms after the request`。另外 `switchUseEnglishInput()`（`Q_INVOKABLE`，`QML` 的筛选框拿到焦点时会调）把切换器所在窗口的输入法切成英文 —— 真实弹出时 `showSwitch()` 自己也会调一次，**预热期间不调**（见第 2 节第 24 条） |
+| `src/app/popup_host.h/.cpp`               | 把上面的模型挂到 QML 窗口上（选单 / 帮助 / 窗口切换器三个窗口）；抢前台（`requestActivate` + `win::window::raiseWindow` 的前台锁绕行）；在 Qt GUI 线程上创建/复用窗口；用户选完（或按 `Enter`/双击帮助里的一行 / 在切换器里选中一个窗口）把活儿回投工作线程；`helpRun()` 负责把**可见行下标**换算成条目下标，并且**先把窗口藏起来再执行**（**GUI 线程亲和**）。另外 `preload()`（由 `main` 在事件循环第一个回合排队调用）把三个窗口建好、填假数据各渲染一帧再藏起来（透明度 0 + 屏幕外），把“进程首次渲染”的固定开销提到启动时（见第 2 节第 23 条）；顺带记两条 debug 日志：`popup `x` shown in N ms` 与 `painted its first frame N ms after the request`。另外 `switchUseEnglishInput()`（`Q_INVOKABLE`，`QML` 的筛选框拿到焦点时会调）把切换器所在窗口的输入法切成英文 —— 真实弹出时 `showSwitch()` 自己也会调一次，**预热期间不调**；它同时把**打开前**的模式记进快照（只记一次），关掉卡片时 `restoreSwitchInputMode()`（`switchChoose` / `switchDismiss` / `closeAll` 三条路径）把它写回去（见第 2 节第 24 条） |
 | `src/qml/`                                | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`、`SwitchPopup.qml`（四个文件都在开头写了 `pragma ComponentBehavior: Bound`）；**三个弹窗的 `flags` 都带 `Qt.Tool`**（= `WS_EX_TOOLWINDOW`，不进任务栏/`Alt+Tab`；日志窗口故意不加，见第 2 节第 23 条）；配色一律用 `palette`，没有单独的 `Style.qml`；中文一律 `font.family: "Microsoft YaHei"`（默认族 `Segoe UI Variable` 没有中文字形，不管会回退到宋体，见第 10 节）。`HelpPopup.qml` 与 `MenuPopup.qml` 里除了卡片外框与按键徽标全是标准控件：帮助的筛选框是 `TextField`、列表是 `ListView` + Qt 自带 `ScrollBar` + `ItemDelegate`（列表只占行区域，不再需要表头/底部的遮罩）；选单的列表同样是 `ListView` + `ItemDelegate`（不滚动，所以没有滚动条；悬停与点击全部由委托提供）；窗口切换器（`SwitchPopup.qml`）与帮助同一套骨架，每行显示窗口标题 + 进程名（数字选择模式下行首还有一个数字冒标）；**它没有标题行**，`ListView` 的 `x`/`width` 直接用 `filterRect`（与筛选框同宽），筛选框拿到焦点时会调 `host.switchUseEnglishInput()`（见第 2 节第 24 条） |
 | `tests/`                                  | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_log_tail`、`tst_audio`、`tst_autostart`（自启的纯逻辑：XML 渲染/解析、输出解码、路径比较；**不碰真实计划任务**）、`tst_interactive`（需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`，否则 skip；含剪贴板/音量/窗口后端/虚拟桌面/钉在所有桌面/置顶/输入法切换的真机验证）、`tst_menu_model`、`tst_help_model`、`tst_window_list_model`（窗口切换器的纯逻辑：进程名前缀筛选、标题不参与、唯一匹配自动激活、`Enter`/`Esc`、悬停高亮、没有标题行的几何与窗口标题）、`tst_power_table`、`tst_desktop_table`、`tst_placement`（`window_rule` 的纯逻辑：显示器排序/选择、重连检测、摆放几何、匹配与摘要）、`tst_layout`、`tst_version`（构建时间戳与版本字符串的纯逻辑；只碰临时文件）、`tst_desktop_badge`（托盘数字徽标的文字与字号） |
 | `scripts/acceptance.ps1`                  | 桌面行为的验收脚本（注入按键 + 焦点捕捉窗口的外部观察，118 项检查：含弹窗滚轮/滚动条拖动/鼠标点选与点筛选框/鼠标点选单条目/`Enter` 与双击真的执行动作/危险动作两次确认/两个弹窗不在任务栏里）；需交互式桌面，**不属于 `ctest`**，见第 5 节与阶段 9。它用 `--no-elevate` 起临时守护进程，所以**不会**碰真实的自启计划任务 |
@@ -2973,6 +2981,51 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   `wps` / `obs64` / `Epic Games` 与 `Win+3` / `Ctrl+Alt+K`，现在是**零警告**
   （`OK (39 hotkey(s), 3 remap(s), 7 window rule(s))`）。
 
+#### 2026-09 新增：窗口切换器「打开时切英文、关闭时还原」
+
+* **本进程的几个窗口会互相看见输入模式。** 实测（`build/windows-debug` + 一次性
+  配置 + `FLOWKEYD_ACCEPT_INJECTED=1`）：在帮助窗口里按 `Shift` 把输入法切成中文
+  （帮助窗口自己不碰输入法，所以那一下只能来自 IME），紧接着打开窗口切换器，它
+  读到的转换状态就带 `NATIVE` 位（`0xfb1`；字母数字时是 `0xfb0`）。**别的进程完全
+  不受影响**（打开卡片之后在浏览器里打字照旧中文；本机 IMM32 跨进程
+  `ImmGetContext` 一律 `no-context`，与 TSF “模式是按线程的”一致）。所以
+  “只影响自己”在“别的应用”那一层是对的，但同一进程里的 help / 日志窗口可能跟着
+  变（实测到的方向是反的：帮助窗口 → 切换器）—— 项目所有者因此要求**卡片关掉时
+  把打开前的模式写回去**。
+* **落地**：`ime::readMode()`（只读快照）+ `ime::restoreMode()`（写回去；已经是那
+  个模式就不写，所以可以在关闭路径上无条件调；`mode.valid` 为假时是空操作）。
+  `PopupHost` 里的快照**只在真正弹出时记一次**（QML 的 `onActiveFocusChanged` 会
+  反复调 `switchUseEnglishInput()`，不能每次都覆盖快照），还原点在 `switchChoose`
+  / `switchDismiss` / `closeAll` 三条关闭路径上。
+* **实测证据**（`tmp/ime-restore.ps1`：一次性实例 + 注入 `LWin` 轻碰 / `Shift` /
+  `Esc` / `Enter`）：
+  ```
+  cycle 1 open  : already english (conversion 0xc00)
+  (Shift -> 中文)
+  cycle 1 close : input method restored (restored conversion 0xc00 (was 0xc01))
+  cycle 2 open  : already english (conversion 0xc00)          <- 还原真的生效了
+  cycle 2 close : input method restored (restored conversion 0xc00 (was 0xc01))
+  cycle 3 close : input method restored (...) + Activate ...   <- 选一个窗口的路径也还原
+  cycle 4 open  : already english (conversion 0xc00)
+  ```
+  没有这行还原（也就是卡片只切不改回）的话，卡片关掉时状态会停在它刚换成的那份
+  `0xc01`，下一次打开就会打 `switched from 0xc01 to 0xc00` —— 等于把用户的输入法
+  状态留在了英文。
+* **同一台机器上不同窗口报出的标志位不一样**（见过 `0x800`、`0xc00`、`0xfb0`
+  三种，多出来的是 `CHARCODE`/`SOFTKBD`/`NOCONVERSION`/`FIXED` 之类的位），只有
+  `NATIVE`（0x0001）那一位对我们有意义。**还原时整份照抄**，不要自己拼一个
+  `IME_CMODE_ALPHANUMERIC`（0）写回去。
+* **一个没完全归因的现象**：程序性地写回状态之后，IME 自己“下一次 `Shift` 会切到
+  哪边”的内部相位不一定跟着变。第一次跑那个脚本时，在帮助窗口里按一下 `Shift`
+  之后状态仍然是英文（看上去像“没生效”）；而打开前/还原后这两个状态正常情况下是
+  自洽的。以后如果收到“卡片关掉后第一次按 `Shift` 没反应”的反馈，先怀疑这里。
+* **不要把 `platform/win/ime.h` 加进任何会被 `main.cpp` 拉到的头文件里。** 那样
+  `windows.h` 就会先于 `core/keys.h` 被包含，而 `winnt.h` 的 `DELETE`（访问权限
+  常量 `0x00010000`）会与 `core/keys.h` 里的 `Vk DELETE`（0x2E）撞名，报一句
+  莫名其妙的 `expected unqualified-id before numeric constant`。`popup_host.h`
+  因此只存 `std::uint32_t` 快照字段，把 `ime.h` 留在 `.cpp` 里（它之前就这么做，
+  这次差一点破坏掉）。
+
 ### 领域坑清单（动手前先看这一遍）
 
 下面这些每一条都值得在动钩子/引擎/窗口/电源之前先读一遍：
@@ -3020,6 +3073,14 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 * **`IVirtualDesktop::GetID` 在 vtable 下标 4**（先 `IsViewVisible`（3），
   照抄 VD.ahk 的 `VD_goToDesktopOfWindow`），用来把窗口的
   `GetWindowDesktopId` 对到内部枚举的桌面上；拿**有且只有一个匹配**当自检。
+* **输入法（IMM32/TSF）的转换模式：别的应用不受影响，但本进程的几个窗口互相
+  看得见**（在一个窗口里按 `Shift` 切中文，另一个窗口读到的也带 `NATIVE` 位）。
+  所以把某个弹窗切成英文之后，要么给它配一份快照/还原，要么就得接受 help /
+  日志窗口跟着变英文（见第 10 节与第 2 节第 24 条）。
+* **`windows.h` 的 `DELETE` 宏与 `core/keys.h` 的 `Vk DELETE` 撞名**：把任何
+  会拉进 `windows.h` 的头文件加进被 `main.cpp` 包含的头里就会炸（报
+  `expected unqualified-id before numeric constant`）。平台头只放在 `.cpp` 里
+  （见第 10 节）。
 
 #### 2026-09 新增：托盘右键与启动日志里的构建版本（build 时间戳）
 
@@ -4428,6 +4489,54 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > （= 560x238，新 `listTop 50`）。
 > 本次提交（收尾时 `--version`/启动日志里报的就是它的短哈希，这里不写死）之后
 > 又重建了一次 release 并把常驻实例重新拉起，所以它跑的就是这份改动。
+> 按工作约定第 11 条：常驻实例已 `--quit` → 构建 release → 从
+> `build\dist-release` 重新拉起（自启任务仍指向那个路径）。
+
+> **2026-09 变更（窗口切换器：打开时切英文、关掉时还原输入法）的 DoD**：
+> 项目所有者要求「每次进入窗口切换弹窗时都把它的输入法状态重置为英文」，并在
+> 追问后拍板要「打开时切英文，**关闭时还原**」（既然这个模式在本进程里几个窗口
+> 之间互相看得见，卡片就不该把它留着）。
+> `windows-debug` 与 `windows-release` 都是 **build exit 0、零编译警告**
+> （release 里那两句 `dxcompiler.dll` 是 `windeployqt` 自己的提示）；
+> `ctest --test-dir build/windows-debug` **24 个测试目标全绿**。
+> `flowkeyd --check --config flowkeyd.lua.example` →
+> `OK (46 hotkey(s), 3 remap(s), 7 window rule(s))`、零警告；真实配置（不带
+> `--config`）→ `OK (31 hotkey(s), 0 remap(s), 4 window rule(s))`、零警告。
+> 改动：`platform/win/ime` 新增 `Mode` / `readMode()` / `restoreMode()`（整份
+> 转换状态照抄后写回，只有 `NATIVE` 那一位对我们有意义；已经是那个模式就不写；
+> 拿不到上下文时是空操作）；`PopupHost` 在**真正弹出**时记一次快照，在
+> `switchChoose` / `switchDismiss` / `closeAll` 三条关闭路径上还原（QML 的
+> `onActiveFocusChanged` 反复调 `switchUseEnglishInput()` 不会覆盖快照，卡片没
+> 显示时那个函数直接返回）。
+> `tst_interactive::switchesTheInputMethodToEnglish`（`FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`，
+> 真机，`-o <file>,txt` 才看得到 QtTest 输出）扩展了快照/还原的往返：切中文 →
+> 快照 → 切英文 → 还原回中文 → 再还原一次是幂等的 → 没有快照时是空操作；
+> **3 passed, 0 failed, 0 skipped**。
+> 真机端到端（`tmp/ime-restore.ps1` + `tmp/ime-restore.lua`，debug 构建 + 一次性
+> 实例 + `FLOWKEYD_ACCEPT_INJECTED=1`，注入 `LWin` 轻碰 / `Shift` / `Esc` / `Enter`
+> 四个循环）：
+> ```
+> cycle 1 open  : already english (conversion 0xc00)
+> (Shift -> chinese)
+> cycle 1 close : input method restored (restored conversion 0xc00 (was 0xc01))
+> cycle 2 open  : already english (conversion 0xc00)          <- 还原真的生效了
+> cycle 2 close : input method restored (restored conversion 0xc00 (was 0xc01))
+> cycle 3 close : input method restored (...) + Activate ...   <- 选一个窗口的路径也还原
+> cycle 4 open  : already english (conversion 0xc00)
+> ```
+> 另有一个探究性实验（`tmp/ime-help.ps1`）确认了「本进程的几个窗口互相看得见
+> 这个模式」（在帮助窗口里按 `Shift` 切成中文之后，切换器窗口读到的转换状态就带
+> `NATIVE` 位：`0xfb1`，字母数字时是 `0xfb0`）以及**别的进程完全不受影响**；
+> 细节与一个没完全归因的相位现象记在第 10 节。
+> `scripts/acceptance.ps1`（只跑 release；跑前先 `--quit` 常驻、跑完再拉起）
+> **118 项、0 失败**（与上次持平：脚本本身没动，但它覆盖的弹窗宿主与切换器共用
+> 同一条路径）。
+> 顺带撞上一个坑并避开了：`platform/win/ime.h` 不能进 `popup_host.h`（否则
+> `windows.h` 会先于 `core/keys.h` 被包含，`winnt.h` 的 `DELETE` 宏与
+> `core/keys.h` 的 `Vk DELETE` 撞名，报 `expected unqualified-id before numeric
+> constant`）——`popup_host.h` 因此只存标量快照字段，见第 10 节。
+> 行为变化：窗口切换器关掉时会把输入法还原成**打开前**的模式（README 的
+> `windows` 动作表、窗口切换器、已知限制已同步）。
 > 按工作约定第 11 条：常驻实例已 `--quit` → 构建 release → 从
 > `build\dist-release` 重新拉起（自启任务仍指向那个路径）。
 

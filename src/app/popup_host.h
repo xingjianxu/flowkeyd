@@ -21,6 +21,7 @@
 #include <QSet>
 #include <QString>
 
+#include <cstdint>
 #include <functional>
 #include <optional>
 #include <vector>
@@ -139,6 +140,11 @@ public:
     /// 真实弹出时由 `showSwitch()` 调一次；输入框自己拿到焦点时 QML 再调一次
     /// （鼠标点进来、或用户中途切回中文时补上）。**预热期间不调**：那时窗口在
     /// 屏幕外，用户并没有要用切换器。
+    ///
+    /// 第一次调进来时先把**打开前**的输入模式记下来
+    /// （`m_switchPreviousValid` / `m_switchPreviousConversion` +
+    /// `m_switchPreviousSentence`），卡片关掉时由 `restoreSwitchInputMode()`
+    /// 还回去。
     Q_INVOKABLE void switchUseEnglishInput();
 
 private:
@@ -164,6 +170,15 @@ private:
     /// 屏幕外）。返回 true 表示刚才在预热 —— 调用方要当「第一次弹出」处理：
     /// 重新摆位置，并把透明度还回去。
     bool cancelPreload(QQuickWindow *window);
+
+    /// 关掉窗口切换器时把输入法还原成**打开前**的模式。
+    ///
+    /// 为什么需要：输入模式是本进程这个**线程**的共享状态（`platform/win/ime.h`
+    /// 里写了为什么），卡片把它切成英文之后，同一个线程的 help / 日志窗口也会
+    /// 跟着变成英文。用户不希望在卡片之外留下痕迹，所以打开前的状态要还回去。
+    /// 没有快照（没真正弹出过、或这台机器压根没有输入法）时是空操作。
+    void restoreSwitchInputMode();
+
     /// 把 `window` 显示成「全透明 + 屏幕外」，等它画出第一帧之后自己藏起来。
     void warmUpWindow(QQuickWindow *window, const QString &name, const QPoint &offscreen);
     /// 预热收尾：藏起来、恢复透明度、写一条 debug 日志。
@@ -182,6 +197,20 @@ private:
     QQuickWindow *m_switchWindow = nullptr;
     WindowListModel *m_switchModel = nullptr;
     SwitchRequest m_switchRequest;
+
+    // 窗口切换器的输入模式快照：真正弹出时记一份（`switchUseEnglishInput()` 里
+    // 只记一次），卡片关掉时 `restoreSwitchInputMode()` 写回去。
+    // 窗口切换器的输入模式快照（就是 `platform/win/ime.h` 的 `ime::Mode`）。
+    //
+    // 这里**不**直接用它、只存这几个标量：一旦这个头文件（会被 `main.cpp` 拉到）
+    // 把 `platform/win/ime.h` 间接带进来，`windows.h` 就会先于 `core/keys.h`
+    // 被包含，而 `winnt.h` 的 `DELETE` 宏会与 `core/keys.h` 里的 `Vk DELETE`
+    // 撞名（报 `expected unqualified-id before numeric constant`）。所以这个
+    // 头文件保持不碰 Win32。
+    std::uint32_t m_switchPreviousConversion = 0;
+    std::uint32_t m_switchPreviousSentence = 0;
+    bool m_switchPreviousValid = false;
+    bool m_switchModeSaved = false;
 
     // 首帧计时的状态（debug 日志用）：`m_frameName` 非空表示正在等那个弹窗的下一帧。
     QString m_frameName;

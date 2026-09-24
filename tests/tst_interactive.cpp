@@ -1342,10 +1342,11 @@ void TestInteractive::cloakedWindowsOnOtherDesktopsStaySwitchable()
 
 /// 窗口切换器的输入法切换（`platform/win/ime.*`）：卡片一出来（以及输入框拿到
 /// 焦点时）要把输入法切成**英文**，否则筛选框里打的是中文候选字，进程名前缀
-/// 一条都筛不出来。
+/// 一条都筛不出来；卡片关掉时要把**打开前**的模式还原回去（输入模式是本进程
+/// 这个线程的共享状态，不能给 help / 日志窗口留下痕迹）。
 ///
 /// 真机上验证：先用测试自己的 IMM32 探针把这个线程的输入法切到中文（`NATIVE`，
-/// 也就是用户按 Shift 之前的那个状态），再让产品把它切回来。
+/// 也就是用户按 Shift 之前的那个状态），再让产品把它切回来、还回去。
 void TestInteractive::switchesTheInputMethodToEnglish()
 {
     if (!interactiveEnabled()) {
@@ -1378,6 +1379,40 @@ void TestInteractive::switchesTheInputMethodToEnglish()
         platform::win::ime::useAlphanumericMode(window.hwnd());
     QVERIFY2(again.ok, qPrintable(again.detail));
     QVERIFY(!again.changed);
+
+    // ---- 快照 + 还原 ----------------------------------------------------------
+    // 窗口切换器打开时先记一份（`readMode`），关掉时写回去（`restoreMode`）：
+    // 输入模式是本进程这个线程的共享状态，卡片不能在 help / 日志窗口里留下痕迹。
+    QVERIFY2(probe.setNative(window.hwnd(), true),
+             "could not put the input method into the native mode");
+    const platform::win::ime::Mode before = platform::win::ime::readMode(window.hwnd());
+    QVERIFY2(before.valid, "could not read the input mode back");
+    QVERIFY(probe.isNative(window.hwnd()).value_or(false));
+
+    const platform::win::ime::ModeSwitch switched =
+        platform::win::ime::useAlphanumericMode(window.hwnd());
+    QVERIFY2(switched.ok && switched.changed, qPrintable(switched.detail));
+    QVERIFY(!probe.isNative(window.hwnd()).value_or(true));
+
+    // 关掉卡片：应该回到打开前那个“中文”的模式（不是留着英文）。
+    const platform::win::ime::ModeSwitch restored =
+        platform::win::ime::restoreMode(window.hwnd(), before);
+    QVERIFY2(restored.ok, qPrintable(restored.detail));
+    QVERIFY2(restored.changed, qPrintable(restored.detail));
+    QVERIFY(probe.isNative(window.hwnd()).value_or(false));
+    QCOMPARE(platform::win::ime::readMode(window.hwnd()).conversion, before.conversion);
+
+    // 已经是那个模式就不应该再写一次（关掉的路径可能在好几个分支上重复走）。
+    const platform::win::ime::ModeSwitch restoredAgain =
+        platform::win::ime::restoreMode(window.hwnd(), before);
+    QVERIFY2(restoredAgain.ok, qPrintable(restoredAgain.detail));
+    QVERIFY(!restoredAgain.changed);
+
+    // 没有快照（`readMode` 当时没读到）时“还原”是空操作，不算失败。
+    const platform::win::ime::ModeSwitch nothing =
+        platform::win::ime::restoreMode(window.hwnd(), platform::win::ime::Mode{});
+    QVERIFY2(nothing.ok, qPrintable(nothing.detail));
+    QVERIFY(!nothing.changed);
 }
 
 QTEST_MAIN(TestInteractive)

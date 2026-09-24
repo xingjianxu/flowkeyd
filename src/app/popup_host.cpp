@@ -119,6 +119,7 @@ void PopupHost::closeAll()
         m_switchWindow->setProperty("visible", false);
     }
     m_switchRequest = SwitchRequest{};
+    restoreSwitchInputMode();
 }
 
 bool PopupHost::menuVisible() const
@@ -212,6 +213,8 @@ void PopupHost::switchChoose(int index)
     // 先把窗口藏起来再交出去（与 `menuChoose` / `helpRun` 一致）：激活动作作用在
     // **前台窗口**上，不先关窗就会把前台算成切换器自己。
     m_switchWindow->setProperty("visible", false);
+    // 关掉卡片就把输入法还回打开前的样子（用户不希望它留下痕迹）。
+    restoreSwitchInputMode();
     SwitchRequest request = std::move(m_switchRequest);
     m_switchRequest = SwitchRequest{};
     if (request.onChoose && index >= 0 && index < static_cast<int>(request.items.size())) {
@@ -225,6 +228,7 @@ void PopupHost::switchDismiss()
         m_switchWindow->setProperty("visible", false);
     }
     m_switchRequest = SwitchRequest{};
+    restoreSwitchInputMode();
 }
 
 void PopupHost::switchUseEnglishInput()
@@ -237,7 +241,21 @@ void PopupHost::switchUseEnglishInput()
     if (m_warming.contains(m_switchWindow)) {
         return;
     }
+    // 卡片没显示的时候也不动（例如隐藏之后 QML 那边又冒出一个焦点变化）：
+    // 关掉卡片时我们已经把模式还回去了，这里再切一次就把还原白做了。
+    if (!m_switchWindow->isVisible()) {
+        return;
+    }
     const HWND hwnd = reinterpret_cast<HWND>(m_switchWindow->winId());
+    // **打开之前**的模式只记一次（QML 的输入框每拿到一次焦点都会调进来）：
+    // 关掉卡片时要还原的就是它。
+    if (!m_switchModeSaved) {
+        const win::ime::Mode previous = win::ime::readMode(hwnd);
+        m_switchPreviousValid = previous.valid;
+        m_switchPreviousConversion = previous.conversion;
+        m_switchPreviousSentence = previous.sentence;
+        m_switchModeSaved = true;
+    }
     const win::ime::ModeSwitch result = win::ime::useAlphanumericMode(hwnd);
     // 每次都记（debug 级）：这条日志是「输入法是英文吗」的唯一现场 —— 输入框
     // 拿到焦点时这个函数会再调一次，而两次之间可能夹着输入法自己的状态变化。
@@ -250,6 +268,31 @@ void PopupHost::switchUseEnglishInput()
     } else {
         win::logDebug(QStringLiteral("window switcher: could not switch the input method: %1")
                           .arg(result.detail));
+    }
+}
+
+void PopupHost::restoreSwitchInputMode()
+{
+    if (!m_switchModeSaved) {
+        // 这次卡片压根没动过输入法（没真正弹出过 / 预热期间取消）：没什么可还的。
+        return;
+    }
+    m_switchModeSaved = false;
+    if (m_switchWindow == nullptr) {
+        return;
+    }
+    const HWND hwnd = reinterpret_cast<HWND>(m_switchWindow->winId());
+    win::ime::Mode previous;
+    previous.valid = m_switchPreviousValid;
+    previous.conversion = m_switchPreviousConversion;
+    previous.sentence = m_switchPreviousSentence;
+    const win::ime::ModeSwitch result = win::ime::restoreMode(hwnd, previous);
+    if (!result.ok) {
+        win::logDebug(QStringLiteral("window switcher: could not restore the input method: %1")
+                          .arg(result.detail));
+    } else if (result.changed) {
+        win::logDebug(
+            QStringLiteral("window switcher: input method restored (%1)").arg(result.detail));
     }
 }
 
