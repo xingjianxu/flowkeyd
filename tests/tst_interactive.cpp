@@ -19,6 +19,8 @@
 #include <QTemporaryDir>
 #include <QThread>
 
+#include <cstring>
+
 #include "core/action.h"
 #include "core/keys.h"
 #include "core/placement.h"
@@ -121,6 +123,36 @@ void TestWindow::pump()
     }
 }
 
+/// 测试自己把窗口 cloaked 掉：`DwmSetWindowAttribute(hwnd, DWMWA_CLOAK, …)`。
+///
+/// 生产代码不需要改这个属性（`platform/win/dwm` 里只有只读的 `isCloaked`），
+/// 所以解析代码就留在测试里。`DWMWA_CLOAK`（13）是应用唯一能自己写的“把我藏
+/// 起来”：效果与 shell 藏窗口在 `DWMWA_CLOAKED` 上完全一样（非零），因此能
+/// 确定性地复现真实现场（本机的「Windows 输入体验」是 shell 藏起来的）。
+bool setWindowCloaked(HWND hwnd, bool cloaked)
+{
+    using SetWindowAttributeFn = HRESULT(WINAPI *)(HWND, DWORD, LPCVOID, DWORD);
+    static SetWindowAttributeFn set = []() -> SetWindowAttributeFn {
+        HMODULE module = LoadLibraryW(L"dwmapi.dll");
+        if (module == nullptr) {
+            return nullptr;
+        }
+        const FARPROC proc = GetProcAddress(module, "DwmSetWindowAttribute");
+        if (proc == nullptr) {
+            return nullptr;
+        }
+        SetWindowAttributeFn fn = nullptr;
+        static_assert(sizeof(fn) == sizeof(proc), "function pointer sizes must match");
+        std::memcpy(&fn, &proc, sizeof(fn));
+        return fn;
+    }();
+    if (set == nullptr) {
+        return false;
+    }
+    const BOOL value = cloaked ? TRUE : FALSE;
+    return SUCCEEDED(set(hwnd, 13 /* DWMWA_CLOAK */, &value, sizeof(value)));
+}
+
 } // namespace
 
 class TestInteractive : public QObject
@@ -143,6 +175,8 @@ private slots:
     void topmostIsAppliedAndCleared();
     void foregroundQuerySkipsOverlayWindows();
     void listsMainWindowsButSkipsOurOwn();
+    void cloakedWindowsAreHiddenFromTheSwitcher();
+    void cloakedWindowsOnOtherDesktopsStaySwitchable();
 };
 
 void TestInteractive::clipboardRoundTrip()
@@ -1094,6 +1128,121 @@ void TestInteractive::listsMainWindowsButSkipsOurOwn()
             QCOMPARE(entry.process, entry.process.toLower());
         }
     }
+}
+
+/// 被 cloaked 掉的窗口不进窗口切换器。
+///
+/// 现场（本机 2026-09）：`TextInputHost.exe` 的「Windows 输入体验」是一个
+/// `IsWindowVisible` 为真、坐标与尺寸都正常、也没有工具窗口标志的顶层窗口，
+/// 于是它混进了切换器（`windows` 动作）。`DWMWA_CLOAKED` 才是实话：shell
+/// 根本没有把它显示出来。
+void TestInteractive::cloakedWindowsAreHiddenFromTheSwitcher()
+{
+    if (!interactiveEnabled()) {
+        QSKIP("set FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1 to run the interactive tests");
+    }
+
+    const QString marker =
+        QStringLiteral("flowkeyd-cloak-%1").arg(QCoreApplication::applicationPid());
+    TestWindow window(marker);
+    HWND hwnd = window.hwnd();
+    QVERIFY2(hwnd != nullptr, "the test window was not created");
+
+    // 正常状态下它当然是一个可切换的窗口。
+    QVERIFY(!platform::win::dwm::isCloaked(hwnd));
+    QVERIFY(platform::win::window::isMainWindow(hwnd));
+    QVERIFY(platform::win::window::isSwitchableWindow(hwnd));
+
+    // 自己把它藏起来：`IsWindowVisible` / 尺寸一概不变，只有 DWM 知道。
+    QVERIFY2(setWindowCloaked(hwnd, true), "DwmSetWindowAttribute(DWMWA_CLOAK) failed");
+    QVERIFY(platform::win::dwm::isCloaked(hwnd));
+    QString error;
+    // 刚创建的窗口 shell 可能还没登记（`IsWindowOnCurrentVirtualDesktop` 报 FALSE、
+    // 桌面 GUID 全零）：那时 `isWindowOnCurrentDesktop()` 给的是 `nullopt`
+    // （“不属于任何虚拟桌面”），而产品的判据在这种情况下是**保留**它。
+    // 这一条要盯的是“cloaked + 在当前桌面上”，所以先等 shell 登记。
+    std::optional<bool> onCurrent;
+    for (int i = 0; i < 40; ++i) {
+        onCurrent = platform::win::desktop::isWindowOnCurrentDesktop(hwnd, &error);
+        if (onCurrent.has_value()) {
+            break;
+        }
+        QThread::msleep(50);
+    }
+    QVERIFY2(onCurrent.has_value() && *onCurrent, qPrintable(error));
+    // 「主窗口」判据本身没变（`window_rule` 走的是那一条），变的是切换器的判据。
+    QVERIFY(platform::win::window::isMainWindow(hwnd));
+    QVERIFY(!platform::win::window::isSwitchableWindow(hwnd));
+
+    // 取消 cloaking 之后又回来了。
+    QVERIFY2(setWindowCloaked(hwnd, false), "could not uncloak the test window");
+    QVERIFY(!platform::win::dwm::isCloaked(hwnd));
+    QVERIFY(platform::win::window::isSwitchableWindow(hwnd));
+}
+
+/// cloaked 但**在别的虚拟桌面上**的窗口要留着。
+///
+/// shell 也拿 `DWMWA_CLOAKED` 藏“在别的桌面上”的窗口，所以切换器不能只看
+/// cloaking：那些窗口 `windows` 动作会切过去（这正是它比 Alt+Tab 多出来的能力）。
+void TestInteractive::cloakedWindowsOnOtherDesktopsStaySwitchable()
+{
+    if (!interactiveEnabled()) {
+        QSKIP("set FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1 to run the interactive tests");
+    }
+    QString error;
+    platform::win::desktop::Snapshot snapshot;
+    QVERIFY2(platform::win::desktop::probe(&snapshot, &error), qPrintable(error));
+    if (snapshot.count < 2) {
+        QSKIP("only one virtual desktop exists; nothing to move a window to");
+    }
+
+    const QString marker =
+        QStringLiteral("flowkeyd-cloak-desktop-%1").arg(QCoreApplication::applicationPid());
+    TestWindow window(marker);
+    HWND hwnd = window.hwnd();
+    QVERIFY2(hwnd != nullptr, "the test window was not created");
+
+    // 搬到另一张桌面，等它真的离开当前桌面（`MoveViewToDesktop` 是异步的）。
+    const std::uint32_t other = snapshot.current == 1 ? 2 : 1;
+    QString detail;
+    QVERIFY2(platform::win::desktop::moveWindowToDesktop(hwnd, other, &detail, &error),
+             qPrintable(error));
+    bool left = false;
+    for (int i = 0; i < 60 && !left; ++i) {
+        const std::optional<bool> onCurrent =
+            platform::win::desktop::isWindowOnCurrentDesktop(hwnd, &error);
+        QVERIFY2(onCurrent.has_value(), qPrintable(error));
+        left = !*onCurrent;
+        if (!left) {
+            QThread::msleep(50);
+        }
+    }
+    QVERIFY2(left, "the window did not leave the current desktop");
+
+    // 自己再 cloaked 一次，把「在别的桌面上」与「被藏起来」两件事分开：只有
+    // 前者才能让切换器留下它。
+    QVERIFY2(setWindowCloaked(hwnd, true), "DwmSetWindowAttribute(DWMWA_CLOAK) failed");
+    QVERIFY(platform::win::dwm::isCloaked(hwnd));
+    QVERIFY(platform::win::window::isMainWindow(hwnd));
+    QVERIFY2(platform::win::window::isSwitchableWindow(hwnd),
+             "a cloaked window on another desktop must stay switchable");
+
+    // 收尾：搬回当前桌面、取消 cloaking，别给用户留下一个跑到别处的窗口。
+    QVERIFY2(platform::win::desktop::moveWindowToDesktop(hwnd, snapshot.current, &detail, &error),
+             qPrintable(error));
+    bool back = false;
+    for (int i = 0; i < 60 && !back; ++i) {
+        const std::optional<bool> onCurrent =
+            platform::win::desktop::isWindowOnCurrentDesktop(hwnd, &error);
+        QVERIFY2(onCurrent.has_value(), qPrintable(error));
+        back = *onCurrent;
+        if (!back) {
+            QThread::msleep(50);
+        }
+    }
+    QVERIFY2(back, "the window did not come back to the current desktop");
+    QVERIFY2(setWindowCloaked(hwnd, false), "could not uncloak the test window");
+    QVERIFY(platform::win::window::isSwitchableWindow(hwnd));
 }
 
 QTEST_MAIN(TestInteractive)

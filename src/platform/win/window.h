@@ -37,12 +37,28 @@ std::vector<HWND> topLevelWindows();
 /// 这个窗口是不是用户眼中的「主窗口」。
 ///
 /// 判据：可见、没有属主、不是 `WS_EX_TOOLWINDOW`、有标题、尺寸非零，
-/// 并且不是外壳自己的「Program Manager」。很多程序会拿无标题 / 工具窗口当
-/// 消息汇或渲染宿主（拿 `process` 匹配时会一次命中一堆），真正的主窗口至少
-/// 会写个标题。
+/// 并且不是外壳自己的「Program Manager」。带 `WS_EX_APPWINDOW` 的有属主窗口
+/// 也算 —— 那是应用显式要求它出现在任务栏 / Alt+Tab 里。很多程序会拿无标题 /
+/// 工具窗口当消息汇或渲染宿主（拿 `process` 匹配时会一次命中一堆），真正的
+/// 主窗口至少会写个标题。
 ///
-/// `window_rule` 与窗口切换器用的是同一条判据。
+/// `window_rule` 与窗口切换器用的是同一条判据（纯逻辑在 `core/window_match`）。
 bool isMainWindow(HWND hwnd);
+
+/// 窗口切换器（`windows` 动作）要不要列出这个窗口。
+///
+/// 判据是 `isMainWindow()` 再加上一句「**shell 真的会显示它**」：被
+/// `DWMWA_CLOAKED` 藏起来、又留在当前虚拟桌面上的窗口用户切不过去
+/// （本机实测：Windows 输入法的宿主 `TextInputHost.exe` 的「Windows 输入体验」
+/// 就是一个 `IsWindowVisible` 为真、尺寸正常的顶层窗口），所以不入列表。
+///
+/// 被藏起来但在**别的**虚拟桌面上的窗口要保留：`windows` 动作会切到那张桌面去，
+/// 这正是它比 Alt+Tab 多出来的能力。判断“在别的桌面上”会问一句虚拟桌面后端
+/// （COM），所以**只对 cloaked 的窗口问**，不是每条都问。
+///
+/// `window_rule` 不走这一条：它只关心“看起来像不像主窗口”，而在窗口出现的
+/// 路径（钩子线程）上加一次 COM 查询不合适。
+bool isSwitchableWindow(HWND hwnd);
 
 /// 当前打开的一个程序窗口（窗口切换器用）。
 struct OpenWindow
@@ -54,11 +70,12 @@ struct OpenWindow
     QString process;
 };
 
-/// 当前所有「主窗口」（可见、无属主、非工具窗口、有标题、尺寸非零），
+/// 当前所有「可切换的窗口」（`isSwitchableWindow()`），
 /// 按 `EnumWindows` 的 Z 序（最近用过的在前）。
 ///
 /// **不包含 flowkeyd 自己的窗口**（弹窗 / 日志窗口不该出现在切换器里），
-/// 也不含锁屏 / 隐藏窗口；跨虚拟桌面的窗口会被列出来（激活时会把视图切过去）。
+/// 也不含锁屏 / 隐藏窗口；跨虚拟桌面的窗口会被列出来（激活时会把视图切过去），
+/// 而被 shell 藏起来的假窗口（输入法宿主、隐藏的 UWP 窗口）不会。
 std::vector<OpenWindow> listOpenWindows();
 
 /// 窗口的可见标题（取不到时返回 `"<untitled>"` / `"<invalid window>"`）。

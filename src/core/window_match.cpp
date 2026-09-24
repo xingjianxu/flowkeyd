@@ -48,6 +48,29 @@ bool windowMatchesQuery(const WindowQuery &query,
     return windowTitleMatches(title, query.title) && windowProcessMatches(executableName, query.process);
 }
 
+bool isMainWindow(const TopLevelWindowFacts &window)
+{
+    if (!window.visible || window.isShellWindow || window.toolWindow) {
+        return false;
+    }
+    // 有属主的窗口是对话框 / 弹出菜单，一般不单独出现在任务栏与 Alt+Tab 里；
+    // 只有应用显式写了 `WS_EX_APPWINDOW` 才把它当独立窗口（照抄任务栏的规则）。
+    if (window.hasOwner && !window.appWindow) {
+        return false;
+    }
+    return window.hasTitle && window.hasArea;
+}
+
+bool isSwitchableWindow(const TopLevelWindowFacts &window)
+{
+    if (!isMainWindow(window)) {
+        return false;
+    }
+    // 被藏起来、又留在当前桌面上的窗口用户切不过去；cloaked 但在别的桌面上的
+    // 窗口要留住（切换器会切过去）。
+    return !(window.cloaked && window.onCurrentDesktop);
+}
+
 WindowPlan planWindowAction(WindowOp op, std::optional<bool> toggle, bool alreadyActive)
 {
     if (op == WindowOp::Activate && toggle.value_or(true) && alreadyActive) {

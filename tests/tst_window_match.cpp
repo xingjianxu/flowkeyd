@@ -16,6 +16,8 @@ private slots:
     void processMatchingCoversTheGuiSuffix();
     void unknownProcessOwnerNeverMatches();
     void queryRequiresEveryCondition();
+    void mainWindowFactsNeedsEveryCondition();
+    void switchableWindowsDropHiddenShellWindows();
     void toggleOnlyCollapsesAnAlreadyActiveWindow();
     void onlyStateChangingOpsHaveTransitions();
 };
@@ -86,6 +88,76 @@ void TestWindowMatch::queryRequiresEveryCondition()
         std::optional<QString>(QStringLiteral("foreground")), std::nullopt);
     QVERIFY(foreground.isForeground());
     QVERIFY(core::windowMatchesQuery(foreground, QStringLiteral("anything"), std::nullopt));
+}
+
+void TestWindowMatch::mainWindowFactsNeedsEveryCondition()
+{
+    core::TopLevelWindowFacts facts;
+    facts.visible = true;
+    facts.hasTitle = true;
+    facts.hasArea = true;
+    // 一个普通的顶层窗口：可见、无属主、有标题、尺寸非零。
+    QVERIFY(core::isMainWindow(facts));
+
+    // 每一条前置条件都是必需的。
+    core::TopLevelWindowFacts hidden = facts;
+    hidden.visible = false;
+    QVERIFY(!core::isMainWindow(hidden));
+
+    core::TopLevelWindowFacts shell = facts;
+    shell.isShellWindow = true;
+    QVERIFY(!core::isMainWindow(shell));
+
+    core::TopLevelWindowFacts tool = facts;
+    tool.toolWindow = true;
+    QVERIFY(!core::isMainWindow(tool));
+
+    core::TopLevelWindowFacts untitled = facts;
+    untitled.hasTitle = false;
+    QVERIFY(!core::isMainWindow(untitled));
+
+    core::TopLevelWindowFacts empty = facts;
+    empty.hasArea = false;
+    QVERIFY(!core::isMainWindow(empty));
+
+    // 有属主的是对话框 / 弹出窗口：除非它显式声明了 `WS_EX_APPWINDOW`
+    // （任务栏与 Alt+Tab 的规则就是这样）。
+    core::TopLevelWindowFacts dialog = facts;
+    dialog.hasOwner = true;
+    QVERIFY(!core::isMainWindow(dialog));
+    dialog.appWindow = true;
+    QVERIFY(core::isMainWindow(dialog));
+}
+
+void TestWindowMatch::switchableWindowsDropHiddenShellWindows()
+{
+    core::TopLevelWindowFacts facts;
+    facts.visible = true;
+    facts.hasTitle = true;
+    facts.hasArea = true;
+    QVERIFY(core::isSwitchableWindow(facts));
+
+    // 被 cloaked 掉、又留在当前桌面上的窗口是 shell 藏起来的假窗口
+    // （本机实测：`TextInputHost.exe` 的「Windows 输入体验」），不进切换器。
+    core::TopLevelWindowFacts hidden = facts;
+    hidden.cloaked = true;
+    hidden.onCurrentDesktop = true;
+    QVERIFY(!core::isSwitchableWindow(hidden));
+
+    // 被 cloaked 但在**别的**虚拟桌面上的窗口要保留：切换器会切到那张桌面去
+    // （这正是它与 Alt+Tab 不同的地方）。
+    core::TopLevelWindowFacts elsewhere = facts;
+    elsewhere.cloaked = true;
+    elsewhere.onCurrentDesktop = false;
+    QVERIFY(core::isSwitchableWindow(elsewhere));
+
+    // 「主窗口」判据不理会 cloaking：`window_rule` 走的是那一条。
+    QVERIFY(core::isMainWindow(hidden));
+
+    // 连「主窗口」都不算的窗口，当然也不进切换器。
+    core::TopLevelWindowFacts tool = hidden;
+    tool.toolWindow = true;
+    QVERIFY(!core::isSwitchableWindow(tool));
 }
 
 void TestWindowMatch::toggleOnlyCollapsesAnAlreadyActiveWindow()

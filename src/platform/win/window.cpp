@@ -179,6 +179,19 @@ bool isOverlayWindow(HWND hwnd)
     return (GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) != 0;
 }
 
+/// 句柄的十六进制文本（`0x20602`），日志用。
+///
+/// **一定要传 `QString`**：Qt 6 里有
+/// `QString::arg(const QString &a, int fieldWidth, QChar fillChar)` 这个重载，
+/// 所以 `.arg(标题, 句柄)` 会把句柄当成**字段宽度** —— 那次替换变成十几万个空格、
+/// 而后面的 `%2` 原样留下（本机实测：`hwnd 0x20602` 让日志行变成 132 KB）。
+QString handleText(HWND hwnd)
+{
+    return QStringLiteral("0x%1").arg(static_cast<qulonglong>(reinterpret_cast<quintptr>(hwnd)),
+                                      0,
+                                      16);
+}
+
 /// 沿 Z 序往下找第一个“主窗口”：可见、无属主、非工具窗口、有标题、尺寸非零。
 /// 找不到时返回 `nullptr`。
 HWND firstMainWindowBelow(HWND hwnd)
@@ -202,6 +215,46 @@ HWND firstMainWindowBelow(HWND hwnd)
         return current;
     }
     return nullptr;
+}
+
+/// 把 Win32 能问到的都问出来，交给 `core::window_match` 的纯函数判断。
+///
+/// 便宜的检查（可见性 / 属主 / 工具窗口）先做，真正跨进程的调用（读标题、
+/// 读矩形）只对活得下来的窗口做；`cloaked` 不在这里读 —— 调用方先确认它
+/// “看起来像主窗口”再问 DWM（见 `isSwitchableWindow`）。
+core::TopLevelWindowFacts windowFacts(HWND hwnd)
+{
+    core::TopLevelWindowFacts facts;
+    if (hwnd == nullptr || IsWindow(hwnd) == 0) {
+        return facts;
+    }
+    if (IsWindowVisible(hwnd) == 0) {
+        return facts;
+    }
+    facts.visible = true;
+    // 外壳自己的「Program Manager」（`Progman`）不是用户想切换到的程序窗口。
+    if (hwnd == GetShellWindow()) {
+        facts.isShellWindow = true;
+        return facts;
+    }
+    const LONG_PTR exStyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+    facts.appWindow = (exStyle & WS_EX_APPWINDOW) != 0;
+    facts.hasOwner = GetWindow(hwnd, GW_OWNER) != nullptr;
+    if (facts.hasOwner && !facts.appWindow) {
+        return facts;
+    }
+    if ((exStyle & WS_EX_TOOLWINDOW) != 0) {
+        facts.toolWindow = true;
+        return facts;
+    }
+    if (GetWindowTextLengthW(hwnd) <= 0) {
+        return facts;
+    }
+    facts.hasTitle = true;
+    RECT rect{};
+    facts.hasArea = GetWindowRect(hwnd, &rect) != 0 && rect.right > rect.left
+                    && rect.bottom > rect.top;
+    return facts;
 }
 
 } // namespace
@@ -229,10 +282,8 @@ HWND find(const core::WindowQuery &query)
         if (hwnd != nullptr && isOverlayWindow(hwnd)) {
             if (HWND below = firstMainWindowBelow(hwnd); below != nullptr) {
                 logDebug(QStringLiteral("foreground %1 (%2) is an overlay; using %3 (%4) instead")
-                             .arg(core::rustDebug(windowTitle(hwnd)),
-                                  reinterpret_cast<quintptr>(hwnd))
-                             .arg(core::rustDebug(windowTitle(below)),
-                                  reinterpret_cast<quintptr>(below)));
+                             .arg(core::rustDebug(windowTitle(hwnd)), handleText(hwnd))
+                             .arg(core::rustDebug(windowTitle(below)), handleText(below)));
                 return below;
             }
         }
@@ -290,27 +341,39 @@ std::vector<HWND> topLevelWindows()
 
 bool isMainWindow(HWND hwnd)
 {
-    if (hwnd == nullptr || IsWindow(hwnd) == 0 || IsWindowVisible(hwnd) == 0) {
+    return core::isMainWindow(windowFacts(hwnd));
+}
+
+bool isSwitchableWindow(HWND hwnd)
+{
+    core::TopLevelWindowFacts facts = windowFacts(hwnd);
+    if (!core::isMainWindow(facts)) {
         return false;
     }
-    // 外壳自己的「Program Manager」（`Progman`）不是用户想切换到的程序窗口。
-    if (hwnd == GetShellWindow()) {
+    // 只有“看起来像主窗口”的窗口才值得问 DWM；被 cloaked 的更是少数，
+    // 那才需要再问一次虚拟桌面（COM，每次一条一次性 STA 线程）。
+    facts.cloaked = dwm::isCloaked(hwnd);
+    if (!facts.cloaked) {
+        return true;
+    }
+    QString error;
+    const std::optional<bool> onCurrent = desktop::isWindowOnCurrentDesktop(hwnd, &error);
+    if (!onCurrent.has_value()) {
+        // 问不出来时按“它在别的桌面上”处理：宁可多列一条，也不要把用户的
+        // 窗口藏起来（与 `isOnCurrentDesktop()` 同一个原则）。
+        logDebug(QStringLiteral("could not tell whether cloaked %1 is on the current "
+                                "desktop (%2); listing it anyway")
+                     .arg(core::rustDebug(windowTitle(hwnd)), error));
+        return true;
+    }
+    facts.onCurrentDesktop = *onCurrent;
+    if (!core::isSwitchableWindow(facts)) {
+        logDebug(QStringLiteral("skipping hidden shell window %1 (%2, cloaked on this "
+                                "desktop)")
+                     .arg(core::rustDebug(windowTitle(hwnd)), handleText(hwnd)));
         return false;
     }
-    if (GetWindow(hwnd, GW_OWNER) != nullptr) {
-        return false;
-    }
-    if ((GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) != 0) {
-        return false;
-    }
-    if (GetWindowTextLengthW(hwnd) <= 0) {
-        return false;
-    }
-    RECT rect{};
-    if (GetWindowRect(hwnd, &rect) == 0) {
-        return false;
-    }
-    return rect.right > rect.left && rect.bottom > rect.top;
+    return true;
 }
 
 namespace {
@@ -324,7 +387,7 @@ struct WindowCollector
 BOOL CALLBACK collectOpenWindowProc(HWND hwnd, LPARAM param)
 {
     auto *collector = reinterpret_cast<WindowCollector *>(param);
-    if (!isMainWindow(hwnd)) {
+    if (!isSwitchableWindow(hwnd)) {
         return TRUE;
     }
     DWORD pid = 0;

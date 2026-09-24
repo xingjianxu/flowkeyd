@@ -474,11 +474,25 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
     QML 卡片（`app/window_list_model.*` + `qml/SwitchPopup.qml`），走 `PopupHost`
     那条既有分工：窗口枚举与激活在动作线程上做，弹窗只在 GUI 线程上显示，选中
     之后把活儿投回动作线程（`Dispatcher::submitCall`）。拍板的细节：
-    * 枚举判据是 `win::window::listOpenWindows()`：可见、无属主、非
-      `WS_EX_TOOLWINDOW`、有标题、尺寸非零、不是外壳的 `Progman`，并且**跳过
-      flowkeyd 自己的进程**。同一套判据抽成了 `win::window::isMainWindow()`
-      （`window_rule` 的 `isPlaceableWindow` 也改用它）。列表按 Z 序（最近用过的
-      在前），跨虚拟桌面的窗口也会列出来（激活走 `raiseWindow`，会把视图切过去）。
+    * 枚举判据是 `win::window::listOpenWindows()`：可见、无属主（或带
+      `WS_EX_APPWINDOW`）、非 `WS_EX_TOOLWINDOW`、有标题、尺寸非零、不是外壳的
+      `Progman`，**跳过 flowkeyd 自己的进程**，而且**只列 shell 真的会显示的窗口**
+      （见下一条）。判据抽成了纯逻辑（`core::TopLevelWindowFacts` +
+      `core::isMainWindow()`，`platform/win/window.cpp` 只负责取 Win32 值），
+      `window_rule` 的 `isPlaceableWindow` 用的是其中的 `isMainWindow()` 那一半。
+      列表按 Z 序（最近用过的在前），跨虚拟桌面的窗口也会列出来（激活走
+      `raiseWindow`，会把视图切过去）。
+    * **被 shell 藏起来的“假窗口”不进列表**（项目所有者 2026-09 报：“会显示诸如
+      Windows 输入法的进程”）。`win::window::isSwitchableWindow()` =
+      `isMainWindow()` + 「没被 cloaked，或者只是被搬到别的虚拟桌面上了」：
+      `DwmGetWindowAttribute(DWMWA_CLOAKED)` 非零 = 窗口没显示出来，而
+      `desktop::isWindowOnCurrentDesktop()` 又为真 = 它就在当前桌面上却没显示
+      —— 那是 shell 藏起来的宿主窗口（本机实例：`TextInputHost.exe` 的
+      「Windows 输入体验」，`IsWindowVisible` 为真、尺寸也正常）。cloaked 但在
+      **别的**虚拟桌面上的窗口要留着（`windows` 动作会切过去），所以判据里必须
+      带上那个桌面查询；它也**只对 cloaked 的窗口问**（COM 调用不便宜）。
+      `window_rule` 不走这一条（窗口出现的路径在钩子线程上，见第 10 节）。
+      判据与 `Alt+Tab` / 任务栏一致（`WS_EX_APPWINDOW` 那一条也是照它来的）。
     * 筛选是**进程名的大小写无关前缀匹配**（项目所有者 2026-09 拍板：“只按进程名
       前缀”，标题只显示、不参与），**不是子串、也不是模糊搜索**：打 `chr` 命中
       `chrome.exe`，打 `hrome` 不命中。自动激活的判据是「只剩一个窗口」，不是
@@ -635,7 +649,7 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `src/core/template.h/.cpp`                | `{clipboard}`、`{selection}`、`{date}` 等占位符展开                                                                                                                                                                         |
 | `src/core/action.h/.cpp`                  | 声明式动作的表示 + 摘要文本（`--list` 与 `help()` 都用它）+ `isDestructive()`（帮助窗口要靠它决定“要不要再确认一次”）                                                                                                        |
 | `src/core/log_tail.h/.cpp`                | 日志文件的增量尾随（纯逻辑，可单测）：按字节读、末尾不完整的 UTF-8 序列不消费、半行留到下一轮、一次最多 1000 行                                                                                                            |
-| `src/core/window_match.h/.cpp`            | 窗口匹配与 `window` 动作决策的纯函数：标题/进程名子串、可执行文件名提取、`toggle` 边界、`animate` 是否有意义                                                                                                                |
+| `src/core/window_match.h/.cpp`            | 窗口匹配与 `window` 动作决策的纯函数：标题/进程名子串、可执行文件名提取、`toggle` 边界、`animate` 是否有意义。另外还持有「什么算一个程序窗口」的纯判据：`TopLevelWindowFacts` + `isMainWindow()`（`window_rule` 与切换器共用）与 `isSwitchableWindow()`（切换器：再把 shell 藏起来的假窗口排掉，见第 2 节第 21 条） |
 | `src/core/placement.h/.cpp`               | `window_rule` 的**纯逻辑**（只用 QtCore、可单测）：显示器排序与选择（序号 / `primary` / 设备名）、「显示器重新接入」检测（设备名从无到有）、摆放几何（最大化 / 居中 / 指定位置与大小 / 夹进工作区）、规则匹配，以及窗口相邻移动用的下标步进 `stepIndex()`（见第 2 节第 16 条）。`all_desktops` / `topmost` 不算几何，只影响 `WindowRule::summary()`。见第 2 节第 13 条 |
 | `src/core/version.h/.cpp`                 | 构建版本号（纯逻辑、可单测）：`buildVersion(executablePath)`（拼成 `yy-MM-dd-<git 短修订>`）、`buildDateFromFile()`、`sourceRevision()`（编译进来的 `FLOWKEYD_GIT_REVISION`）、`unknownValue()`。修订来自 CMake 用 `cmake/version_revision.h.in` 生成的 `flowkeyd_revision.h`；机制与取舍见第 2 节第 12 条与第 10 节 |
 | `src/lua/lua_config.h/.cpp`               | **Lua 与 C++ 的唯一边界**：建 `lua_State`、注入 DSL、把脚本里的表转成 `core::Config`（逐条目、带上下文的错误；`app{}` 转成 `core::AppDef` 后在 `compile()` 里展开）、UTF-8 BOM 剔除、`.toml` 明确拒绝                                                                            |
@@ -643,13 +657,13 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `src/platform/win/`                       | Win32 后端（每个文件都只做一件事，方便单独替换）                                                                                                                                                                            |
 | `src/platform/win/ffi.h/.cpp`             | 全部 Win32 声明、结构体与常量（`INPUT` 的 40 字节布局有 `static_assert` 盯着）                                                                                                                                              |
 | `src/platform/win/nt.h/.cpp`              | 未公开的 `win32u.dll` 导出，运行时解析并校验                                                                                                                                                                                |
-| `src/platform/win/dwm.h/.cpp`             | **运行时解析**的 `dwmapi!DwmSetWindowAttribute`：按窗口关掉过渡动画（`window` 的 `animate`）；拿不到 dwmapi 时只是保留动画，动作不失败                                                                                      |
+| `src/platform/win/dwm.h/.cpp`             | **运行时解析**的 `dwmapi` 两个导出：`DwmSetWindowAttribute`（按窗口关掉过渡动画，`window` 的 `animate`）与 `DwmGetWindowAttribute`（读 `DWMWA_CLOAKED`：`isCloaked()`，窗口到底显示了没有 —— 窗口切换器靠它排掉 shell 藏起来的假窗口，见第 2 节第 21 条与第 10 节）。拿不到 dwmapi 时只是保留动画 / 按“它在显示”处理，动作不失败 |
 | `src/platform/win/monitor.h/.cpp`         | 显示器枚举（`EnumDisplayMonitors` → `core::MonitorDescription`）、窗口当前在哪块屏、`applyPlacement`（`SetWindowPlacement` + `SetWindowPos`，带 `SWP_NOACTIVATE`，最大化时先还原再最大化）。**几何判断不在这一层** |
 | `src/platform/win/input.h/.cpp`           | 按键注入（`SendInput`/`NtUserSendInput`）、按键状态、`ModifierGuard`（含菜单遮断标记）、`FLOWKEYD_ACCEPT_INJECTED` 测试后门（见第 5 节与阶段 9）                                                                                |
 | `src/platform/win/hook.h/.cpp`            | 钩子回调、**钩子线程自己的 Win32 消息循环**、`SetTimer`、控制消息、重载；另外还负责 `window_rule` 的两个监听：`SetWinEventHook`（`EVENT_OBJECT_SHOW` / `DESTROY`，按 HWND 去重）与一个 350 ms 的显示器轮询定时器。**定时器 id 必须用 `SetTimer` 的返回值**，见第 10 节 |
 | `src/platform/win/audio.h/.cpp`           | Core Audio `IAudioEndpointVolume`，手写 COM vtable（**高风险**）                                                                                                                                                            |
 | `src/platform/win/clipboard.h/.cpp`       | 剪贴板读写（`CF_UNICODETEXT`）                                                                                                                                                                                              |
-| `src/platform/win/window.h/.cpp`          | 窗口查找（标题子串/可执行文件名）、激活/最小化/最大化/还原/关闭/置顶、前台锁绕行、启动回退、`TransitionGuard`（RAII 恢复动画开关）、`setTopmost`（`window_rule` 的 `topmost` 与 `window` 的 `toggle_topmost` 共用）。**“是否已经激活”还要看虚拟桌面**：被 `window_rule` 搬到别的桌面的窗口仍被 shell 当前台窗口（见第 2 节第 14 条），`raiseWindow` 在这时先显式切到它那一张桌面。**前台查询会跳过 `WS_EX_TOOLWINDOW` 覆盖层**（如 PowerToys「快捷键指南」，见第 2 节第 19 条）。另外 `isMainWindow()`（“主窗口”判据）与 `listOpenWindows()`（窗口切换器枚举的窗口，跳过自己进程）也在这里，见第 2 节第 21 条。 |
+| `src/platform/win/window.h/.cpp`          | 窗口查找（标题子串/可执行文件名）、激活/最小化/最大化/还原/关闭/置顶、前台锁绕行、启动回退、`TransitionGuard`（RAII 恢复动画开关）、`setTopmost`（`window_rule` 的 `topmost` 与 `window` 的 `toggle_topmost` 共用）。**“是否已经激活”还要看虚拟桌面**：被 `window_rule` 搬到别的桌面的窗口仍被 shell 当前台窗口（见第 2 节第 14 条），`raiseWindow` 在这时先显式切到它那一张桌面。**前台查询会跳过 `WS_EX_TOOLWINDOW` 覆盖层**（如 PowerToys「快捷键指南」，见第 2 节第 19 条）。另外 `isMainWindow()` / `isSwitchableWindow()`（“什么算一个程序窗口”的 Win32 取值侧，纯判据在 `core/window_match`）与 `listOpenWindows()`（窗口切换器枚举的窗口，跳过自己进程、排掉 shell 藏起来的假窗口）也在这里，见第 2 节第 21 条。 |
 | `src/platform/win/desktop.h/.cpp`         | 虚拟桌面切换、**窗口移动**与**钉在所有桌面**：`CLSID_ImmersiveShell` → `IServiceProvider::QueryService` → 未公开的 `IVirtualDesktopManagerInternal`（按 `build.revision` 查表）+ 未公开的 `IVirtualDesktopPinnedApps`（IID 不随版本变，所以不进表）；`moveWindowToDesktop` 走 `MoveViewToDesktop`（vtable 下标 4，三种布局一致，`changed` 出参报告“真的换了桌面吗”）、`setWindowPinned`/`isWindowPinned` 走 `PinView`/`UnpinView`/`IsViewPinned`（下标 7/8/6）、`switchToWindowDesktop` 把视图切到**某个窗口所在**的桌面（未公开的 `IVirtualDesktop::GetID` 下标 4 与已公开的 `GetWindowDesktopId` 逐个比对，对不上就只报错），并用**已公开**的 `IVirtualDesktopManager::GetWindowDesktopId` / `IsWindowOnCurrentVirtualDesktop` 做验证与诊断。另外 `currentDesktopIndex()` 是托盘数字图标用的精简只读查询（与 `probe()` 同一条会话），`windowsVersion()` 的结果在进程内缓存（500 ms 一次的轮询不反复读注册表），见第 2 节第 20 条 |
 | `src/platform/win/power.h/.cpp`           | `powrprof!SetSuspendState`、`user32!ExitWindowsEx`、`LockWorkStation`、`WM_SYSCOMMAND`/`SC_MONITORPOWER` 广播，外加 `SeShutdownPrivilege`                                                                                   |
 | `src/platform/win/tray.h/.cpp`            | 托盘图标 + 气泡提示 + 右键菜单（查看日志/挂起/重载/打开配置/版本/退出）+ 悬停提示（构建版本 + 当前虚拟桌面 + 挂起状态）。图标平时是构造时传进来的应用图标（`app::applicationIcon()`，见 `app/app_icon.*`）；`setDesktop()` 之后换成**当前桌面号的数字徽标**（`app::desktopIcon()` 画出来的，`number <= 0` 或徽标为空则退回应用图标），见第 2 节第 20 条；拿不到应用图标时退回系统图标，免得托盘上什么都没有 |
@@ -3306,6 +3320,71 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   瞬间去找**；脚本实际是守护进程起来 + `FocusCatcher` 之后才做弹窗检查，那时
   预热早已收尾。
 
+#### 2026-09 修复：窗口切换器会列出 Windows 输入法的“假窗口”（`DWMWA_CLOAKED`）
+
+* **现象**（项目所有者 2026-09 报）：“窗口切换器里仅保留有窗口的进程，类似
+  Alt+Tab 的筛选逻辑，目前的版本会显示诸如 windows 输入法的进程”。用户日志里
+  还能看到他自己真的选中了那一条：
+  `` `window-switcher` -> Activate "Windows 输入体验" (from the window switcher) ``
+  —— 切也切不过去（它根本不在屏幕上）。
+* **那个窗口为什么能通过旧判据**：`TextInputHost.exe` 的「Windows 输入体验」
+  是一个 `Windows.UI.Core.CoreWindow`，`IsWindowVisible` 为真、无属主、不是
+  `WS_EX_TOOLWINDOW`、有标题、矩形正好是整块屏幕（本机实测 `0x20602`，
+  `style 0x94000000`、`ex 0x200000`）—— 旧的「主窗口」判据一条都拦不住它。
+* **实话只有 `DWMWA_CLOAKED` 会说**（微软自己的说法：被 shell 藏起来的窗口仍然
+  有 `WS_VISIBLE`、坐标也还在屏幕里）。但它**不能单独用**：
+  * `cloaked != 0` + `IsWindowOnCurrentVirtualDesktop == FALSE` → 窗口在**别的
+    虚拟桌面**上（本机实测 VS Code / WPS 的窗口都是 `cloaked = 2`），
+    这种**要留**（`windows` 动作会切过去，这是它比 `Alt+Tab` 多出来的能力）；
+  * `cloaked != 0` + `IsWindowOnCurrentVirtualDesktop == TRUE` → shell 藏在当前
+    桌面上的假窗口（输入法宿主、隐藏的 UWP 窗口、PowerToys 的 Quick Access）
+    → **排掉**。
+  两个 `DWM_CLOAKED_SHELL(2)` 在数值上分不开，只能问一句虚拟桌面。
+  （做法不是独创：PowerToys 那次“像 Alt+Tab 一样列应用”的改动就是把 cloaked
+  重新放回列表的；AltTaber 的注释里也写着“加 `isWindowCloaked()` 之后，UWP 的
+  那一堆类名特例全成了废码”。）
+* **判据放在 `core`（纯逻辑，能单测）**：`core::TopLevelWindowFacts` +
+  `core::isMainWindow()` / `core::isSwitchableWindow()`；`platform/win/window.cpp`
+  只负责把 Win32 值取出来（便宜的检查先做，DWM 只问“看起来像主窗口”的窗口，
+  COM 只问 cloaked 的那些）。顺带把 `WS_EX_APPWINDOW` 那条补上了：任务栏与
+  Alt+Tab 的规则是“无属主 **或** 带 `WS_EX_APPWINDOW`”（Raymond Chen 的
+  “什么窗口会出现在任务栏上”），有属主但显式要求上任务栏的窗口不该被排除。
+* **`window_rule` 不走新判据**：它的调用点在钩子线程的窗口出现路径上（
+  `EVENT_OBJECT_SHOW`），而多一次 COM 查询（每次一条一次性 STA 线程）在那里
+  不合适；而且“把一个隐藏窗口摆到某块屏”本来也无害。所以
+  `win::window::isMainWindow()` 保持原样，只有切换器用
+  `isSwitchableWindow()`。
+* **刚创建的窗口会被误判成“不属于任何虚拟桌面”**：新建一个窗口后马上问
+  `isWindowOnCurrentVirtualDesktop`，shell 还没登记，会得到 FALSE + 全零 GUID，
+  `desktop::isWindowOnCurrentDesktop()` 因此返回 `nullopt`（
+  `tst_interactive` 里新加的那条用例第一次就是这么偶发挂的）。产品侧对
+  `nullopt` 的选择是**保留**它（宁可多列一条，也不要把用户的窗口藏起来），
+  测试侧则要先轮询等 shell 登记。
+* **验证手法**（`tmp/cloak-switch.ps1`，一次性配置 + `FLOWKEYD_ACCEPT_INJECTED=1`）：
+  先用外部脚本把“旧规则”与“新规则”两份清单都枚举出来（C# 里 `EnumWindows` +
+  `DwmGetWindowAttribute` + 公有的 `IVirtualDesktopManager`），再注入一次 `LWin`
+  轻碰打开真实弹窗，断言卡片标题里的条数与**新规则**一致。本机实测：
+  旧 9 条 / 新 8 条，差的那一条正是 `textinputhost.exe | Windows 输入体验`，
+  弹窗标题是 `flowkeyd 窗口 — 8 个`；日志里也有
+  `skipping hidden shell window "Windows 输入体验" (0x20602, cloaked on this desktop)`。
+* **对照组（很关键，否则可能把真正的 UWP 窗口一起误杀）**：验证时机器上正好开着
+  计算器（`ApplicationFrameHost.exe` 的 `ApplicationFrameWindow`），它**没有**被
+  排掉 —— 真正显示在屏幕上的 UWP 窗口不 cloaked，最小化的 Win32 窗口也不 cloaked
+  （本机实测：最小化 Chrome 之后 `cloaked` 仍是 0）。
+* **`.arg(标题, 句柄)` 会把句柄当成字段宽度（Qt 6 的坑，本任务顺便修掉）。**
+  Qt 6 有 `QString::arg(const QString &a, int fieldWidth, QChar fillChar)` 这个
+  重载，所以 `.arg(core::rustDebug(windowTitle(hwnd)), reinterpret_cast<quintptr>(hwnd))`
+  不会被当成“两个值”，而是“值 + 字段宽度”：`%1` 被填成 `hwnd` 那么宽的**空格**
+  （本机 `0x20602` → 132,608 个空格），`%2` 原样留下，一条日志变成 **132 KB**
+  （日志文件会被它撑大，而且真正的内容看不出来）。本机的实例就是这次新加的那条
+  `skipping hidden shell window ...`；`window.cpp::find()` 里那句“前台是覆盖层”
+  的日志一直是同一个写法（只是很少触发）。现在两处都改用 `handleText(hwnd)`
+  （返回 `QString`，`0x20602`）。教训：**两个参数的 `.arg()` 里只要有一个不是
+  `QString`，就自己先转成字符串**；用 `tmp/argdump`（一个 15 行的 Qt 小程序，
+  直接 `g++ -lQt6Core` 编译）实测确认了这一点：
+  `arg(QString("Windows IME"), quintptr(0x20602))` → `len=132633`、尾串
+  `"Windows IME (%2, cloaked)"`，而第二个参数写 `QString::number(...)` 就正常。
+
 ---
 
 ## 11. 完成定义（DoD）细则
@@ -4206,6 +4285,33 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > （`popup `x` shown in N ms` / `painted its first frame N ms after the
 > request`），以后接到“弹出卡”的反馈先看它们。
 
+> **2026-09 修复（窗口切换器列出 Windows 输入法假窗口）的 DoD**：
+> `windows-debug` 与 `windows-release` 都是 `build exit 0`、零编译警告；
+> `ctest --test-dir build/windows-debug` **24 个测试目标全绿**
+> （`tst_window_match` 新增 `mainWindowFactsNeedsEveryCondition` 与
+> `switchableWindowsDropHiddenShellWindows`；`tst_interactive` 新增两个 opt-in
+> 用例 `cloakedWindowsAreHiddenFromTheSwitcher` 与
+> `cloakedWindowsOnOtherDesktopsStaySwitchable`，真机全绿）。
+> 真机端到端（`tmp/cloak-switch.ps1`：一次性配置 + `FLOWKEYD_ACCEPT_INJECTED=1`
+> + `SendInput` 注入 `LWin` 轻碰）：外部枚举的**旧规则 9 条 / 新规则 8 条**，
+> 差的那一条是 `textinputhost.exe | Windows 输入体验`；弹窗标题
+> `flowkeyd 窗口 — 8 个` 与新规则一致，日志里是
+> `skipping hidden shell window "Windows 输入体验" (0x20602, cloaked on this desktop)`。
+> 同时开着计算器（UWP `ApplicationFrameWindow`）做对照：它照旧在列表里。
+> `scripts/acceptance.ps1`（只跑 release；跑前先 `--quit` 常驻、跑完从
+> `build\dist-release` 重新拉起）**118 项、0 失败**。
+> `flowkeyd --check --config flowkeyd.lua.example` 通过、零警告
+> （46 hotkey / 3 remap / 7 window rule，输出与改动前逐字相同）。
+> 行为变化：窗口切换器不再列被 shell 藏起来、点不到的“假窗口”
+> （`DWMWA_CLOAKED` + 虚拟桌面查询，见第 2 节第 21 条）；「主窗口」判据多了
+> `WS_EX_APPWINDOW` 那一条（有属主但显式要求上任务栏的窗口现在也算）；
+> 顺手修了 `.arg(标题, 句柄)` 把句柄当字段宽度、一条日志 132 KB 的老 bug
+> （`window.cpp` 两处，见第 10 节）。README（窗口切换器、已知限制）与
+> 第 2 / 4 / 10 / 14 节已同步。
+> 一个与本次无关的已知失败（用 `git stash` 在改动前的提交上同样能复现，
+> 不是回归）：`tst_interactive::windowBackendLaunchesActivatesAndCloses` 的
+> 「activate 拿到前台」偶发失败（3 次里挂 1 次，第 10 节写过的前台锁环境问题）。
+
 ---
 
 ## 12. 本期不做的（有意留白）与后续工作
@@ -4419,9 +4525,10 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、
   `"volume:up"`、`"media:next"`、`"clipboard:get"`、`"window:minimize"`、
   `"desktop:1"`、`"power:sleep"`、裸关键字 `reload`/`quit`/`help`/`windows`/`none`。
 * `windows([title])` 是**窗口切换器**（见第 2 节第 21 条）：列出当前打开的程序
-  窗口，输入按**进程名前缀**筛选（标题只显示、不参与），只剩一个窗口时直接
-  激活它；筛到一个进程名而它开了多个窗口时进入**数字选择模式**（前 10 行依次是
-  `1`..`9`、`0`，按数字直接跳过去，见第 2 节第 22 条）。常见绑法是
+  窗口（**只列真正有窗口的进程**：工具窗口、无标题窗口与 shell 藏起来的“假窗口”
+  不列，判据与 Alt+Tab 一致），输入按**进程名前缀**筛选（标题只显示、不参与），
+  只剩一个窗口时直接激活它；筛到一个进程名而它开了多个窗口时进入**数字选择模式**
+  （前 10 行依次是 `1`..`9`、`0`，按数字直接跳过去，见第 2 节第 22 条）。常见绑法是
   `keys = "LWin"` + `trigger = "release"`（「轻碰 Win」）。
 * **完全没有动作**的快捷键就是一个按键屏蔽器（会吞掉它匹配到的按键）。
 * `window` 的 `toggle`（默认**开**）只对 `op = "activate"` 有意义；
