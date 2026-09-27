@@ -29,6 +29,8 @@ Tray::Tray(const QIcon &icon, QObject *parent) : QObject(parent)
     m_suspendAction = m_menu->addAction(QStringLiteral("挂起快捷键(&S)"));
     m_reloadAction = m_menu->addAction(QStringLiteral("重载配置(&L)"));
     m_openConfigAction = m_menu->addAction(QStringLiteral("打开配置文件(&O)"));
+    // 在线更新：查 GitHub Release，有新版本就弹更新窗口（下载 + 替换 + 重启）。
+    m_updateAction = m_menu->addAction(QStringLiteral("检查更新(&U)..."));
     m_menu->addSeparator();
     // 构建版本：一个不可点的信息项（真实取值由启动时调 setBuildVersion 传进来，
     // 见 core/version.h）。放在「退出」上面，和系统菜单里的「关于」条目一个位置。
@@ -43,6 +45,7 @@ Tray::Tray(const QIcon &icon, QObject *parent) : QObject(parent)
     connect(m_suspendAction, &QAction::triggered, this, &Tray::suspendToggleRequested);
     connect(m_reloadAction, &QAction::triggered, this, &Tray::reloadRequested);
     connect(m_openConfigAction, &QAction::triggered, this, &Tray::openConfigRequested);
+    connect(m_updateAction, &QAction::triggered, this, &Tray::checkUpdateRequested);
     connect(m_quitAction, &QAction::triggered, this, &Tray::quitRequested);
     connect(m_icon, &QSystemTrayIcon::activated, this, [this](QSystemTrayIcon::ActivationReason reason) {
         if (reason == QSystemTrayIcon::Trigger) {

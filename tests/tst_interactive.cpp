@@ -15,12 +15,16 @@
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
+#include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QThread>
 
 #include <cstring>
+#include <functional>
 
+#include "app/updater.h"
 #include "core/action.h"
 #include "core/keys.h"
 #include "core/placement.h"
@@ -42,6 +46,26 @@ namespace {
 bool interactiveEnabled()
 {
     return !qEnvironmentVariable("FLOWKEYD_ALLOW_INTERACTIVE_TESTS").isEmpty();
+}
+
+/// 需要联网 / 需要 GitHub 可用的那几条（在线更新）单独一道门：开启交互式测试
+/// 并不等于想在这台机器上跑真实网络请求。
+bool networkEnabled()
+{
+    return !qEnvironmentVariable("FLOWKEYD_ALLOW_NETWORK_TESTS").isEmpty();
+}
+
+/// 原地转事件循环直到 `done()` 为真或超时（异步的 `QNetworkAccessManager` 需要
+/// 有人转事件循环才会往前跑）。
+bool spinUntil(const std::function<bool()> &done, int timeoutMs)
+{
+    QElapsedTimer timer;
+    timer.start();
+    while (!done() && timer.elapsed() < timeoutMs) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+        QThread::msleep(20);
+    }
+    return done();
 }
 
 /// 测试自己的一个普通顶层窗口。
@@ -272,6 +296,7 @@ private slots:
     void cloakedWindowsAreHiddenFromTheSwitcher();
     void cloakedWindowsOnOtherDesktopsStaySwitchable();
     void switchesTheInputMethodToEnglish();
+    void checksAndDownloadsAnUpdateFromGitHub();
 };
 
 void TestInteractive::clipboardRoundTrip()
@@ -1413,6 +1438,73 @@ void TestInteractive::switchesTheInputMethodToEnglish()
         platform::win::ime::restoreMode(window.hwnd(), platform::win::ime::Mode{});
     QVERIFY2(nothing.ok, qPrintable(nothing.detail));
     QVERIFY(!nothing.changed);
+}
+
+/// 在线更新真的去 GitHub 走一遍：检查最新发布 → 下载 **slim 升级包** →
+/// sha256 校验 → 解压出新的 exe。
+///
+/// **默认跳过**（要联网、要 GitHub 可用、会真的下载约 700 KB），显式开：
+///
+///     $env:FLOWKEYD_ALLOW_NETWORK_TESTS = "1"
+///
+/// 它只把新 exe 落到一个**临时目录**，既不替换任何东西、也不重启 ——
+/// 「替换 + 重启」由 `tst_update_install` 与手工冒烟覆盖。
+/// 报告一个很旧的当前版本，这样 GitHub 上的最新发布一定看起来是“新版本”，
+/// 于是这条用例不依赖本文档所在的提交是否已经发布。
+void TestInteractive::checksAndDownloadsAnUpdateFromGitHub()
+{
+    if (!networkEnabled()) {
+        QSKIP("set FLOWKEYD_ALLOW_NETWORK_TESTS=1 to run the network tests");
+    }
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+
+    app::Updater updater(QStringLiteral("20-01-01-0000000"),
+                         dir.filePath(QStringLiteral("flowkeyd.exe")));
+    app::UpdateModel *model = updater.model();
+
+    updater.checkForUpdates();
+    const bool settled = spinUntil(
+        [model]() {
+            return model->phaseName() == QStringLiteral("available")
+                || model->phaseName() == QStringLiteral("uptodate")
+                || model->phaseName() == QStringLiteral("failed");
+        },
+        60000);
+    QVERIFY2(settled, qPrintable(QStringLiteral("the update check never finished: %1 %2")
+                                    .arg(model->phaseName(), model->errorDetail())));
+    QVERIFY2(model->phaseName() == QStringLiteral("available"),
+             qPrintable(QStringLiteral("expected an update, got %1: %2")
+                            .arg(model->phaseName(), model->errorDetail())));
+    QVERIFY(!model->newVersion().isEmpty());
+    QVERIFY(!model->notes().isEmpty());
+
+    updater.startDownload();
+    const bool staged = spinUntil(
+        [&updater, model]() {
+            return updater.hasStagedUpdate() || model->phaseName() == QStringLiteral("failed");
+        },
+        180000);
+    QVERIFY2(staged, "the download never finished");
+    QVERIFY2(model->phaseName() == QStringLiteral("ready"),
+             qPrintable(QStringLiteral("expected ready, got %1: %2")
+                            .arg(model->phaseName(), model->errorDetail())));
+    // sha256 对不上 / 解压失败 / 拿到的不是一个 PE 都会在这里变成 failed。
+    QVERIFY(updater.hasStagedUpdate());
+    QVERIFY(updater.stagedExecutable().startsWith(dir.path()));
+
+    QFile file(updater.stagedExecutable());
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    const QByteArray bytes = file.readAll();
+    // Windows 上文件句柄没关就删不掉（下一步的清理会失败）。
+    file.close();
+    QCOMPARE(bytes.left(2), QByteArray("MZ"));
+    QVERIFY2(bytes.size() > 1024 * 1024,
+             qPrintable(QStringLiteral("the downloaded executable is suspiciously small: %1")
+                            .arg(bytes.size())));
+
+    // 收尾：把 `flowkeyd.exe.new` 删掉（`dismiss` 不会动已经落盘的文件）。
+    QVERIFY(QFile::remove(updater.stagedExecutable()));
 }
 
 QTEST_MAIN(TestInteractive)

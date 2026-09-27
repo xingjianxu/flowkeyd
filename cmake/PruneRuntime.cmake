@@ -93,13 +93,21 @@ foreach(_f ${_prune_files})
 endforeach()
 
 # --- 3) 用不到的插件目录 ----------------------------------------------------
-# tls / networkinformation：Qt Network 的两个插件（没有它们只是不能用 https 与
-# “网络是否可用”，flowkeyd 从不发网络请求；Qt6Network.dll 本身要留，Qt6Qml/
-# Qt6Quick 直接依赖它）。generic/qtuiotouch：TUIO 协议触摸输入。
+# networkinformation：Qt Network 的可选插件（拿不到只是不能判断「网络是否可用」，
+# 在线更新自己会报网络错误）。generic/qtuiotouch：TUIO 协议触摸输入。
+#
+# **`tls/` 不能整个删掉**（2026-09 起）：在线更新要走 https，Qt 在 Windows 上默认
+# 用系统自带的 Schannel 后端，那是一个插件（`qschannelbackend.dll`）；没有它
+# `QNetworkAccessManager` 会直接报 TLS 后端缺失。OpenSSL 与 cert-only 两个后端
+# 用不到（本机有 Schannel），删掉。
+# `Qt6Network.dll` 本身必须留：Qt6Qml/Qt6Quick 直接依赖它。
 file(REMOVE_RECURSE
     "${PRUNE_DIR}/networkinformation"
-    "${PRUNE_DIR}/tls"
     "${PRUNE_DIR}/generic"
+)
+file(REMOVE
+    "${PRUNE_DIR}/tls/qopensslbackend.dll"
+    "${PRUNE_DIR}/tls/qcertonlybackend.dll"
 )
 # qmltooling：13 个 QML 调试/剖析插件，只有 `-qmljsdebugger` 那条路会加载它们。
 if(NOT PROFILE STREQUAL "debug")

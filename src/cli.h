@@ -42,6 +42,9 @@ struct CliOptions
     std::optional<qint64> parentPid;
     /// 内部标记：本进程已经以管理员权限运行，不要再重启自己。
     bool elevated = false;
+    /// 内部标记：本进程是「在线更新」重启起来的，`--updated-from` 后面是更新前的
+    /// 版本号（启动后用一条托盘通知告诉用户更新成功了）。
+    std::optional<QString> updatedFrom;
     bool showHelp = false;
     bool showVersion = false;
 

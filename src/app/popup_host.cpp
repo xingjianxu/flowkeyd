@@ -105,6 +105,17 @@ void PopupHost::requestSwitch(SwitchRequest request)
     showSwitch(std::move(request));
 }
 
+void PopupHost::requestUpdate(UpdateRequest request)
+{
+    if (QThread::currentThread() != thread()) {
+        QMetaObject::invokeMethod(
+            this, [this, request]() { requestUpdate(request); }, Qt::QueuedConnection);
+        return;
+    }
+    m_updateRequest = std::move(request);
+    showUpdate();
+}
+
 void PopupHost::closeAll()
 {
     if (m_menuWindow != nullptr) {
@@ -119,6 +130,12 @@ void PopupHost::closeAll()
         m_switchWindow->setProperty("visible", false);
     }
     m_switchRequest = SwitchRequest{};
+    // 「在线更新」窗口也归这里管：退出时它必须消失，而它里面的回调会碰
+    // `Updater`（与 `onChoose` 碰 `Dispatcher` 同理）。
+    if (m_updateWindow != nullptr) {
+        m_updateWindow->setProperty("visible", false);
+    }
+    m_updateRequest = UpdateRequest{};
     restoreSwitchInputMode();
 }
 
@@ -135,6 +152,18 @@ bool PopupHost::helpVisible() const
 bool PopupHost::switchVisible() const
 {
     return m_switchWindow != nullptr && m_switchWindow->isVisible();
+}
+
+bool PopupHost::updateVisible() const
+{
+    return m_updateWindow != nullptr && m_updateWindow->isVisible();
+}
+
+void PopupHost::hideUpdate()
+{
+    if (m_updateWindow != nullptr) {
+        m_updateWindow->setProperty("visible", false);
+    }
 }
 
 void PopupHost::menuChoose(int index)
@@ -229,6 +258,40 @@ void PopupHost::switchDismiss()
     }
     m_switchRequest = SwitchRequest{};
     restoreSwitchInputMode();
+}
+
+void PopupHost::updateInstall()
+{
+    if (m_updateRequest.onInstall) {
+        m_updateRequest.onInstall();
+    }
+}
+
+void PopupHost::updateDismiss()
+{
+    if (m_updateWindow != nullptr) {
+        m_updateWindow->setProperty("visible", false);
+    }
+    // 与 `menuDismiss()` / `switchDismiss()` 一致：窗口收了就把未完成的回调丢掉。
+    UpdateRequest request = std::move(m_updateRequest);
+    m_updateRequest = UpdateRequest{};
+    if (request.onDismiss) {
+        request.onDismiss();
+    }
+}
+
+void PopupHost::updateRetry()
+{
+    if (m_updateRequest.onRetry) {
+        m_updateRequest.onRetry();
+    }
+}
+
+void PopupHost::updateOpenRelease()
+{
+    if (m_updateRequest.onOpenRelease) {
+        m_updateRequest.onOpenRelease();
+    }
 }
 
 void PopupHost::switchUseEnglishInput()
@@ -331,6 +394,10 @@ void PopupHost::preload()
     if (menu == nullptr || help == nullptr || switchWindow == nullptr) {
         return;
     }
+    // 「在线更新」卡片也预热：它没有列表，装配很便宜，但能把「首次弹出要现场
+    // 加载 QML」这笔钱提前付掉；顺带让启动日志里的 QML 加载错误把它的
+    // 加载失败也暴露出来（`scripts/acceptance.ps1` 有一条哨兵检查盯着这个）。
+    QQuickWindow *update = m_updateModel != nullptr ? ensureUpdateWindow() : nullptr;
 
     // 假数据：`help` / `switch` / `menu` 的列表里得有行，`ListView` 才会把
     // `ItemDelegate` 建出来（`TextField` / `ScrollBar` 这些样式件也在这一步
@@ -376,6 +443,9 @@ void PopupHost::preload()
     warmUpWindow(menu, QStringLiteral("menu"), offscreen);
     warmUpWindow(help, QStringLiteral("help"), offscreen);
     warmUpWindow(switchWindow, QStringLiteral("switch"), offscreen);
+    if (update != nullptr) {
+        warmUpWindow(update, QStringLiteral("update"), offscreen);
+    }
 
     win::logDebug(QStringLiteral("popup preload: windows built in %1 ms")
                       .arg(m_warmTimer.elapsed()));
@@ -587,6 +657,58 @@ QQuickWindow *PopupHost::ensureSwitchWindow()
     m_switchWindow->setProperty("host", QVariant::fromValue(static_cast<QObject *>(this)));
     QObject::connect(m_switchWindow, &QQuickWindow::frameSwapped, this, &PopupHost::noteFirstFrame);
     return m_switchWindow;
+}
+
+void PopupHost::showUpdate()
+{
+    if (m_updateModel == nullptr) {
+        win::logError(QStringLiteral("the update window has no model; nothing to show"));
+        return;
+    }
+    const bool created = m_updateWindow == nullptr;
+    m_frameTimer.start();
+    QQuickWindow *window = ensureUpdateWindow();
+    if (window == nullptr) {
+        return;
+    }
+    const bool warming = cancelPreload(window);
+    const bool wasVisible = window->isVisible() && !warming;
+    window->setProperty("visible", true);
+    if (!wasVisible) {
+        // 位置只在第一次算：更新窗口是一个任务窗口，不跟着光标跳。
+        centreOnCursorScreen(window, m_updateModel->cardWidth(), m_updateModel->cardHeight());
+    }
+    activateWindow(window);
+    noteShown(QStringLiteral("update"), created);
+}
+
+QQuickWindow *PopupHost::ensureUpdateWindow()
+{
+    if (m_updateWindow != nullptr) {
+        return m_updateWindow;
+    }
+    if (m_updateModel == nullptr) {
+        return nullptr;
+    }
+    QQmlComponent component(m_engine);
+    component.loadFromModule(QStringLiteral("Flowkeyd"), QStringLiteral("UpdatePopup"));
+    if (component.isError()) {
+        win::logError(QStringLiteral("could not load UpdatePopup.qml: %1")
+                          .arg(component.errorString()));
+        return nullptr;
+    }
+    QObject *object = component.create();
+    m_updateWindow = qobject_cast<QQuickWindow *>(object);
+    if (m_updateWindow == nullptr) {
+        delete object;
+        win::logError(QStringLiteral("UpdatePopup.qml did not create a window"));
+        return nullptr;
+    }
+    m_updateWindow->setProperty("updateModel",
+                                QVariant::fromValue(static_cast<QObject *>(m_updateModel)));
+    m_updateWindow->setProperty("host", QVariant::fromValue(static_cast<QObject *>(this)));
+    QObject::connect(m_updateWindow, &QQuickWindow::frameSwapped, this, &PopupHost::noteFirstFrame);
+    return m_updateWindow;
 }
 
 } // namespace flowkeyd::app

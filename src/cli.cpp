@@ -113,6 +113,12 @@ std::optional<QString> parseCli(const QStringList &args, CliOptions *out)
             cli.logWindow = true;
         } else if (name == QLatin1String("--elevated")) {
             cli.elevated = true;
+        } else if (name == QLatin1String("--updated-from")) {
+            const auto value = takeValue();
+            if (!value.has_value()) {
+                return QStringLiteral("%1 需要一个取值").arg(name);
+            }
+            cli.updatedFrom = *value;
         } else if (name == QLatin1String("-h") || name == QLatin1String("--help")) {
             cli.showHelp = true;
         } else if (name == QLatin1String("-V") || name == QLatin1String("--version")) {
@@ -139,6 +145,8 @@ QString helpText(const QString &buildVersion)
         --no-elevate        不自动提权，直接以当前权限运行
         --console           保留控制台输出
         --elevated          内部标记：已经提权，不要再重启自己
+        --updated-from <V>  内部标记：本进程是被在线更新重启起来的（重启前
+                            的版本号是 V），启动后弹一条更新成功通知
         --check             校验配置并退出
         --list              打印已配置的快捷键并退出
         --list-keys         打印所有可接受的按键名并退出

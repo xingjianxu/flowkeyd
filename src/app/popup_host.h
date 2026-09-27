@@ -1,4 +1,5 @@
-// 弹窗宿主：在 Qt GUI 线程上创建/复用 `menu` 与 `help` 两个 QML 窗口。
+// 弹窗宿主：在 Qt GUI 线程上创建/复用 `menu` / `help` / 窗口切换器 / 在线更新
+// 四个 QML 窗口。
 //
 // 为什么必须有这一层：QML 窗口只能在 GUI 线程上碰，而动作是在**工作线程**上
 // 执行的（`app::Dispatcher`）。所以 `requestMenu` / `requestHelp` 可以从任意
@@ -13,6 +14,7 @@
 
 #include "app/help_model.h"
 #include "app/menu_model.h"
+#include "app/update_model.h"
 #include "app/window_list_model.h"
 
 #include <QElapsedTimer>
@@ -73,7 +75,25 @@ struct SwitchRequest
     std::function<void(int)> onChoose;
 };
 
-/// `menu` / `help` / 窗口切换器三个弹窗的宿主（GUI 线程亲和）。
+/// 打开「在线更新」窗口需要的一切。
+///
+/// 窗口要显示的模型（`app::UpdateModel`）不在这里传：它由 `setUpdateModel()`
+/// 在启动时交进来一次 —— 这样预热也能把这张卡片建出来（模型的指针必须在那之前
+/// 就有）。这里的四个回调是「用户点了哪个按钮」，实现是 `app::Updater` 上对应
+/// 的槽。
+struct UpdateRequest
+{
+    /// 用户点了「立即更新」。
+    std::function<void()> onInstall;
+    /// 用户关掉了窗口（下载中叫「取消下载」，会顺便放弃请求）。
+    std::function<void()> onDismiss;
+    /// 用户点了「重试」。
+    std::function<void()> onRetry;
+    /// 用户点了「打开发布页」。
+    std::function<void()> onOpenRelease;
+};
+
+/// `menu` / `help` / 窗口切换器 / 在线更新四个弹窗的宿主（GUI 线程亲和）。
 class PopupHost : public QObject
 {
     Q_OBJECT
@@ -89,8 +109,11 @@ public:
     void requestHelp(HelpRequest request);
     /// 弹出窗口切换器；已经开着时只是前置、清空筛选并把窗口列表换成最新的。
     void requestSwitch(SwitchRequest request);
+    /// 显示「在线更新」卡片（托盘菜单「检查更新」）。窗口已经开着时只前置，
+    /// 不重置里面的状态（状态是 `UpdateModel` 的事，`Updater` 已经改好了）。
+    void requestUpdate(UpdateRequest request);
 
-    /// 启动后台预热（**GUI 线程**）：把三个弹窗窗口建出来、填一份假数据各渲染
+    /// 启动后台预热（**GUI 线程**）：把弹窗窗口建出来、填一份假数据各渲染
     /// 一帧，然后再藏起来。
     ///
     /// 为什么要有这一步（2026-09 实测，`build/windows-debug`，一次性实例 + 注入
@@ -122,6 +145,14 @@ public:
     bool menuVisible() const;
     bool helpVisible() const;
     bool switchVisible() const;
+    bool updateVisible() const;
+
+    /// 把「在线更新」卡片要显示的模型交给宿主（GUI 线程、启动时调一次）。
+    /// 必须在 `preload()` 之前调，否则那张卡片不会被预热。
+    void setUpdateModel(UpdateModel *model) { m_updateModel = model; }
+
+    /// 关掉「在线更新」窗口（不取消任何正在跑的请求 —— 那是 `Updater` 的事）。
+    void hideUpdate();
 
     // 供 QML 调用（GUI 线程）：模型只做判断，执行决定的是这几个方法。
     Q_INVOKABLE void menuChoose(int index);
@@ -131,6 +162,11 @@ public:
     Q_INVOKABLE void helpDismiss();
     Q_INVOKABLE void switchChoose(int index);
     Q_INVOKABLE void switchDismiss();
+    // 「在线更新」卡片上的按钮（GUI 线程；只把活儿转交给 `Updater`）。
+    Q_INVOKABLE void updateInstall();
+    Q_INVOKABLE void updateDismiss();
+    Q_INVOKABLE void updateRetry();
+    Q_INVOKABLE void updateOpenRelease();
     /// 把窗口切换器所在窗口的输入法切成英文（字母数字）模式。
     ///
     /// 为什么需要：筛选框匹配的是**进程名**（ASCII），而用户可能正开着中文
@@ -151,9 +187,11 @@ private:
     void showMenu(MenuRequest request);
     void showHelp(HelpRequest request);
     void showSwitch(SwitchRequest request);
+    void showUpdate();
     QQuickWindow *ensureMenuWindow();
     QQuickWindow *ensureHelpWindow();
     QQuickWindow *ensureSwitchWindow();
+    QQuickWindow *ensureUpdateWindow();
     void placePopup(QQuickWindow *window, int width, int height);
     void activate(QQuickWindow *window);
 
@@ -197,6 +235,11 @@ private:
     QQuickWindow *m_switchWindow = nullptr;
     WindowListModel *m_switchModel = nullptr;
     SwitchRequest m_switchRequest;
+
+    // 「在线更新」卡片（第四个弹窗）。模型由 `Updater` 拥有，宿主只持有指针。
+    QQuickWindow *m_updateWindow = nullptr;
+    UpdateModel *m_updateModel = nullptr;
+    UpdateRequest m_updateRequest;
 
     // 窗口切换器的输入模式快照：真正弹出时记一份（`switchUseEnglishInput()` 里
     // 只记一次），卡片关掉时 `restoreSwitchInputMode()` 写回去。

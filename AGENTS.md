@@ -141,6 +141,7 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | 开机自启   | 计划任务 `flowkeyd`（登录时 + 最高权限 + 15 秒延迟）指向**当前运行的 `flowkeyd.exe` 路径**：守护进程每次启动自动检查/注册（`--no-autostart` 跳过、`--remove-autostart` 删除），见第 2 节第 10 条与第 10 节 |
 | 日志窗口   | **进程内的 QML 窗口**（FluentWinUI3），尾随同一个日志文件                                                     |
 | 选单/帮助  | **QML 窗口**（FluentWinUI3），跑在 Qt GUI 线程上                                                              |
+| 在线更新   | 托盘菜单 *检查更新* → 查 GitHub `releases/latest` → 下载 slim 升级包（`*-slim-windows-x64.zip`，只有 exe）→ sha256 校验 → 解压出 `flowkeyd.exe` → 改名替换 + 重启（失败回滚）→ 新实例用托盘通知说“更新成功”。**手动触发，不自动检查**，见第 2 节第 25 条 |
 | 示例配置   | `flowkeyd.lua.example`                                                                                        |
 | 自动化测试 | Qt Test 单元测试 + **`scripts/acceptance.ps1`**（119 项检查，注入按键 + 高亮/弹窗滚轮/拖动滚动条/“滚动不改键盘选中项”/鼠标点选与点筛选框/鼠标点选单条目/`Enter` 与双击真的执行动作/危险动作两次确认/三个弹窗不进任务栏/启动日志里没有 QML 加载错误的外部验收；`--simulate`/`--selftest`/`--probe` 本期不做，见第 12 节） |
 | 依赖管理   | CMake Presets + Ninja，`vendor/lua` 静态编进二进制                                                            |
@@ -598,6 +599,47 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
       切英文 → 还原回中文 → 再还原一次是幂等的 → 没有快照时是空操作）；
       真机端到端见第 10 节与第 11 节的 DoD 记录。
 
+25. **在线更新：托盘菜单里点一下，自己换 exe 并重启（项目所有者 2026-09 要求）。**
+    需求是「任务栏右键菜单里加在线更新（可以依赖已有的 GitHub 发版机制）；
+    弹出更新窗口里有新版本号与主要更新内容；确认后有进度条；更新完自动重启；
+    重启完用 Windows 通知告诉用户成功」。拍板与取舍：
+
+    * **下载的是发布脚本已经传上去的精简升级包**（`*-slim-windows-x64.zip`，
+      约 700 KB，里面只有 `flowkeyd.exe`），**没有**新增第三种资产。
+      为了解压它用了 Qt **私有**的 `QZipReader`（`<QtCore/private/qzipreader_p.h>`，
+      `Qt6::CorePrivate`）—— 项目所有者 2026-09 在两三个方案里选了这一条
+      （见第 10 节）。某次发布万一没有 slim 包时退回到完整包。
+    * **只换 `flowkeyd.exe`，不动 Qt/MinGW 运行时**：“第一次安装用完整包、
+      以后升级用精简包”那条约定的直接结果。因此新版本如果新增了运行时依赖，
+      替换会**回滚**（新 exe 活不过 2.5 秒 → 把旧的那份改回来），并提醒用户
+      手动下载完整包。这比赔上一个起不来的程序好得多。
+    * **触发方式是手动的**（项目所有者选）：只有点托盘菜单才联网，启动时不检查。
+      仓库是公开的，匿名 `GET /releases/latest` 不需要 token；请求带 `User-Agent`
+      与 `Accept: application/vnd.github+json`。
+    * **替换顺序：旧 exe 改名成 `<exe>.old` → 新的改名就位 → 启动新实例 →
+      等 2.5 秒确认它还活着**。运行中的映像可以改名（不能删/覆盖）—— 这正是
+      第 10 节那条“改名绕路”用到的事实。任何一步失败都回滚到旧 exe；
+      `.old` 由**新实例**启动时删（当前进程的映像就是它，自己删不掉），
+      旧进程还在退出时删不掉就隔 0.7 秒重试（最多 20 次）。
+    * **`--updated-from <旧版本>` 是重启时唯一的额外参数**（内部标记）：
+      新实例靠它知道“我刚被更新过”，于是弹一条托盘通知（
+      `QSystemTrayIcon::showMessage`，Win10/11 上就是系统通知），并且**只认它**
+      —— 用户自己退出后重启不会重复提示。
+    * **下载下来的 exe 的最后写入时间被对齐到发布日**（版本号里的日期段取的是
+      exe 的 mtime，见第 2 节第 12 条）：不对齐的话更新完重启，版本号会变成
+      “下载那一天”，与更新窗口里显示的对不上。
+    * 替换需要能写安装目录（默认提权运行，所以正常路径下没影响）；
+      更新**不碰**配置、日志与开机自启任务（新实例只是再确认一遍任务路径）。
+    * 新增静态库 **`flowkeyd_update`**（`update_model` / `update_archive` /
+      `updater`）与 `platform/win/update.*`；新增第四个弹窗 `UpdatePopup.qml`
+      （同样预热、同样 `Qt.Tool`）；`Qt6::Network` 进入依赖，所以
+      `cmake/PruneRuntime.cmake` **必须留下 `tls/qschannelbackend.dll`**
+      （Windows 上的 https 靠它），见第 10 节。
+    * 验证：`tst_update`（JSON/资产/版本比较/`QZipWriter` 造的 zip）、
+      `tst_update_model`（状态机与按钮）、`tst_update_install`（真的改名 + 启动
+      `ping.exe` + 回滚）、`tst_interactive` 里一个新的联网用例（
+      `FLOWKEYD_ALLOW_NETWORK_TESTS=1`），以及一次手工的本地假 GitHub 端到端。
+
 ---
 
 ## 3. 环境与工具链
@@ -639,6 +681,15 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 
 **唯一的例外是 Qt 自己的库随便链**：
 
+* **Qt 的模块照常 `find_package` + `target_link_libraries`**：`Core`/`Gui`/
+  `Qml`/`Quick`/`QuickControls2`/`Widgets`/`Test`，加上 2026-09 为在线更新引入的
+  **`Network`**（`QNetworkAccessManager`；https 在 Windows 上走 Qt 的 Schannel
+  插件，所以发布包必须留 `tls/qschannelbackend.dll`，见第 10 节）。
+  另外链接了一个 **Qt 私有**模块 `Qt6::CorePrivate`（**只**为了
+  `<QtCore/private/qzipreader_p.h>`，用来解开 slim 升级包）。
+  官网装出来的 Qt 不会因为 `COMPONENTS Core` 就自动加载私有模块，需要在
+  `find_package(Qt6 …)` **之前**设 `QT_FIND_PRIVATE_MODULES ON`（否则报
+  “Qt6::CorePrivate … target was not found”）。私有 API 的取舍见第 2 节第 25 条。
 * **允许静态链接的集合**（MinGW 的工具链自带这些导入库，实测都在
   `C:\Qt\Tools\mingw1310_64\x86_64-w64-mingw32\lib` 下，
   `target_link_libraries` 里写名字即可）：
@@ -692,6 +743,7 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `src/core/window_match.h/.cpp`            | 窗口匹配与 `window` 动作决策的纯函数：标题/进程名子串、可执行文件名提取、`toggle` 边界、`animate` 是否有意义。另外还持有「什么算一个程序窗口」的纯判据：`TopLevelWindowFacts` + `isMainWindow()`（`window_rule` 与切换器共用）与 `isSwitchableWindow()`（切换器：再把 shell 藏起来的假窗口排掉，见第 2 节第 21 条） |
 | `src/core/placement.h/.cpp`               | `window_rule` 的**纯逻辑**（只用 QtCore、可单测）：显示器排序与选择（序号 / `primary` / 设备名）、「显示器重新接入」检测（设备名从无到有）、摆放几何（最大化 / 居中 / 指定位置与大小 / 夹进工作区）、规则匹配，以及窗口相邻移动用的下标步进 `stepIndex()`（见第 2 节第 16 条）。`all_desktops` / `topmost` 不算几何，只影响 `WindowRule::summary()`。见第 2 节第 13 条 |
 | `src/core/version.h/.cpp`                 | 构建版本号（纯逻辑、可单测）：`buildVersion(executablePath)`（拼成 `yy-MM-dd-<git 短修订>`）、`buildDateFromFile()`、`sourceRevision()`（编译进来的 `FLOWKEYD_GIT_REVISION`）、`unknownValue()`。修订来自 CMake 用 `cmake/version_revision.h.in` 生成的 `flowkeyd_revision.h`；机制与取舍见第 2 节第 12 条与第 10 节 |
+| `src/core/update_check.h/.cpp`            | 在线更新的**纯逻辑**（只用 QtCore、可单测）：`updateRepository()` / `latestReleaseApiUrl()`（固定指向发布脚本那个仓库的 `releases/latest`）、`parseReleaseJson()`（解析 GitHub 的返回：tag/标题/发布说明/资产/`digest`）、`pickUpdateAsset()`（优先 `*-slim-windows-x64.zip`，其次完整包）、`isUpdateArchiveEntry()`（zip 里哪一条是 `flowkeyd.exe`）、`compareBuildVersions()`（返回值是「候选比当前新多少」：正数 = 有更新）、`buildVersionDate()`（从版本串取日期，**自己拼年份，不用 `QDate::fromString` 的两位年份启发式**，见第 10 节）。见第 2 节第 25 条 |
 | `src/lua/lua_config.h/.cpp`               | **Lua 与 C++ 的唯一边界**：建 `lua_State`、注入 DSL、把脚本里的表转成 `core::Config`（逐条目、带上下文的错误；`app{}` 转成 `core::AppDef` 后在 `compile()` 里展开）、UTF-8 BOM 剔除、`.toml` 明确拒绝                                                                            |
 | `src/lua/lua_prelude.lua`                 | 注入配置脚本的 DSL：`settings{}`/`hotkey{}`/`remap{}`/`window_rule{}`/`app{}` + 动作构造器 + `flowkeyd` 表。**纯 Lua，改它不需要改 C++**（编进 qrc，见第 7 节）                                                                                     |
 | `src/platform/win/`                       | Win32 后端（每个文件都只做一件事，方便单独替换）                                                                                                                                                                            |
@@ -712,6 +764,7 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `src/platform/win/single_instance.h/.cpp` | 按配置路径散列命名的互斥体（含提权重启后的重试）；`instanceRunning`（`OpenMutexW`，不获取所有权，**提权之前**的「已在运行」检查）；**`--quit` 的命名事件通道**：`quitEventName`/`createQuitEvent`（带 Low 完整性标签的 SDDL，让不提权的调用方也能 `SetEvent`）/`requestQuit`/`quitEventExists` |
 | `src/platform/win/elevate.h/.cpp`         | `ShellExecuteW("runas")` 自提权 + UAC 被拒时降级继续 + `--elevated` 标记 + 命令行/工作目录转发（`quote_arg`）                                                                                                               |
 | `src/platform/win/autostart.h/.cpp`       | 开机自启的计划任务：`buildTaskXml`/`taskXmlCommand`/`decodeTaskOutput`/`sameExecutablePath` 是**纯函数**（可单测），`query/register/removeAutostartTask` 走隐藏的 `schtasks.exe /Create /XML`，`ensureAutostart(spec, confirm)` 是启动时的“缺失或指向别的 exe 就**先问用户、同意后**刷新成当前路径”策略（`confirm` 为空表示不问）。**不写任何安装目录**（见第 2 节第 10 条与第 10 节） |
+| `src/platform/win/update.h/.cpp`          | 在线更新的最后一步：`applyExecutableUpdate(plan, error)` 把当前 exe 改名成 `<exe>.old`、把下载好的那份改名就位、用 `CreateProcessW` 启动新实例（命令行末尾加 `--updated-from <旧版本>`），再 `WaitForSingleObject(…, 2500)` 确认它还活着 —— **任何一步失败都回滚**并把旧的那份改回来；`removeExecutableBackup(exePath)` 删掉 `.old`（新实例启动时调，旧进程还在退出时返回 false，调用方重试）。测试拿 `cmd.exe`/`ping.exe` 当新旧两个版本（`tst_update_install`），不需要桌面。见第 2 节第 25 条 |
 | `src/app/`                                | 组装层：把 core / lua / platform 串起来，并拥有 Qt 对象                                                                                                                                                                     |
 | `src/app/app_icon.h/.cpp`                 | 应用图标：把 qrc 里的 9 张 PNG 帧拼成一个多尺寸 `QIcon`（`applicationIcon()`），托盘、全部 QML 窗口与 Qt 消息框都用它。用 PNG 而不用 SVG 是为了不依赖 `Qt6Svg` 与 `imageformats/qsvg` 插件（见第 10 节）。另外 `desktopIcon(number)` 现画托盘上的**桌面号徽标**（蓝色渐变圆角底 + 白色粗体数字，每个尺寸单独渲染、按字形墨迹居中），见第 2 节第 20 条 |
 | `src/app/dispatcher.h/.cpp`               | **动作工作线程**（`QThread`）：执行动作列表，含 `window` 的“先启动再激活”与默认开的 `toggle` 收起、`menu` 的窗口请求、`help` 的窗口请求 + 每一行的“执行目标”（绑定是 press+release 两串动作，`remap` 是直接注入目标按键）；`windows` 的窗口请求（`openWindowsAction()` 在**这条线程**上枚举窗口、把选中的 HWND 经 `submitCall()` 再拿回这条线程去激活，见第 2 节第 21 条）；还执行 `window_rule`（窗口出现 / 显示器重新接入 / 启动时各跑一次，`isPlaceableWindow()` 判“主窗口”；**只有“窗口出现”那一遍**会在规则真的搬迁窗口时把视图跟过去并重新激活，见第 2 节第 14 条）；另外 `startDesktopWatch()`/`pollDesktop()` 在这条线程上每 500 ms 查一次当前虚拟桌面并通知 GUI 线程换托盘图标（只能在这条线程上调用，见第 2 节第 20 条） |
@@ -720,10 +773,13 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `src/app/menu_model.h/.cpp`               | `menu` 选单的**纯逻辑**（`QAbstractListModel`，只用 QtCore）：卡片外框几何（宽高、标题、底部提示）、高亮移动（到边界回绕）、单字符选中、`Esc`/`Enter` 语义，以及给 QML 排版用的几个常量（`listTop`/`rowHeight`/`rowSpacing`/`rowInset`/`badgeSize`）。**行几何与鼠标命中不归它管**：列表是真正的 QML `ListView` + 标准 `ItemDelegate`（见第 2 节第 9 条与第 10 节），所以它没有 `rowRect`/`hitTest`，也**没有** `highlighted`/`hovered` 角色（那两个名字被标准委托占了）。悬停仍由模型持有（`hover`/`setHover`），因为「`Enter` 选光标下那一条」是选单的语义 |
 | `src/app/help_model.h/.cpp`               | `help` 帮助的**纯逻辑**（同上）：筛选（和弦/`comment`/`name`/动作摘要）、`可见/总数` 计数、键盘选中项（**高亮就是它**，鼠标悬停不改高亮）、`Enter`/双击该执行还是先武装（危险动作两次确认）、三级 `Esc`，以及鼠标点选用的 `setSelected()`（**可单测**）。**列表的滚动、行几何与鼠标命中都不归它管**：那是一个真正的 QML `ListView` + `ItemDelegate` + Qt 自带的 `ScrollBar`（见第 2 节第 9 条）。`handleKey()` 只接导航键与 `Enter`/`Esc`，字符/退格/`Home`/`End` 放行给标准 `TextField` |
 | `src/app/window_list_model.h/.cpp`        | 窗口切换器（`windows` 动作）的**纯逻辑**（只用 QtCore、可单测）：筛选（**进程名前缀**，标题只显示、不参与）、`可见/总数` 计数、键盘选中项（悬停即高亮）、`Enter`/`Esc`，**自动激活**（筛选非空且只剩一个窗口时 `setFilter()` 直接返回 `choose`）与**数字选择模式**（筛选到一个进程名的多个窗口时前 10 行分到 `1`..`9`/`0`，见第 2 节第 22 条）。卡片**没有标题行**（`listTop = 50`，没有 `titleRect`/`countRect`，计数在 `footerText` 里；`windows()` 的 `title` 只用作 `caption()`＝窗口标题），QML 的 `ListView` 左右与宽度都用 `filterRect`，见第 2 节第 24 条。窗口枚举与激活不在这里（见 `platform/win/window` 与 `app/dispatcher`），列表的滚动/行几何/鼠标命中归标准 `ListView` + `ItemDelegate`（见第 2 节第 21 条） |
-| `src/app/popup_layout.h/.cpp`             | 三个弹窗共用的几何类型（`PopupRect`/`PopupPoint`）与纯函数 `centrePopup()`（先在工作区居中、再夹进屏幕；**可单测**） |
-| `src/app/popup_host.h/.cpp`               | 把上面的模型挂到 QML 窗口上（选单 / 帮助 / 窗口切换器三个窗口）；抢前台（`requestActivate` + `win::window::raiseWindow` 的前台锁绕行）；在 Qt GUI 线程上创建/复用窗口；用户选完（或按 `Enter`/双击帮助里的一行 / 在切换器里选中一个窗口）把活儿回投工作线程；`helpRun()` 负责把**可见行下标**换算成条目下标，并且**先把窗口藏起来再执行**（**GUI 线程亲和**）。另外 `preload()`（由 `main` 在事件循环第一个回合排队调用）把三个窗口建好、填假数据各渲染一帧再藏起来（透明度 0 + 屏幕外），把“进程首次渲染”的固定开销提到启动时（见第 2 节第 23 条）；顺带记两条 debug 日志：`popup `x` shown in N ms` 与 `painted its first frame N ms after the request`。另外 `switchUseEnglishInput()`（`Q_INVOKABLE`，`QML` 的筛选框拿到焦点时会调）把切换器所在窗口的输入法切成英文 —— 真实弹出时 `showSwitch()` 自己也会调一次，**预热期间不调**；它同时把**打开前**的模式记进快照（只记一次），关掉卡片时 `restoreSwitchInputMode()`（`switchChoose` / `switchDismiss` / `closeAll` 三条路径）把它写回去（见第 2 节第 24 条） |
-| `src/qml/`                                | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`、`SwitchPopup.qml`（四个文件都在开头写了 `pragma ComponentBehavior: Bound`）；**三个弹窗的 `flags` 都带 `Qt.Tool`**（= `WS_EX_TOOLWINDOW`，不进任务栏/`Alt+Tab`；日志窗口故意不加，见第 2 节第 23 条）；配色一律用 `palette`，没有单独的 `Style.qml`；中文一律 `font.family: "Microsoft YaHei"`（默认族 `Segoe UI Variable` 没有中文字形，不管会回退到宋体，见第 10 节）。`HelpPopup.qml` 与 `MenuPopup.qml` 里除了卡片外框与按键徽标全是标准控件：帮助的筛选框是 `TextField`、列表是 `ListView` + Qt 自带 `ScrollBar` + `ItemDelegate`（列表只占行区域，不再需要表头/底部的遮罩）；选单的列表同样是 `ListView` + `ItemDelegate`（不滚动，所以没有滚动条；悬停与点击全部由委托提供）；窗口切换器（`SwitchPopup.qml`）与帮助同一套骨架，每行显示窗口标题 + 进程名（数字选择模式下行首还有一个数字冒标）；**它没有标题行**，`ListView` 的 `x`/`width` 直接用 `filterRect`（与筛选框同宽），筛选框拿到焦点时会调 `host.switchUseEnglishInput()`（见第 2 节第 24 条） |
-| `tests/`                                  | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_log_tail`、`tst_audio`、`tst_autostart`（自启的纯逻辑：XML 渲染/解析、输出解码、路径比较；**不碰真实计划任务**）、`tst_interactive`（需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`，否则 skip；含剪贴板/音量/窗口后端/虚拟桌面/钉在所有桌面/置顶/输入法切换的真机验证）、`tst_menu_model`、`tst_help_model`、`tst_window_list_model`（窗口切换器的纯逻辑：进程名前缀筛选、标题不参与、唯一匹配自动激活、`Enter`/`Esc`、悬停高亮、没有标题行的几何与窗口标题）、`tst_power_table`、`tst_desktop_table`、`tst_placement`（`window_rule` 的纯逻辑：显示器排序/选择、重连检测、摆放几何、匹配与摘要）、`tst_layout`、`tst_version`（构建时间戳与版本字符串的纯逻辑；只碰临时文件）、`tst_desktop_badge`（托盘数字徽标的文字与字号） |
+| `src/app/popup_layout.h/.cpp`             | 弹窗共用的几何类型（`PopupRect`/`PopupPoint`）与纯函数 `centrePopup()`（先在工作区居中、再夹进屏幕；**可单测**） |
+| `src/app/popup_host.h/.cpp`               | 把上面的模型挂到 QML 窗口上（选单 / 帮助 / 窗口切换器 / 在线更新四个窗口）；抢前台（`requestActivate` + `win::window::raiseWindow` 的前台锁绕行）；在 Qt GUI 线程上创建/复用窗口；用户选完（或按 `Enter`/双击帮助里的一行 / 在切换器里选中一个窗口）把活儿回投工作线程；`helpRun()` 负责把**可见行下标**换算成条目下标，并且**先把窗口藏起来再执行**（**GUI 线程亲和**）。另外 `preload()`（由 `main` 在事件循环第一个回合排队调用）把四个窗口建好、填假数据各渲染一帧再藏起来（透明度 0 + 屏幕外），把“进程首次渲染”的固定开销提到启动时（见第 2 节第 23 条）；顺带记两条 debug 日志：`popup `x` shown in N ms` 与 `painted its first frame N ms after the request`。另外 `switchUseEnglishInput()`（`Q_INVOKABLE`，`QML` 的筛选框拿到焦点时会调）把切换器所在窗口的输入法切成英文 —— 真实弹出时 `showSwitch()` 自己也会调一次，**预热期间不调**；它同时把**打开前**的模式记进快照（只记一次），关掉卡片时 `restoreSwitchInputMode()`（`switchChoose` / `switchDismiss` / `closeAll` 三条路径）把它写回去（见第 2 节第 24 条）。在线更新那一个窗口不走“任意线程请求”那条路（它由 GUI 线程上的托盘菜单触发），`setUpdateModel()` 在启动时把模型交给它，四个 `updateXxx()` 只是把按钮点击转交给 `app::Updater` |
+| `src/app/update_model.h/.cpp`             | “在线更新”卡片的状态机（`QObject` + `Q_PROPERTY`，**只用 QtCore、可单测**）：`idle`/`checking`/`uptodate`/`available`/`downloading`/`extracting`/`ready`/`failed` 八个阶段、版本号/发布说明/状态行/英文错误细节/进度（`0..1` + 字节文案）/按钮可见性（`canInstall`/`canDismiss`/`canRetry`/`canOpenRelease`）/卡片尺寸。界面文案是中文，`errorDetail` 保留英文技术原因。它**不联网、不解压、不换文件** |
+| `src/app/update_archive.h/.cpp`           | 从 GitHub Release 的 zip 字节里取出新的 `flowkeyd.exe`（`QZipReader`，Qt **私有**头；见第 2 节第 25 条与第 3 节）：按 `core::isUpdateArchiveEntry()` 找条目、`QSaveFile` 落盘、再用 `looksLikeExecutable()`（PE 魔数 + 最小尺寸）筛一道。失败给英文原因（写日志用） |
+| `src/app/updater.h/.cpp`                  | 在线更新的**联网编排**（`QObject`，Qt GUI 线程、异步 `QNetworkAccessManager`）：`checkForUpdates()` → `startDownload()` → `downloadProgress` 进度 → sha256 校验（资产的 `digest`）→ 解压到 `<exe>.new` → **把新文件的 mtime 对齐到发布日**（否则重启后版本号里的日期变成下载那天）→ `stagedReady()`。`dismiss()` 会断掉在飞的请求。它**不换 exe、不重启**（那是 `platform/win/update` 与 `main` 收尾的事） |
+| `src/qml/`                                | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`、`SwitchPopup.qml`、`UpdatePopup.qml`（五个文件都在开头写了 `pragma ComponentBehavior: Bound`）；**四个弹窗的 `flags` 都带 `Qt.Tool`**（= `WS_EX_TOOLWINDOW`，不进任务栏/`Alt+Tab`；日志窗口故意不加，见第 2 节第 23 条）；配色一律用 `palette`，没有单独的 `Style.qml`；中文一律 `font.family: "Microsoft YaHei"`（默认族 `Segoe UI Variable` 没有中文字形，不管会回退到宋体，见第 10 节）。`HelpPopup.qml` 与 `MenuPopup.qml` 里除了卡片外框与按键徽标全是标准控件：帮助的筛选框是 `TextField`、列表是 `ListView` + Qt 自带 `ScrollBar` + `ItemDelegate`（列表只占行区域，不再需要表头/底部的遮罩）；选单的列表同样是 `ListView` + `ItemDelegate`（不滚动，所以没有滚动条；悬停与点击全部由委托提供）；窗口切换器（`SwitchPopup.qml`）与帮助同一套骨架，每行显示窗口标题 + 进程名（数字选择模式下行首还有一个数字冒标）；**它没有标题行**，`ListView` 的 `x`/`width` 直接用 `filterRect`（与筛选框同宽），筛选框拿到焦点时会调 `host.switchUseEnglishInput()`（见第 2 节第 24 条）。`UpdatePopup.qml` 同一套卡片外壳，但里面是“任务窗口”：标题、当前/新版本号、`ScrollView` + 只读 `TextArea`（**Markdown**）显示发布说明、`ProgressBar`（`from == to` 就是不确定进度）、状态行 + 英文错误细节、四个按钮（立即更新 / 重试 / 打开发布页 / 关闭，后者在下载中叫“取消下载”）；它**不**在失去焦点时自动关掉（下载要几秒），也没接 `Esc` 以外的键盘逻辑 |
+| `tests/`                                  | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_log_tail`、`tst_audio`、`tst_autostart`（自启的纯逻辑：XML 渲染/解析、输出解码、路径比较；**不碰真实计划任务**）、`tst_interactive`（需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`，否则 skip；含剪贴板/音量/窗口后端/虚拟桌面/钉在所有桌面/置顶/输入法切换的真机验证；其中 `checksAndDownloadsAnUpdateFromGitHub` 还要 `FLOWKEYD_ALLOW_NETWORK_TESTS=1`，会真的去 GitHub 查一次并下载 slim 包，只落到临时目录）、`tst_menu_model`、`tst_help_model`、`tst_window_list_model`（窗口切换器的纯逻辑：进程名前缀筛选、标题不参与、唯一匹配自动激活、`Enter`/`Esc`、悬停高亮、没有标题行的几何与窗口标题）、`tst_power_table`、`tst_desktop_table`、`tst_placement`（`window_rule` 的纯逻辑：显示器排序/选择、重连检测、摆放几何、匹配与摘要）、`tst_layout`、`tst_version`（构建时间戳与版本字符串的纯逻辑；只碰临时文件）、`tst_desktop_badge`（托盘数字徽标的文字与字号）、`tst_update`（在线更新的纯逻辑：`releases/latest` JSON、资产挑选、版本比较、日期解析、**用 `QZipWriter` 现造一个 zip** 再解出 exe、损坏/缺条目时的报错）、`tst_update_model`（更新窗口的阶段、进度、按钮可见性）、`tst_update_install`（`cmd.exe`/`ping.exe` 当新旧两个 exe：改名替换 + 启动 + `.old` 清理 + 两种失败回滚） |
 | `scripts/acceptance.ps1`                  | 桌面行为的验收脚本（注入按键 + 焦点捕捉窗口的外部观察，119 项检查：含弹窗滚轮/滚动条拖动/鼠标点选与点筛选框/鼠标点选单条目/`Enter` 与双击真的执行动作/危险动作两次确认/两个弹窗不在任务栏里/启动日志里没有 QML 加载错误）；需交互式桌面，**不属于 `ctest`**，见第 5 节与阶段 9。它用 `--no-elevate` 起临时守护进程，所以**不会**碰真实的自启计划任务（于是它验证的运行时就是精简过的发布包，见第 10 节“发布包精简”） |
 | `scripts/release.ps1`                     | 发布脚本（**2026-09 新增**）：构建 release（默认连 debug + `ctest` 一起跑）、把 `build/dist-release` 打成**两个** zip（完整包 + 精简升级包，各附 `.sha256`）、用 GitHub CLI（`gh`）上传到 GitHub Release。tag 取**刚构建出来的那个 exe** 的 `--version`（形如 `v26-09-24-0e33ae9`）；资产是 `flowkeyd-<版本>-windows-x64.zip`（exe + Qt/MinGW 运行时）与 `flowkeyd-<版本>-windows-x64-slim.zip`（只有 exe，给升级用）加它们各自的 `.sha256`。哪些文件进精简包由脚本里的 `$SlimFiles` / `$DependencyPatterns` **白名单**决定，`dist` 里有两边都不认识的文件就直接失败（见第 10 节）。要**构建**时先 `flowkeyd.exe --quit` 停掉常驻实例，收尾（**包括中途失败**）用 `schtasks /Run /TN flowkeyd` 拉回来；`-SkipBuild`（用现有产物、不碰常驻）/`-SkipResident`/`-SkipUpload` 各自关掉那一段。工作区脏或 HEAD 没推到 origin 会**直接拒绝**（要 `-AllowDirty`/`-Push`）。**唯一的新前置依赖是 `gh`**（`scoop install gh` + `gh auth login`），只在发布那一步用到。见第 5 节与第 11 节的 DoD 记录 |
 
@@ -737,6 +793,7 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `flowkeyd_core`    | `src/core/*`（纯逻辑，只用 QtCore）                                | exe + 全部单测            |
 | `flowkeyd_lua`     | `src/lua/*` + 编成 qrc 的 `lua_prelude.lua`                        | exe + `tst_lua`           |
 | `flowkeyd_models`  | `src/app/{menu,help}_model.*` + `src/app/window_list_model.*` + `src/app/popup_layout.*`（纯逻辑，只用 QtCore） | exe + `tst_menu_model`/`tst_help_model`/`tst_window_list_model` |
+| `flowkeyd_update`  | `src/app/{update_model,update_archive,updater}.*`（在线更新；`Qt6::Core` + `Qt6::Network` + **`Qt6::CorePrivate`**，另链 `flowkeyd_platform`） | exe + `tst_update`/`tst_update_model`/`tst_update_install`/`tst_interactive` |
 | `flowkeyd_platform`| `src/platform/win/*`（不碰 Qt GUI的 Win32 后端）                    | exe + 平台层单测           |
 | `flowkeyd`         | `src/main.cpp`、`src/cli.*`、`src/app/*`、`src/platform/win/tray.*`、QML、**图标 qrc（`:/icons`）+ 图标 .rc** | ——                        |
 | `flowkeyd_icon_gen`| `tools/icon_gen/main.cpp`（把 `logo.svg` 光栅化成 `assets/` 下的 .ico 与 PNG；**`EXCLUDE_FROM_ALL`**，只由 `icons` 目标手工构建） | ——（不进任何产物）        |
@@ -744,6 +801,8 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 
 > `src/app/popup_host.*` 用 QML/QtQuick，所以**不进** `flowkeyd_models`，留在 exe 里；
 > 模型层只有 QtCore，这样 `tst_menu_model`/`tst_help_model`/`tst_window_list_model` 能在没有桌面的情况下跑。
+> 在线更新**单独一个库 `flowkeyd_update`**（而不是塞进 `flowkeyd_models`）：它是唯一
+> 需要 `Qt6::Network` 与 Qt 私有头的东西，两个单测因此只在需要时才链它。
 
 `flowkeyd_add_test(name [LIBS …])` 负责把 Qt/MinGW 的 DLL 目录写进 test 的 `PATH`。
 **测试目标只在这个函数被调用时创建，而整段（连 `enable_testing()`）都包在
@@ -839,6 +898,11 @@ $C = 'C:\Qt\Tools\CMake_64\bin\cmake.exe'
 
 # 单元测试：只跑 debug 那一份（release 里根本不构建测试目标，见工作约定第 2 条）
 & ctest --test-dir build/windows-debug --output-on-failure
+
+# 在线更新那条联网用例另外一道门（它会真的去 GitHub 查一次并下载 slim 包，
+# 只落到临时目录、不换任何文件）：
+$env:FLOWKEYD_ALLOW_NETWORK_TESTS = '1'
+& build\windows-debug\tst_interactive.exe checksAndDownloadsAnUpdateFromGitHub
 
 # release 构建已经顺手产出了发布目录（只有 exe + Qt/MinGW 运行时，拷走就能跑）
 dir build\dist-release
@@ -3218,6 +3282,71 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   过去跑一次 —— 版本号一致就说明“升级”这条路径是通的。精简包自己**不能单独跑**
   （它没有 Qt 的 dll，这正是它小的原因），所以 `README.txt` 里写明了用法。
 
+#### 2026-09 新增：在线更新（托盘菜单 → 查 GitHub → 换 exe → 重启）
+
+* **`QDate::fromString("26-09-27", "yy-MM-dd")` 返回的是 1926 年，不是 2026。**
+  Qt 对两位年份用的是一条“距当前年份 ±50 年”的启发式规则，而同一个格式**反过来
+  输出**（`QDate::toString("yy-MM-dd")`）给的确实是 `26-09-27`：
+  用 `fromString` 去解析自己的输出会拿到一个差一百年的日期，而且不报错。
+  构建版本里的日期一定是 20xx，所以 `core::update_check.cpp` 里的 `buildVersionDate()`
+  **自己把前两位拆出来 + 2000**（`tst_update::parsesTheBuildDate` 盯着它）。
+* **`QDate` 那个坑在真实场景里的后果很隐蔽**：`compareBuildVersions()` 拿日期排序，
+  解成 1926 之后“有新版本”永远不成立（或者反过来永远成立）。这个 bug 是单测查出来的，
+  不是真机 —— 所以这种纯逻辑一定要先写测试。
+* **`getattr` 一类的事情不要猜，Qt 私有模块要显式打开。** 官网装出来的 Qt 不会因为
+  `find_package(Qt6 COMPONENTS Core)` 就加载 `Qt6::CorePrivate`
+  （`Qt6CoreConfig.cmake` 里那段自动加载只在 Qt 自己的构建树里生效），必须在
+  `find_package(Qt6 …)` **之前** `set(QT_FIND_PRIVATE_MODULES ON)`，否则报
+  “Target "flowkeyd_update" links to: Qt6::CorePrivate but the target was not found”。
+* **`Qt6::Network` 加进来之后，`cmake/PruneRuntime.cmake` 里的 `tls/` 不能整个删了。**
+  Qt 在 Windows 上默认走系统自带的 Schannel，而它是一个**插件**
+  （`tls/qschannelbackend.dll`）；没有它 `QNetworkAccessManager` 会直接报 TLS 后端缺失。
+  现在只删 `qopensslbackend.dll` 与 `qcertonlybackend.dll`。
+  漏掉这一条的发现方式：`tst_interactive` 里那个联网用例直接失败。
+* **下载回来的 exe 必须把最后写入时间对齐到发布日。** 版本号里的日期段取自 exe 的
+  mtime（第 2 节第 12 条），新文件刚解压出来时 mtime 是“现在”，于是更新窗口里
+  显示 `26-09-28-…`、重启后日志里却是 `26-09-30-…`（同样的 git 修订）。
+  `Updater` 从发布版本里取日期、把它写成 `yy-MM-dd 12:00` 的本地时间。
+  真机 E2E 里一眼就能看出来（新实例启动日志里的版本号日期与更新窗口里那个对不上）。
+* **把一个不认 `--updated-from` 的旧 exe 当成“新版本”重启，会被它以退出码 2 拒掉
+  （无法识别的参数）。** 这不是 bug：`applyExecutableUpdate()` 发现新进程
+  在 2.5 秒内就退出时会**回滚**，日志里是
+  `the restarted flowkeyd exited immediately (code 2); the previous executable was restored`。
+  本次写 E2E 时就撞上了（本地构建比 GitHub 上的最新发布还新），
+  它恰好免费验证了一遍“起不来就回滚”那条路径。
+  真实场景不会碰到：**只有带在线更新的版本才会发出 `--updated-from`**，
+  但它也说明这套机制不会把程序弄成起不来的样子。
+* **更新失败时的 `QMessageBox` 会把进程吊住。** 它跑在 `QApplication::exec()`
+  返回之后、而且没人点就永远不返回 —— 自动化里（`--no-prompt`）只写日志，
+  不弹框。本次就因为它在 `tmp/e2e` 里留下了一个带着模态框的沙箱进程，
+  把下一次 `Remove-Item` 卡死（`qico.dll` 访问被拒），排查了好一会儿。
+* **`.old` 必须由新实例删。** 旧进程的映像就是 `<exe>.old`，自己删不掉；
+  而新实例启动时旧进程可能还在退出，所以第一次删也会失败 ——
+  `removeExecutableBackup()` 返回 false 时调用方要每隔 0.7 秒重试（实测几秒内就成了）。
+* **`MoveFileExW` 不能跨卷。** 新 exe 必须先落在安装目录旁边
+  （`<exe>.new`），不能先放到 `%TEMP%` 再改名过去（那就得 `MOVEFILE_COPY_ALLOWED`，
+  而“同一个卷内的改名”才是原子的）。
+* **Windows 上文件句柄没关就删不掉。** 单测里拿着 `QFile file(...)` 读完就去
+  `QFile::remove(...)`，返回 false —— 先把 `file.close()` 掉。
+  在线更新的落盘用的是 `QSaveFile`（内部自己关）。
+* **无 BOM 的 `.ps1` 里的中文注释会把下一行吞掉（又踩一次）。** PowerShell 5.1 按
+  GBK 解码，注释行末尾的中文 UTF-8 字节里会有一个被当成 GBK 的**尾字节**，
+  于是紧跟的换行也跟着被吃掉，下一行就成了注释的一部分：脚本不报错，
+  **只是静默地少做一步**（本次是“用带调试钩子的 exe 覆盖沙箱里的 exe”那一行没了，
+  于是 E2E 一直对着旧的 exe 跑，怎么也看不到日志）。
+  写 `tmp/` 下的一次性脚本一律纯 ASCII。
+* **PowerShell 里 `Start-Process` 起的后台进程会把继承的 stdout/stderr 一直握着**，
+  于是调用方（agent 的工具链）会一直等下去。要起后台服务就把
+  `-RedirectStandardOutput` **和** `-RedirectStandardError` 都重定向到文件。
+* **“本地假 GitHub”是验证在线更新最好用的手法**（`tmp/e2e-local.ps1` +
+  `tmp/e2e-http-server.ps1`，临时改了 `latestReleaseApiUrl()` 指向它，测完就删）：
+  用 `System.Net.HttpListener` 发一份 `releases/latest` 的 JSON 和一个装着自家新 exe 的
+  slim zip（`ZipArchive` 自己写条目、`/` 当分隔符），让一个从 `build/dist-release`
+  拷出来的沙箱实例自己走完「检查 → 下载 → sha256 → 解压 → 换名 → 重启」；
+  不碰真实 GitHub、不依赖网络。比“手工点托盘菜单”可靠得多（托盘菜单点不了）。
+  注意沙箱 exe 要用**带临时钩子**的那份（否则没人点菜单，它不会自己检查），
+  而 zip 里的“新版本”要用**不带钩子**的那份（否则重启后会再检查一次、无限循环）。
+
 ### 领域坑清单（动手前先看这一遍）
 
 下面这些每一条都值得在动钩子/引擎/窗口/电源之前先读一遍：
@@ -3276,6 +3405,14 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 * **`windeployqt` 只会多拷、不会删。** QML 模块目录是它按 qmldir 里的
   `optional import … auto`（Quick Controls 有六个样式）扫出来的，没有开关能只留一个；
   想把发布包变小只能“拷完再删”（`cmake/PruneRuntime.cmake`）。
+  **那个清单里 `tls/` 不能整个删**：加了 `Qt6::Network` 之后 https 靠
+  `tls/qschannelbackend.dll` 这个插件（见第 10 节的在线更新一节）。
+* **`QDate::fromString(text, "yy-MM-dd")` 的两位年份是启发式的**（本机实测 `26`
+  解成 **1926**），而 `toString` 反着写就是 `26-09-27`：解析自己的输出必须自己
+  拼年份。构建版本号里的日期就踩在这个上面。
+* **Windows 上“正在运行的 exe”可以改名、不可以删/覆盖**：在线更新就是靠这个
+  把旧 exe 改成 `<exe>.old` 再把新的改名就位；而 `.old` 只能由**新进程**删（旧进程
+  的映像就是它）。`MoveFileExW` 还不能跨卷（新文件必须先落在同目录）。
 * **`objcopy --strip-all` 不幂等**：每次都会重写 PE 头 COFF 里的 `TimeDateStamp`，
   同一个 exe 连 strip 两次得两个不同的文件（只差 2 个字节）。两棵 release 树的 exe
   要保持逐字节相同，就只能 strip 一次（见第 10 节“发布包精简”）。
@@ -5013,6 +5150,19 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   已公开但不在静态链接集合里的库走同一条路（`dwmapi` 是范例）。
 * **新的动作后端**：在 `src/platform/win/` 下新建模块，从 `dispatcher` 调用，
   并（如果以后补了 `--selftest`）加一项检查。
+* **在线更新的新行为**（例如启动时自动检查、签名校验、把运行时也一并升级）：
+  纯逻辑（版本比较、资产挑选、JSON 解析）在 `src/core/update_check.*`，
+  状态与文案在 `src/app/update_model.*`（后者只动 `Q_PROPERTY` 与阶段），
+  联网 / 下载 / 校验 / 落盘在 `src/app/updater.*`，换文件与重启在
+  `src/platform/win/update.*`，卡片在 `src/qml/UpdatePopup.qml`（按钮通过
+  `PopupHost::updateXxx()` 转给 `Updater`）。
+  改“去哪儿查”只改 `core::updateRepository()` / `latestReleaseApiUrl()`；
+  新增一个状态就在 `UpdateModel::Phase` / `phaseName()` / `statusForPhase()` /
+  几个 `canXxx()` 里各加一条（`tst_update_model` 盯着）。
+  **不要在 `main` 里提前做替换**：换 exe 必须在运行时停干净之后（见第 2 节第 25 条）。
+  验证走 `tst_update` / `tst_update_model` / `tst_update_install`，
+  联网那条是 `tst_interactive` 里的 `checksAndDownloadsAnUpdateFromGitHub`
+  （`FLOWKEYD_ALLOW_NETWORK_TESTS=1`），以及第 10 节那个“本地假 GitHub”的沙箱 E2E。
 * **换图标**：改仓库根目录的 `logo.svg`（唯一的真源），然后
   `cmake --build --preset debug --target icons` 重新生成 `assets/flowkeyd.ico`
   与 `assets/icons/flowkeyd-<n>.png`（**两者都要提交**）；尺寸列表写在
@@ -5055,8 +5205,9 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、
 `--check`、`--list`、`--list-keys`、`--quit`、`--no-autostart`、
 `--remove-autostart`、`--log-window`、`--log-level`、`--log-file`、`--no-color`、
-`--allow-multi`、`--no-prompt`、`-h/--help`、`-V/--version`。
-`--parent-pid` 与 `--simulate`/`--selftest`/`--probe` 见第 12 节；
+`--allow-multi`、`--no-prompt`、`--updated-from`、`-h/--help`、`-V/--version`。
+`--updated-from <V>` 是在线更新重启新实例时加的内部标记（新实例靠它弹“更新成功”
+通知，见第 2 节第 25 条）；`--parent-pid` 与 `--simulate`/`--selftest`/`--probe` 见第 12 节；
 `--quit`（请正在跑的实例干净退出）见第 2 节第 10 条与第 5 节；
 `--no-autostart` / `--remove-autostart`（自启任务的跳过与删除）见第 2 节第 10 条。
 

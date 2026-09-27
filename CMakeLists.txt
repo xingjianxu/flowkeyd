@@ -10,9 +10,18 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
+# 在线更新要用 Qt 私有的 `QZipReader`（`<QtCore/private/qzipreader_p.h>`，
+# 从发布脚本传的 slim zip 里取出新的 exe，见 `src/app/update_archive.h`）。
+# 官网装出来的 Qt 默认**不会**因为 `COMPONENTS Core` 就加载 `Qt6CorePrivate`
+# （Qt6CoreConfig.cmake 里那段自动加载只在 Qt 的构建树里生效），必须显式打开
+# 这个开关 —— 否则 `target_link_libraries(... Qt6::CorePrivate)` 会报
+# “the target was not found”。
+set(QT_FIND_PRIVATE_MODULES ON)
+
 find_package(Qt6 6.8 REQUIRED COMPONENTS
     Core
     Gui
+    Network
     Qml
     Quick
     QuickControls2
@@ -162,6 +171,8 @@ add_library(flowkeyd_core STATIC
     src/core/placement.h
     src/core/template.cpp
     src/core/template.h
+    src/core/update_check.cpp
+    src/core/update_check.h
     src/core/version.cpp
     src/core/version.h
     src/core/window_match.cpp
@@ -249,6 +260,8 @@ add_library(flowkeyd_platform STATIC
     src/platform/win/power.h
     src/platform/win/single_instance.cpp
     src/platform/win/single_instance.h
+    src/platform/win/update.cpp
+    src/platform/win/update.h
     src/platform/win/window.cpp
     src/platform/win/window.h
 )
@@ -266,6 +279,37 @@ target_link_libraries(flowkeyd_platform PUBLIC
 flowkeyd_strict_warnings(flowkeyd_platform)
 
 # ---------------------------------------------------------------------------
+# 在线更新层：查 GitHub Release + 下载 + 解压（把 `flowkeyd_update` 单放在这里、
+# 而不是塞进 `flowkeyd_models`，是为了让模型层继续保持“只用 QtCore”）。
+#
+# 需要三个额外的东西：
+#   * `Qt6::Network`：`QNetworkAccessManager`（https 走 Windows 自带的 Schannel
+#     后端插件，所以精简清单里要留下 `tls/qschannelbackend.dll`）；
+#   * `Qt6::CorePrivate`：只为了私有头 `<QtCore/private/qzipreader_p.h>`
+#     （从发布脚本传的那个 slim zip 里取出新的 exe，见 app/update_archive.h）；
+#   * `flowkeyd_platform`：`openTarget`（打开发布页）与日志。
+# ---------------------------------------------------------------------------
+add_library(flowkeyd_update STATIC
+    src/app/update_archive.cpp
+    src/app/update_archive.h
+    src/app/update_model.cpp
+    src/app/update_model.h
+    src/app/updater.cpp
+    src/app/updater.h
+)
+target_include_directories(flowkeyd_update PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(flowkeyd_update
+    PUBLIC
+        flowkeyd_core
+        flowkeyd_platform
+        Qt6::Core
+        Qt6::Network
+    PRIVATE
+        Qt6::CorePrivate
+)
+flowkeyd_strict_warnings(flowkeyd_update)
+
+# ---------------------------------------------------------------------------
 # 守护进程本体
 # ---------------------------------------------------------------------------
 set(FLOWKEYD_QML_FILES
@@ -273,6 +317,7 @@ set(FLOWKEYD_QML_FILES
     src/qml/MenuPopup.qml
     src/qml/HelpPopup.qml
     src/qml/SwitchPopup.qml
+    src/qml/UpdatePopup.qml
 )
 set_source_files_properties(src/qml/LogWindow.qml
     PROPERTIES QT_RESOURCE_ALIAS LogWindow.qml)
@@ -282,6 +327,8 @@ set_source_files_properties(src/qml/HelpPopup.qml
     PROPERTIES QT_RESOURCE_ALIAS HelpPopup.qml)
 set_source_files_properties(src/qml/SwitchPopup.qml
     PROPERTIES QT_RESOURCE_ALIAS SwitchPopup.qml)
+set_source_files_properties(src/qml/UpdatePopup.qml
+    PROPERTIES QT_RESOURCE_ALIAS UpdatePopup.qml)
 
 qt_add_executable(flowkeyd
     WIN32
@@ -333,9 +380,11 @@ target_link_libraries(flowkeyd
         flowkeyd_lua
         flowkeyd_models
         flowkeyd_platform
+        flowkeyd_update
         flowkeyd::lua
         Qt6::Core
         Qt6::Gui
+        Qt6::Network
         Qt6::Qml
         Qt6::Quick
         Qt6::QuickControls2
@@ -508,10 +557,13 @@ flowkeyd_add_test(tst_log_tail)
 flowkeyd_add_test(tst_window_match)
 flowkeyd_add_test(tst_placement)
 flowkeyd_add_test(tst_audio LIBS flowkeyd_platform)
-flowkeyd_add_test(tst_interactive LIBS flowkeyd_platform)
+flowkeyd_add_test(tst_interactive LIBS flowkeyd_platform flowkeyd_update)
 flowkeyd_add_test(tst_menu_model LIBS flowkeyd_models)
 flowkeyd_add_test(tst_help_model LIBS flowkeyd_models)
 flowkeyd_add_test(tst_window_list_model LIBS flowkeyd_models)
+flowkeyd_add_test(tst_update LIBS flowkeyd_update Qt6::CorePrivate)
+flowkeyd_add_test(tst_update_model LIBS flowkeyd_update)
+flowkeyd_add_test(tst_update_install LIBS flowkeyd_update)
 flowkeyd_add_test(tst_desktop_table LIBS flowkeyd_platform)
 flowkeyd_add_test(tst_power_table LIBS flowkeyd_platform)
 

@@ -16,6 +16,7 @@
 #include "app/log_window.h"
 #include "app/popup_host.h"
 #include "app/runtime.h"
+#include "app/updater.h"
 #include "cli.h"
 #include "core/config.h"
 #include "core/keys.h"
@@ -31,6 +32,7 @@
 #include "platform/win/process.h"
 #include "platform/win/single_instance.h"
 #include "platform/win/tray.h"
+#include "platform/win/update.h"
 
 #include <memory>
 #include <optional>
@@ -202,6 +204,22 @@ int main(int argc, char *argv[])
         win::writeStderr(toConsole(QStringLiteral("flowkeyd: %1\n\n").arg(*error)));
         win::writeStderr(toConsole(app::helpText(buildVersion)));
         return 2;
+    }
+
+    // 在线更新重启新实例时要原样转发的命令行参数：去掉程序名，以及 `--updated-from`
+    // （那一个由 `applyExecutableUpdate()` 按这次的新版本号自己加）。
+    QStringList restartArgs;
+    restartArgs.reserve(args.size());
+    for (qsizetype i = 1; i < args.size(); ++i) {
+        const QString &arg = args.at(i);
+        if (arg == QLatin1String("--updated-from")) {
+            ++i; // 连取值一起跳过
+            continue;
+        }
+        if (arg.startsWith(QLatin1String("--updated-from="))) {
+            continue;
+        }
+        restartArgs.append(arg);
     }
     if (options.showHelp) {
         win::writeStdout(toConsole(app::helpText(buildVersion)));
@@ -504,6 +522,11 @@ int main(int argc, char *argv[])
     // 由 Runtime 转发（动作跑在工作线程上）。
     app::PopupHost popupHost(&engine);
 
+    // 在线更新：只负责查 GitHub、下载、解压、把新 exe 落到 `<exe>.new`。
+    // 实时替换 exe 与重启在事件循环退出之后做（见文件末尾）。
+    app::Updater updater(buildVersion, win::currentExecutablePath());
+    popupHost.setUpdateModel(updater.model());
+
     app::Runtime runtime;
     runtime.setPopupHost(&popupHost);
     auto compiledPointer = std::make_shared<core::Compiled>(std::move(compiled));
@@ -553,8 +576,68 @@ int main(int argc, char *argv[])
                      });
     QObject::connect(&runtime, &app::Runtime::finished, &application, &QApplication::quit);
 
+    // ---- 在线更新（托盘菜单「检查更新」） ----
+    // 关掉窗口、中止下载、重试、打开发布页都只是把活儿转交给 `Updater`；
+    // 真正联网 / 解压 / 重启都在那边。
+    bool restartForUpdate = false;
+    QObject::connect(&tray, &platform::win::Tray::checkUpdateRequested, &updater,
+                     &app::Updater::checkForUpdates);
+    QObject::connect(&updater, &app::Updater::windowRequested, &popupHost,
+                     [&popupHost, &updater]() {
+                         app::UpdateRequest request;
+                         request.onInstall = [&updater]() { updater.startDownload(); };
+                         request.onDismiss = [&updater]() { updater.dismiss(); };
+                         request.onRetry = [&updater]() { updater.retry(); };
+                         request.onOpenRelease = [&updater]() { updater.openReleasePage(); };
+                         popupHost.requestUpdate(std::move(request));
+                     });
+    QObject::connect(&updater, &app::Updater::stagedReady, &runtime,
+                     [&runtime, &restartForUpdate]() {
+                         // 更新已经下好、校验通过。先把「更新已就绪，正在重启」
+                         // 留在屏幕上一小会儿，再走那条干净的退出路径。
+                         restartForUpdate = true;
+                         QTimer::singleShot(500, &runtime, &app::Runtime::requestShutdownFromAnyThread);
+                     });
+
     tray.setBuildVersion(buildVersion);
     tray.show();
+
+    // 「重启完后通知用户更新成功」：这一条托盘气泡就是 Windows 的通知
+    // （`QSystemTrayIcon::showMessage` 在 Win10/11 上进通知中心）。
+    if (options.updatedFrom.has_value()) {
+        win::logInfo(QStringLiteral("started by the online update (was %1)").arg(*options.updatedFrom));
+        tray.showMessage(QStringLiteral("flowkeyd 更新成功"),
+                         QStringLiteral("已经更新到 %1（原 %2）。")
+                             .arg(buildVersion, *options.updatedFrom));
+    }
+
+    // 在线更新把旧 exe 改名成了 `<exe>.old`。那个文件是**上一个进程**的映像，
+    // 我们自己（新实例）删得掉，但它可能还在退出过程中，所以隔一会儿重试几次。
+    const QString executablePath = win::currentExecutablePath();
+    if (QFileInfo::exists(executablePath + QStringLiteral(".old"))) {
+        auto attempts = std::make_shared<int>(0);
+        auto *cleanupTimer = new QTimer(&application);
+        cleanupTimer->setInterval(700);
+        QObject::connect(cleanupTimer, &QTimer::timeout, &application,
+                         [cleanupTimer, attempts, executablePath]() {
+                             ++(*attempts);
+                             const bool removed = win::removeExecutableBackup(executablePath);
+                             if (!removed && *attempts < 20) {
+                                 return;
+                             }
+                             cleanupTimer->stop();
+                             if (removed) {
+                                 win::logDebug(QStringLiteral(
+                                     "removed the previous executable %1.old")
+                                                   .arg(QDir::toNativeSeparators(executablePath)));
+                             } else {
+                                 win::logWarn(QStringLiteral(
+                                     "could not remove %1.old yet; it will be cleaned up next time")
+                                                  .arg(QDir::toNativeSeparators(executablePath)));
+                             }
+                         });
+        cleanupTimer->start();
+    }
     if (options.logWindow) {
         logWindow.show();
     }
@@ -567,6 +650,43 @@ int main(int argc, char *argv[])
 
     const int code = QApplication::exec();
     runtime.shutdown();
+    int exitCode = code;
+    if (restartForUpdate && updater.hasStagedUpdate()) {
+        // 更新已经下好、校验过：现在是唯一会打断运行的一步（改名 + 启动新进程），
+        // 所以放在最后做。
+        //
+        // 单实例锁必须先放掉：新实例启动时会先看一眼「有没有同名实例在跑」，
+        // 不放手它会以为还有一个在运行、直接退出。
+        instance.reset();
+        win::UpdateInstallPlan plan;
+        plan.targetExecutable = executablePath;
+        plan.stagedExecutable = updater.stagedExecutable();
+        plan.restartArgs = restartArgs;
+        plan.currentVersion = buildVersion;
+        QString updateError;
+        if (win::applyExecutableUpdate(plan, &updateError)) {
+            win::logInfo(QStringLiteral("restarting as flowkeyd %1; the previous version %2 was "
+                                        "renamed to %3.old")
+                             .arg(updater.newVersion(), buildVersion,
+                                  QDir::toNativeSeparators(executablePath)));
+        } else {
+            win::logError(QStringLiteral("could not apply the update: %1").arg(updateError));
+            // 弹窗提醒用户（旧版本已经恢复回去了，手动重启即可）。
+            // `--no-prompt`（脚本 / 自动化）只记日志：一个没人点的模态框会把
+            // 进程吊在那里，而它这时已经卸了钩子、什么也做不了。
+            if (!options.noPrompt) {
+                QMessageBox box(QMessageBox::Warning,
+                                QStringLiteral("flowkeyd 更新失败"),
+                                QStringLiteral("在线更新没能完成，已经恢复成更新前的版本。\n"
+                                               "请手动重新启动 flowkeyd。\n\n%1")
+                                    .arg(updateError),
+                                QMessageBox::Ok);
+                box.setTextInteractionFlags(Qt::TextSelectableByMouse);
+                box.exec();
+            }
+            exitCode = 1;
+        }
+    }
     win::shutdownLogging();
-    return code;
+    return exitCode;
 }
