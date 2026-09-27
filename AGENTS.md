@@ -915,6 +915,9 @@ dir build\dist-release
 & build\dist-release\flowkeyd.exe --quit
 & $C --build --preset release
 Start-Process build\dist-release\flowkeyd.exe
+# 如果当前 shell **没有**提权（先自己测一下），就把最后一条换成计划任务：
+# `Start-Process` 会让守护进程自己 runas 弹 UAC，没人点就卡在那儿（见第 10 节）。
+# schtasks /Run /TN flowkeyd
 
 # 上面这套收尾 + 打包 + 上传 GitHub Release 一条命令做完（需要装好 gh 并登录）：
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\release.ps1
@@ -2856,10 +2859,26 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   这是个预先存在的小缺陷，不在本次自启任务的范围里，**没改**；
   要改就得给 core 一个不依赖 Qt 实例的 exe 目录来源（例如
   `core::setExeDirectory()`，由 main 从平台层传进去），两处调用点都得改。
-* **本机 agent 的 `powershell.exe` 是提权的**（`IsInRole(Administrator)` 为真，
-  实测能注册“最高权限”任务、能 `Stop-Process` 提权进程）。之前 AGENTS 里
-  “agent 的 shell 没有提权”的结论在这台机器上不成立；但**别依赖它**，
-  脚本里仍然要自己检查管理员。
+* **本机 agent 的 `powershell.exe` 是不是提权的，会变 —— 每次都自己测一下。**
+  2026-09 早期实测 `IsInRole(Administrator)` 为真（能注册“最高权限”任务、能
+  `Stop-Process` 提权进程），后来**同一个会话里实测到 False**：
+  所以不要拿它当真，写脚本/验证时先用 `Assert-Admin` 之类的检查站稳。
+  提权与否会直接改变“怎么拉起常驻实例”的做法：
+  * 提权时：`Start-Process build\dist-release\flowkeyd.exe`（或
+    `Start-Process -Verb RunAs`）；
+  * **不提权时千万不要**用上面那条 —— 守护进程自己会 `ShellExecuteW("runas")`，
+    而没人点那个 UAC 框的话它会**一直卡在 `ShellExecuteW` 里**（`consent.exe`
+    留在屏幕上，还得用户手动取消）。正确做法是走已经注册好的计划任务：
+
+    ```powershell
+    & build\dist-release\flowkeyd.exe --quit      # 先停（不需要提权）
+    schtasks /Run /TN flowkeyd                    # 以最高权限拉起，不弹 UAC
+    ```
+
+    本任务收尾就是这么干的（`schtasks /Run` 退出码 0，日志里
+    `flowkeyd 26-09-27-96762cb starting` + `running elevated: …`）。
+    先停再 `schtasks /Run` 很重要：如果不先停，任务里的新实例会弹一个「已在运行」
+    的原生框，没人点就卡在那里。
 * **提权实例被强杀会留下幽灵托盘图标**（explorer 不会马上发现进程没了）。
   所以停实例优先 `--quit`；`Stop-Process -Force` 只当兜底，而且要在脚本里说明。
 
@@ -5071,9 +5090,16 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > `flowkeyd.lua.example`（无需改动，在线更新没有配置项）、
 > 第 2 / 3 / 4 / 5 / 10 / 13 / 14 节已同步。
 >
-> 收尾：本记录（纯文档）与上一条 feature 提交之后各重建过一次两个 profile，
-> 常驻实例已按工作约定第 11 条 `--quit` → 构建 release → 从
-> `build\dist-release` 重新拉起（自启任务仍指向那个路径）。
+> 收尾：本记录（纯文档）与上一条 feature 提交之后各重建过一次两个 profile。
+> 常驻实例按工作约定第 11 条 `--quit` → 构建 release → 重新拉起；
+> 但**这一次 agent 的 shell 没有提权**（`IsInRole(Administrator)` 为 False，
+> 见第 10 节），所以“拉起”用的是已经注册好的计划任务
+> `schtasks /Run /TN flowkeyd`（不弹 UAC），日志里是
+> `flowkeyd 26-09-27-96762cb starting` + `running elevated: actions can drive
+> windows of elevated processes`，`31 hotkey(s), 0 remap(s), 4 window rule(s)`，
+> 自启任务仍指向 `build\dist-release\flowkeyd.exe`。
+> （第一次误用 `Start-Process` 时弹了一个 UAC 框、进程卡在 `ShellExecuteW` 里，
+> 已经停掉那个进程改用任务；这条已经写进第 10 节的“agent 的 shell 是不是提权的”。）
 
 ---
 
