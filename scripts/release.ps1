@@ -93,26 +93,62 @@ function Step([string]$text) { Write-Host ''; Write-Host "== $text" -ForegroundC
 function Info([string]$text) { Write-Host "   $text" }
 function Warn([string]$text) { Write-Host "   warning: $text" -ForegroundColor Yellow }
 
-# 控制台程序（git / cmake / ctest / gh）：实时输出，退出码非 0 就抛。
+# 原生命令都套一层小助手：`$ErrorActionPreference = 'Stop'` 下，原生命令往 stderr
+# 写一个字就会被 PowerShell 包成**终止性异常**（`git push` 那次就是这么被打断的，
+# 把脚本输出重定向到文件时尤其容易撞上），而 cmake / ninja / git / gh 正常都会
+# 往 stderr 写警告。所以调用期间把 EAP 临时切成 `Continue`，调用完再切回来 ——
+# 判定只看退出码。
+
+# 实时输出（构建 / ctest / gh），退出码非 0 就抛。
 function Invoke-Live {
     param([string]$Exe, [string[]]$ArgList)
     Info "> $Exe $($ArgList -join ' ')"
-    & $Exe @ArgList
-    if ($LASTEXITCODE -ne 0) {
-        throw "$Exe exited with code $LASTEXITCODE ($($ArgList -join ' '))"
+    $saved = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $Exe @ArgList
+        $code = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $saved
+    }
+    if ($code -ne 0) {
+        throw "$Exe exited with code $code ($($ArgList -join ' '))"
     }
 }
 
-# 控制台程序：捕获输出（`git rev-parse`、`git ls-remote`、`gh release view`……）。
-# 注意返回值**每行一项**，调用方一律用 `@(...)[0]` 取第一行：PowerShell 的函数
-# 返回单个元素时会把数组拆掉，直接下标会落到“字符串的第一个字符”上。
+# 捕获输出（`git rev-parse`、`git ls-remote`、`schtasks /XML`、`gh release view`…），
+# 退出码非 0 就抛。注意返回值**每行一项**，调用方一律用 `@(...)[0]` 取第一行：
+# PowerShell 的函数返回单个元素时会把数组拆掉，直接下标会落到“字符串的第一个
+# 字符”上。
 function Invoke-Capture {
     param([string]$Exe, [string[]]$ArgList)
-    $lines = & $Exe @ArgList 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw "$Exe exited with code $LASTEXITCODE ($($ArgList -join ' '))"
+    $saved = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $lines = @(& $Exe @ArgList 2>&1 | ForEach-Object { "$_".Trim() })
+        $code = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $saved
     }
-    return @($lines | ForEach-Object { "$_".Trim() })
+    if ($code -ne 0) {
+        throw "$Exe exited with code $code ($($ArgList -join ' '))"
+    }
+    return $lines
+}
+
+# 只关心成败、不要输出（`git rev-parse --git-dir`、`gh auth status`、
+# `git merge-base --is-ancestor`、`schtasks`）：返回退出码。`-Stream` 让它把输出
+# （含 stderr）照常打出来，用于 `git push` 这种要看现场的命令。
+function Test-Native {
+    param([string]$Exe, [string[]]$ArgList, [switch]$Stream)
+    $saved = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        if ($Stream) { & $Exe @ArgList } else { & $Exe @ArgList 2>&1 | Out-Null }
+        return $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $saved
+    }
 }
 
 # GUI 子系统的 exe（flowkeyd 自己）：用 `& exe` 调用时 PowerShell **不等它、
@@ -147,8 +183,7 @@ function Assert-Tools {
     if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
         throw 'git not found on PATH'
     }
-    & git rev-parse --git-dir > $null 2>&1
-    if ($LASTEXITCODE -ne 0) {
+    if ((Test-Native -Exe 'git' -ArgList @('rev-parse', '--git-dir')) -ne 0) {
         throw "$here is not a git repository"
     }
     if ($SkipUpload) {
@@ -158,8 +193,7 @@ function Assert-Tools {
     if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
         throw 'GitHub CLI (gh) not found. Install it first: scoop install gh   (or: winget install GitHub.cli)   then run: gh auth login'
     }
-    & gh auth status > $null 2>&1
-    if ($LASTEXITCODE -ne 0) {
+    if ((Test-Native -Exe 'gh' -ArgList @('auth', 'status')) -ne 0) {
         throw 'gh is installed but not logged in; run: gh auth login'
     }
     Info 'gh is installed and logged in'
@@ -197,8 +231,7 @@ function Assert-GitState {
     }
     $contained = $false
     if ($remoteSha) {
-        & git merge-base --is-ancestor $script:head $remoteSha > $null 2>&1
-        $contained = ($LASTEXITCODE -eq 0)
+        $contained = ((Test-Native -Exe 'git' -ArgList @('merge-base', '--is-ancestor', $script:head, $remoteSha)) -eq 0)
     }
     if ($contained) {
         Info "HEAD $($script:shortHead) is already contained in origin/$branch"
@@ -220,9 +253,9 @@ function Assert-GitState {
 function Push-Branch {
     param([string]$Branch)
     Info "> git push origin $Branch"
-    & git push origin $Branch
-    if ($LASTEXITCODE -eq 0) { return }
-    Warn "git push exited with code $LASTEXITCODE; retrying with gh's credential helper"
+    $code = Test-Native -Exe 'git' -ArgList @('push', 'origin', $Branch) -Stream
+    if ($code -eq 0) { return }
+    Warn "git push exited with code $code; retrying with gh's credential helper"
     if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
         throw 'git push failed and gh is not available to provide credentials'
     }
@@ -270,15 +303,14 @@ function Restore-Resident {
     }
     Step 'restarting the resident instance'
 
-    & schtasks /Query /TN flowkeyd > $null 2>&1
-    if ($LASTEXITCODE -ne 0) {
+    if ((Test-Native -Exe 'schtasks' -ArgList @('/Query', '/TN', 'flowkeyd')) -ne 0) {
         Warn 'the scheduled task `flowkeyd` is not registered'
         Warn "start it yourself, e.g.: Start-Process -Verb RunAs `"$distExe`""
         return
     }
 
     # 任务指向的 exe 与刚打包的那份不一致时提醒一下（守护进程下次启动会自己刷新）。
-    $xml = @(& schtasks /Query /TN flowkeyd /XML 2>&1 | ForEach-Object { "$_" }) -join "`n"
+    $xml = (Invoke-Capture -Exe 'schtasks' -ArgList @('/Query', '/TN', 'flowkeyd', '/XML')) -join "`n"
     if ($xml -match '<Command>(.*?)</Command>') {
         $taskExe = $Matches[1].Trim()
         if (-not [string]::Equals($taskExe, $distExe, [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -287,8 +319,7 @@ function Restore-Resident {
     }
 
     Info '> schtasks /Run /TN flowkeyd'
-    & schtasks /Run /TN flowkeyd > $null 2>&1
-    if ($LASTEXITCODE -ne 0) {
+    if ((Test-Native -Exe 'schtasks' -ArgList @('/Run', '/TN', 'flowkeyd')) -ne 0) {
         Warn 'schtasks /Run failed (it needs administrator rights for a highest-privilege task)'
         Warn "start it yourself, e.g.: Start-Process -Verb RunAs `"$distExe`""
         return

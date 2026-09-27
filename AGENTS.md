@@ -4564,6 +4564,57 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > 按工作约定第 11 条：常驻实例已 `--quit` → 构建 release → 从
 > `build\dist-release` 重新拉起（自启任务仍指向那个路径）。
 
+> **2026-09 新增（`scripts/release.ps1`：构建 + 打包 + 上传 GitHub Release）的 DoD**：
+> `windows-debug` 与 `windows-release` 都是 `build exit 0`、零编译警告
+> （release 里那句 `dxcompiler.dll` 是 `windeployqt` 自己的提示）；
+> 单元测试由脚本自己跑：`ctest --test-dir build/windows-debug` **24 个测试目标全绿**；
+> `flowkeyd --check --config flowkeyd.lua.example` → `OK (46 hotkey(s), 3 remap(s),
+> 7 window rule(s))`、零警告。
+> 实测（本机早已装好 `gh` 并登录为 `xingjianxu`，所以上传链路这次是真的跑通的）：
+> * `-AllowDirty -SkipUpload`（当时还没提交）跑通整条链路：停常驻（pid 30532，
+>   日志 `flowkeyd: … exited`）→ debug + `ctest`（24/24）→ release（`ninja:
+>   no work to do`）→ 检查 `build/dist-release`（1378 个文件 / 149.8 MB，没有
+>   `tst_*.exe`/`CMakeCache.txt` 那类东西）→ 读版本 `26-09-24-0e33ae9` → 打包
+>   `flowkeyd-26-09-24-0e33ae9-windows-x64.zip`（51.3 MB）+ `.sha256` →
+>   `schtasks /Run /TN flowkeyd` 把常驻拉回来（pid 26664）。
+>   把那个 zip 解到临时目录、把 `PATH` 清成 `C:\Windows\System32;C:\Windows`
+>   （模拟“拷到别的机器上”）之后，`--version` → `flowkeyd 26-09-24-0e33ae9`、
+>   `--check --config` → `OK (46 hotkey(s), 3 remap(s), 7 window rule(s))`：
+>   **包确实是自包含、可以直接跑的**。
+> * 两个拒绝路径都验过：工作区脏时 `FAILED: the working tree is dirty …`、
+>   HEAD 没推时 `FAILED: HEAD d4735f7 is not pushed to origin/master …`；
+>   两者都**没有碰常驻实例、也没有构建**。
+> * **正式发布一次**：提交 `d79313b`（脚本 + README/AGENTS 文档）→
+>   `scripts/release.ps1 -Push` 一路跑完（停常驻 → debug + `ctest` 24/24 →
+>   release 重新链接（`-- flowkeyd: source revision d79313b`）→ 打包 51.3 MB →
+>   上传 → 拉回常驻 pid 31868），产出
+>   **https://github.com/xingjianxu/flowkeyd/releases/tag/v26-09-27-d79313b**
+>   （tag 就是构建版本号；资产是 zip + `.sha256`，`gh release view` 显示两个资产
+>   都是 `uploaded`；`gh release download --pattern '*.sha256'` 拿回来的哈希与本地
+>   zip 的 SHA-256 一致：`a2b62177…`）。
+> * `-Push` 的兜底也真的用上了：agent 的非交互 shell 里 `git push` 先以
+>   `Unable to persist credentials with the 'wincredman' credential store`
+>   失败（退出码 128），脚本按设计**自动改用 gh 的凭证助手**
+>   （`git -c credential.helper= -c credential.helper=!gh auth git-credential
+>   push origin master`）才推上去 —— 这条兜底因此不是纸上谈兵。
+> * 修了一个真实的 bug（这次是自己撞出来的）：`$ErrorActionPreference = 'Stop'` 下
+>   原生命令往 stderr 写一个字就会被 PowerShell 包成**终止性异常**，于是把脚本输出
+>   重定向到文件（`... -File scripts\release.ps1 ... > log.txt`）时，第一次 `git push`
+>   的失败信息直接把脚本打断，`-Push` 的 gh 兜底根本没机会跑（日志里只有
+>   `FAILED: fatal: Unable to persist credentials…`）。现在 cmake / ctest / git / gh /
+>   schtasks 全部走三个小助手（`Invoke-Live` / `Invoke-Capture` / `Test-Native`）：
+>   调用期间把 EAP 临时切回 `Continue`、只看退出码，所以重定向下也照常跑完。
+>   修完重跑 `-Push -SkipUpload`（输出故意重定向到文件）验证：plain push 失败 →
+>   自动换 gh 的凭证助手 → 推上去 → debug + `ctest` → release → 打包 → 拉回常驻。
+>   注意：首次发布（`v26-09-27-d79313b`）那个 tag 里的脚本是**修之前**的版本；
+>   发布资产（exe + Qt/MinGW 运行时）不受影响，后续发布用的就是修好的版本。
+> 行为变化：新增 `scripts/release.ps1`（见第 5 节与代码地图）。唯一的新前置依赖是
+> `gh`，只在“发布”这一步用：构建、测试、运行都不需要它（`-SkipUpload` 在没有 gh
+> 的机器上也能打包）。没测到的分支只有 `-SkipResident` / `-SkipTests` / `-Draft` /
+> `-Prerelease` / `-Clobber` / `-Notes`（都是“少做一件事”或透传给 `gh` 的开关）。
+> 本次没有动钩子/引擎/分发/窗口后端，所以按第 11 节第 3 条没有重跑
+> `scripts/acceptance.ps1`。
+
 ---
 
 ## 12. 本期不做的（有意留白）与后续工作
