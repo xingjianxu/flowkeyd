@@ -4858,6 +4858,9 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > 那个路径）。
 > 行为变化：每次发布多传两个资产（完整包 + 精简包，各带 `.sha256`），包内多一份
 > `README.txt`；README 的「发布」一节、本文件第 4 / 5 / 10 / 13 节已同步。
+> 收尾说明：本记录（纯文档）是**发布之后**的提交，按本文件“不想动二进制就别在
+> 提交之后再构建”的约定**没有**重新构建，所以常驻实例跑的正是已发布的那一份
+> （`26-09-27-95f40ac`，与 GitHub 上的资产逐字节相同），行为与最新提交一致。
 > **这次学到的一条（写 PowerShell 脚本时很值）**：用 PowerShell 5.1 接一个原生
 > 命令的 **UTF-8 标准输出**（这里是 `gh release view --json body`）会把中文按
 > 控制台代码页（本机 GBK）解码成乱码 —— 一度让我以为发布说明写坏了；把 gh 的
