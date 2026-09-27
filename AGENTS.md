@@ -5009,6 +5009,74 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 
 ---
 
+> **2026-09 新增（托盘菜单在线更新：查 GitHub Release → 换 exe → 重启 → 通知成功）
+> 的 DoD**：项目所有者要求「任务栏右键菜单里加在线更新（可以依赖已有的 GitHub
+> 发版机制）；弹出更新窗口里有新版本号与主要更新内容；确认后有进度条；
+> 更新完自动重启；重启完用 Windows 通知告诉用户成功」。
+>
+> 两个 profile 都是 **build exit 0、零编译警告**（`source revision ee31497`；
+> release 里那两句 `dxcompiler.dll` 是 `windeployqt` 自己的提示）；
+> `ctest --test-dir build/windows-debug` **27 个测试目标全绿**
+> （新增 `tst_update` 15 项、`tst_update_model` 10 项、`tst_update_install` 4 项）。
+> `flowkeyd --check --config flowkeyd.lua.example` →
+> `OK (46 hotkey(s), 3 remap(s), 7 window rule(s))`、零警告；
+> `--version` → `flowkeyd 26-09-27-ee31497` + `Lua 5.5.1`。
+>
+> **真机验证（联网，真的去 GitHub）**：
+> `FLOWKEYD_ALLOW_NETWORK_TESTS=1 build\windows-debug\tst_interactive.exe
+> checksAndDownloadsAnUpdateFromGitHub` → PASS，3.6 秒。日志：
+> `update check: latest release is 26-09-27-95f40ac (current 20-01-01-0000000)` →
+> `26-09-27-95f40ac is available (flowkeyd-26-09-27-95f40ac-slim-windows-x64.zip,
+> 672254 bytes)` → `update download: sha256 verified
+> (653e3839c450651cb6feddc7bb2120b5c7ff8da7a3dd5fc1ce0c56b8dc1269fd)` ——
+> 这个哈希与 GitHub 上那个资产的 `digest` 逐字相符，也就是说 **HTTPS（精简后的
+> 运行时里的 Schannel 插件）、JSON、资产挑选、下载、sha256、zip 解压** 整条路
+> 都是通的。
+>
+> **真机验证（一次性的“本地假 GitHub”沙箱 E2E，见第 10 节）**：用一个
+> `HttpListener` 发一份假的 `releases/latest`（版本 `26-09-28-9999999`）与一个装着
+> 自家 release 构建的 slim zip，把一个从 `build\dist-release` 拷出来的临时实例
+> 指向它。日志完整地走完了：
+> `update check: 26-09-28-9999999 is available` → `sha256 verified` →
+> `update download: 26-09-28-9999999 is ready at …\flowkeyd.exe.new` →
+> `restarting as flowkeyd 26-09-28-9999999; the previous version 26-09-27-331db71 was
+> renamed to …\flowkeyd.exe.old` → （新实例）`flowkeyd 26-09-28-331db71 starting` +
+> `started by the online update (was 26-09-27-331db71)` →
+> `removed the previous executable …\flowkeyd.exe.old`。收尾状态：
+> **目标 exe 的 SHA-256 与 zip 里那份完全相同**、`.old` 与 `.new` 都不在了、
+> 沙箱进程 1 个、`--quit` 干净退出。
+> 顺带免费验证了回滚：另一次跑里“新版本”是 GitHub 上那个**还不认**
+> `--updated-from` 的旧构建，它在 2.5 秒内以退出码 2 退出，产品正确回滚：
+> `could not apply the update: the restarted flowkeyd exited immediately (code 2);
+> the previous executable was restored`，日志里也确认了旧 exe 被换回来。
+>
+> `scripts/acceptance.ps1`（只跑 release 产物）**119 项、0 失败**（与上次持平：
+> 脚本本身没动，但它跑的那个 exe 现在多了第四个预热窗口与 `Qt6::Network`）。
+> 其中“启动日志里没有弹窗 QML 加载错误”那条哨兵现在也盯着 `UpdatePopup.qml`
+> （启动日志里能看到 `popup `update` preloaded in … ms`）。
+> qmllint 对 `src/qml/UpdatePopup.qml` 零警告。
+>
+> 尺寸与内存：`build/dist-release` **212 个文件 / 63.0 MB**（上次 211 / 63.0 MB，
+> 多出来的那一个是 **`tls/qschannelbackend.dll`**，见下）；四个预热窗口都在时
+> release 常驻实例的工作集 **~140 MB**（上次三个窗口是 ~128 MB；`--log-window`
+> 的对照组仍是 ~157 MB）。
+>
+> 行为变化：托盘菜单多了 *检查更新(&U)...*；新增第四个 QML 卡片
+> `UpdatePopup.qml`（同样预热、同样 `Qt.Tool`）；新增内部参数
+> `--updated-from <V>`；`cmake/PruneRuntime.cmake` 不再整个删 `tls/`，而是留下
+> Windows 自带的 Schannel 后端（否则 https 起不来）；依赖多了 `Qt6::Network`
+> 与 Qt 私有的 `Qt6::CorePrivate`（后者只为 `QZipReader`，见第 2 节第 25 条）；
+> 更新失败时如果带 `--no-prompt` 就只记日志，不弹那个模态框。
+> README（新增「在线更新」一节、命令行、已知限制、验证、路线图）、
+> `flowkeyd.lua.example`（无需改动，在线更新没有配置项）、
+> 第 2 / 3 / 4 / 5 / 10 / 13 / 14 节已同步。
+>
+> 收尾：本记录（纯文档）与上一条 feature 提交之后各重建过一次两个 profile，
+> 常驻实例已按工作约定第 11 条 `--quit` → 构建 release → 从
+> `build\dist-release` 重新拉起（自启任务仍指向那个路径）。
+
+---
+
 ## 12. 本期不做的（有意留白）与后续工作
 
 按项目所有者的决定，**本期不做**下面这些；它们是明确的待办，不是遗忘：
