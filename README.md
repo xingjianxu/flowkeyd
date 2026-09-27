@@ -139,6 +139,36 @@ $C = 'C:\Qt\Tools\CMake_64\bin\cmake.exe'
 就整个拷 `build\dist-release\`**：目标机器不需要装 Qt。
 `CMakePresets.json` 里写死了本机的 Qt / MinGW / Ninja 路径，换机器时改那里。
 
+### 发布（打包 + 上传 GitHub Release）
+
+仓库里带了一个发布脚本，把这套活儿一条命令做完：构建（debug + `ctest` + release）
+→ 把 `build/dist-release` 打成一个 zip 并附上 sha256 → 用
+[GitHub CLI](https://cli.github.com/)（`gh`）建一个 GitHub Release 并把资产传上去。
+
+```powershell
+# 只需要做一次：装 gh 并登录（浏览器登录，不用手填 token）
+scoop install gh        # 或 winget install GitHub.cli
+gh auth login
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\release.ps1
+```
+
+* tag 取**刚构建出来的那个 exe** 的版本号（`--version` 的第一行），例如
+  `v26-09-24-0e33ae9`；资产是 `flowkeyd-<版本>-windows-x64.zip` 与
+  `flowkeyd-<版本>-windows-x64.zip.sha256`（后者是 `sha256sum -c` 认的格式）。
+  zip 里是一个同名目录，解压后直接跑 `flowkeyd.exe` 就行。
+* 常驻实例会**短暂停掉**（它锁着 `build\dist-release\flowkeyd.exe`，不停掉链接
+  会失败）：构建开始前 `flowkeyd.exe --quit`，收尾时（**包括中途失败**）
+  `schtasks /Run /TN flowkeyd` 把它拉回来 —— 走计划任务，不弹 UAC。
+  不想让它动常驻实例就加 `-SkipResident`；停了不拉回是 `-LeaveStopped`。
+* 工作区脏、或 HEAD 还没推到 origin 时脚本**直接拒绝**（版本号里的 git 修订就是
+  构建时的 HEAD，脏的工作区会让包和 tag 对不上）：先把改动提交并推送，或者显式
+  给 `-AllowDirty` / `-Push`。
+* 其余开关：`-SkipUpload`（只打包，不需要 gh）、`-SkipBuild`（用现有的
+  `build/dist-release`，不碰常驻实例）、`-SkipTests`（跳过 debug + `ctest`）、
+  `-Draft` / `-Prerelease`、`-Notes <文本>` / `-NotesFile <文件>`（默认让 `gh`
+  自动生成说明）、`-Clobber`（tag 已存在时覆盖同名资产）。
+
 **构建产物是自包含的**：每次链接完 `flowkeyd` 之后会自动跑一次 `windeployqt`，
 把 Qt 与 MinGW 的运行时 DLL、以及 exe 用到的 QML 模块（`QtQuick`、
 `QtQuick.Controls.FluentWinUI3`……）拷到产物目录。所以

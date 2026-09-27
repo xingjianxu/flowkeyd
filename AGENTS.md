@@ -725,6 +725,7 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `src/qml/`                                | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`、`SwitchPopup.qml`（四个文件都在开头写了 `pragma ComponentBehavior: Bound`）；**三个弹窗的 `flags` 都带 `Qt.Tool`**（= `WS_EX_TOOLWINDOW`，不进任务栏/`Alt+Tab`；日志窗口故意不加，见第 2 节第 23 条）；配色一律用 `palette`，没有单独的 `Style.qml`；中文一律 `font.family: "Microsoft YaHei"`（默认族 `Segoe UI Variable` 没有中文字形，不管会回退到宋体，见第 10 节）。`HelpPopup.qml` 与 `MenuPopup.qml` 里除了卡片外框与按键徽标全是标准控件：帮助的筛选框是 `TextField`、列表是 `ListView` + Qt 自带 `ScrollBar` + `ItemDelegate`（列表只占行区域，不再需要表头/底部的遮罩）；选单的列表同样是 `ListView` + `ItemDelegate`（不滚动，所以没有滚动条；悬停与点击全部由委托提供）；窗口切换器（`SwitchPopup.qml`）与帮助同一套骨架，每行显示窗口标题 + 进程名（数字选择模式下行首还有一个数字冒标）；**它没有标题行**，`ListView` 的 `x`/`width` 直接用 `filterRect`（与筛选框同宽），筛选框拿到焦点时会调 `host.switchUseEnglishInput()`（见第 2 节第 24 条） |
 | `tests/`                                  | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_log_tail`、`tst_audio`、`tst_autostart`（自启的纯逻辑：XML 渲染/解析、输出解码、路径比较；**不碰真实计划任务**）、`tst_interactive`（需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`，否则 skip；含剪贴板/音量/窗口后端/虚拟桌面/钉在所有桌面/置顶/输入法切换的真机验证）、`tst_menu_model`、`tst_help_model`、`tst_window_list_model`（窗口切换器的纯逻辑：进程名前缀筛选、标题不参与、唯一匹配自动激活、`Enter`/`Esc`、悬停高亮、没有标题行的几何与窗口标题）、`tst_power_table`、`tst_desktop_table`、`tst_placement`（`window_rule` 的纯逻辑：显示器排序/选择、重连检测、摆放几何、匹配与摘要）、`tst_layout`、`tst_version`（构建时间戳与版本字符串的纯逻辑；只碰临时文件）、`tst_desktop_badge`（托盘数字徽标的文字与字号） |
 | `scripts/acceptance.ps1`                  | 桌面行为的验收脚本（注入按键 + 焦点捕捉窗口的外部观察，118 项检查：含弹窗滚轮/滚动条拖动/鼠标点选与点筛选框/鼠标点选单条目/`Enter` 与双击真的执行动作/危险动作两次确认/两个弹窗不在任务栏里）；需交互式桌面，**不属于 `ctest`**，见第 5 节与阶段 9。它用 `--no-elevate` 起临时守护进程，所以**不会**碰真实的自启计划任务 |
+| `scripts/release.ps1`                     | 发布脚本（**2026-09 新增**）：构建 release（默认连 debug + `ctest` 一起跑）、把 `build/dist-release` 打成一个 zip（附 `.sha256`）、用 GitHub CLI（`gh`）上传到 GitHub Release。tag 取**刚构建出来的那个 exe** 的 `--version`（形如 `v26-09-24-0e33ae9`），资产是 `flowkeyd-<版本>-windows-x64.zip` + 它的 `.sha256`。要**构建**时先 `flowkeyd.exe --quit` 停掉常驻实例，收尾（**包括中途失败**）用 `schtasks /Run /TN flowkeyd` 拉回来；`-SkipBuild`（用现有产物、不碰常驻）/`-SkipResident`/`-SkipUpload` 各自关掉那一段。工作区脏或 HEAD 没推到 origin 会**直接拒绝**（要 `-AllowDirty`/`-Push`）。**唯一的新前置依赖是 `gh`**（`scoop install gh` + `gh auth login`），只在发布那一步用到。见第 5 节与第 11 节的 DoD 记录 |
 
 > `scripts/install.ps1` / `scripts/uninstall.ps1` **已删除**（2026-09）：自启的注册、
 > 刷新与删除现在全在 `src/platform/win/autostart.*` 里，由守护进程自己在启动时做。
@@ -841,6 +842,9 @@ dir build\dist-release
 & build\dist-release\flowkeyd.exe --quit
 & $C --build --preset release
 Start-Process build\dist-release\flowkeyd.exe
+
+# 上面这套收尾 + 打包 + 上传 GitHub Release 一条命令做完（需要装好 gh 并登录）：
+#   powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\release.ps1
 ```
 
 **任务收尾只需要保证 `build/dist-release/` 是最新发布包**（工作约定第 11 条）：
@@ -850,6 +854,23 @@ release 构建的 `POST_BUILD` 会自动把干净的发布产物写到那里（�
 `C:\Program Files\flowkeyd`”方案已经删掉**（`install.ps1` 不复存在）。
 常驻实例从 `build/dist-release` 跑的时候，重建前要先 `--quit`（正在跑的 exe 锁着），
 构建完再拉起；`ninja: no work to do` 的纯文档任务什么都不用做。
+
+**要发布（打包 + 上传 GitHub Release）时用 `scripts/release.ps1`**（2026-09 新增）：
+它把上面那套「停常驻 → debug + `ctest` → release → 重新拉起」连打包、算 sha256、
+上传一起做完：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\release.ps1
+powershell.exe ... -SkipUpload     # 只打包不上传（不需要 gh）
+powershell.exe ... -SkipBuild      # 用现有的 build/dist-release（不碰常驻实例）
+```
+
+tag 取刚构建出来的那个 exe 的 `--version`（形如 `v26-09-24-0e33ae9`），资产是
+`flowkeyd-<版本>-windows-x64.zip` 与 `flowkeyd-<版本>-windows-x64.zip.sha256`。
+工作区脏、或 HEAD 没推到 origin 时脚本**直接拒绝**（要 `-AllowDirty` / `-Push`
+才行）：版本号里的 git 修订就是构建时的 HEAD（第 2 节第 12 条），脏工作区打出来的
+包与 tag 对不上。**唯一的新前置依赖是 `gh`**（`scoop install gh` +
+`gh auth login`），只在发布那一步用，构建与测试都不需要它。
 
 **debug 与 release 两个 profile 都必须编译通过，这是每个任务（包括纯文档任务）
 的硬性要求。** 理由：release 走的是完全不同的优化与链接路径
