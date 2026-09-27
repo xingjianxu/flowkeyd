@@ -19,14 +19,34 @@
 )
 
 # =============================================================================
-# flowkeyd 的发布脚本：构建 release -> 把 build/dist-release 打成一个 zip ->
-# 生成 sha256 -> 用 GitHub CLI（gh）上传到 GitHub Release。
+# flowkeyd 的发布脚本：构建 release -> 把 build/dist-release 打成两个 zip ->
+# 各生成一份 sha256 -> 用 GitHub CLI（gh）上传到 GitHub Release。
 #
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\release.ps1
 #   powershell.exe ... -SkipUpload              # 只打包，不上传（先看一眼产物）
 #   powershell.exe ... -SkipBuild               # 用现有的 build/dist-release 打包
 #   powershell.exe ... -NotesFile notes.md      # 自定义说明（默认让 gh 自己生成）
 #   powershell.exe ... -Draft -Prerelease       # 建草稿 / 标成预发布
+#
+# ### 两个包：完整包 + 精简包
+#
+# 同一份 build/dist-release 打两个 zip，一次发布都传上去：
+#
+#   * 完整包 `flowkeyd-<版本>-windows-x64.zip`：dist 原样 —— flowkeyd.exe 加上
+#     windeployqt / PruneRuntime.cmake 部署的 Qt 与 MinGW 运行时（约 63 MB）。
+#     **第一次安装**的人下这个，解压出来就能跑。
+#   * 精简包 `flowkeyd-<版本>-windows-x64-slim.zip`：只放**每次构建都会变**的
+#     文件，也就是 flowkeyd.exe（外加一份 README.txt，约 2 MB 压完更小）。
+#     **已经在用 flowkeyd 的人升级**只需要它：解压出来的 exe 覆盖到原来的目录
+#     即可，那几十 MB 在版本之间不变的运行时不用重下一次。
+#
+# 哪些文件算“每次都会变”、哪些算“不变化的依赖”，写在下面的 $SlimFiles /
+# $DependencyPatterns 里。分类是**白名单 + 兜底报错**：dist 里出现两边都不认识
+# 的文件时脚本直接失败，逼着人当场决定它属于哪一边 —— 新加的东西既不会悄悄
+# 漏进精简包、也不会悄悄漏出完整包（见 AGENTS.md 第 10 节）。
+#
+# 精简包在打包后会逐条目检查一遍（用的是 zip 里的条目名）：只允许出现
+# $SlimFiles 那几项加一份 README.txt，且 exe 与 dist 里的那个 SHA-256 相同。
 #
 # ### 需要先装好的东西（脚本会自己检查，缺了会直接告诉你）
 #
@@ -87,6 +107,35 @@ $script:head = ''
 $script:shortHead = ''
 $script:version = ''
 $script:tag = ''
+
+# --- 两个包怎么分（见文件头的「两个包：完整包 + 精简包」） -------------------
+#
+# 分类是白名单 + 兜底报错：dist 里出现两边都不认识的文件时直接失败，逼着人当场
+# 决定它属于哪一边。要加文件就在这里加。
+
+# 每次构建都会变的（进精简包）。相对 dist 根的路径，正斜杠，大小写无关。
+$script:SlimFiles = @(
+    'flowkeyd.exe'
+)
+
+# 一般不变、由 windeployqt + cmake/PruneRuntime.cmake 部署的依赖（只进完整包）。
+$script:DependencyPatterns = @(
+    'Qt6*.dll',                 # Qt 各模块（本仓库锁 6.11.x）
+    'lib*.dll',                 # MinGW 运行时（libstdc++ / libgcc / libwinpthread）
+    'platforms/*',              # Qt 平台插件（qwindows.dll）
+    'styles/*',                 # 原生控件样式
+    'imageformats/*',
+    'iconengines/*',
+    'qml/*',                    # QML 模块与样式（FluentWinUI3 / Basic / Fusion……）
+    'generic/*',
+    'networkinformation/*',
+    'tls/*',
+    'translations/*'
+)
+
+# Assert-DistIsClean 填这两个（相对路径，正斜杠）。
+$script:distSlimFiles = @()
+$script:distDependencyFiles = @()
 
 # --- 输出 ---
 function Step([string]$text) { Write-Host ''; Write-Host "== $text" -ForegroundColor Cyan }
@@ -334,6 +383,28 @@ function Restore-Resident {
     Warn 'the scheduled task was started but no flowkeyd process showed up yet'
 }
 
+# dist 里所有文件的相对路径（正斜杠），按目录递归。
+function Get-DistRelativeFiles {
+    return @(Get-ChildItem -LiteralPath $distRoot -Recurse -Force -File |
+        ForEach-Object { $_.FullName.Substring($distRoot.Length + 1).Replace('\', '/') })
+}
+
+function Test-SlimFile {
+    param([string]$RelPath)
+    foreach ($name in $script:SlimFiles) {
+        if ($RelPath -eq $name) { return $true }
+    }
+    return $false
+}
+
+function Test-DependencyFile {
+    param([string]$RelPath)
+    foreach ($pattern in $script:DependencyPatterns) {
+        if ($RelPath -like $pattern) { return $true }
+    }
+    return $false
+}
+
 function Assert-DistIsClean {
     Step "checking $DistDir"
     if (-not (Test-Path -LiteralPath $distExe)) {
@@ -358,28 +429,177 @@ function Assert-DistIsClean {
     $files = @(Get-ChildItem -LiteralPath $distRoot -Recurse -Force -File)
     $bytes = ($files | Measure-Object -Property Length -Sum).Sum
     Info ("{0} files, {1:N1} MB" -f $files.Count, ($bytes / 1MB))
+
+    # 把每个文件分到「精简包」或「不变依赖」里去；分不下去就报错。
+    $script:distSlimFiles = @()
+    $script:distDependencyFiles = @()
+    foreach ($rel in @(Get-DistRelativeFiles)) {
+        $slim = Test-SlimFile -RelPath $rel
+        $dep = Test-DependencyFile -RelPath $rel
+        if ($slim -and $dep) {
+            throw ('"' + $rel + '" is listed both in $SlimFiles and in $DependencyPatterns (scripts/release.ps1); it can only be one of the two')
+        }
+        if (-not $slim -and -not $dep) {
+            throw ('unclassified file in ' + $DistDir + ': "' + $rel + '". Decide which package it belongs to and list it in scripts/release.ps1: $SlimFiles (it changes on every build, so it goes into the slim package) or $DependencyPatterns (it is a stable runtime dependency, so it only goes into the full package)')
+        }
+        if ($slim) { $script:distSlimFiles += $rel } else { $script:distDependencyFiles += $rel }
+    }
+    if ($script:distSlimFiles.Count -eq 0) {
+        throw 'the slim package would be empty: $SlimFiles in scripts/release.ps1 must list at least one file'
+    }
+    Info ("slim package: {0} file(s) ({1}); stable dependencies: {2} file(s)" -f `
+            $script:distSlimFiles.Count, ($script:distSlimFiles -join ', '), $script:distDependencyFiles.Count)
 }
 
-function New-Package {
-    param([string]$Version)
-    Step 'staging the release package'
-    $stage = Join-Path $WorkDir "flowkeyd-$Version"
-    if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
-    New-Item -ItemType Directory -Force -Path $stage | Out-Null
-    Copy-Item -Path (Join-Path $distRoot '*') -Destination $stage -Recurse -Force
+# 包里的说明文件（完整包与精简包各一份，内容不同）。用带 BOM 的 UTF-8 写，
+# 免得别人的记事本之类把中文看成乱码。
+function Write-PackageReadme {
+    param([string]$Path, [string]$Kind, [string]$Version, [string]$SlimName)
+    if ($Kind -eq 'full') {
+        $text = @"
+flowkeyd $Version（Windows x64 完整包）
 
-    $zip = Join-Path $WorkDir "flowkeyd-$Version-windows-x64.zip"
+这是完整的发布包：flowkeyd.exe 加上它需要的 Qt 与 MinGW 运行时，
+整个目录拷到别的机器上就能跑（目标机器不需要装 Qt）。要求 Windows 10 或 11。
+
+* 第一次安装：把整个目录放到你想放的地方（例如 D:\Tools\flowkeyd），
+  双击 flowkeyd.exe 即可。首次运行会弹一次 UAC 用于自提权，
+  并问你要不要注册开机自启的计划任务。
+* 配置文件：%USERPROFILE%\.config\flowkeyd\config.lua
+  完整说明与参考配置见仓库里的 README.md 与 flowkeyd.lua.example。
+* 升级：不用重新下这个完整包。下载「$SlimName」
+  （精简包，里面只有 flowkeyd.exe），解压出来的 exe 覆盖到本目录即可。
+
+校验：同名 .sha256 文件里的哈希对应这个 zip（sha256sum -c 格式）。
+"@
+    } else {
+        $fullZip = "flowkeyd-$Version-windows-x64.zip"
+        $text = @"
+flowkeyd $Version 精简包（只用于升级，不要用来做首次安装）
+
+这个包里只有 flowkeyd.exe（和这份说明），**不含** Qt 与 MinGW 运行时：
+那几十 MB 的东西在版本之间不会变，第一次安装时下的完整包（$fullZip）
+里已经有了。
+
+用法：
+  1. 先让正在运行的实例退出：flowkeyd.exe --quit（或点托盘菜单里的“退出”），
+     否则 exe 被占用、覆盖不了。
+  2. 把这里解压出来的 flowkeyd.exe 覆盖到原来的安装目录。
+  3. 如果开机自启的计划任务原来就指向这个目录，什么都不用做；
+     重新跑一次 flowkeyd.exe 即可。
+
+如果你是第一次安装 flowkeyd，请下载完整包（$fullZip），而不是这个。
+
+校验：同名 .sha256 文件里的哈希对应这个 zip（sha256sum -c 格式）。
+"@
+    }
+    [System.IO.File]::WriteAllText($Path, $text, (New-Object System.Text.UTF8Encoding($true)))
+}
+
+# 打一个 zip，并在旁边写一份 `<zip>.sha256`（`sha256sum -c` 认的格式）。
+function New-ZipPackage {
+    param([string]$Stage, [string]$ZipName, [string]$Label)
+    $zip = Join-Path $WorkDir $ZipName
     if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
-    Info "compressing (Compress-Archive -CompressionLevel $Compression); this can take a while"
-    Compress-Archive -Path $stage -DestinationPath $zip -CompressionLevel $Compression
+    Info "compressing the $Label (Compress-Archive -CompressionLevel $Compression); this can take a while"
+    Compress-Archive -Path $Stage -DestinationPath $zip -CompressionLevel $Compression
 
     $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
-    $shaFile = "$zip.sha256"
-    $shaLine = "$hash  flowkeyd-$Version-windows-x64.zip`n"
-    [System.IO.File]::WriteAllText($shaFile, $shaLine, (New-Object System.Text.UTF8Encoding($false)))
-    Info ("zip:    {0} ({1:N1} MB)" -f $zip, ((Get-Item -LiteralPath $zip).Length / 1MB))
+    [System.IO.File]::WriteAllText("$zip.sha256", "$hash  $ZipName`n", (New-Object System.Text.UTF8Encoding($false)))
+    Info ("{0}: {1} ({2:N1} MB)" -f $Label, $zip, ((Get-Item -LiteralPath $zip).Length / 1MB))
     Info "sha256: $hash"
-    return @($zip, $shaFile)
+    return $zip
+}
+
+function Get-ZipEntryNames {
+    param([string]$Zip)
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $archive = [System.IO.Compression.ZipFile]::OpenRead($Zip)
+    try {
+        return @($archive.Entries | ForEach-Object { $_.FullName })
+    } finally {
+        $archive.Dispose()
+    }
+}
+
+# 从外面把精简包再查一遍（看的是 zip 里的条目名，不是暂存目录）：只允许
+# $SlimFiles 那几项加一份 README.txt。这是“Qt 的 dll 真的没被漏进去”的哨兵。
+function Assert-SlimZip {
+    param([string]$Zip, [string]$StageName)
+    $allowed = @("$StageName/README.txt")
+    foreach ($rel in $script:distSlimFiles) { $allowed += "$StageName/$rel" }
+    $entries = @(Get-ZipEntryNames -Zip $Zip | Where-Object { -not $_.EndsWith('/') })
+    $unexpected = @($entries | Where-Object { $allowed -notcontains $_ })
+    if ($unexpected.Count -gt 0) {
+        throw ('the slim package contains unexpected file(s): ' + ($unexpected -join ', ') + '. The slim package must only contain the files listed in $SlimFiles (plus README.txt)')
+    }
+    foreach ($rel in $script:distSlimFiles) {
+        if (@($entries | Where-Object { $_ -eq "$StageName/$rel" }).Count -ne 1) {
+            throw "the slim package does not contain $StageName/$rel"
+        }
+    }
+    Info ("slim package verified from the zip: {0} file(s): {1}" -f $entries.Count, ($entries -join ', '))
+}
+
+# 打两个包（完整包 + 精简包），返回要上传的资产列表。
+function New-Packages {
+    param([string]$Version)
+    Step 'staging the release packages'
+
+    $fullName = "flowkeyd-$Version"
+    $slimName = "flowkeyd-$Version-slim"
+
+    # 完整包：build/dist-release 原样 + 一份说明。
+    $fullStage = Join-Path $WorkDir $fullName
+    if (Test-Path -LiteralPath $fullStage) { Remove-Item -LiteralPath $fullStage -Recurse -Force }
+    New-Item -ItemType Directory -Force -Path $fullStage | Out-Null
+    Copy-Item -Path (Join-Path $distRoot '*') -Destination $fullStage -Recurse -Force
+    Write-PackageReadme -Path (Join-Path $fullStage 'README.txt') -Kind 'full' -Version $Version -SlimName "$slimName-windows-x64.zip"
+
+    # 精简包：只拷 $script:SlimFiles 列出来的那几个文件 + 一份说明。
+    $slimStage = Join-Path $WorkDir $slimName
+    if (Test-Path -LiteralPath $slimStage) { Remove-Item -LiteralPath $slimStage -Recurse -Force }
+    New-Item -ItemType Directory -Force -Path $slimStage | Out-Null
+    foreach ($rel in $script:distSlimFiles) {
+        $source = Join-Path $distRoot $rel.Replace('/', '\')
+        $target = Join-Path $slimStage $rel.Replace('/', '\')
+        $targetDir = Split-Path -Parent $target
+        if (-not (Test-Path -LiteralPath $targetDir)) { New-Item -ItemType Directory -Force -Path $targetDir | Out-Null }
+        Copy-Item -LiteralPath $source -Destination $target -Force
+    }
+    Write-PackageReadme -Path (Join-Path $slimStage 'README.txt') -Kind 'slim' -Version $Version -SlimName "$slimName-windows-x64.zip"
+
+    # 精简包里的可执行文件必须与 build/dist-release 的那个逐字节相同。
+    $distHash = (Get-FileHash -LiteralPath $distExe -Algorithm SHA256).Hash
+    foreach ($rel in $script:distSlimFiles) {
+        $staged = Join-Path $slimStage $rel.Replace('/', '\')
+        $stagedHash = (Get-FileHash -LiteralPath $staged -Algorithm SHA256).Hash
+        $sourceHash = (Get-FileHash -LiteralPath (Join-Path $distRoot $rel.Replace('/', '\')) -Algorithm SHA256).Hash
+        if ($stagedHash -ne $sourceHash) {
+            throw "the staged copy of $rel does not match the one in $DistDir"
+        }
+    }
+    Info ("slim package source exe: {0:N1} MB, sha256 {1}" -f ((Get-Item -LiteralPath $distExe).Length / 1MB), $distHash.ToLowerInvariant())
+
+    $fullZip = New-ZipPackage -Stage $fullStage -ZipName "$fullName-windows-x64.zip" -Label 'full package'
+    $slimZip = New-ZipPackage -Stage $slimStage -ZipName "$slimName-windows-x64.zip" -Label 'slim package'
+    Assert-SlimZip -Zip $slimZip -StageName $slimName
+
+    return @($fullZip, "$fullZip.sha256", $slimZip, "$slimZip.sha256")
+}
+
+# 自动生成的发布说明前面要加的一段：告诉下载的人两个包怎么选。
+#
+# 故意写成**一行**：这段文字是当命令行参数交给 gh 的，带换行的参数在
+# Windows 上要多绕一道（引号与换行符会不会被拆开取决于对方怎么解析命令行），
+# 一行就完全不用赌。
+function Get-PackageChoiceNotes {
+    param([string]$Version)
+    $full = "flowkeyd-$Version-windows-x64.zip"
+    $slim = "flowkeyd-$Version-windows-x64-slim.zip"
+    return ('**下载哪个包**：第一次安装用**完整包** `' + $full + '`（flowkeyd.exe 加上 Qt/MinGW 运行时，解压出来直接双击）；' +
+        '已经装过、只是想**升级**就用**精简包** `' + $slim + '`（里面只有 flowkeyd.exe），' +
+        '解压出来的 exe 覆盖到原来的目录即可（覆盖前先让正在运行的实例退出：`flowkeyd.exe --quit`）。两个包各带一份 `.sha256`。')
 }
 
 function Publish-Release {
@@ -407,7 +627,10 @@ function Publish-Release {
             [System.IO.File]::WriteAllText($notePath, $Notes, (New-Object System.Text.UTF8Encoding($false)))
             $ghArgs += @('--notes-file', $notePath)
         } else {
+            # gh 会把 `--notes` 的内容**加在自动生成的说明前面**（见 `gh release create --help`），
+            # 这样一进 release 页就看到“两个包怎么选”。
             $ghArgs += '--generate-notes'
+            $ghArgs += @('--notes', (Get-PackageChoiceNotes -Version $Version))
         }
         if ($Draft) { $ghArgs += '--draft' }
         if ($Prerelease) { $ghArgs += '--prerelease' }
@@ -471,7 +694,7 @@ try {
         Warn "the packaged exe was built from revision $rev but HEAD is $($script:shortHead); use -SkipBuild only if that is intentional"
     }
 
-    $assets = New-Package -Version $script:version
+    $assets = New-Packages -Version $script:version
 
     if ($SkipUpload) {
         Step 'upload skipped (-SkipUpload)'
@@ -491,9 +714,9 @@ try {
 
 if ($script:exitCode -eq 0) {
     if ($SkipUpload) {
-        Write-Host "   packaged flowkeyd $($script:version) (not uploaded)." -ForegroundColor Green
+        Write-Host "   packaged flowkeyd $($script:version) (full + slim, not uploaded)." -ForegroundColor Green
     } else {
-        Write-Host "   released flowkeyd $($script:version) as $($script:tag)." -ForegroundColor Green
+        Write-Host "   released flowkeyd $($script:version) as $($script:tag) (full + slim)." -ForegroundColor Green
     }
 }
 exit $script:exitCode

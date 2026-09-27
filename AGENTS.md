@@ -725,7 +725,7 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `src/qml/`                                | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`、`SwitchPopup.qml`（四个文件都在开头写了 `pragma ComponentBehavior: Bound`）；**三个弹窗的 `flags` 都带 `Qt.Tool`**（= `WS_EX_TOOLWINDOW`，不进任务栏/`Alt+Tab`；日志窗口故意不加，见第 2 节第 23 条）；配色一律用 `palette`，没有单独的 `Style.qml`；中文一律 `font.family: "Microsoft YaHei"`（默认族 `Segoe UI Variable` 没有中文字形，不管会回退到宋体，见第 10 节）。`HelpPopup.qml` 与 `MenuPopup.qml` 里除了卡片外框与按键徽标全是标准控件：帮助的筛选框是 `TextField`、列表是 `ListView` + Qt 自带 `ScrollBar` + `ItemDelegate`（列表只占行区域，不再需要表头/底部的遮罩）；选单的列表同样是 `ListView` + `ItemDelegate`（不滚动，所以没有滚动条；悬停与点击全部由委托提供）；窗口切换器（`SwitchPopup.qml`）与帮助同一套骨架，每行显示窗口标题 + 进程名（数字选择模式下行首还有一个数字冒标）；**它没有标题行**，`ListView` 的 `x`/`width` 直接用 `filterRect`（与筛选框同宽），筛选框拿到焦点时会调 `host.switchUseEnglishInput()`（见第 2 节第 24 条） |
 | `tests/`                                  | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_log_tail`、`tst_audio`、`tst_autostart`（自启的纯逻辑：XML 渲染/解析、输出解码、路径比较；**不碰真实计划任务**）、`tst_interactive`（需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`，否则 skip；含剪贴板/音量/窗口后端/虚拟桌面/钉在所有桌面/置顶/输入法切换的真机验证）、`tst_menu_model`、`tst_help_model`、`tst_window_list_model`（窗口切换器的纯逻辑：进程名前缀筛选、标题不参与、唯一匹配自动激活、`Enter`/`Esc`、悬停高亮、没有标题行的几何与窗口标题）、`tst_power_table`、`tst_desktop_table`、`tst_placement`（`window_rule` 的纯逻辑：显示器排序/选择、重连检测、摆放几何、匹配与摘要）、`tst_layout`、`tst_version`（构建时间戳与版本字符串的纯逻辑；只碰临时文件）、`tst_desktop_badge`（托盘数字徽标的文字与字号） |
 | `scripts/acceptance.ps1`                  | 桌面行为的验收脚本（注入按键 + 焦点捕捉窗口的外部观察，119 项检查：含弹窗滚轮/滚动条拖动/鼠标点选与点筛选框/鼠标点选单条目/`Enter` 与双击真的执行动作/危险动作两次确认/两个弹窗不在任务栏里/启动日志里没有 QML 加载错误）；需交互式桌面，**不属于 `ctest`**，见第 5 节与阶段 9。它用 `--no-elevate` 起临时守护进程，所以**不会**碰真实的自启计划任务（于是它验证的运行时就是精简过的发布包，见第 10 节“发布包精简”） |
-| `scripts/release.ps1`                     | 发布脚本（**2026-09 新增**）：构建 release（默认连 debug + `ctest` 一起跑）、把 `build/dist-release` 打成一个 zip（附 `.sha256`）、用 GitHub CLI（`gh`）上传到 GitHub Release。tag 取**刚构建出来的那个 exe** 的 `--version`（形如 `v26-09-24-0e33ae9`），资产是 `flowkeyd-<版本>-windows-x64.zip` + 它的 `.sha256`。要**构建**时先 `flowkeyd.exe --quit` 停掉常驻实例，收尾（**包括中途失败**）用 `schtasks /Run /TN flowkeyd` 拉回来；`-SkipBuild`（用现有产物、不碰常驻）/`-SkipResident`/`-SkipUpload` 各自关掉那一段。工作区脏或 HEAD 没推到 origin 会**直接拒绝**（要 `-AllowDirty`/`-Push`）。**唯一的新前置依赖是 `gh`**（`scoop install gh` + `gh auth login`），只在发布那一步用到。见第 5 节与第 11 节的 DoD 记录 |
+| `scripts/release.ps1`                     | 发布脚本（**2026-09 新增**）：构建 release（默认连 debug + `ctest` 一起跑）、把 `build/dist-release` 打成**两个** zip（完整包 + 精简升级包，各附 `.sha256`）、用 GitHub CLI（`gh`）上传到 GitHub Release。tag 取**刚构建出来的那个 exe** 的 `--version`（形如 `v26-09-24-0e33ae9`）；资产是 `flowkeyd-<版本>-windows-x64.zip`（exe + Qt/MinGW 运行时）与 `flowkeyd-<版本>-windows-x64-slim.zip`（只有 exe，给升级用）加它们各自的 `.sha256`。哪些文件进精简包由脚本里的 `$SlimFiles` / `$DependencyPatterns` **白名单**决定，`dist` 里有两边都不认识的文件就直接失败（见第 10 节）。要**构建**时先 `flowkeyd.exe --quit` 停掉常驻实例，收尾（**包括中途失败**）用 `schtasks /Run /TN flowkeyd` 拉回来；`-SkipBuild`（用现有产物、不碰常驻）/`-SkipResident`/`-SkipUpload` 各自关掉那一段。工作区脏或 HEAD 没推到 origin 会**直接拒绝**（要 `-AllowDirty`/`-Push`）。**唯一的新前置依赖是 `gh`**（`scoop install gh` + `gh auth login`），只在发布那一步用到。见第 5 节与第 11 节的 DoD 记录 |
 
 > `scripts/install.ps1` / `scripts/uninstall.ps1` **已删除**（2026-09）：自启的注册、
 > 刷新与删除现在全在 `src/platform/win/autostart.*` 里，由守护进程自己在启动时做。
@@ -875,11 +875,15 @@ powershell.exe ... -SkipBuild      # 用现有的 build/dist-release（不碰常
 ```
 
 tag 取刚构建出来的那个 exe 的 `--version`（形如 `v26-09-24-0e33ae9`），资产是
-`flowkeyd-<版本>-windows-x64.zip` 与 `flowkeyd-<版本>-windows-x64.zip.sha256`。
-工作区脏、或 HEAD 没推到 origin 时脚本**直接拒绝**（要 `-AllowDirty` / `-Push`
-才行）：版本号里的 git 修订就是构建时的 HEAD（第 2 节第 12 条），脏工作区打出来的
-包与 tag 对不上。**唯一的新前置依赖是 `gh`**（`scoop install gh` +
-`gh auth login`），只在发布那一步用，构建与测试都不需要它。
+**两个** zip 加各自的 `.sha256`：完整包
+`flowkeyd-<版本>-windows-x64.zip`（exe + Qt/MinGW 运行时，首次安装用）与精简包
+`flowkeyd-<版本>-windows-x64-slim.zip`（只有 `flowkeyd.exe` + 一份 `README.txt`，
+升级用）。两个包里的目录各带一份包内说明；自动生成的发布说明前面会加一段
+“两个包怎么选”。工作区脏、或 HEAD 没推到 origin 时脚本**直接拒绝**（要
+`-AllowDirty` / `-Push` 才行）：版本号里的 git 修订就是构建时的 HEAD
+（第 2 节第 12 条），脏工作区打出来的包与 tag 对不上。**唯一的新前置依赖是
+`gh`**（`scoop install gh` + `gh auth login`），只在发布那一步用，构建与测试
+都不需要它。
 
 **debug 与 release 两个 profile 都必须编译通过，这是每个任务（包括纯文档任务）
 的硬性要求。** 理由：release 走的是完全不同的优化与链接路径
@@ -3165,6 +3169,44 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
     PowerShell 5.1 按 GBK 解码之后就报 `Join-Path : 参数 Path 不能为空` ——
     其实是 `$root` 那行被中文注释的乱码破坏掉了。
 
+#### 2026-09 新增：精简升级包（完整包 + slim 包）
+
+* **需求**（项目所有者）：“向 github 上传发布包时，除了目前已经提供的这个 full 的
+  zip 版本的包，再提供一个精简包（不包含一般不变化的依赖文件，如 qt 的 dll 等等），
+  这样用户如果第一次安装本软件，可以下载 full 版本，如果是升级，可以下载精简版本的
+  zip 包。” 所以现在每次发布传**四个**资产：完整 zip、精简 zip、以及各自的
+  `.sha256`。
+* **精简包 = `flowkeyd.exe` + 一份 `README.txt`**（约 1.7 MB，压完不到 1 MB），
+  完整包 = `build/dist-release` 原样 + 同一份说明的另一版本（约 63 MB）。
+  两个 zip 里都是同名目录（`flowkeyd-<版本>` / `flowkeyd-<版本>-slim`），
+  与原来的约定一致。
+* **分类用白名单 + 兜底报错，而不是“排除掉 Qt 的 dll”。** `scripts/release.ps1` 里
+  `$SlimFiles`（每次构建都会变的，进精简包）与 `$DependencyPatterns`
+  （`Qt6*.dll`、`lib*.dll`、`platforms/*`、`styles/*`、`imageformats/*`、
+  `iconengines/*`、`qml/*`、`generic/*`、`networkinformation/*`、`tls/*`、
+  `translations/*`，只进完整包）两张表；`dist` 里出现**两边都不认识**的文件时
+  `Assert-DistIsClean` 直接抛错并打印那个文件，逼着人当场决定它属于哪一边。
+  一个文件同时落在两张表里也报错。这意味着以后加新的部署产物时**必须**顺手分类：
+  漏了会让发布失败（安全的方向），而不是让某个包少一个文件、或悄悄多带一个旧依赖。
+* **精简包怎么验证**：打包后从 zip 里读条目名（`System.IO.Compression.ZipFile`）
+  再查一遍 —— 只允许 `$SlimFiles` 那几项加 `README.txt`（看的是 **zip 条目**，
+  不是暂存目录，所以“拷进去又删掉”这类错误也躲不过）；另外暂存出来的那份 exe
+  必须与 `build/dist-release/flowkeyd.exe` 的 SHA-256 相同。
+* **`gh release create` 可以把 `--notes` 的内容加在自动生成的说明前面**（它的
+  `--help` 里写着 “Additional release notes can be prepended to automatically
+  generated notes by using the `--notes` flag”），所以“两个包怎么选”那段不用自己
+  拼说明文件。**那段文字故意写成一行**：它是当命令行参数交给 gh 的，带换行的参数
+  在 Windows 上要多绕一道（引号与换行符会不会被拆开取决于对方怎么解析命令行），
+  一行就完全不用赌；改用 `--notes-file` 又会失去 `--generate-notes`。
+* 包内的 `README.txt` 用**带 BOM 的 UTF-8** 写（它是给人看的，记事本之类要认得出
+  中文），而 `.sha256` 仍然是不带 BOM 的 UTF-8（`sha256sum -c` 认的是逐字节的
+  `<hash>  <name>\n`）。
+* **两个包在 `-SkipUpload` 下都能单独验**：跑一遍
+  `scripts\release.ps1 -SkipUpload`（产物在 `%TEMP%\flowkeyd-release`），把两个 zip
+  都解出来；先拿完整包那份 `flowkeyd.exe --version` 跑一次，再把精简包的 exe 覆盖
+  过去跑一次 —— 版本号一致就说明“升级”这条路径是通的。精简包自己**不能单独跑**
+  （它没有 Qt 的 dll，这正是它小的原因），所以 `README.txt` 里写明了用法。
+
 ### 领域坑清单（动手前先看这一遍）
 
 下面这些每一条都值得在动钩子/引擎/窗口/电源之前先读一遍：
@@ -4928,6 +4970,12 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   `cmake/version_revision.h.in`）。要换成别的来源就改 `buildVersion()` /
   `buildDateFromFile()` / `sourceRevision()`，显示侧（托盘、启动日志、
   `--version`、`--help`）不用动。
+* **发布包里新增 / 删除文件**：`scripts/release.ps1` 里的 `$SlimFiles` /
+  `$DependencyPatterns` 就是“哪个文件进哪个包”的**唯一清单**；`dist` 里出现
+  两边都不认识的文件时发布脚本会直接失败（见第 10 节）。新的部署产物按
+  “每次构建都会变吗”分类：会变的（exe、以后假如有的数据文件）写进
+  `$SlimFiles`（它同时进完整包与精简包），不变的（新加的运行时 dll / 插件 /
+  QML 模块）写进 `$DependencyPatterns`（只进完整包）。
 
 ---
 

@@ -148,8 +148,8 @@ exe 的调试符号都已去掉，见 `cmake/PruneRuntime.cmake` 与本文件末
 ### 发布（打包 + 上传 GitHub Release）
 
 仓库里带了一个发布脚本，把这套活儿一条命令做完：构建（debug + `ctest` + release）
-→ 把 `build/dist-release` 打成一个 zip 并附上 sha256 → 用
-[GitHub CLI](https://cli.github.com/)（`gh`）建一个 GitHub Release 并把资产传上去。
+→ 把 `build/dist-release` 打成**两个 zip**（完整包 + 精简升级包）并各附一份 sha256
+→ 用 [GitHub CLI](https://cli.github.com/)（`gh`）建一个 GitHub Release 并把资产传上去。
 
 ```powershell
 # 只需要做一次：装 gh 并登录（浏览器登录，不用手填 token）
@@ -160,9 +160,21 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\release.ps1
 ```
 
 * tag 取**刚构建出来的那个 exe** 的版本号（`--version` 的第一行），例如
-  `v26-09-24-0e33ae9`；资产是 `flowkeyd-<版本>-windows-x64.zip` 与
-  `flowkeyd-<版本>-windows-x64.zip.sha256`（后者是 `sha256sum -c` 认的格式）。
-  zip 里是一个同名目录，解压后直接跑 `flowkeyd.exe` 就行。
+  `v26-09-24-0e33ae9`；每次发布传**两个** zip（各带一份 `sha256sum -c` 格式的
+  `.sha256`），zip 里都是一个同名目录（目录里还有一份 `README.txt`）：
+
+  | 资产                                                                | 里面有什么                                  | 什么时候用                                         |
+  | ------------------------------------------------------------------- | ------------------------------------------- | -------------------------------------------------- |
+  | `flowkeyd-<版本>-windows-x64.zip`                                    | `flowkeyd.exe` + Qt/MinGW 运行时（约 63 MB） | **第一次安装**：解压出来直接双击 `flowkeyd.exe`    |
+  | `flowkeyd-<版本>-windows-x64-slim.zip`                               | **只有** `flowkeyd.exe`（约 2 MB）          | **已经装过、只是升级**：解压出的 exe 覆盖旧的那一个 |
+
+  两个包是按**文件白名单**分的（`scripts/release.ps1` 里的 `$SlimFiles` /
+  `$DependencyPatterns`）：Qt/MinGW 那一堆在版本之间不会变的依赖只进完整包，
+  尺寸小的那个只管每次都会变的 `flowkeyd.exe`。`build/dist-release` 里出现两边
+  都不认识的文件时脚本**直接失败**（打印是哪个文件），逼着人当场决定它属于
+  哪一边 —— 新加的东西不会悄悄漏进精简包、也不会悄悄漏出完整包。
+  升级时当然也可以不用包：`flowkeyd.exe --quit` 之后直接把新构建的
+  `build\dist-release\flowkeyd.exe` 覆盖过去就行（精简包就是这个文件的压缩版）。
 * 常驻实例会**短暂停掉**（它锁着 `build\dist-release\flowkeyd.exe`，不停掉链接
   会失败）：构建开始前 `flowkeyd.exe --quit`，收尾时（**包括中途失败**）
   `schtasks /Run /TN flowkeyd` 把它拉回来 —— 走计划任务，不弹 UAC。
@@ -170,10 +182,15 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\release.ps1
 * 工作区脏、或 HEAD 还没推到 origin 时脚本**直接拒绝**（版本号里的 git 修订就是
   构建时的 HEAD，脏的工作区会让包和 tag 对不上）：先把改动提交并推送，或者显式
   给 `-AllowDirty` / `-Push`。
-* 其余开关：`-SkipUpload`（只打包，不需要 gh）、`-SkipBuild`（用现有的
-  `build/dist-release`，不碰常驻实例）、`-SkipTests`（跳过 debug + `ctest`）、
+* 其余开关：`-SkipUpload`（只打包，不需要 gh；会把两个包的路径打出来）、
+  `-SkipBuild`（用现有的 `build/dist-release`，不碰常驻实例）、
+  `-SkipTests`（跳过 debug + `ctest`）、
   `-Draft` / `-Prerelease`、`-Notes <文本>` / `-NotesFile <文件>`（默认让 `gh`
-  自动生成说明）、`-Clobber`（tag 已存在时覆盖同名资产）。
+  自动生成说明，并在前面加上一段“两个包怎么选”）、`-Clobber`（tag 已存在时
+  覆盖同名资产）。
+* 精简包只放**每次构建都会变**的文件，所以它解压出来**不能单独运行**
+  （没有 Qt 的 dll）—— 它的用法是覆盖到已经装好的目录里，这一点包里的
+  `README.txt` 也写了。
 
 **构建产物是自包含的、而且精简过**：每次链接完 `flowkeyd` 之后会自动跑一次
 `windeployqt`，把 Qt 与 MinGW 的运行时 DLL、以及 exe 用到的 QML 模块（`QtQuick`、
