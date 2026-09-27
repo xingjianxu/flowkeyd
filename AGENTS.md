@@ -142,7 +142,7 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | 日志窗口   | **进程内的 QML 窗口**（FluentWinUI3），尾随同一个日志文件                                                     |
 | 选单/帮助  | **QML 窗口**（FluentWinUI3），跑在 Qt GUI 线程上                                                              |
 | 示例配置   | `flowkeyd.lua.example`                                                                                        |
-| 自动化测试 | Qt Test 单元测试 + **`scripts/acceptance.ps1`**（118 项检查，注入按键 + 高亮/弹窗滚轮/拖动滚动条/“滚动不改键盘选中项”/鼠标点选与点筛选框/鼠标点选单条目/`Enter` 与双击真的执行动作/危险动作两次确认/三个弹窗不进任务栏的外部验收；`--simulate`/`--selftest`/`--probe` 本期不做，见第 12 节） |
+| 自动化测试 | Qt Test 单元测试 + **`scripts/acceptance.ps1`**（119 项检查，注入按键 + 高亮/弹窗滚轮/拖动滚动条/“滚动不改键盘选中项”/鼠标点选与点筛选框/鼠标点选单条目/`Enter` 与双击真的执行动作/危险动作两次确认/三个弹窗不进任务栏/启动日志里没有 QML 加载错误的外部验收；`--simulate`/`--selftest`/`--probe` 本期不做，见第 12 节） |
 | 依赖管理   | CMake Presets + Ninja，`vendor/lua` 静态编进二进制                                                            |
 
 ---
@@ -175,7 +175,7 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
    `--check` / `--list` / `--list-keys` 保留（它们是产品功能，也是手工验证的
    主要工具）。
    → **阶段 9 补充（2026-09）**：这三个开关仍然不做，但“手工冒烟清单”已经
-   自动化成了 **`scripts/acceptance.ps1`**（118 项检查），它靠一个
+   自动化成了 **`scripts/acceptance.ps1`**（119 项检查），它靠一个
    **只给测试用的后门** `FLOWKEYD_ACCEPT_INJECTED=1` 抬升“丢弃注入输入”
    那道过滤（见第 5 节与阶段 9）。
    这是对一个“当时无法验证”的条款的修订，不是推翻：不变量 2 本身没动，
@@ -724,7 +724,7 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `src/app/popup_host.h/.cpp`               | 把上面的模型挂到 QML 窗口上（选单 / 帮助 / 窗口切换器三个窗口）；抢前台（`requestActivate` + `win::window::raiseWindow` 的前台锁绕行）；在 Qt GUI 线程上创建/复用窗口；用户选完（或按 `Enter`/双击帮助里的一行 / 在切换器里选中一个窗口）把活儿回投工作线程；`helpRun()` 负责把**可见行下标**换算成条目下标，并且**先把窗口藏起来再执行**（**GUI 线程亲和**）。另外 `preload()`（由 `main` 在事件循环第一个回合排队调用）把三个窗口建好、填假数据各渲染一帧再藏起来（透明度 0 + 屏幕外），把“进程首次渲染”的固定开销提到启动时（见第 2 节第 23 条）；顺带记两条 debug 日志：`popup `x` shown in N ms` 与 `painted its first frame N ms after the request`。另外 `switchUseEnglishInput()`（`Q_INVOKABLE`，`QML` 的筛选框拿到焦点时会调）把切换器所在窗口的输入法切成英文 —— 真实弹出时 `showSwitch()` 自己也会调一次，**预热期间不调**；它同时把**打开前**的模式记进快照（只记一次），关掉卡片时 `restoreSwitchInputMode()`（`switchChoose` / `switchDismiss` / `closeAll` 三条路径）把它写回去（见第 2 节第 24 条） |
 | `src/qml/`                                | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`、`SwitchPopup.qml`（四个文件都在开头写了 `pragma ComponentBehavior: Bound`）；**三个弹窗的 `flags` 都带 `Qt.Tool`**（= `WS_EX_TOOLWINDOW`，不进任务栏/`Alt+Tab`；日志窗口故意不加，见第 2 节第 23 条）；配色一律用 `palette`，没有单独的 `Style.qml`；中文一律 `font.family: "Microsoft YaHei"`（默认族 `Segoe UI Variable` 没有中文字形，不管会回退到宋体，见第 10 节）。`HelpPopup.qml` 与 `MenuPopup.qml` 里除了卡片外框与按键徽标全是标准控件：帮助的筛选框是 `TextField`、列表是 `ListView` + Qt 自带 `ScrollBar` + `ItemDelegate`（列表只占行区域，不再需要表头/底部的遮罩）；选单的列表同样是 `ListView` + `ItemDelegate`（不滚动，所以没有滚动条；悬停与点击全部由委托提供）；窗口切换器（`SwitchPopup.qml`）与帮助同一套骨架，每行显示窗口标题 + 进程名（数字选择模式下行首还有一个数字冒标）；**它没有标题行**，`ListView` 的 `x`/`width` 直接用 `filterRect`（与筛选框同宽），筛选框拿到焦点时会调 `host.switchUseEnglishInput()`（见第 2 节第 24 条） |
 | `tests/`                                  | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_log_tail`、`tst_audio`、`tst_autostart`（自启的纯逻辑：XML 渲染/解析、输出解码、路径比较；**不碰真实计划任务**）、`tst_interactive`（需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`，否则 skip；含剪贴板/音量/窗口后端/虚拟桌面/钉在所有桌面/置顶/输入法切换的真机验证）、`tst_menu_model`、`tst_help_model`、`tst_window_list_model`（窗口切换器的纯逻辑：进程名前缀筛选、标题不参与、唯一匹配自动激活、`Enter`/`Esc`、悬停高亮、没有标题行的几何与窗口标题）、`tst_power_table`、`tst_desktop_table`、`tst_placement`（`window_rule` 的纯逻辑：显示器排序/选择、重连检测、摆放几何、匹配与摘要）、`tst_layout`、`tst_version`（构建时间戳与版本字符串的纯逻辑；只碰临时文件）、`tst_desktop_badge`（托盘数字徽标的文字与字号） |
-| `scripts/acceptance.ps1`                  | 桌面行为的验收脚本（注入按键 + 焦点捕捉窗口的外部观察，118 项检查：含弹窗滚轮/滚动条拖动/鼠标点选与点筛选框/鼠标点选单条目/`Enter` 与双击真的执行动作/危险动作两次确认/两个弹窗不在任务栏里）；需交互式桌面，**不属于 `ctest`**，见第 5 节与阶段 9。它用 `--no-elevate` 起临时守护进程，所以**不会**碰真实的自启计划任务 |
+| `scripts/acceptance.ps1`                  | 桌面行为的验收脚本（注入按键 + 焦点捕捉窗口的外部观察，119 项检查：含弹窗滚轮/滚动条拖动/鼠标点选与点筛选框/鼠标点选单条目/`Enter` 与双击真的执行动作/危险动作两次确认/两个弹窗不在任务栏里/启动日志里没有 QML 加载错误）；需交互式桌面，**不属于 `ctest`**，见第 5 节与阶段 9。它用 `--no-elevate` 起临时守护进程，所以**不会**碰真实的自启计划任务（于是它验证的运行时就是精简过的发布包，见第 10 节“发布包精简”） |
 | `scripts/release.ps1`                     | 发布脚本（**2026-09 新增**）：构建 release（默认连 debug + `ctest` 一起跑）、把 `build/dist-release` 打成一个 zip（附 `.sha256`）、用 GitHub CLI（`gh`）上传到 GitHub Release。tag 取**刚构建出来的那个 exe** 的 `--version`（形如 `v26-09-24-0e33ae9`），资产是 `flowkeyd-<版本>-windows-x64.zip` + 它的 `.sha256`。要**构建**时先 `flowkeyd.exe --quit` 停掉常驻实例，收尾（**包括中途失败**）用 `schtasks /Run /TN flowkeyd` 拉回来；`-SkipBuild`（用现有产物、不碰常驻）/`-SkipResident`/`-SkipUpload` 各自关掉那一段。工作区脏或 HEAD 没推到 origin 会**直接拒绝**（要 `-AllowDirty`/`-Push`）。**唯一的新前置依赖是 `gh`**（`scoop install gh` + `gh auth login`），只在发布那一步用到。见第 5 节与第 11 节的 DoD 记录 |
 
 > `scripts/install.ps1` / `scripts/uninstall.ps1` **已删除**（2026-09）：自启的注册、
@@ -740,6 +740,7 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `flowkeyd_platform`| `src/platform/win/*`（不碰 Qt GUI的 Win32 后端）                    | exe + 平台层单测           |
 | `flowkeyd`         | `src/main.cpp`、`src/cli.*`、`src/app/*`、`src/platform/win/tray.*`、QML、**图标 qrc（`:/icons`）+ 图标 .rc** | ——                        |
 | `flowkeyd_icon_gen`| `tools/icon_gen/main.cpp`（把 `logo.svg` 光栅化成 `assets/` 下的 .ico 与 PNG；**`EXCLUDE_FROM_ALL`**，只由 `icons` 目标手工构建） | ——（不进任何产物）        |
+| `cmake/PruneRuntime.cmake` | **发布运行时精简清单**（以 `cmake -P` 脚本方式运行）：windeployqt 之后把用不到的 Quick Controls 样式、qmltooling、软件 OpenGL 回退、系统自带的 D3D 编译器、`plugins.qmltypes`、FluentWinUI3 磁盘上与插件重复的 .qml/.png 删掉，release 再 `strip` exe 的调试符号。**它是“发布包里有什么”唯一的家**，清单与理由见第 10 节“发布包精简” | exe 的部署步骤（不是库） |
 
 > `src/app/popup_host.*` 用 QML/QtQuick，所以**不进** `flowkeyd_models`，留在 exe 里；
 > 模型层只有 QtCore，这样 `tst_menu_model`/`tst_help_model`/`tst_window_list_model` 能在没有桌面的情况下跑。
@@ -750,19 +751,27 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 （`CMakeLists.txt` 里的默认值跟着 `CMAKE_BUILD_TYPE` 走）。所以 release 的
 构建树里根本不会出现 `tst_*.exe`。
 
-**exe 的产物目录是自包含的**：`flowkeyd` 上挂了一条 `POST_BUILD` 的
+**exe 的产物目录是自包含的、而且是精简过的**：`flowkeyd` 上挂了一条 `POST_BUILD` 的
 `windeployqt`（`Qt6::windeployqt`），它把 Qt 与 MinGW 运行时的 DLL + exe 用到的
 QML 模块（`--qmldir src/qml`）拷到 exe 同目录，所以双击
 `build/windows-release/flowkeyd.exe`（或 debug 那一份）就能启动，不必手动改 `PATH`。
+紧接着同一个 `POST_BUILD` 会跑 `cmake/PruneRuntime.cmake`，把 windeployqt
+多拷的东西删掉（没用到的 Quick Controls 样式、qmltooling、`opengl32sw.dll`、
+`D3Dcompiler_47.dll`、只给 Creator 用的 `plugins.qmltypes`、
+FluentWinUI3 磁盘上与插件重复的 .qml/.png……），release 还会 `objcopy --strip-all`
+掉 exe 的调试符号。debug profile 保留 `qmltooling` 与符号（QML 调试、gdb 要用）。
+清单与理由见第 10 节的“发布包精简”。
 只对 `flowkeyd` 做，**不给测试可执行文件做**（那些 `tst_*` 靠 ctest 注入 `PATH`，
-而且每个都部署一次会让构建慢得多）。大小参考：release 目录里 Qt 侧大约 120 MB
-（含 19.7 MB 的 `opengl32sw.dll`，刻意保留 —— 不想为了省 20 MB 去赌软件回退）。
+而且每个都部署一次会让构建慢得多）。大小参考：精简前 release 目录里 Qt 侧大约
+120 MB（含 19.7 MB 的 `opengl32sw.dll`），精简后整个发布目录大约 63 MB。
 
 **release profile 还会额外产出一个干净的发布目录**：另一条 `POST_BUILD` 把
 `flowkeyd.exe` 与它的运行时（同一条 `windeployqt`，只换个落点）放进
-`build/dist-release/`。那个目录里**只有运行需要的东西**，可以直接整个拷到别的
-机器上跑；发布版本以它为准（`build/windows-release` 是构建树，里面还有
-`CMakeCache.txt`/`build.ninja`/`*.a` 之类的东西）。debug profile 不产出它。
+`build/dist-release/`，紧接着同样跑一遍 `cmake/PruneRuntime.cmake`。那个目录里
+**只有运行需要的东西（而且是精简过的）**：**211 个文件 / 63.0 MB**
+（精简前 1378 个 / 149.8 MB），可以直接整个拷到别的机器上跑；发布版本以它为准
+（`build/windows-release` 是构建树，里面还有 `CMakeCache.txt`/`build.ninja`/`*.a`
+之类的东西）。debug profile 不产出它。
 
 **分层铁律**：`src/core/`、`src/lua/`（除 `lua_config.cpp` 里对 Lua C API 的
 调用之外）与 `src/app/{menu,help}_model.*`、`src/app/popup_layout.*`
@@ -934,7 +943,7 @@ QML 模块注册之后，两条 profile 都要重新全量构建一次**。
 清单在下面（12 条），**从阶段 9 起有了自动化版本**：
 
 ```powershell
-# 118 项检查，约三分钟，会持续注入按键/抢焦点；按工作约定第 6 条先提醒用户
+# 119 项检查，约三分钟，会持续注入按键/抢焦点；按工作约定第 6 条先提醒用户
 # 只跑 release 那一份产物（见工作约定第 2 条，脚本默认 -Exe 就是它）
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance.ps1
 powershell.exe ... -Phase config                              # 只看配置，不注入按键
@@ -2288,6 +2297,9 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   真正的原因是 `LogWindow.qml` 里写着 `import QtQuick.Controls`（基础模块），
   `qmlimportscanner` 无法知道运行时会用 `QQuickStyle::setStyle("FluentWinUI3")`。
   7 MB 不值得为它改 QML 或者加 `--qmlimport` 花招，先放着。
+  → **2026-09 后来解决了**：`cmake/PruneRuntime.cmake` 在 windeployqt 之后把这几个
+  用不到的样式（连同它们的 QML 目录、`*.dll`）删掉（只留 FluentWinUI3 与它依赖的
+  Basic/Fusion），见第 10 节“发布包精简”。
 * **验证“双击能起来”要真的把 Qt 从 `PATH` 里拿掉。** 从 agent 的 shell 里
   `Start-Process` 启动的进程继承的是同一个 `PATH`（本来就不含 Qt），
   所以“在 agent shell 里能跑”就已经等价于双击；要断言就用
@@ -3047,6 +3059,112 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   因此只存 `std::uint32_t` 快照字段，把 `ime.h` 留在 `.cpp` 里（它之前就这么做，
   这次差一点破坏掉）。
 
+#### 2026-09 新增：发布包精简（1378 个文件 / 149.8 MB → 211 个 / 63.0 MB）
+
+* **需求**（项目所有者）：“发布的运行时包太大，有没有办法精简，不要有这么多的文件？”
+  拍板的四个开关：删 `opengl32sw.dll`、删 `D3Dcompiler_47.dll`（用系统的）、
+  release 的 exe `strip-all`、**三棵构建树都精简**（debug 保留 `qmltooling` 与符号）。
+  实现全在 `cmake/PruneRuntime.cmake`（一个 `cmake -P` 脚本，由 CMakeLists.txt 在
+  `windeployqt` 之后调用），**清单只有这一处**，删了什么、为什么删都写在里面。
+
+* **删掉的四类东西与依据**（每条都实测过）：
+  1. **没用到的那几个 Quick Controls 样式**（Imagine / Material / Universal /
+     Windows / NativeStyle，连同 `Qt6QuickControls2*.dll` 与它们的 `*StyleImpl`）：
+     `src/qml/*.qml` 只 import `QtQuick.Controls.FluentWinUI3`（与基础
+     `QtQuick.Controls`）。那一大堆样式是 `QtQuick.Controls` 的 qmldir 里
+     `optional import … auto` 被 **qmlimportscanner 扫出来**的，windeployqt 没有
+     开关能关掉（`--no-quickcontrols2imagine` 只管 DLL，不管 QML 目录）。
+     → 约 12 MB / ~500 个文件。
+  2. **`qmltooling/`**（13 个 QML 调试/剖析插件，只有 `-qmljsdebugger` 会加载）、
+     **`imageformats/{qgif,qjpeg,qsvg}` + `iconengines/qsvgicon` + `Qt6Svg.dll`**
+     （图标与样式图一律是 PNG）、**`tls/` + `networkinformation/` +
+     `generic/qtuiotouch`**（从不发网络请求、不碰 TUIO）、**`Qt6Quick3DUtils.dll`**
+     （只有被删掉的 `qmldbg_quick3dprofiler` 需要）、**`plugins.qmltypes`**
+     （只给 Qt Creator / qmllint 用）→ 约 5 MB / ~40 个文件。
+  3. **`opengl32sw.dll`（19.7 MB）与 `D3Dcompiler_47.dll`（4.0 MB）**：Qt Quick 在
+     Windows 上走 D3D11 RHI（没有显卡驱动时 Windows 自带的 WARP 也能画），
+     而 Win10+ 的 `System32` 里本来就有 `d3dcompiler_47.dll`（本机
+     `10.0.26100.9549`）。**这两个必须同进同退**：少了 D3D 编译器 Qt 会退回
+     OpenGL，那时才真需要软件回退。删掉后实测弹窗预热、日志窗口、验收脚本（119 项）全正常。
+     失败时的现象是“弹窗与日志窗口出不来（托盘与快捷键还在）”，把这两个文件从
+     `C:\Qt\6.11.2\mingw_64\bin\` 拷回去即可。
+  4. **exe 里的 43 MB 调试符号**（`RelWithDebInfo` 带 `-g`：47.4 MB 里有
+     `.debug_info` 37 MB……）：release 用 `objcopy --strip-all` → **1.6 MB**。
+     符号只留在 `build/windows-debug`，要调崩溃就用那个 profile。
+  → 另加 **848 个文件**的“去掉磁盘副本”，见下一条。
+
+* **FluentWinUI3 的磁盘 .qml/.png 可以整份删掉（省 848 个文件）** ——
+  样式插件 `qtquickcontrols2fluentwinui3styleplugin.dll` 把整套 .qml 与 .png
+  **内嵌在自己的 qrc 里**，模块 qmldir 里的
+  `prefer :/qt-project.org/imports/QtQuick/Controls/FluentWinUI3/` 就是指向那里；
+  磁盘上那份只是给 Qt Creator / qmllint 看的（官方 Qt 两处都装）。删掉后实测：
+  三个弹窗预热、日志窗口、验收脚本 119 项全绿，**stderr 零 QML 警告**。
+  验证“插件里真有这些资源”的手法：把 DLL 按 **UTF-16** 解码（Qt 的资源树里文件名
+  是 UTF-16），再查 `Config.qml`/`checkbox-indicator-checked@2x.png` 这类名字；
+  按 ASCII 查会一个都找不到（而`.png` 本身是 ASCII，容易被误导）。
+  **`qmldir` 必须留着**（模块靠它找到插件），`plugins.qmltypes` 可以删（工具用）。
+
+* **Basic 与 Fusion 删不得**（实测报错）：`QtQuick.Controls` 的 qmldir 有
+  `default import QtQuick.Controls.Basic auto`，FluentWinUI3 的 qmldir 有
+  `import QtQuick.Controls.Fusion auto`；删掉之后三个弹窗直接加载不了：
+  `could not load MenuPopup.qml: … module "QtQuick.Controls.Basic" is not installed`
+  （Fusion 同理）。两个合起来约 4 MB，作为“保险”留着。
+
+* **`objcopy --strip-all` 不是幂等的**（实测：同一个 exe 连 strip 两次，SHA-256
+  不同 —— PE 头 COFF 里的 `TimeDateStamp` 每次都被重写成当前时间，只差 2 字节）。
+  所以 dist-release 那一步 **不再 strip**（源 exe 已经被上一条 POST_BUILD strip 过），
+  否则 `build/windows-release/flowkeyd.exe` 与 `build/dist-release/flowkeyd.exe`
+  就不再逐字节相同（这是文档里承诺过的不变量）。
+
+* **`LINK_DEPENDS`：改了精简清单必须重新链接，否则 `ninja: no work to do`。**
+  prune 是挂在 `flowkeyd` 的 `POST_BUILD` 上的，只在链接时跑；光改
+  `cmake/PruneRuntime.cmake` 不会触发链接，于是部署目录里还是旧内容（而且
+  看上去什么都没发生）。所以 CMakeLists 里给目标加了
+  `set_property(TARGET flowkeyd APPEND PROPERTY LINK_DEPENDS …/cmake/PruneRuntime.cmake)`。
+  实测：只 touch 那个脚本 → `[1/2] Linking CXX executable flowkeyd.exe` + 两次 prune。
+
+* **精简过头怎么及早发现？** 三个弹窗本来就在启动时预热（`PopupHost::preload`，
+  见本节“三个弹窗不进任务栏 + 启动预热”），所以缺模块会立刻在日志里报
+  `could not load ….qml: module "…" is not installed`。`scripts/acceptance.ps1`
+  因此加了一条哨兵检查（“启动日志里没有弹窗 QML 加载错误”，119 项），
+  这是防止“新加的 QML 用了别的模块、却没从清单里拿掉”的永久防线。
+  **日志窗口（`LogWindow.qml`）不在预热里**，它只 import `QtQuick` /
+  `QtQuick.Controls` / `QtQuick.Layouts`（都在保留名单里）。
+
+* **怎么验证“删了这么多东西还一模一样”**：
+  * 真机：`--log-window` 起 release 包，stderr 只有我们自己的日志行（零 QML 警告），
+    主窗口标题是 `flowkeyd 日志 — N 行`；
+  * **像素级对比**：`tmp/preview`（进程内预览工具）分别用**精简后的运行时**
+    （把 `build/dist-release` 当成 app dir：`platforms/`、`qml/` 都从那里来）与
+    Qt 官方安装跑一遍，`menu`/`help` 两张截图的差异只有 237/376800 与
+    206/1416000 个像素、每个通道 ±1（AA/抖动），说明渲染完全一致。
+    注意：预览工具自己会报一堆 `ItemDelegate.qml/StyleImage.qml` 的
+    `TypeError: Cannot read property … of null`（用官方 Qt 跑也一样，548 条），
+    那是**预览工具的环境问题**，产品（守护进程）日志里是 **0 条**——别被它骗了。
+  * 尺寸：`build/dist-release` 211 个文件 / 63.0 MB（`Compress-Archive`
+    量到 zip 25.7 MB；原来是 1378 个 / 149.8 MB / zip 51.3 MB）。
+
+* **构建日志会被 windeployqt 的 `is up to date` 淹没**（每次 prune 都会重拷一次那
+  堆被删的文件）：正常现象，不是错误。只想看重点就 `where $_ -match
+  'prune_runtime|error|warning|Linking'`。prune 每次都会打一行汇总：
+  `-- prune_runtime: … -> 211 file(s), 64524 KB (was 1378 file(s), 106498 KB)`
+  （`was` 的字节数里 exe 已经是 strip 过的，所以加起来不等于一条命令前的目录大小）。
+
+* **坑（agent 自己踩的，两个都值得记）**：
+  * **在 bash 里给 `powershell.exe -File` 做重定向不要写 `*>`**：bash 会把它拆成
+    `*` + `>`，于是 `*` 先被 glob 成当前目录的全部文件名（还包含刚被建出来的那个
+    重定向目标），脚本拿到一堆位置参数 → `$Exe`/`$WorkDir`/`$Phase` 全被顶掉，
+    报一句莫名其妙的 `参数"build"不属于 ValidateSet 属性指定的集合`，
+    而且 `> 'D:\…'` 这种 **Windows 路径形式的 bash 重定向会在仓库根目录里建出一个
+    名字带反斜杠的垃圾文件**（本次就建了 `D??prj?flowkeyd?tmp?acceptance.log`）。
+    要重定向就用 `/mnt/d/…` 形式的路径、并且只用单个 `>`。
+  * **`tmp/` 里有上次跑留下的旧日志，别把它当成这次的输出**：我就是读了
+    `tmp\acceptance.log`（三天前的、116 项、内容看着完全合理）而以为自己在看
+    刚才那次运行，白查了一轮“为什么新加的检查没跑”。先看文件时间戳/先删掉旧的。
+  * **`tmp/` 下的一次性 `.ps1` 一律纯 ASCII**（又踩一次）：我那个脚本里写了中文注释，
+    PowerShell 5.1 按 GBK 解码之后就报 `Join-Path : 参数 Path 不能为空` ——
+    其实是 `$root` 那行被中文注释的乱码破坏掉了。
+
 ### 领域坑清单（动手前先看这一遍）
 
 下面这些每一条都值得在动钩子/引擎/窗口/电源之前先读一遍：
@@ -3102,6 +3220,12 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   会拉进 `windows.h` 的头文件加进被 `main.cpp` 包含的头里就会炸（报
   `expected unqualified-id before numeric constant`）。平台头只放在 `.cpp` 里
   （见第 10 节）。
+* **`windeployqt` 只会多拷、不会删。** QML 模块目录是它按 qmldir 里的
+  `optional import … auto`（Quick Controls 有六个样式）扫出来的，没有开关能只留一个；
+  想把发布包变小只能“拷完再删”（`cmake/PruneRuntime.cmake`）。
+* **`objcopy --strip-all` 不幂等**：每次都会重写 PE 头 COFF 里的 `TimeDateStamp`，
+  同一个 exe 连 strip 两次得两个不同的文件（只差 2 个字节）。两棵 release 树的 exe
+  要保持逐字节相同，就只能 strip 一次（见第 10 节“发布包精简”）。
 
 #### 2026-09 新增：托盘右键与启动日志里的构建版本（build 时间戳）
 
@@ -4615,6 +4739,36 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > 本次没有动钩子/引擎/分发/窗口后端，所以按第 11 节第 3 条没有重跑
 > `scripts/acceptance.ps1`。
 
+> **2026-09 新增（发布包精简：1378 个文件 / 149.8 MB → 211 个 / 63.0 MB）的 DoD**：
+> `windows-debug` 与 `windows-release` 都是 `build exit 0`、零编译警告
+> （release 里那句 `dxcompiler.dll` 是 `windeployqt` 自己的提示）；
+> `ctest --test-dir build/windows-debug` **24 个测试目标全绿**（本次没有新增/修改
+> 可单测的逻辑，数量不变）。
+> `flowkeyd --check --config flowkeyd.lua.example` → `OK (46 hotkey(s), 3 remap(s),
+> 7 window rule(s))`、零警告（用的是**精简+strip 后**的 release exe）；
+> `--version` 正常；`[System.Drawing.Icon]::ExtractAssociatedIcon` 仍能拿到 32x32
+> 图标（objcopy 没有动资源节）。
+> 尺寸：`build/dist-release` 从 **1378 个 / 149.8 MB** 变成 **211 个 / 63.0 MB**
+> （`Compress-Archive` 量到 zip 25.7 MB）；`build/windows-release/flowkeyd.exe`
+> 与 `build/dist-release/flowkeyd.exe` 的 SHA-256 **仍然相同**（都是 1667 KB、
+> 去掉 43 MB 调试符号后的那个）。
+> `scripts/acceptance.ps1`（只跑 release 产物，也就是精简后的运行时）
+> **119 项、0 失败**（`checks: 119, failures: 0`）：本次新增的那一条是
+> “启动日志里没有弹窗 QML 加载错误”（三个弹窗的预热 + 保留名单的哨兵）。
+> 手记：`--log-window` 起精简后的包，stderr 只有我们自己的日志行、主窗口标题
+> `flowkeyd 日志 — 7 行`（零 QML 警告）；`tmp/preview`（进程内预览）分别用**精简
+> 后的运行时**与 Qt 官方安装跑同一套 QML，`menu`/`help` 两张截图的差异只有
+> 237/376800 与 206/1416000 个像素且每通道 ±1（AA/抖动）—— 弹窗的输入框、按键
+> 徽标、标准 `ItemDelegate` 高亮、滚动条、微软雅黑都在（见第 10 节“发布包精简”）。
+> 行为变化：发布包与三棵构建树里的 Qt 运行时都被精简（**需要 Windows 10+**：
+> 用系统自带的 `d3dcompiler_47.dll`，不再自带软件 OpenGL 回退），
+> release 的 exe 不再包含调试符号；新增 `cmake/PruneRuntime.cmake`、
+> `flowkeyd` 的 `LINK_DEPENDS`（改了清单就会重新链接）、
+> `scripts/acceptance.ps1` 的一条哨兵检查（118 → 119 项）。
+> README（环境要求、构建与运行、已知限制）与本文件第 4 / 5 / 10 节已同步。
+> 按工作约定第 11 条：常驻实例已 `--quit` → 构建 release → 从
+> `build\dist-release` 重新拉起（自启任务仍指向那个路径）。
+
 ---
 
 ## 12. 本期不做的（有意留白）与后续工作
@@ -4659,6 +4813,10 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 14. **托盘图标跟随 explorer 重启**（处理 `TaskbarCreated`）。
     （真正的应用图标本期已经做了：`logo.svg` → `assets/` 下的 .ico 与 PNG，
     见第 10 节“应用图标”那一段。）
+15. **把发布包再缩到更小**：本期做的是“把用不到的东西删掉”
+    （1378 个文件 / 149.8 MB → 211 个 / 63.0 MB，见第 10 节“发布包精简”）。
+    再往下（静态链 Qt、把 Qt 自己的 QML 模块也编进 exe、单文件自解压）要换一套
+    Qt 构建或引入新的打包机制，为了几十 MB 不划算。
 
 ---
 
@@ -4702,6 +4860,14 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   “`topMargin`/`bottomMargin` + 不透明底色”三件套；
   **避开 FluentWinUI3 不支持的那些控件**（见第 10 节）。
   文件开头写 `pragma ComponentBehavior: Bound`，并用 `qmllint -I …` 确认零警告。
+* **给弹窗/日志窗口加新的 QML `import` 时，先看 `cmake/PruneRuntime.cmake` 的
+  保留名单**：发布包里只留了 `QtQuick.Controls.FluentWinUI3` 与它依赖的
+  `Basic`/`Fusion`/`Layouts`/`Effects`/`Shapes`/`Templates` 那几套（见第 10 节
+  “发布包精简”）。用了别的东西（比如 `QtQuick.Dialogs`）就要从清单里拿掉对应的
+  删除项，否则弹窗在启动预热那一步就会报
+  `could not load ….qml: module "…" is not installed`（`scripts/acceptance.ps1`
+  有一条哨兵检查盯着这个；开发期跑 `build/windows-debug` 也会同样报）。
+  改了清单就会自动重新链接（`LINK_DEPENDS`），不用手动清构建目录。
 * **新的电源操作**：`PowerOp` 加变体 → `platform/win/power` 里处理
   （需要特权的先调 `enable_shutdown_privilege()`；不需要的要放在它**之前** return）
   → `as_str` 与简写 → README 表格。**不给它加自动化测试**（破坏性；见工作

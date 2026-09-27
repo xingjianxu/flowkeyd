@@ -346,19 +346,43 @@ target_link_libraries(flowkeyd
 
 flowkeyd_strict_warnings(flowkeyd)
 
+# 精简清单（cmake/PruneRuntime.cmake）变了之后必须重新链接一次 exe，而下面的
+# POST_BUILD 只在链接时跑；不然改完清单直接 `cmake --build` 会得到
+# `ninja: no work to do`，部署目录里还是旧内容（LINK_DEPENDS 正是为此存在的）。
+if(WIN32 AND TARGET Qt6::windeployqt)
+    set_property(TARGET flowkeyd APPEND PROPERTY LINK_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/PruneRuntime.cmake")
+endif()
+
 # ---------------------------------------------------------------------------
 # 让构建产物自包含：`windeployqt` 把 Qt 与 MinGW 运行时的 DLL（以及 exe 用到的
 # QML 模块）拷到 exe 同目录，于是双击 build/<preset>/flowkeyd.exe 就能启动，
 # 不必再把 Qt 的 bin 加进 PATH（见 AGENTS.md 第 5 节）。
 # 只给 flowkeyd 做；测试可执行文件仍然靠 ctest 注入 PATH。
+#
+# 紧接着 `cmake/PruneRuntime.cmake` 把 windeployqt 多拷的东西（没用到的 Quick
+# Controls 样式、qmltooling、软件 OpenGL 回退……）删掉，release 还顺手 strip 掉
+# exe 的调试符号。清单与理由见 AGENTS.md 第 10 节的“发布包精简”。
+# debug profile 保留 qmltooling 与符号（Qt Creator 的 QML 调试、gdb 要用）。
 # ---------------------------------------------------------------------------
 if(WIN32 AND TARGET Qt6::windeployqt)
+    if(FLOWKEYD_IS_DEBUG_PROFILE)
+        set(FLOWKEYD_PRUNE_PROFILE debug)
+    else()
+        set(FLOWKEYD_PRUNE_PROFILE release)
+    endif()
     add_custom_command(TARGET flowkeyd POST_BUILD
         COMMAND Qt6::windeployqt
             --no-translations
             --qmldir "${CMAKE_CURRENT_SOURCE_DIR}/src/qml"
             "$<TARGET_FILE:flowkeyd>"
-        COMMENT "windeployqt: deploying the Qt runtime next to flowkeyd.exe"
+        COMMAND ${CMAKE_COMMAND}
+            "-DPRUNE_DIR=$<TARGET_FILE_DIR:flowkeyd>"
+            "-DPROFILE=${FLOWKEYD_PRUNE_PROFILE}"
+            "-DSTRIP_EXE=$<TARGET_FILE:flowkeyd>"
+            "-DOBJCOPY=${CMAKE_OBJCOPY}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/PruneRuntime.cmake"
+        COMMENT "windeployqt + prune: deploying the Qt runtime next to flowkeyd.exe"
         VERBATIM)
 endif()
 
@@ -368,6 +392,11 @@ endif()
 # 没有构建系统文件、没有单测，可以直接拷贝到别的机器上运行。
 # 注意这是“额外”产出：build/windows-release 自己仍然部署了一份运行时，方便
 # 开发期直接跑；发布一律以 build/dist-release 为准（见 AGENTS.md 第 5 节）。
+# 上面那条 POST_BUILD 已经把 build/windows-release 里的 exe 与运行时精简过，
+# 所以这里拷过去的 exe 与 dist 里的是同一个二进制（SHA-256 相同）。
+# 下面紧接着的这一次 prune **不再 strip**：源 exe 已经 strip 过了，而 objcopy
+# **不是幂等的**（每跑一次都会重写 PE 头的 TimeDateStamp），再 strip 一次会让
+# dist 的 exe 与 build/windows-release 的不再逐字节相同。
 # ---------------------------------------------------------------------------
 if(WIN32 AND TARGET Qt6::windeployqt AND NOT FLOWKEYD_IS_DEBUG_PROFILE)
     set(FLOWKEYD_DIST_DIR "${CMAKE_SOURCE_DIR}/build/dist-release")
@@ -379,7 +408,13 @@ if(WIN32 AND TARGET Qt6::windeployqt AND NOT FLOWKEYD_IS_DEBUG_PROFILE)
             --no-translations
             --qmldir "${CMAKE_CURRENT_SOURCE_DIR}/src/qml"
             "${FLOWKEYD_DIST_DIR}/flowkeyd.exe"
-        COMMENT "windeployqt: staging the clean release into build/dist-release"
+        COMMAND ${CMAKE_COMMAND}
+            "-DPRUNE_DIR=${FLOWKEYD_DIST_DIR}"
+            "-DPROFILE=release"
+            "-DSTRIP_EXE="
+            "-DOBJCOPY=${CMAKE_OBJCOPY}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/PruneRuntime.cmake"
+        COMMENT "windeployqt + prune: staging the clean release into build/dist-release"
         VERBATIM)
 endif()
 

@@ -108,6 +108,10 @@ git 提交**（`git rev-parse --short HEAD` 的缩写）。托盘右键菜单里
 
 运行期没有任何第三方依赖：Lua 5.5.1 静态链在二进制里，Qt 与 MinGW 的运行时 DLL
 由构建时的 `windeployqt` 拷到 exe 同目录（见下节），所以构建产物是自包含的。
+那套运行时是**精简过**的（见下节）：软件 OpenGL 回退（`opengl32sw.dll`）与
+D3D 编译器（`D3Dcompiler_47.dll`）都已去掉，Qt Quick 走 D3D11（系统没有显卡
+驱动时用 Windows 自带的 WARP），所以**运行期要求 Windows 10 或 11**
+（它们自带 `d3dcompiler_47.dll`）。
 
 ## 构建与运行
 
@@ -134,9 +138,11 @@ $C = 'C:\Qt\Tools\CMake_64\bin\cmake.exe'
 | `build/dist-release`    | **发布**   | 只有 `flowkeyd.exe` 与它需要的 Qt/MinGW 运行时 —— 拷走就能跑        |
 
 `build/dist-release/` 是 release 构建时**自动**产出的（不用另跑命令）：它里面的
-`flowkeyd.exe` 与 `build/windows-release/flowkeyd.exe` 是同一个二进制，只是旁边
-没有 `CMakeCache.txt`/`build.ninja`/`*.a` 这些构建系统文件。**要交付或换机器，
-就整个拷 `build\dist-release\`**：目标机器不需要装 Qt。
+`flowkeyd.exe` 与 `build/windows-release/flowkeyd.exe` 是同一个二进制（SHA-256
+相同），只是旁边没有 `CMakeCache.txt`/`build.ninja`/`*.a` 这些构建系统文件。
+**要交付或换机器，就整个拷 `build\dist-release\`**：目标机器不需要装 Qt。
+里面的运行时是**精简过**的（用不到的 Quick Controls 样式、软件 OpenGL 回退、
+exe 的调试符号都已去掉，见 `cmake/PruneRuntime.cmake` 与本文件末尾的「已知限制」）。
 `CMakePresets.json` 里写死了本机的 Qt / MinGW / Ninja 路径，换机器时改那里。
 
 ### 发布（打包 + 上传 GitHub Release）
@@ -169,13 +175,16 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\release.ps1
   `-Draft` / `-Prerelease`、`-Notes <文本>` / `-NotesFile <文件>`（默认让 `gh`
   自动生成说明）、`-Clobber`（tag 已存在时覆盖同名资产）。
 
-**构建产物是自包含的**：每次链接完 `flowkeyd` 之后会自动跑一次 `windeployqt`，
-把 Qt 与 MinGW 的运行时 DLL、以及 exe 用到的 QML 模块（`QtQuick`、
-`QtQuick.Controls.FluentWinUI3`……）拷到产物目录。所以
-**直接双击 `build\dist-release\flowkeyd.exe`（或用构建树里那一份）就能启动**，
+**构建产物是自包含的、而且精简过**：每次链接完 `flowkeyd` 之后会自动跑一次
+`windeployqt`，把 Qt 与 MinGW 的运行时 DLL、以及 exe 用到的 QML 模块（`QtQuick`、
+`QtQuick.Controls.FluentWinUI3`……）拷到产物目录；紧接着 `cmake/PruneRuntime.cmake`
+把**用不到**的那些删掉（没用到的 Quick Controls 样式、QML 调试插件、软件 OpenGL
+回退、系统自带的 D3D 编译器……），release 还会 `strip` 掉 exe 的调试符号。
+于是发布包是 **211 个文件 / 约 63 MB**（精简前是 1378 个 / 150 MB；zip 约 26 MB）。
+所以**直接双击 `build\dist-release\flowkeyd.exe`（或用构建树里那一份）就能启动**，
 不需要把 Qt 的 `bin` 加进 `PATH`，也不需要额外跑部署脚本。
 （想走标准的安装规则时仍然可以用 `cmake --install`：那套规则走的是
-`qt_generate_deploy_app_script`；见 `CMakeLists.txt` 末段。）
+`qt_generate_deploy_app_script`，**它没有精简这一步**，见 `CMakeLists.txt` 末段。）
 
 > 双击启动等价于**不带任何参数**启动：它没有控制台，日志只进
 > `%USERPROFILE%\.config\flowkeyd\flowkeyd.log`（用托盘「查看日志」看），
@@ -1334,6 +1343,18 @@ $env:FLOWKEYD_ALLOW_INTERACTIVE_TESTS = '1'
 
 ## 已知限制
 
+* **发布包里的 Qt 运行时要 Windows 10 或 11。** 为了把 1378 个文件 / 150 MB 压到
+  211 个 / 63 MB，`cmake/PruneRuntime.cmake` 删掉了用不到的东西：没用到的那几个
+  Quick Controls 样式（只留 `FluentWinUI3` 与它依赖的 `Basic`/`Fusion`）、
+  QML 调试插件（`qmltooling`）、软件 OpenGL 回退与 D3D 编译器（改用系统自带的）、
+  以及只给 Qt Creator 用的 `plugins.qmltypes`；release 还会 `strip` 掉 exe 的
+  调试符号（符号仍在 `build/windows-debug`）。推到的机器上如果缺
+  `d3dcompiler_47.dll`（Win8.1 及更早），弹窗与日志窗口会起不来 —— 把
+  `C:\Qt\6.11.2\mingw_64\bin\` 里的 `D3Dcompiler_47.dll` 与 `opengl32sw.dll`
+  拷回 exe 旁边即可。从源码构建的话，删掉 `cmake/PruneRuntime.cmake` 里那几行
+  就恢复成完整运行时。
+* 精简过的产物里**不能再用 `-qmljsdebugger` 调 QML**（QML 调试插件被删了）：
+  要调 QML 就用 `build/windows-debug`（那个 profile 保留 `qmltooling`）。
 * 配置文件是**脚本**，不是数据：`--check` 会执行它（`print` 会打到 stdout，
   `os.execute` 之类也真的会跑）。请只跑你信任的配置。
 * **动作不能是 Lua 函数。** 这不是技术限制，而是刻意的：动作要能被 `--list`

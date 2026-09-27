@@ -664,6 +664,11 @@ try {
     Write-Host "daemon started (pid $($daemon.Id))"
     Check '日志里有测试模式的警告' ((DaemonText) -match 'FLOWKEYD_ACCEPT_INJECTED is set')
 
+    # 精简运行时之后（见 AGENTS.md 第 10 节的“发布包精简”），三个弹窗在启动时就会
+    # 预热加载一遍：精简清单删过头（例如新加的 QML 用了别的模块）时，这里会立刻
+    # 出现我们自己的 ERROR —— `could not load xxx.qml: ... module "..." is not installed`。
+    Check '启动日志里没有弹窗 QML 加载错误' (-not ((DaemonText) -match 'could not load'))
+
     # --- 单实例 --------------------------------------------------------------
     Write-Host '--- 单实例 ---'
     $secondOut = Join-Path $WorkDir 'second.out'
