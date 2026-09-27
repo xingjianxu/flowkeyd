@@ -4822,6 +4822,51 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > 按工作约定第 11 条：常驻实例已 `--quit` → 构建 release → 从
 > `build\dist-release` 重新拉起（自启任务仍指向那个路径）。
 
+> **2026-09 新增（发布时同时提供精简升级包）的 DoD**：项目所有者要求“除了
+> 目前已经提供的这个 full 的 zip 版本的包，再提供一个精简包（不包含一般不变化
+> 的依赖文件，如 qt 的 dll 等等）……第一次安装可以下载 full 版本，如果是升级，
+> 可以下载精简版本的 zip 包”。
+> `windows-debug` 与 `windows-release` 都是 **build exit 0**、零编译警告
+> （release 里那句 `dxcompiler.dll` 是 `windeployqt` 自己的提示）；单元测试由
+> 发布脚本自己跑：`ctest --test-dir build/windows-debug` **24 个测试目标全绿**
+> （本次没有改可测的代码）。
+> 脚本改动：同一份 `build/dist-release` 打**两个** zip —— 完整包
+> `flowkeyd-<版本>-windows-x64.zip`（exe + Qt/MinGW 运行时）与精简包
+> `flowkeyd-<版本>-windows-x64-slim.zip`（只有 `flowkeyd.exe`），各带一份
+> `.sha256` 与一份包内 `README.txt`；自动生成的发布说明前面会加一段“两个包
+> 怎么选”（`--generate-notes` + `--notes`）。哪个文件进哪个包由白名单 +
+> 兜底报错决定（`$SlimFiles` / `$DependencyPatterns`，见第 10 节）。
+> 干跑 + 独立核验（`-SkipUpload`，产物在 `%TEMP%\flowkeyd-release`）：完整包
+> **24.0 MB / 212 个条目**、精简包 **0.64 MB / 2 个条目**（`flowkeyd.exe` +
+> `README.txt`）；两份 `.sha256` 与对应 zip 逐字节相符；精简包里的 exe 与
+> `build/dist-release/flowkeyd.exe` 的 SHA-256 相同；把完整包解出来
+> `--version` → `flowkeyd 26-09-27-95f40ac`，再把精简包的 exe 覆盖过去跑一次
+> → 同样的输出（“升级”这条路径是通的）。两份 `README.txt` 用 read 工具看过，
+> 中文正常（带 BOM）。
+> **顺手修掉一个老毛病**：`Compress-Archive` 与 `ZipFile::CreateFromDirectory`
+> 在 Windows PowerShell 5.1 里把 zip 条目名的分隔符写成 `\`（Windows 能解，
+> 但 unzip / tar / WSL 会解出一堆名字里带反斜杠的文件）；现在 `New-ZipPackage`
+> 自己用 `ZipArchive` 逐个写条目（`/` 分隔符、保留一层 `<目录名>/`）。
+> **正式发布**：`scripts/release.ps1 -Push` 一路跑完（停常驻 → debug + `ctest`
+> → release 重新链接（`source revision 95f40ac`）→ 打包 → 上传 → 拉回常驻），产出
+> **https://github.com/xingjianxu/flowkeyd/releases/tag/v26-09-27-95f40ac**（Latest，
+> 四个资产都是 `uploaded`）。又用 `gh release download` 把四个资产拉回来核对：
+> 两个 zip 的 SHA-256 与本地一致（`17a78031…` / `653e3839…`），两份 `.sha256`
+> 文件的内容也对得上；发布说明确实是“中文那段 + 自动生成的 Full Changelog”。
+> 常驻实例已按工作约定第 11 条 `--quit` → 构建 → 从 `build\dist-release`
+> 重新拉起（启动日志第一行 `flowkeyd 26-09-27-95f40ac starting`，自启任务仍指向
+> 那个路径）。
+> 行为变化：每次发布多传两个资产（完整包 + 精简包，各带 `.sha256`），包内多一份
+> `README.txt`；README 的「发布」一节、本文件第 4 / 5 / 10 / 13 节已同步。
+> **这次学到的一条（写 PowerShell 脚本时很值）**：用 PowerShell 5.1 接一个原生
+> 命令的 **UTF-8 标准输出**（这里是 `gh release view --json body`）会把中文按
+> 控制台代码页（本机 GBK）解码成乱码 —— 一度让我以为发布说明写坏了；把 gh 的
+> 输出**按字节重定向到文件**（或先设 `[Console]::OutputEncoding = UTF8`）再看就
+> 正常。同理，`Info` 里回显整条命令行时看到的中文乱码也只是控制台代码页，
+> **不代表参数真的传坏了**（发布说明里那段中文是好的，gh 拿到的就是它）。
+> 两个包里的 `README.txt` 用**带 BOM 的 UTF-8** 写，正是为了别人打开时不踩这类
+> 编码问题（`.sha256` 仍然不带 BOM，因为 `sha256sum -c` 认的是逐字节内容）。
+
 ---
 
 ## 12. 本期不做的（有意留白）与后续工作
