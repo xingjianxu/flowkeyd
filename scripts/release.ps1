@@ -496,13 +496,50 @@ flowkeyd $Version 精简包（只用于升级，不要用来做首次安装）
     [System.IO.File]::WriteAllText($Path, $text, (New-Object System.Text.UTF8Encoding($true)))
 }
 
+# `ZipArchive`/`ZipArchiveMode` 在 System.IO.Compression 里，`ZipFile` 在
+# System.IO.Compression.FileSystem 里：两个程序集都得显式加载，
+# 不然 PowerShell 解析类型名会报“找不到类型”。
+function Add-ZipAssemblies {
+    Add-Type -AssemblyName System.IO.Compression
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+}
+
 # 打一个 zip，并在旁边写一份 `<zip>.sha256`（`sha256sum -c` 认的格式）。
+#
+# **自己逐个写条目**，不用 `Compress-Archive`，也不用
+# `ZipFile::CreateFromDirectory`：这两个在 Windows PowerShell 5.1（.NET
+# Framework）里把条目名里的目录分隔符写成 **`\`**，而不是 zip 规范要求的 `/`。
+# Windows 自己的解压能容，但 `unzip` / `tar` / WSL 里解出来会得到一堆名字里
+# 带反斜杠的文件（名字整个错了）。自己写就是几行，还能顺便把压缩级别直接
+# 映到 `CompressionLevel`。
 function New-ZipPackage {
     param([string]$Stage, [string]$ZipName, [string]$Label)
     $zip = Join-Path $WorkDir $ZipName
     if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
-    Info "compressing the $Label (Compress-Archive -CompressionLevel $Compression); this can take a while"
-    Compress-Archive -Path $Stage -DestinationPath $zip -CompressionLevel $Compression
+    Add-ZipAssemblies
+    $level = switch ($Compression) {
+        'NoCompression' { [System.IO.Compression.CompressionLevel]::NoCompression; break }
+        'Fastest' { [System.IO.Compression.CompressionLevel]::Fastest; break }
+        default { [System.IO.Compression.CompressionLevel]::Optimal }
+    }
+    Info "compressing the $Label (zip, CompressionLevel $Compression); this can take a while"
+    $archive = [System.IO.Compression.ZipFile]::Open($zip, [System.IO.Compression.ZipArchiveMode]::Create)
+    try {
+        # 条目名从**暂存目录的父目录**算起，所以 zip 里带一层 `<目录名>/`，
+        # 与以前的包（以及 `Compress-Archive` 的行为）一致。
+        $parent = Split-Path -Parent $Stage
+        foreach ($file in (Get-ChildItem -LiteralPath $Stage -Recurse -Force -File)) {
+            $name = $file.FullName.Substring($parent.Length + 1).Replace('\', '/')
+            $entry = $archive.CreateEntry($name, $level)
+            $source = [System.IO.File]::OpenRead($file.FullName)
+            try {
+                $target = $entry.Open()
+                try { $source.CopyTo($target) } finally { $target.Dispose() }
+            } finally { $source.Dispose() }
+        }
+    } finally {
+        $archive.Dispose()
+    }
 
     $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
     [System.IO.File]::WriteAllText("$zip.sha256", "$hash  $ZipName`n", (New-Object System.Text.UTF8Encoding($false)))
@@ -511,12 +548,16 @@ function New-ZipPackage {
     return $zip
 }
 
+# 返回 zip 里的文件条目（已归一到 `/`，目录条目丢掉）。这里把 `\` 也当成
+# 分隔符，所以不管这个 zip 是哪个工具打的都查得出来。
 function Get-ZipEntryNames {
     param([string]$Zip)
-    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    Add-ZipAssemblies
     $archive = [System.IO.Compression.ZipFile]::OpenRead($Zip)
     try {
-        return @($archive.Entries | ForEach-Object { $_.FullName })
+        return @($archive.Entries |
+            ForEach-Object { $_.FullName.Replace('\', '/') } |
+            Where-Object { -not $_.EndsWith('/') })
     } finally {
         $archive.Dispose()
     }
@@ -528,7 +569,7 @@ function Assert-SlimZip {
     param([string]$Zip, [string]$StageName)
     $allowed = @("$StageName/README.txt")
     foreach ($rel in $script:distSlimFiles) { $allowed += "$StageName/$rel" }
-    $entries = @(Get-ZipEntryNames -Zip $Zip | Where-Object { -not $_.EndsWith('/') })
+    $entries = @(Get-ZipEntryNames -Zip $Zip)
     $unexpected = @($entries | Where-Object { $allowed -notcontains $_ })
     if ($unexpected.Count -gt 0) {
         throw ('the slim package contains unexpected file(s): ' + ($unexpected -join ', ') + '. The slim package must only contain the files listed in $SlimFiles (plus README.txt)')

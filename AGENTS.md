@@ -3147,6 +3147,8 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
     那是**预览工具的环境问题**，产品（守护进程）日志里是 **0 条**——别被它骗了。
   * 尺寸：`build/dist-release` 211 个文件 / 63.0 MB（`Compress-Archive`
     量到 zip 25.7 MB；原来是 1378 个 / 149.8 MB / zip 51.3 MB）。
+    → **2026-09 后续**：zip 改成发布脚本自己逐个写条目（为了用 `/` 当分隔符，
+    见下一节），同一个目录量到 **24.0 MB**。
 
 * **构建日志会被 windeployqt 的 `is up to date` 淹没**（每次 prune 都会重拷一次那
   堆被删的文件）：正常现象，不是错误。只想看重点就 `where $_ -match
@@ -3192,6 +3194,15 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   再查一遍 —— 只允许 `$SlimFiles` 那几项加 `README.txt`（看的是 **zip 条目**，
   不是暂存目录，所以“拷进去又删掉”这类错误也躲不过）；另外暂存出来的那份 exe
   必须与 `build/dist-release/flowkeyd.exe` 的 SHA-256 相同。
+* **别用 `Compress-Archive`（或 `ZipFile::CreateFromDirectory`）写发布 zip**：
+  这两个在 Windows PowerShell 5.1（.NET Framework）里把条目名里的目录分隔符写成
+  **`\`**，而不是 zip 规范要求的 `/`。Windows 自己的解压能容（所以以前的包没
+  人抱怨），但 `unzip` / `tar` / WSL 里解出来会得到一堆名字里带反斜杠的文件。
+  现在 `New-ZipPackage` 自己用 `ZipArchive` 逐个写条目，名字从**暂存目录的父目录**
+  算起（所以 zip 里仍然带一层 `<目录名>/`）。另外一个坑：这两个类型在两个不同的
+  程序集里（`ZipArchive`/`ZipArchiveMode` 在 `System.IO.Compression`，`ZipFile`
+  在 `System.IO.Compression.FileSystem`），**两个都要 `Add-Type` 加载**，
+  少一个就报一句“找不到类型”。
 * **`gh release create` 可以把 `--notes` 的内容加在自动生成的说明前面**（它的
   `--help` 里写着 “Additional release notes can be prepended to automatically
   generated notes by using the `--notes` flag”），所以“两个包怎么选”那段不用自己

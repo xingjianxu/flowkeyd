@@ -197,7 +197,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\release.ps1
 `QtQuick.Controls.FluentWinUI3`……）拷到产物目录；紧接着 `cmake/PruneRuntime.cmake`
 把**用不到**的那些删掉（没用到的 Quick Controls 样式、QML 调试插件、软件 OpenGL
 回退、系统自带的 D3D 编译器……），release 还会 `strip` 掉 exe 的调试符号。
-于是发布包是 **211 个文件 / 约 63 MB**（精简前是 1378 个 / 150 MB；zip 约 26 MB）。
+于是发布包是 **211 个文件 / 约 63 MB**（精简前是 1378 个 / 150 MB；zip 约 24 MB；
+升级用的精简 zip 只有 0.6 MB）。
 所以**直接双击 `build\dist-release\flowkeyd.exe`（或用构建树里那一份）就能启动**，
 不需要把 Qt 的 `bin` 加进 `PATH`，也不需要额外跑部署脚本。
 （想走标准的安装规则时仍然可以用 `cmake --install`：那套规则走的是
