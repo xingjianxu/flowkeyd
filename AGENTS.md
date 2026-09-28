@@ -3941,7 +3941,10 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   这正是“日志与错误信息保持英文”那条约定的方向（`README.md` 仍然是中文）；
   要参数时仍可走 `-File`（无 BOM 的纯 ASCII 文件两种读法都对）或
   `&([scriptblock]::Create((irm <url>))) -Version …`。
-  **再改这个文件时必须守住两条：全部字节 ≤ 0x7F、不写 BOM**（CRLF 保持与原来一致）。
+  **再改这个文件时必须守住两条：全部字节 ≤ 0x7F、不写 BOM**。行尾不用特意管：
+  仓库开着 `core.autocrlf=true`，提交进去（也就是 raw 上取到的）是 **LF**，
+  工作区检出来是 CRLF，两种都能被 `irm | iex` 与 `-File` 正确执行
+  （旧那份在仓库里也是 LF，上面记录里的 `crlf=297` 说的是工作区）。
 * **验证手法**（`tmp/` 下的一次性脚本，不进版本库）：
   * 只断言“能解析”不够，要真的跑一遍 `irm | iex`，而且**不能让默认流程真的装一遍**。
     做法是照本节“本地假 GitHub”那一套：用**裸 `TcpListener`** 起一个 HTTP 服务
@@ -3954,6 +3957,10 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   * 两条对照：`&([scriptblock]::Create((irm <url>))) -Version 99-99-99-abcdef0 -NoLaunch`
     （真实文件 + 真实 GitHub 404）与 `powershell -File install.ps1 -Version 99…`
     （证明 `-File` 这条路照旧）。
+  * 推到 master 之后想验**真实 URL** 又不想真的装一遍：**把子进程的 `$env:OS` 置空**
+    （`powershell -nop -c "$env:OS=$null; irm <raw> | iex"`），脚本会在第一条 guard
+    （`if (-not $env:OS …) { throw 'this installer only runs on Windows.' }`）上退出，
+    既不下载也不安装，却证明了「取来的文本真的能解析并执行」。
   * 每条都写进 `tmp/` 下的一个 UTF-8 文本再 `read`，不要盯控制台（中文会被代码页弄乱）。
 * **一个容易骗过自己的细节**：`Invoke-RestMethod` / `Invoke-WebRequest` 对
   `text/plain` 返回的是**一个字符串**（实测 `type=System.String`，不是按行拆开的
@@ -5252,13 +5259,21 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 >   **27 项测试全绿**（`100% tests passed, 0 tests failed out of 27`）。
 > * `flowkeyd --check --config flowkeyd.lua.example` →
 >   `OK (46 hotkey(s), 3 remap(s), 7 window rule(s))`、零警告。
-> * `install.ps1` 自身：`bytes=12997`、`first3=23 52 65`（`#Re`，**无 BOM**）、
+> * `install.ps1` 自身（工作区）：`bytes=12997`、`first3=23 52 65`（`#Re`，**无 BOM**）、
 >   `nonascii=0`、`crlf=297 bare_lf=0`、`Parser::ParseInput` **0 错误**。
+>   提交之后 raw 上取到的是 **LF**（仓库开了 `core.autocrlf=true`；raw 副本 12700 字节、
+>   同样 0 解析错误、首字符仍是 `#`）。
 > * 三条路径实测跑通：字面 `irm <url> | iex`（本地假 GitHub，完整走完
 >   「取版本 → 下载 → 失败」，英文错误 + 退出码 1，**没碰安装目录、没碰常驻实例**）、
 >   `&([scriptblock]::Create((irm <url>))) -Version 99-99-99-abcdef0`（真实文件 +
 >   真实 GitHub 404）、`powershell -File install.ps1 -Version 99…`（`-File` 照旧正常）。
 >   细节与手法见第 10 节新增的那一小节。
+> * 推到 master 之后又对**真实 URL** 验了一遍：`irm https://raw.githubusercontent.com/…/install.ps1`
+>   取到的文本无 BOM、0 解析错误；把子进程的 `$env:OS` 置空后，字面命令
+>   `powershell -nop -c "$env:OS=$null; irm <raw> | iex"` **真的跑进了脚本**，
+>   在第一条 guard 上以 `this installer only runs on Windows.` + 退出码 1 收场
+>   （没创建安装目录、没留 staging 目录）—— 这就是「README 那条命令现在真的可用」
+>   的直接证据（提交前它在 `param()` 上就解析失败了）。
 > * **没有动钩子 / 引擎 / 分发 / 窗口后端**，所以按第 11 节第 3 条没有重跑
 >   `scripts/acceptance.ps1`。
 > * 收尾：这次是纯脚本 / 文档改动，**提交之后没有重新构建**（提交会让 git 修订变化、
