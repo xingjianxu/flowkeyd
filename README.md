@@ -9,7 +9,7 @@
 在 **PowerShell** 里执行下面这一行，即可从 GitHub Release 下载并安装（或升级）最新版：
 
 ```powershell
-curl.exe -fsSL https://raw.githubusercontent.com/xingjianxu/flowkeyd/master/install.ps1 -o "$env:TEMP\flowkeyd-install.ps1"; powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\flowkeyd-install.ps1"
+powershell -nop -c "irm https://raw.githubusercontent.com/xingjianxu/flowkeyd/master/install.ps1 | iex"
 ```
 
 安装脚本会：
@@ -21,11 +21,14 @@ curl.exe -fsSL https://raw.githubusercontent.com/xingjianxu/flowkeyd/master/inst
 5. 覆盖安装，并创建开始菜单快捷方式；
 6. 启动 flowkeyd（守护进程首次启动会自提权，弹一次 UAC）。
 
-脚本也可以先下载再带参数运行：
+上面那种 `irm … | iex` 的写法传不了参数。要指定版本 / 安装目录、或不创建快捷方式、
+不启动，就把脚本落盘（或直接在仓库里）带参数运行：
 
 ```powershell
+# 先落盘（也可以直接用仓库里的 install.ps1）
+curl.exe -fsSL https://raw.githubusercontent.com/xingjianxu/flowkeyd/master/install.ps1 -o "$env:TEMP\flowkeyd-install.ps1"
 # 安装指定版本，装到别处，并且不创建快捷方式、不启动
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 `
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\flowkeyd-install.ps1" `
     -Version 26-09-27-dc6b332 -InstallDir D:\Tools\flowkeyd -NoShortcut -NoLaunch
 ```
 

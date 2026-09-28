@@ -63,9 +63,14 @@
 >    **例外（2026-09，项目所有者要求）**：仓库根目录有一个 **`install.ps1`**，
 >    它是给**外部用户**的一键安装器（从 GitHub Release 下载完整包、校验 sha256、
 >    解压到 `%LOCALAPPDATA%\Programs\flowkeyd` 并可选启动），**不是**当年那个
->    「部署到预设安装目录」的脚本，也不参与自启任务。README 最上面那条 curl
->    命令用的就是它（先 `-o` 落盘，再用 `powershell -File` 跑，**不要**用管道喂
->    stdin，见第 10 节），见第 4 节与第 11 节末尾的 DoD 记录。
+>    「部署到预设安装目录」的脚本，也不参与自启任务。README 最上面那条
+>    `powershell -nop -c "irm <raw>/install.ps1 | iex"` 用的就是它。
+>    **这个文件必须保持纯 ASCII，而且不能有 UTF-8 BOM**：`irm` 会把 BOM 留成一个
+>    真实的 `U+FEFF`，`Invoke-Expression` 随即在 `param()` 上解析失败
+>    （`ParserError: InvalidLeftHandSide`，见第 10 节）。要带参数跑就用
+>    「`curl -o` 落盘 + `powershell -File`」，或
+>    `&([scriptblock]::Create((irm <url>))) -Version …`。
+>    见第 4 节与第 11 节末尾的 DoD 记录。
 >
 >    **注意（2026-09 实测）**：这台机器上 agent 的 `powershell.exe` **是提权的**
 >    （`WindowsPrincipal.IsInRole(Administrator)` 为真），所以它能注册/启停那个
@@ -732,7 +737,7 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `cmake/VendorLua.cmake`                   | 把 `vendor/lua` 编成静态库 `lua_static`（排除 `lua.c`/`luac.c`/`onelua.c`/`ltests.c`，定义 `LUA_USE_WINDOWS`）                                                                                                              |
 | `flowkeyd.lua.example`                    | 有文档、覆盖全部特性的参考配置（中文注释、无警告），`--check` 就是拿它跑的                                                                                                                                                  |
 | `README.md`                               | **用户文档（只写使用方法，不含开发内容）**：安装（curl 一键装）、快速上手、命令行、配置/动作/schema 全部字段、托盘与弹窗、开机自启、在线更新、已知限制。是配置 schema 的权威定义                                                                                                                                                      |
-| `install.ps1` | **对外的一键安装器**（仓库根目录，UTF-8 with BOM）：从 GitHub Release 读最新版本 → 下载完整包 `flowkeyd-<版本>-windows-x64.zip` 并校验 `.sha256` → 解压到 `%LOCALAPPDATA%\Programs\flowkeyd` → `flowkeyd.exe --quit` 停掉正在跑的实例 → 覆盖安装 + 创建开始菜单快捷方式 → 启动。参数：`-Version` / `-InstallDir` / `-NoLaunch` / `-NoShortcut` / `-SkipChecksum`。README 最上面的 curl 命令就是「下载它 + 用 `powershell -File` 跑它」。**它不是部署脚本**，与自启任务无关（见第 2 节第 10 条的例外说明）
+| `install.ps1` | **对外的一键安装器**（仓库根目录，**纯 ASCII、无 BOM、CRLF**；必须是纯 ASCII 且无 BOM，否则 README 最上面那条 `powershell -nop -c "irm <raw>/install.ps1 | iex"` 会解析失败，见第 10 节）：从 GitHub Release 读最新版本 → 下载完整包 `flowkeyd-<版本>-windows-x64.zip` 并校验 `.sha256` → 解压到 `%LOCALAPPDATA%\Programs\flowkeyd` → `flowkeyd.exe --quit` 停掉正在跑的实例 → 覆盖安装 + 创建开始菜单快捷方式 → 启动。参数：`-Version` / `-InstallDir` / `-NoLaunch` / `-NoShortcut` / `-SkipChecksum`（`irm | iex` 那条路传不了参数，要参数就用 `-File` 或 `&([scriptblock]::Create((irm <url>)))` 形式）。**它不是部署脚本**，与自启任务无关（见第 2 节第 10 条的例外说明）|
 | `logo.svg`                                | **应用图标的美术源**（仓库根目录，唯一的真源）。它不被任何构建步骤读取，只在改图标时被 `tools/icon_gen` 光栅化（见第 10 节）                                                                                                |
 | `assets/flowkeyd.ico`                     | **exe 的 Windows 图标资源**（9 帧：16–64 为 DIB，128/256 为 PNG），由 windres 通过配置时生成的 `assets/flowkeyd.rc.in` 嵌进 exe。改了 `logo.svg` 要重新生成：`cmake --build --preset debug --target icons`。**要提交** |
 | `assets/icons/flowkeyd-<n>.png`           | 运行时 `QIcon` 的 9 个尺寸（16/20/24/32/40/48/64/128/256），编在 exe 自己的 qrc 里（`:/icons/…`，见 `src/app/app_icon.*`）。**要提交**                                        |
@@ -3381,8 +3386,16 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 * **`curl | powershell -Command -` 在中文 Windows 上会把脚本里的 UTF-8 中文按
   GBK 解码**（本机 ACP=936；实测 `"安装完成"` 变成 `28729,22798,58826,…` 六七个
   字符），给 stdin 加 UTF-8 BOM 也不行（BOM 会被当成第一个标识符，报
-  `ObjectNotFound`）。所以 `install.ps1` 是**带 BOM 的 UTF-8**，README 给的是
-  「`curl -o` 落盘 + `powershell -File` 跑」两段式命令，而不是管道喂 stdin。
+  `ObjectNotFound`）。
+* **`irm <url> | iex` 与 BOM 不兼容**（2026-09 实测）：`irm` 会把响应体开头
+  那个 UTF-8 BOM 留成一个**真实的 `U+FEFF` 字符**，于是
+  `Invoke-Expression` 解析到 `param(...)` 时报
+  `ParserError: InvalidLeftHandSide`（`行:35 字符:24`，指 `[string]$Version = '',`）。
+  两个「不兼容」是同一件事的两面：**`install.ps1` 只能二选一** —— 要么
+  「带 BOM（`-File` 读中文，管道喂 stdin 会乱码）」，要么
+  「纯 ASCII + 无 BOM（`irm | iex` 直接可用）」。项目所有者 2026-09 选了后者
+  （安装器文案改英文），所以**这个文件必须保持纯 ASCII、无 BOM**，
+  见第 10 节的实测记录。
 * 通用修饰键 `VK_SHIFT` vs 分侧 `VK_LSHIFT`/`VK_RSHIFT`（`same_key`）。
 * 小键盘 Enter 与主键盘 Enter 共用 `VK_RETURN`，只能靠扩展键标志区分；
   **`SendInput` 不带 `KEYEVENTF_EXTENDEDKEY` 就造不出小键盘的 Enter**。
@@ -3897,6 +3910,63 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   560x238 与模型的 `listTop 50 + 3*48 + listBottom 44` 完全对得上。
   （一开始用逐通道容差 3 得到“整行都不同”的假象，是因为卡片的圆角/描边像素也不等
   于背景；阈值取 8 就干净了。）
+
+#### 2026-09 变更：一键安装命令精简成 `irm … | iex`（`install.ps1` 改纯 ASCII、去掉 BOM）
+
+* **起因**（项目所有者提的问）：“一键安装的命令能否精简为
+  `powershell -nop -c "irm <raw>/install.ps1 | iex"`？”
+* **实测答案：改之前不行** —— 那条命令会以解析错误收场，什么都没装：
+  ```
+  iex : 所在位置 行:35 字符: 24
+  +     [string]$Version = '',
+  +                        ~~
+  赋值表达式无效。赋值运算符输入必须是能够接受赋值的对象，例如变量或属性。
+      + FullyQualifiedErrorId : InvalidLeftHandSide,Microsoft.PowerShell.Commands.InvokeExpressionCommand
+  ```
+* **根因：`irm` 会把脚本开头那个 UTF-8 BOM 留成一个真实的 `U+FEFF` 字符。**
+  实测响应体 `first_cps=65279`；把同一份响应去掉开头一个字符再
+  `Parser::ParseInput`，错误数从 1 变 0（给干净文本手工加回一个 `U+FEFF` 就再次报错）。
+  带着这个字符，`param(...)` 就不再是脚本的参数块：解析器在 `param(` 那一行先报
+  `ExpectedExpression` / `MissingEndParenthesisInExpression`，整份文件最终收敛成
+  第一个参数上的 `InvalidLeftHandSide`。token 层面也看得见：第一行被切成
+  `Generic "\uFEFF#Requires"`（不再是 `#Requires` 注释）。
+* **BOM 不能简单删掉**：实测把 `install.ps1` 存成无 BOM 的 UTF-8 之后，
+  `powershell -File` 会按 ANSI/GBK 读它（本机 ACP=936），中文全变乱码
+  （`鈥?鐢?Lua 閰嶇疆…`），脚本连解析都过不去（`意外的标记“}”`、`字符串缺少终止符`）
+  —— 与本节“无 BOM 的 `.ps1` 里的中文会把下一行吞掉”是同一个坑。
+  所以 **“带 BOM（`-File` 读中文）+ 管道/`iex` 喂文本”和“纯 ASCII 无 BOM（`irm | iex`）”
+  只能二选一**。
+* **项目所有者 2026-09 拍板选后者**：`install.ps1` 改**纯 ASCII + 无 BOM**
+  （中文注释与文案全改英文，逻辑逐行不变），README 顶部就是最短的那条一行版。
+  这正是“日志与错误信息保持英文”那条约定的方向（`README.md` 仍然是中文）；
+  要参数时仍可走 `-File`（无 BOM 的纯 ASCII 文件两种读法都对）或
+  `&([scriptblock]::Create((irm <url>))) -Version …`。
+  **再改这个文件时必须守住两条：全部字节 ≤ 0x7F、不写 BOM**（CRLF 保持与原来一致）。
+* **验证手法**（`tmp/` 下的一次性脚本，不进版本库）：
+  * 只断言“能解析”不够，要真的跑一遍 `irm | iex`，而且**不能让默认流程真的装一遍**。
+    做法是照本节“本地假 GitHub”那一套：用**裸 `TcpListener`** 起一个 HTTP 服务
+    （`http://127.0.0.1:<port>/`；不用 `HttpListener`，它要 URL ACL），
+    把临时副本里的 `$ApiLatest` / `$DownloadBase` 两处常量改成本地地址，
+    让 `releases/latest` 返回一个不存在的 `99-99-99-abcdef0`。真实的那条命令于是
+    完整走完「取版本 → 下载 → 失败」，以英文错误 + 退出码 1 收场，**不碰用户的安装
+    目录、不碰常驻实例**（实测前后 `%LOCALAPPDATA%\Programs\flowkeyd` 都不存在、
+    `%TEMP%\flowkeyd-install-*` 一个不留）。
+  * 两条对照：`&([scriptblock]::Create((irm <url>))) -Version 99-99-99-abcdef0 -NoLaunch`
+    （真实文件 + 真实 GitHub 404）与 `powershell -File install.ps1 -Version 99…`
+    （证明 `-File` 这条路照旧）。
+  * 每条都写进 `tmp/` 下的一个 UTF-8 文本再 `read`，不要盯控制台（中文会被代码页弄乱）。
+* **一个容易骗过自己的细节**：`Invoke-RestMethod` / `Invoke-WebRequest` 对
+  `text/plain` 返回的是**一个字符串**（实测 `type=System.String`，不是按行拆开的
+  数组），所以 `irm | iex` 收到的是整份脚本。如果哪天看到
+  `MissingTerminatorMultiLineComment` 且“第一行是 `<#`”，那是收到的文本**从第二行
+  开始**了（本机第一次跑那个临时驱动器时出现过一次，重跑两次 + 另一条独立探针都
+  正常，没能复现；与 BOM 无关，别归错因）。
+* **实测结果**：字面命令
+  `powershell -nop -c "irm http://127.0.0.1:<port>/install.ps1 | iex"` 打印
+  `== flowkeyd installer` / `resolving the version` / `installing: flowkeyd 99-99-99-abcdef0`
+  / `downloading …`，以 `installation failed: cannot parse the checksum file: …`
+  结束、退出码 1；文件本身 `bytes=12997`、`first3=23 52 65`（`#Re`）、`nonascii=0`、
+  `crlf=297 bare_lf=0`、`Parser::ParseInput` 错误数 0。
 
 ---
 
@@ -5119,7 +5189,7 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > 放在 `README.md` 最上面；`README.md` 只保留使用方法、不要开发内容；并且把项目
 > 代码与文档里所有旧参考实现（Rust 版）的字样全部去掉，以后不再提它的名字。
 >
-> * **`install.ps1`（仓库根目录，UTF-8 with BOM + CRLF）**：问 GitHub 要最新
+> * **`install.ps1`（仓库根目录，UTF-8 with BOM + CRLF）**（→ **2026-09 后续已改成纯 ASCII、无 BOM**，见本行下面那条记录）：问 GitHub 要最新
 >   Release 的 `tag_name`（`-Version` 可指定）→ 下载完整包
 >   `flowkeyd-<版本>-windows-x64.zip` → 用 `*.sha256` 校验 → `Expand-Archive`
 >   → `flowkeyd.exe --quit --no-prompt` 让正在跑的实例干净退出（15 秒不退再
@@ -5166,6 +5236,36 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > `31 hotkey(s), 0 remap(s), 4 window rule(s)` + `keyboard hook installed`。
 > 未跑 `scripts/acceptance.ps1`：本次只改注释 / 文档 / 一个新脚本，没碰钩子 /
 > 引擎 / 分发 / 窗口后端。
+
+> **2026-09 变更（一键安装命令精简成 `irm … | iex`：`install.ps1` 改纯 ASCII、去 BOM）
+> 的 DoD**：项目所有者要求把 README 最上面的安装命令换成
+> `powershell -nop -c "irm https://raw.githubusercontent.com/xingjianxu/flowkeyd/master/install.ps1 | iex"`，
+> 并在两个选项里拍板了**把 `install.ps1` 改成纯 ASCII + 无 BOM**（而不是保留 BOM
+> 再在命令里剥它；见第 2 节第 10 条的例外与第 10 节新增的那一小节）。
+>
+> * 改动只有三处：`install.ps1`（中文注释与文案全改英文，**逻辑逐行不变**：
+>   `#Requires -Version 5.1`、`param()` 的 5 个参数、临时目录、sha256 校验、
+>   `--quit` 停实例、快捷方式、卸载提示都没动）、`README.md`（顶部命令 + 带参数的
+>   两段式示例）、本文件。
+> * `windows-debug` 与 `windows-release` 都是 `build exit 0`（本轮改动不是构建输入，
+>   两条都是 `ninja: no work to do`）；`ctest --test-dir build/windows-debug`
+>   **27 项测试全绿**（`100% tests passed, 0 tests failed out of 27`）。
+> * `flowkeyd --check --config flowkeyd.lua.example` →
+>   `OK (46 hotkey(s), 3 remap(s), 7 window rule(s))`、零警告。
+> * `install.ps1` 自身：`bytes=12997`、`first3=23 52 65`（`#Re`，**无 BOM**）、
+>   `nonascii=0`、`crlf=297 bare_lf=0`、`Parser::ParseInput` **0 错误**。
+> * 三条路径实测跑通：字面 `irm <url> | iex`（本地假 GitHub，完整走完
+>   「取版本 → 下载 → 失败」，英文错误 + 退出码 1，**没碰安装目录、没碰常驻实例**）、
+>   `&([scriptblock]::Create((irm <url>))) -Version 99-99-99-abcdef0`（真实文件 +
+>   真实 GitHub 404）、`powershell -File install.ps1 -Version 99…`（`-File` 照旧正常）。
+>   细节与手法见第 10 节新增的那一小节。
+> * **没有动钩子 / 引擎 / 分发 / 窗口后端**，所以按第 11 节第 3 条没有重跑
+>   `scripts/acceptance.ps1`。
+> * 收尾：这次是纯脚本 / 文档改动，**提交之后没有重新构建**（提交会让 git 修订变化、
+>   触发重新配置 + 重新链接，而常驻实例锁着 `build/dist-release\flowkeyd.exe`），
+>   按本文件“不想动二进制就别在提交之后再构建”的约定办；`build/dist-release/`
+>   仍然是最新的代码产物，常驻实例继续跑它（不需要 `--quit` / 重新拉起）。
+> * 提醒：README 里那条命令要等 `install.ps1` **推到 master** 之后才真的可用。
 
 ---
 

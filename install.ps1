@@ -1,50 +1,61 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
 .SYNOPSIS
-    一键安装 / 升级 flowkeyd：从 GitHub Release 下载完整包，解压到本机并启动。
+    One-click install / upgrade for flowkeyd: download the full package from the
+    GitHub Release, extract it locally and launch it.
 
 .DESCRIPTION
-    默认流程：
-      1. 问 GitHub 要最新 Release 的版本号（也可以用 -Version 指定）；
-      2. 下载完整包 flowkeyd-<版本>-windows-x64.zip，并按同名 .sha256 校验；
-      3. 解压到安装目录（默认 %LOCALAPPDATA%\Programs\flowkeyd，可用 -InstallDir 改）；
-      4. 让正在运行的实例干净退出（flowkeyd.exe --quit）；
-      5. 覆盖安装，并创建开始菜单快捷方式；
-      6. 启动 flowkeyd（守护进程首次启动会自提权，弹一次 UAC）。
+    Default flow:
+      1. ask GitHub for the latest release tag (or pass -Version);
+      2. download the full package flowkeyd-<version>-windows-x64.zip and verify
+         it against the matching .sha256;
+      3. extract it into the install directory
+         (default %LOCALAPPDATA%\Programs\flowkeyd, -InstallDir overrides it);
+      4. let a running instance exit cleanly (flowkeyd.exe --quit);
+      5. install over the old copy and create a Start Menu shortcut;
+      6. launch flowkeyd (the daemon elevates itself on first start, so Windows
+         will show one UAC prompt).
 
-    网络上有两个地址可以用：
-      * raw.githubusercontent.com 上的本脚本；
-      * GitHub Release 里的完整包与 .sha256。
-    HTTPS 走系统自带的 Schannel，不需要任何额外的 PowerShell 模块。
+    Two hosts are used: raw.githubusercontent.com for this script, and the
+    GitHub release download pages for the package and its .sha256 file. HTTPS
+    goes through the system Schannel stack, so no extra PowerShell module is
+    needed.
 
-    卸载：先运行 flowkeyd.exe --quit 让它退出，再运行
-    flowkeyd.exe --remove-autostart（需要管理员，删除开机自启的计划任务），
-    最后删掉安装目录与开始菜单里的 flowkeyd 快捷方式。
+    This file is deliberately pure ASCII and has NO UTF-8 BOM: it is meant to be
+    run straight from the web, for example
+
+        powershell -nop -c "irm https://raw.githubusercontent.com/xingjianxu/flowkeyd/master/install.ps1 | iex"
+
+    and a leading BOM would make the PowerShell parser treat the param() block
+    as an argument list of a command (Invoke-Expression then fails with
+    "Invalid left-hand side of assignment" on the first parameter). Keep it that
+    way when editing: no BOM, no non-ASCII characters.
 
 .EXAMPLE
-    # 装最新版到默认目录并启动
+    # install the latest version into the default directory and launch it
     powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 
 .EXAMPLE
-    # 装指定版本，不创建快捷方式、也不启动
+    # install a specific version, no shortcut, no launch
     powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 `
         -Version 26-09-27-dc6b332 -NoShortcut -NoLaunch
 #>
 param(
-    # 要安装的版本号（形如 26-09-27-dc6b332，带不带前导 v 都行）。默认安装最新版。
+    # Version to install (like 26-09-27-dc6b332, an optional leading "v" is
+    # fine). Defaults to the latest release.
     [string]$Version = '',
-    # 安装目录。默认 %LOCALAPPDATA%\Programs\flowkeyd。
+    # Install directory. Defaults to %LOCALAPPDATA%\Programs\flowkeyd.
     [string]$InstallDir = '',
-    # 安装完成后不启动 flowkeyd。
+    # Do not launch flowkeyd after installing.
     [switch]$NoLaunch,
-    # 不创建开始菜单快捷方式。
+    # Do not create a Start Menu shortcut.
     [switch]$NoShortcut,
-    # 跳过 sha256 校验（不推荐）。
+    # Skip the sha256 check (not recommended).
     [switch]$SkipChecksum
 )
 
 $ErrorActionPreference = 'Stop'
-$ProgressPreference = 'SilentlyContinue'   # 关掉进度条：它会让 Invoke-WebRequest 慢好几倍
+$ProgressPreference = 'SilentlyContinue'   # the progress bar makes Invoke-WebRequest several times slower
 
 $Repo = 'xingjianxu/flowkeyd'
 $UserAgent = 'flowkeyd-installer'
@@ -55,11 +66,11 @@ function Write-Step { param([string]$Text) Write-Host ''; Write-Host "== $Text" 
 function Write-Info { param([string]$Text) Write-Host "   $Text" }
 function Write-Warn { param([string]$Text) Write-Host "   warning: $Text" -ForegroundColor Yellow }
 
-# PowerShell 5.1 默认可能还禁用 TLS 1.2，GitHub 只接受 1.2+。
+# PowerShell 5.1 may still have TLS 1.2 disabled, and GitHub only accepts 1.2+.
 try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 } catch {
-    Write-Warn "无法设置 TLS 1.2：$($_.Exception.Message)"
+    Write-Warn "could not enable TLS 1.2: $($_.Exception.Message)"
 }
 
 function Get-RemoteFile {
@@ -67,7 +78,8 @@ function Get-RemoteFile {
     Invoke-WebRequest -Uri $Uri -OutFile $Path -UseBasicParsing -Headers @{ 'User-Agent' = $UserAgent }
 }
 
-# 和 Get-RemoteFile 一样，但 404 时返回 $false 而不是抛异常（老发布可能没有 .sha256）。
+# Same as Get-RemoteFile, but returns $false on 404 instead of throwing (older
+# releases may not have a .sha256 file).
 function Get-RemoteFileOptional {
     param([string]$Uri, [string]$Path)
     try {
@@ -86,50 +98,51 @@ function Get-RemoteFileOptional {
 function Resolve-Version {
     param([string]$Requested)
     if ($Requested) { return $Requested.TrimStart('v', 'V') }
-    Write-Info "查询 $Repo 的最新发布"
+    Write-Info "querying the latest release of $Repo"
     $headers = @{ 'User-Agent' = $UserAgent; 'Accept' = 'application/vnd.github+json' }
     $release = Invoke-RestMethod -Uri $ApiLatest -Headers $headers
-    if (-not $release.tag_name) { throw 'GitHub 没有返回 tag_name' }
+    if (-not $release.tag_name) { throw 'GitHub did not return a tag_name' }
     return ("$($release.tag_name)").TrimStart('v', 'V')
 }
 
 function Test-Checksum {
     param([string]$Zip, [string]$Sum)
     $expected = (((Get-Content -LiteralPath $Sum -Raw) -split '\s+')[0]).ToLowerInvariant()
-    if ($expected -notmatch '^[0-9a-f]{64}$') { throw "无法解析校验文件：$Sum" }
+    if ($expected -notmatch '^[0-9a-f]{64}$') { throw "cannot parse the checksum file: $Sum" }
     $actual = (Get-FileHash -LiteralPath $Zip -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($expected -ne $actual) {
-        throw "sha256 校验失败（期望 $expected，实际 $actual）。文件可能下载不完整，请重试。"
+        throw "sha256 mismatch (expected $expected, got $actual). The download may be incomplete, please retry."
     }
-    Write-Info "sha256 校验通过：$actual"
+    Write-Info "sha256 verified: $actual"
 }
 
 function Get-RunningInstance {
     return @(Get-Process -Name 'flowkeyd' -ErrorAction SilentlyContinue)
 }
 
-# 让正在运行的实例走干净退出路径（--quit 走的是命名事件，跨权限也能用）。
-# 实在不走就强制结束；再不行就报错让人自己处理。
+# Let a running instance take the clean exit path (--quit uses a named event and
+# works across integrity levels). Kill it if it does not react, and finally tell
+# the user to handle it by hand.
 function Stop-RunningInstance {
     param([string]$QuitExe, [string]$TempDir)
 
     $running = Get-RunningInstance
     if ($running.Count -eq 0) {
-        Write-Info '没有正在运行的 flowkeyd'
+        Write-Info 'no flowkeyd instance is running'
         return
     }
     $pids = ($running | ForEach-Object { $_.Id }) -join ', '
-    Write-Info "正在运行的实例：pid $pids"
+    Write-Info "running instance(s): pid $pids"
 
     if (Test-Path -LiteralPath $QuitExe) {
-        Write-Info '请求它干净退出（--quit）'
+        Write-Info 'asking it to exit cleanly (--quit)'
         $stdout = Join-Path $TempDir 'quit-out.txt'
         $stderr = Join-Path $TempDir 'quit-err.txt'
         try {
             Start-Process -FilePath $QuitExe -ArgumentList @('--quit', '--no-prompt') -NoNewWindow -Wait -PassThru `
                 -RedirectStandardOutput $stdout -RedirectStandardError $stderr | Out-Null
         } catch {
-            Write-Warn "调用 --quit 失败：$($_.Exception.Message)"
+            Write-Warn "calling --quit failed: $($_.Exception.Message)"
         }
         foreach ($file in @($stdout, $stderr)) {
             if (Test-Path -LiteralPath $file) {
@@ -142,7 +155,7 @@ function Stop-RunningInstance {
 
     for ($i = 0; $i -lt 30; $i++) {
         if ((Get-RunningInstance).Count -eq 0) {
-            Write-Info '实例已退出'
+            Write-Info 'the instance exited'
             return
         }
         Start-Sleep -Milliseconds 500
@@ -150,17 +163,17 @@ function Stop-RunningInstance {
 
     $still = Get-RunningInstance
     $stillPids = ($still | ForEach-Object { $_.Id }) -join ', '
-    Write-Warn "实例没有在 15 秒内退出（pid $stillPids），强制结束"
+    Write-Warn "the instance did not exit within 15 seconds (pid $stillPids), killing it"
     try {
         $still | Stop-Process -Force -ErrorAction Stop
     } catch {
-        throw "flowkeyd 还在运行（pid $stillPids），而且没有权限结束它。请先从托盘菜单退出（或运行 flowkeyd.exe --quit），再重新运行本安装脚本。"
+        throw "flowkeyd is still running (pid $stillPids) and this script is not allowed to stop it. Quit it from the tray menu (or run flowkeyd.exe --quit) and run this installer again."
     }
     Start-Sleep -Seconds 1
     if ((Get-RunningInstance).Count -gt 0) {
-        throw 'flowkeyd 还在运行。请先从托盘菜单退出，再重新运行本安装脚本。'
+        throw 'flowkeyd is still running. Quit it from the tray menu and run this installer again.'
     }
-    Write-Info '实例已退出'
+    Write-Info 'the instance exited'
 }
 
 function New-StartMenuShortcut {
@@ -175,20 +188,20 @@ function New-StartMenuShortcut {
         $shortcut.TargetPath = $ExePath
         $shortcut.WorkingDirectory = $WorkDir
         $shortcut.IconLocation = "$ExePath,0"
-        $shortcut.Description = 'flowkeyd — 由 Lua 配置驱动的 Windows 键盘钩子守护进程'
+        $shortcut.Description = 'flowkeyd - a Windows keyboard hook daemon configured with Lua scripts'
         $shortcut.Save()
-        Write-Info "开始菜单快捷方式：$lnk"
+        Write-Info "Start Menu shortcut: $lnk"
     } catch {
-        Write-Warn "创建开始菜单快捷方式失败：$($_.Exception.Message)"
+        Write-Warn "could not create the Start Menu shortcut: $($_.Exception.Message)"
     }
 }
 
 # ---------------------------------------------------------------------------
-# 主流程
+# main flow
 # ---------------------------------------------------------------------------
 
-if (-not $env:OS -or $env:OS -ne 'Windows_NT') { throw '本安装脚本只能在 Windows 上运行。' }
-if (-not [Environment]::Is64BitOperatingSystem) { throw 'flowkeyd 目前只提供 64 位版本。' }
+if (-not $env:OS -or $env:OS -ne 'Windows_NT') { throw 'this installer only runs on Windows.' }
+if (-not [Environment]::Is64BitOperatingSystem) { throw 'flowkeyd is currently only available for 64-bit Windows.' }
 
 if (-not $InstallDir) {
     $local = $env:LOCALAPPDATA
@@ -203,79 +216,79 @@ $configPath = Join-Path $env:USERPROFILE '.config\flowkeyd\config.lua'
 $logPath = Join-Path $env:USERPROFILE '.config\flowkeyd\flowkeyd.log'
 
 try {
-    Write-Step 'flowkeyd 安装程序'
-    Write-Info "安装目录：$InstallDir"
+    Write-Step 'flowkeyd installer'
+    Write-Info "install directory: $InstallDir"
     New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
 
-    Write-Step '解析版本'
+    Write-Step 'resolving the version'
     $resolved = Resolve-Version -Requested $Version
-    Write-Info "将安装：flowkeyd $resolved"
+    Write-Info "installing: flowkeyd $resolved"
 
     $zipName = "flowkeyd-$resolved-windows-x64.zip"
     $zipUri = "$DownloadBase/v$resolved/$zipName"
     $zipPath = Join-Path $tempDir $zipName
     $sumPath = "$zipPath.sha256"
 
-    Write-Step '下载完整包（含 Qt / MinGW 运行时，约 25 MB）'
+    Write-Step 'downloading the full package (Qt / MinGW runtime included, about 25 MB)'
     try {
         Get-RemoteFile -Uri $zipUri -Path $zipPath
     } catch {
-        throw "下载失败：$zipUri`n       请确认版本号 $resolved 存在，或稍后重试。原始错误：$($_.Exception.Message)"
+        throw "download failed: $zipUri`n       check that version $resolved exists, or retry later. Original error: $($_.Exception.Message)"
     }
     $sizeMb = [math]::Round((Get-Item -LiteralPath $zipPath).Length / 1MB, 1)
-    Write-Info "下载完成：$zipPath（$sizeMb MB）"
+    Write-Info "downloaded: $zipPath ($sizeMb MB)"
 
     if ($SkipChecksum) {
-        Write-Warn '已跳过 sha256 校验（-SkipChecksum）'
+        Write-Warn 'sha256 check skipped (-SkipChecksum)'
     } else {
         if (Get-RemoteFileOptional -Uri "$zipUri.sha256" -Path $sumPath) {
             Test-Checksum -Zip $zipPath -Sum $sumPath
         } else {
-            Write-Warn '这个发布没有提供 .sha256，跳过校验'
+            Write-Warn 'this release does not provide a .sha256 file, skipping the check'
         }
     }
 
-    Write-Step '解压'
+    Write-Step 'extracting'
     $extractDir = Join-Path $tempDir 'extract'
     Expand-Archive -LiteralPath $zipPath -DestinationPath $extractDir -Force
     $exeItem = Get-ChildItem -LiteralPath $extractDir -Recurse -Filter 'flowkeyd.exe' -File | Select-Object -First 1
-    if (-not $exeItem) { throw '下载的包里没有 flowkeyd.exe' }
+    if (-not $exeItem) { throw 'the downloaded package does not contain flowkeyd.exe' }
     $packageRoot = $exeItem.DirectoryName
 
-    Write-Step '停止正在运行的实例'
+    Write-Step 'stopping a running instance'
     $quitExe = $installedExe
     if (-not (Test-Path -LiteralPath $quitExe)) { $quitExe = $exeItem.FullName }
     Stop-RunningInstance -QuitExe $quitExe -TempDir $tempDir
 
-    Write-Step '安装'
+    Write-Step 'installing'
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
     Copy-Item -Path (Join-Path $packageRoot '*') -Destination $InstallDir -Recurse -Force
-    if (-not (Test-Path -LiteralPath $installedExe)) { throw "安装后没有找到 $installedExe" }
-    Write-Info "已安装：$installedExe"
+    if (-not (Test-Path -LiteralPath $installedExe)) { throw "flowkeyd.exe was not found in $InstallDir after installing" }
+    Write-Info "installed: $installedExe"
 
     if (-not $NoShortcut) { New-StartMenuShortcut -ExePath $installedExe -WorkDir $InstallDir }
 
-    Write-Step '完成'
-    Write-Output ("  程序目录：$InstallDir")
-    Write-Output ("  主程序　：$installedExe")
-    Write-Output ("  配置文件：$configPath")
-    Write-Output ("  日志文件：$logPath")
-    Write-Output ("  停止：    `"$installedExe`" --quit")
-    Write-Output ("  卸载：    `"$installedExe`" --quit，再 `"$installedExe`" --remove-autostart（需管理员），")
-    Write-Output  '            最后删掉程序目录与开始菜单里的 flowkeyd 快捷方式。'
-    Write-Output  '  提示：    首次启动 flowkeyd 会问你要不要注册「登录时自启」的计划任务。'
+    Write-Step 'done'
+    Write-Output ("  program directory: $InstallDir")
+    Write-Output ("  executable       : $installedExe")
+    Write-Output ("  config file      : $configPath")
+    Write-Output ("  log file         : $logPath")
+    Write-Output ("  stop             : `"$installedExe`" --quit")
+    Write-Output ("  uninstall        : `"$installedExe`" --quit, then `"$installedExe`" --remove-autostart (administrator),")
+    Write-Output  '                     finally delete the program directory and the Start Menu shortcut.'
+    Write-Output  '  note             : the first start of flowkeyd asks whether to register the logon autostart task.'
 
     if ($NoLaunch) {
-        Write-Info '已按 -NoLaunch 跳过启动'
+        Write-Info 'not launching (-NoLaunch)'
     } else {
-        Write-Info '正在启动 flowkeyd（守护进程会自提权，可能弹一次 UAC）'
+        Write-Info 'launching flowkeyd (the daemon elevates itself, Windows may show one UAC prompt)'
         Start-Process -FilePath $installedExe
         Write-Output ''
-        Write-Host '  安装成功。' -ForegroundColor Green
+        Write-Host '  installed successfully.' -ForegroundColor Green
     }
 } catch {
     Write-Host ''
-    Write-Host "安装失败：$($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "installation failed: $($_.Exception.Message)" -ForegroundColor Red
     exit 1
 } finally {
     if (Test-Path -LiteralPath $tempDir) {
