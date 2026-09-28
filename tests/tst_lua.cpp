@@ -1,6 +1,6 @@
 // Lua 配置层测试：DSL 注入、两种写法、每个构造器、错误信息格式与 BOM。
 //
-// 测试点对齐 oskeyd 的 `src/lua.rs`（见 AGENTS.md 第 9 节的阶段 2）。
+// 覆盖 DSL 转换与错误信息的关键路径。
 #include <QtTest>
 
 #include <QFile>

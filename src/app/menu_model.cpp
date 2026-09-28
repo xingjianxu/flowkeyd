@@ -91,7 +91,7 @@ void MenuModel::moveHighlight(int delta)
     if (n == 0 || delta == 0) {
         return;
     }
-    // 一次一格，到边界回绕（与 oskeyd 的 `↑`/`↓` 一致；帮助窗口那边则是夹住）。
+    // 一次一格，到边界回绕（帮助窗口那边则是夹住）。
     if (delta > 0) {
         m_highlight = m_highlight >= n - 1 ? 0 : m_highlight + 1;
     } else {
@@ -200,7 +200,7 @@ QVariant MenuModel::data(const QModelIndex &index, int role) const
     case HintRole:
         return item.hint.value_or(QString());
     case KeyRole:
-        // 徽标上显示大写（与 oskeyd 的 `key.to_uppercase()` 一致）；
+        // 徽标上显示大写；
         // 匹配用的 `m_items[].key` 仍然是小写。
         return item.key.has_value() ? QString(item.key->toUpper()) : QString();
     case RowSelectedRole:

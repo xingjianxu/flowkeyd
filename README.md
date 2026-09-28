@@ -1,40 +1,97 @@
 # flowkeyd
 
-一个用 Lua 脚本配置的 Windows 键盘钩子守护进程。
+一个用 **Lua 脚本**配置的 Windows 键盘钩子守护进程（C++20 + Qt 6）。
 
-flowkeyd 是 **oskeyd**（Rust 参考实现）的 **Qt 6 / C++ 复刻版**：它安装一个
-`WH_KEYBOARD_LL` 钩子，把你的配置与按键和弦进行匹配，在你需要时把匹配到的按键
-对前台应用隐藏（也就是 AutoHotkey 的行为），然后执行你绑定的动作。动作默认在
-**按下**的那一刻就跑（不等按键或修饰键抬起），而且只跑一次；想改成抬起时触发或
-按住重复，用 `trigger` 设置即可。它还能把一个按键重映射为另一个按键、在按住源键
-期间一直按住目标键、按住时重复，并通过已公开的 `user32!SendInput` 或未公开的
-`win32u!NtUserSendInput` 注入按键。动作可以是启动程序、发送按键、控制音量/媒体、
-操作窗口、切换虚拟桌面与剪贴板、弹出通知、执行电源动作，或者**弹出一个选单**
-——例如一个电源选单（睡眠 / 关机 / 重启，按 `S`/`P`/`R` 选择、`Esc` 关闭）。
-同一套卡片还用来弹一个**快捷键帮助**：`Win+/` 列出当前全部绑定，可以直接输入筛选，
-`Enter`（或双击一行）就直接把那一行的动作跑起来。
-同一套卡片还能当**窗口切换器**（`windows()`）：列出当前所有打开的程序窗口，
-输入就按**进程名前缀**筛选，只剩一个窗口时直接切过去；筛到一个程序而它开了好几个
-窗口时，每一行会带上数字快捷键（`1`..`9`、`0`），按数字直接跳过去 —— 常见绑法是
-「轻碰一下 Win 键」（`keys = "LWin"` + `trigger = "release"`）。
-它还能按程序摆放窗口：`window_rule{...}` 让某个程序的窗口第一次出现时落到指定的
-虚拟桌面 / 显示器上（默认铺满那块显示器的工作区），并在之前断开的显示器重新接上时
-重新归位。规则还能把窗口**钉在所有虚拟桌面上**（`all_desktops = true`）或让它
-**始终在最上层**（`topmost = true`）。
-如果要给同一个程序同时配「窗口规则」与「唤起它的快捷键」，用 `app{...}` 写到
-一起即可，`process` / `title` 只写一遍。
+## 安装
 
-托盘通知区域里的图标平时是应用图标，但**主体内容是当前是第几号虚拟桌面**：
-守护进程每 500 ms 问一次 shell 现在在第几张桌面，把图标换成对应的数字
-（蓝底白字，`10` 以上显示 `9+`），悬停提示里也写着 `桌面 2/4` ——
-一眼就能看出现在在哪张桌面上。查不到当前桌面时（锁屏、非交互会话）退回应用图标。
+**系统要求：Windows 10 或 11（64 位）。** 运行期不需要装 Qt 或任何其它依赖。
 
-托盘右键菜单里还有**在线更新**：点一下就去 GitHub 问一次最新发布，有新版本时
-弹出一张卡片（版本号 + 这次改了什么），确认后带进度条下载、校验，然后自己换上
-新的 exe 并重启，重启后弹一条 Windows 通知告诉你更新成功（见
-[在线更新](#在线更新)）。
+在 **PowerShell** 里执行下面这一行，即可从 GitHub Release 下载并安装（或升级）最新版：
+
+```powershell
+curl.exe -fsSL https://raw.githubusercontent.com/xingjianxu/flowkeyd/master/install.ps1 -o "$env:TEMP\flowkeyd-install.ps1"; powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\flowkeyd-install.ps1"
+```
+
+安装脚本会：
+
+1. 问 GitHub 要最新 Release 的版本号；
+2. 下载完整包 `flowkeyd-<版本>-windows-x64.zip`，并用同名 `.sha256` 校验；
+3. 解压到 `%LOCALAPPDATA%\Programs\flowkeyd`；
+4. 让正在运行的实例干净退出（`flowkeyd.exe --quit`）；
+5. 覆盖安装，并创建开始菜单快捷方式；
+6. 启动 flowkeyd（守护进程首次启动会自提权，弹一次 UAC）。
+
+脚本也可以先下载再带参数运行：
+
+```powershell
+# 安装指定版本，装到别处，并且不创建快捷方式、不启动
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 `
+    -Version 26-09-27-dc6b332 -InstallDir D:\Tools\flowkeyd -NoShortcut -NoLaunch
+```
+
+| 参数            | 含义                                                     |
+| --------------- | -------------------------------------------------------- |
+| `-Version`      | 要安装的版本号（形如 `26-09-27-dc6b332`，可带前导 `v`）  |
+| `-InstallDir`   | 安装目录（默认 `%LOCALAPPDATA%\Programs\flowkeyd`）      |
+| `-NoLaunch`     | 安装完成后不启动                                         |
+| `-NoShortcut`   | 不创建开始菜单快捷方式                                   |
+| `-SkipChecksum` | 跳过 sha256 校验（不推荐）                               |
+
+**手动安装：** 到
+[Releases](https://github.com/xingjianxu/flowkeyd/releases/latest) 下载
+`flowkeyd-<版本>-windows-x64.zip`（完整包），解压到任意目录，双击 `flowkeyd.exe`
+即可。已经装过、只想升级时下载精简包
+`flowkeyd-<版本>-windows-x64-slim.zip`（里面只有 `flowkeyd.exe`），先
+`flowkeyd.exe --quit`，再用解压出的 exe 覆盖掉旧的即可。
+
+**卸载：**
+
+```powershell
+& "$env:LOCALAPPDATA\Programs\flowkeyd\flowkeyd.exe" --quit
+& "$env:LOCALAPPDATA\Programs\flowkeyd\flowkeyd.exe" --remove-autostart   # 删除开机自启，需要管理员
+```
+
+然后删掉程序目录与开始菜单里的 `flowkeyd` 快捷方式即可。配置与日志在
+`%USERPROFILE%\.config\flowkeyd\`，不需要时可以一并删除。
+
+## 功能概览
+
+它安装一个 `WH_KEYBOARD_LL` 钩子，把你的配置与按键和弦进行匹配，在你需要时把匹配到的
+按键对前台应用隐藏（也就是 AutoHotkey 的行为），然后执行你绑定的动作。动作默认在
+**按下**的那一刻就跑（不等按键或修饰键抬起），而且只跑一次；想改成抬起时触发或按住
+重复，用 `trigger` 设置即可。它还能把一个按键重映射为另一个按键、在按住源键期间一直
+按住目标键。
+
+动作可以是：启动程序、发送按键、输入文本、控制音量/媒体、操作窗口、把窗口挪到相邻的
+虚拟桌面或显示器、切换虚拟桌面与剪贴板、弹出通知、执行电源动作，或者**弹出一张卡片**
+——电源选单（睡眠 / 关机 / 重启，按 `S`/`P`/`R` 选择、`Esc` 关闭）、快捷键帮助
+（`Win+/`，可直接输入筛选，`Enter` 或双击一行就直接执行它），以及窗口切换器
+（`windows()`，列出当前打开的程序窗口，按进程名前缀筛选，常见绑法是「轻碰一下 Win」）。
+
+它还能按程序摆放窗口：`window_rule{...}` 让某个程序的窗口第一次出现时落到指定的虚拟
+桌面 / 显示器上（默认铺满那块显示器的工作区），并在之前断开的显示器重新接上时重新
+归位；规则还能把窗口**钉在所有虚拟桌面上**（`all_desktops = true`）或让它**始终在最
+上层**（`topmost = true`）。要给同一个程序同时配「窗口规则」与「唤起它的快捷键」，
+用 `app{...}` 写到一起即可，`process` / `title` / `launch` 只写一遍。
+
+托盘通知区域里的图标平时是应用图标，但**主体内容是当前是第几号虚拟桌面**：守护进程
+每 500 ms 问一次 shell 现在在第几张桌面，把图标换成对应的数字（蓝底白字，`10` 以上
+显示 `9+`），悬停提示里也写着 `桌面 2/4`。查不到当前桌面时（锁屏、非交互会话）退回
+应用图标。
+
+托盘右键菜单里还有**在线更新**：点一下就去 GitHub 问一次最新发布，有新版本时弹出一张
+卡片（版本号 + 这次改了什么），确认后带进度条下载、校验，然后自己换上新的 exe 并重启，
+重启后弹一条 Windows 通知告诉你更新成功（见[在线更新](#在线更新)）。
+
+## 快速上手
+
+配置文件是 `%USERPROFILE%\.config\flowkeyd\config.lua`（一段真正的 Lua 脚本）。
+一个覆盖全部特性的参考配置见仓库里的
+[`flowkeyd.lua.example`](flowkeyd.lua.example)。最小的例子：
 
 ```lua
+settings{ swallow = true, tick_ms = 15 }
+
 hotkey{
   name = "terminal",
   keys = "Ctrl+Alt+t",
@@ -46,11 +103,7 @@ remap{ from = "CapsLock", to = "Esc" }
 -- 按程序摆放窗口：第一次出现时放到第 2 个虚拟桌面的右屏并最大化
 window_rule{ process = "wezterm", desktop = 2, monitor = 2 }
 
--- 也可以只钉住 / 置顶：切到哪张桌面都看得见，而且一直在最上层
-window_rule{ process = "wezterm", all_desktops = true, topmost = true }
-
--- 同一个程序的窗口规则 + 快捷键 + 启动参数写在一起：process 与 launch 只写一遍，
--- hotkey 里的 window 动作自动拿到它们
+-- 同一个程序的窗口规则 + 快捷键 + 启动参数写在一起
 app{
   process = "wps",
   launch = { program = [[C:\tools\wps.exe]], wait_ms = 10000 },
@@ -61,327 +114,16 @@ app{
 }
 ```
 
-## 与 oskeyd 的关系
+改完配置后运行 `flowkeyd --check --config <路径>` 校验，或用托盘菜单的*重载配置* /
+`reload` 快捷键让正在运行的实例重新读取。
 
-flowkeyd 的目标是把 oskeyd 的**功能与配置语义 1:1 复刻**出来：配置 schema、动作
-字段、按键名、CLI 开关、日志文案都保持一致。把
-`%USERPROFILE%\.config\oskeyd\config.lua` 复制到
-`%USERPROFILE%\.config\flowkeyd\config.lua` 即可直接跑。
+启动后 flowkeyd 是一个常驻托盘的程序：右键菜单是 *查看日志*、*挂起/恢复快捷键*、
+*重载配置*、*打开配置文件*、*检查更新...*、*版本 ...*（不可点的信息项）、*退出*；
+左键单击直接打开日志窗口。悬停提示会显示构建版本、当前虚拟桌面与挂起状态。
 
-唯一有意的差异是 **UI 那一层**：oskeyd 的日志查看器是一个真正的命令行窗口
-（独立进程），选单与帮助窗口是自己用 GDI 画的原生窗口；flowkeyd 把它们全部换成
-**Qt Quick（QML）+ FluentWinUI3 样式**的窗口，而且都跑在**同一个进程**里。
-选单与帮助的配色跟随系统主题（浅色/深色都会跟着变），不像 oskeyd 那样固定深色。
-帮助窗口的列表用的是 **Qt 自带的 `ListView` + `ScrollBar`**（不是自绘的滑槽），
-所以：滚动条能拖、滚轮是原生的平滑滚动，而且**滚轮方向跟着系统**——
-oskeyd（以及自绘时期）把 `+120` 当成「往列表后面走」，与系统列表控件相反，
-这条有意不再复刻。筛选框与列表项也全部是标准控件（`TextField` /
-`ItemDelegate`）：鼠标点得进去、点得中，不再是自绘的假输入框。
-**选单弹窗走的是同一条路线**：列表一样是 Qt 自带的 `ListView` + 标准
-`ItemDelegate`，悬停 / 按下 / 高亮都交给 FluentWinUI3 的标准样式，
-鼠标点一行就是执行它 —— 行几何与命中测试不再由 flowkeyd 自己算。
-
-| 方面     | oskeyd                             | flowkeyd                                   |
-| -------- | ---------------------------------- | ------------------------------------------ |
-| 语言     | Rust + 手写 FFI                    | C++20 + Qt 6.11 + 手写 Win32 声明          |
-| 配置脚本 | Lua 5.4（`mlua` vendored）         | Lua 5.5.1（`vendor/lua` 静态编进二进制）   |
-| DSL 表名 | `oskeyd.*`                         | `flowkeyd.*`（构造器名不变）               |
-| 注入标记 | `dwExtraInfo` 里的 `"OSKE"`        | `dwExtraInfo` 里的 `"FLOW"`                |
-| 日志窗口 | 独立进程里的命令行窗口             | 进程内的 QML 窗口（FluentWinUI3）          |
-| 选单/帮助 | 自绘 GDI 原生窗口，固定深色        | QML 窗口（FluentWinUI3），跟随系统主题     |
-| 自动化   | `cargo test` + `--selftest`/e2e    | Qt Test 单测 + `scripts/acceptance.ps1`（注入按键的验收） |
-
-## 状态
-
-版本号形如 `26-09-22-42900ad`：前半（`yy-MM-dd`）是**构建这个 exe 的日期**
-（取 exe 自己的最后写入时间，也就是它被链接出来的时刻），后半是**构建时源码所在的
-git 提交**（`git rev-parse --short HEAD` 的缩写）。托盘右键菜单里的*版本*、
-启动日志的第一行、`--version` 与 `--help` 都能看到它 —— 这样一眼就能确认正在跑的
-是哪一次构建、来自哪个提交。下面描述的一切都已实现并有测试覆盖；每一层是如何在
-真实 Windows 上验证的，见[验证它能工作](#验证它能工作)。[已知限制](#已知限制)
-列出了刻意还没做的部分。
-
-## 环境要求
-
-* Windows 10 或 11（在 build 26200 上验证）。
-* **Qt 6.8+（本机用的是 6.11.2 的 `mingw_64`）**、GCC 13（Qt 自带的 MinGW 即可）、
-  CMake 3.24+ 与 Ninja。不需要 Visual Studio / MSVC。
-* 挂钩子和注入输入都不需要管理员权限。但 flowkeyd 默认会以管理员身份运行：
-  未提权启动时会弹一次 UAC 并重启自己，因为只有提权后动作才能驱动提权进程的窗口
-  （否则会被 Windows 的 UIPI 拦下）。不想看到 UAC 就加 `--no-elevate`，
-  或在配置里写 `elevate = false`（例如已用任务计划程序的“最高权限”启动时）。
-
-运行期没有任何第三方依赖：Lua 5.5.1 静态链在二进制里，Qt 与 MinGW 的运行时 DLL
-由构建时的 `windeployqt` 拷到 exe 同目录（见下节），所以构建产物是自包含的。
-那套运行时是**精简过**的（见下节）：软件 OpenGL 回退（`opengl32sw.dll`）与
-D3D 编译器（`D3Dcompiler_47.dll`）都已去掉，Qt Quick 走 D3D11（系统没有显卡
-驱动时用 Windows 自带的 WARP），所以**运行期要求 Windows 10 或 11**
-（它们自带 `d3dcompiler_47.dll`）。
-
-## 构建与运行
-
-```powershell
-$C = 'C:\Qt\Tools\CMake_64\bin\cmake.exe'
-
-# 首次各配置一次
-& $C --preset windows-debug
-& $C --preset windows-release
-
-& $C --build --preset debug
-& $C --build --preset release
-
-# 单元测试：只在 debug 里构建和运行（release 是发布 profile，不含测试目标）
-& ctest --test-dir build/windows-debug --output-on-failure
-```
-
-两条 profile 的分工是固定的：
-
-| 目录                    | 用途       | 里面有什么                                                          |
-| ----------------------- | ---------- | ------------------------------------------------------------------- |
-| `build/windows-debug`   | 开发       | 全部测试目标（`tst_*.exe`）+ 已部署的 Qt 运行时，随手就能跑         |
-| `build/windows-release` | 构建树     | 只是编译产物；**这里出现 `tst_*.exe` 就是 bug**                     |
-| `build/dist-release`    | **发布**   | 只有 `flowkeyd.exe` 与它需要的 Qt/MinGW 运行时 —— 拷走就能跑        |
-
-`build/dist-release/` 是 release 构建时**自动**产出的（不用另跑命令）：它里面的
-`flowkeyd.exe` 与 `build/windows-release/flowkeyd.exe` 是同一个二进制（SHA-256
-相同），只是旁边没有 `CMakeCache.txt`/`build.ninja`/`*.a` 这些构建系统文件。
-**要交付或换机器，就整个拷 `build\dist-release\`**：目标机器不需要装 Qt。
-里面的运行时是**精简过**的（用不到的 Quick Controls 样式、软件 OpenGL 回退、
-exe 的调试符号都已去掉，见 `cmake/PruneRuntime.cmake` 与本文件末尾的「已知限制」）。
-`CMakePresets.json` 里写死了本机的 Qt / MinGW / Ninja 路径，换机器时改那里。
-
-### 发布（打包 + 上传 GitHub Release）
-
-仓库里带了一个发布脚本，把这套活儿一条命令做完：构建（debug + `ctest` + release）
-→ 把 `build/dist-release` 打成**两个 zip**（完整包 + 精简升级包）并各附一份 sha256
-→ 用 [GitHub CLI](https://cli.github.com/)（`gh`）建一个 GitHub Release 并把资产传上去。
-
-```powershell
-# 只需要做一次：装 gh 并登录（浏览器登录，不用手填 token）
-scoop install gh        # 或 winget install GitHub.cli
-gh auth login
-
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\release.ps1
-```
-
-* tag 取**刚构建出来的那个 exe** 的版本号（`--version` 的第一行），例如
-  `v26-09-24-0e33ae9`；每次发布传**两个** zip（各带一份 `sha256sum -c` 格式的
-  `.sha256`），zip 里都是一个同名目录（目录里还有一份 `README.txt`）：
-
-  | 资产                                                                | 里面有什么                                  | 什么时候用                                         |
-  | ------------------------------------------------------------------- | ------------------------------------------- | -------------------------------------------------- |
-  | `flowkeyd-<版本>-windows-x64.zip`                                    | `flowkeyd.exe` + Qt/MinGW 运行时（约 63 MB） | **第一次安装**：解压出来直接双击 `flowkeyd.exe`    |
-  | `flowkeyd-<版本>-windows-x64-slim.zip`                               | **只有** `flowkeyd.exe`（约 2 MB）          | **已经装过、只是升级**：解压出的 exe 覆盖旧的那一个 |
-
-  两个包是按**文件白名单**分的（`scripts/release.ps1` 里的 `$SlimFiles` /
-  `$DependencyPatterns`）：Qt/MinGW 那一堆在版本之间不会变的依赖只进完整包，
-  尺寸小的那个只管每次都会变的 `flowkeyd.exe`。`build/dist-release` 里出现两边
-  都不认识的文件时脚本**直接失败**（打印是哪个文件），逼着人当场决定它属于
-  哪一边 —— 新加的东西不会悄悄漏进精简包、也不会悄悄漏出完整包。
-  升级时当然也可以不用包：`flowkeyd.exe --quit` 之后直接把新构建的
-  `build\dist-release\flowkeyd.exe` 覆盖过去就行（精简包就是这个文件的压缩版）。
-* 常驻实例会**短暂停掉**（它锁着 `build\dist-release\flowkeyd.exe`，不停掉链接
-  会失败）：构建开始前 `flowkeyd.exe --quit`，收尾时（**包括中途失败**）
-  `schtasks /Run /TN flowkeyd` 把它拉回来 —— 走计划任务，不弹 UAC。
-  不想让它动常驻实例就加 `-SkipResident`；停了不拉回是 `-LeaveStopped`。
-* 工作区脏、或 HEAD 还没推到 origin 时脚本**直接拒绝**（版本号里的 git 修订就是
-  构建时的 HEAD，脏的工作区会让包和 tag 对不上）：先把改动提交并推送，或者显式
-  给 `-AllowDirty` / `-Push`。
-* 其余开关：`-SkipUpload`（只打包，不需要 gh；会把两个包的路径打出来）、
-  `-SkipBuild`（用现有的 `build/dist-release`，不碰常驻实例）、
-  `-SkipTests`（跳过 debug + `ctest`）、
-  `-Draft` / `-Prerelease`、`-Notes <文本>` / `-NotesFile <文件>`（默认让 `gh`
-  自动生成说明，并在前面加上一段“两个包怎么选”）、`-Clobber`（tag 已存在时
-  覆盖同名资产）。
-* 精简包只放**每次构建都会变**的文件，所以它解压出来**不能单独运行**
-  （没有 Qt 的 dll）—— 它的用法是覆盖到已经装好的目录里，这一点包里的
-  `README.txt` 也写了。
-
-**构建产物是自包含的、而且精简过**：每次链接完 `flowkeyd` 之后会自动跑一次
-`windeployqt`，把 Qt 与 MinGW 的运行时 DLL、以及 exe 用到的 QML 模块（`QtQuick`、
-`QtQuick.Controls.FluentWinUI3`……）拷到产物目录；紧接着 `cmake/PruneRuntime.cmake`
-把**用不到**的那些删掉（没用到的 Quick Controls 样式、QML 调试插件、软件 OpenGL
-回退、系统自带的 D3D 编译器……），release 还会 `strip` 掉 exe 的调试符号。
-于是发布包是 **211 个文件 / 约 63 MB**（精简前是 1378 个 / 150 MB；zip 约 24 MB；
-升级用的精简 zip 只有 0.6 MB）。
-所以**直接双击 `build\dist-release\flowkeyd.exe`（或用构建树里那一份）就能启动**，
-不需要把 Qt 的 `bin` 加进 `PATH`，也不需要额外跑部署脚本。
-（想走标准的安装规则时仍然可以用 `cmake --install`：那套规则走的是
-`qt_generate_deploy_app_script`，**它没有精简这一步**，见 `CMakeLists.txt` 末段。）
-
-> 双击启动等价于**不带任何参数**启动：它没有控制台，日志只进
-> `%USERPROFILE%\.config\flowkeyd\flowkeyd.log`（用托盘「查看日志」看），
-> 并且默认会弹一次 UAC 自提权（不想提权就在配置里写 `elevate = false`）。
-
-配置文件默认放在 `%USERPROFILE%\.config\flowkeyd\config.lua`（见下文
-[配置文件在哪里](#配置文件在哪里)）。它是一段 Lua 脚本，参考配置见
-[`flowkeyd.lua.example`](flowkeyd.lua.example)。
-
-启动后 flowkeyd 是一个常驻托盘的程序：从终端启动时那个控制台属于你的 shell，
-flowkeyd 不会去动它（`--console` 可以强制保留输出）。右键菜单是
-*查看日志*、*挂起/恢复快捷键*、*重载配置*、*打开配置文件*、*版本 …*、*退出*
-（*版本* 是个不可点的信息项），左键单击直接打开日志窗口。悬停提示会显示
-构建版本与挂起状态。
-
-托盘图标、日志窗口与三个弹窗（选单 / 帮助 / 窗口切换器）用的是**应用自己的
-图标**（仓库根目录 `logo.svg`
-那张：一个深色圆角方块加两个叠加的按键），不再是系统图标。exe 文件本身在资源
-管理器/任务栏里显示的那个图标是另一份东西——嵌在 PE 资源里的 `assets/flowkeyd.ico`
-——两者都由 `logo.svg` 生成（开发时要换图标：改 `logo.svg` 然后
-`cmake --build --preset debug --target icons`；见 [AGENTS.md](AGENTS.md) 第 10 节）。
-
-**构建版本号**长这样：`26-09-22-42900ad` —— 前半是**构建这个 exe 的日期**
-（`yy-MM-dd`，取运行中的可执行文件自己的最后写入时间），后半是**构建时源码的
-git 提交缩写**（`git rev-parse --short HEAD`）。日期每次重新链接都会跟着变，
-git 那一段在提交变了重新构建时自动更新（都不需要任何构建脚本）。启动日志的
-第一行、`--version` 与 `--help` 打印的也是它：
-
-```console
-$ flowkeyd --version
-flowkeyd 26-09-22-42900ad
-Lua 5.5.1
-```
-
-所以「跑的是不是最新那份」看这一行就够了（常驻实例从 `build\dist-release` 跑的
-时候，重建前要先 `--quit`，见[开机自启与更新](#开机自启与更新任务计划程序)）。
-
-> 想让版本号里是你最新提交的哈希，就**先提交再构建**：哈希是 CMake 配置时取的，
-> 而 `.git` 的 HEAD 与当前分支的 ref 被登记成了 configure 依赖，提交之后重新构建
-> 会自动重新配置一次。工作区里还有未提交的改动时，显示的哈希是最近一次提交的。
-
-日志写控制台，同时（守护进程模式下总是）追加写到
-`%USERPROFILE%\.config\flowkeyd\flowkeyd.log`
-（`--log-file` 可以指定别的地方，`--log-level` 调整级别）。
-
-**日志窗口**（左键单击托盘图标）是一个**进程内的 QML 窗口**（FluentWinUI3
-样式）：它尾随上面的日志文件，每 250 ms 追一次新行，最多显示最后 1000 行，
-按级别配色，带一个子串筛选框，新行会自动滚到底（你往上翻时不会打扰你）。
-窗口标题带着已显示的行数（`flowkeyd 日志 — 128 行`）。
-
-它是**同一个进程里的普通窗口**，所以：关掉它不会退出守护进程（
-`setQuitOnLastWindowClosed(false)`）；再点一次托盘图标只会把它抬到前面，
-不会开出第二个；退出只能走托盘菜单的*退出*、`quit` 动作，或 `taskkill`
-（**不带** `/F` 时如果日志窗口开着，`WM_CLOSE` 会被它吃掉，所以要么走托盘退出，
-要么用 `/F`）。日志窗口里看到的只是内存里的一小段——完整日志在日志文件里。
-
-### 开机自启与更新（任务计划程序）
-
-flowkeyd **自己**会注册一个**登录时触发**的计划任务（*使用最高权限运行*）：
-每次启动时它检查这个任务，**不存在、或指向的 exe 与当前正在运行的这个不是同一个，
-就先弹一个确认框问你要不要注册 / 更新**，同意之后才用当前路径重新注册一次
-（不同意就保持原样，下次启动会再问）。之后每次登录、以及每次机器重启，
-flowkeyd 都会以管理员权限起来，**不弹 UAC**。
-
-**没有安装目录**：自启跟着你运行的那个 `flowkeyd.exe` 走。把 exe 放到
-`D:\Tools\flowkeyd\flowkeyd.exe` 并运行一次，任务就指向那里；换到别处再运行一次，
-在确认框里同意之后任务就更新；直接运行 `build\dist-release\flowkeyd.exe`
-也一样在哪儿生效。
-
-为什么必须是计划任务，而不是 `shell:startup` 快捷方式或 `HKCU\...\Run`：
-
-* flowkeyd 需要管理员权限才能驱动提权进程的窗口、才能执行电源动作；
-  只有计划任务能做到「提权启动且不弹 UAC」（后两者要么以普通权限跑，
-  要么每次登录弹一次 UAC）。
-  也**不要**给 exe 登记 `RUNASADMIN` 兼容性标记：那会让**任何**调用都提权，
-  连 `flowkeyd --check` 都会弹 UAC —— 离线命令本就不该弹 UAC。
-* 服务（Windows Service）不行：它跑在 session 0，`WH_KEYBOARD_LL` 看不到桌面的
-  按键，也没有托盘图标。
-
-```powershell
-# 删掉自启（需要管理员）。先停实例，否则它下次启动会把任务注册回来。
-& D:\Tools\flowkeyd\flowkeyd.exe --quit
-& D:\Tools\flowkeyd\flowkeyd.exe --remove-autostart
-```
-
-**更新循环**（不用任何脚本）：`cmake --build --preset release` 会把干净的发布包
-写到 `build\dist-release\`。常驻实例如果正从那里跑（它会锁住那个 exe），先
-`--quit`、构建、再重新启动一次，任务会自动指向新路径。构建产物也可以整个拷到
-别的机器上直接运行。
-
-`--no-autostart` 可以临时关掉自启管理；开发 / 测试实例（`--no-elevate`、
-`--allow-multi`、或没有提权的进程）本来就**不会**动这个任务。
-`--no-prompt` 则不弹任何交互提示：自启按默认的「注册 / 更新」处理，
-「已在运行」也只记日志、不弹框（脚本与自动化用）。
-
-脚本里的任务参数（这些默认值全是坑，改的时候别删）：
-
-| 设置 | 值 | 为什么 |
-| ---- | -- | ------ |
-| `RunLevel` | *最高权限*（`HighestAvailable`） | 提权且不弹 UAC |
-| 触发器 | *登录时* + 延迟 15 秒 | 托盘要等 explorer；本版本还没有处理 `TaskbarCreated`（explorer 重启后重新挂托盘图标），延迟是最便宜的兜底 |
-| `ExecutionTimeLimit` | `PT0S`（不限） | **默认是 72 小时** —— 三天后任务计划程序会亲手把守护进程停掉 |
-| 「只在交流电时启动 / 掉电就停」 | 关 | 默认是开 |
-| 多个实例 | 忽略新实例 | 加上 flowkeyd 自己的单实例互斥体，双保险 |
-| 工作目录 | exe 所在目录 | `--config` 的相对路径与 `{cwd}` 模板看它 |
-| 允许按需启动 | 开 | 更新后不用重启系统，`Start-ScheduledTask flowkeyd` 就能起 |
-| 失败后重启 | 1 分钟一次，最多 3 次 | COM 那几块（Core Audio / 虚拟桌面 vtable）崩了能自己回来；**正常退出（退出码 0）不会触发重启**，所以托盘/`quit` 动作退出后不会被拉起来 |
-
-**任务失败是静默的**：路径写错、exe 被删、单实例冲突…结果都只是「没有托盘图标、
-快捷键不生效」，不会弹任何东西。排查顺序：任务计划程序里看 `flowkeyd` 这个任务
-（*上次运行结果*）、看 `%USERPROFILE%\.config\flowkeyd\flowkeyd.log`、
-再手动跑一次 `Start-ScheduledTask -TaskName flowkeyd`。
-
-自启任务的路径**跟着当前运行的 exe 走**：一旦那个路径失效（你把 exe 删了或移走了），
-表现就是上面那种静默失败；下次手动启动一次 flowkeyd，自检会把它刷新回来。
-另外，开发 / 测试实例（`--no-elevate`、`--allow-multi`、或没有提权的进程）**不会**
-碰这个任务，免得临时实例把真实的自启劫持到构建目录。
-
-想立刻关掉正在运行的实例：
-
-```powershell
-& 'D:\Tools\flowkeyd\flowkeyd.exe' --quit   # 换成你自己的 exe 路径
-```
-
-`--quit` 按**配置文件路径**匹配实例（`--config` 可选），最多等 10 秒；
-它走的是一条命名的事件通道，让守护进程走**干净的退出路径**（卸钩子、退循环），
-而不是 `taskkill /F` —— 后者会留下一个幽灵托盘图标。
-没有在跑的实例时它返回 1，不算错误。
-事件对象带 Low 完整性标签，所以**不提权**的调用方也能请提权的守护进程退出。
-
-### 在线更新
-
-托盘右键菜单里的 *检查更新(&U)...* 会弹出一张「在线更新」卡片：它问一次 GitHub
-上最新 Release 的版本号与发布说明（这次更新大概改了什么），显示给你看；
-发现新版本时点「立即更新」，卡片里出现**下载进度条**，下载完校验通过之后
-flowkeyd 会**自己把 exe 换掉并重启**，重启起来的那个新实例再弹一条 Windows 通知
-告诉你更新成功了。
-
-```
-在线更新
-当前版本 26-09-27-331db71　　新版本 26-09-28-95f40ac
-┌──────────────────────────────┐
-│ ### 更新内容                  │  ← 发布说明（Markdown，可滚动、可选中复制）
-│                              │
-│ - 修了一个 bug               │
-└──────────────────────────────┘
-██████████████████░░░░░  82%  ·  560 KB / 670 KB
-正在下载 26-09-28-95f40ac…
-                              [立即更新] [打开发布页] [关闭]
-```
-
-* **来源就是发布那套东西**：`https://api.github.com/repos/xingjianxu/flowkeyd/releases/latest`，
-  也就是 [`scripts/release.ps1`](#构建与运行) 建的那个 Release。下载的是发布脚本
-  传上去的**精简升级包**（`*-slim-windows-x64.zip`，里面只有 `flowkeyd.exe`，
-  约 700 KB）；某次发布万一没有精简包，会退回到完整包（约 25 MB）。
-  HTTPS 由 Windows 自带的 Schannel 提供，并用发布资产里的 **sha256** 校验下载结果。
-* **只换 exe，不动运行时**：这就是「第一次安装用完整包、以后升级用精简包」那条
-  约定。所以**如果某个新版本依赖一个新的运行时文件，光换 exe 是起不来的**；
-  那种情况下替换会**自动回滚**（见下），你应该手动下载完整包。
-* **替换是原子的，而且会回滚**：顺序是「旧的 `flowkeyd.exe` 改名成
-  `flowkeyd.exe.old` → 新的改名就位 → 启动新实例 → 等 2.5 秒确认它还活着」。
-  任何一步失败（安装目录写不进去、新 exe 起不来）都会把旧的那份改回来、
-  保留原来的程序不变，日志里有一条 `ERROR could not apply the update: ...`
-  并弹一个提示框（`--no-prompt` 时只写日志）。新实例启动后会删掉
-  `flowkeyd.exe.old`（旧进程还在退出时删不掉，它会隔 0.7 秒重试）。
-* **不会自动检查**：只有你点菜单才联网，不需要 token（公开仓库的匿名请求，
-  限额对“手动点一下”绰绰有余）。它也不写任何状态文件。
-* **权限**：替换 exe 需要能写安装目录，所以安装目录在 `C:\Program Files` 这类
-  地方时要保持提权运行（flowkeyd 默认就是提权的，正常路径下没有额外提示）。
-* **不动你的东西**：`%USERPROFILE%\.config\flowkeyd\config.lua`、日志文件、
-  开机自启的计划任务都原样保留（新实例只是把任务的路径再确认一遍）。
-* 没有新版本时卡片里写「已经是最新版本」；检查失败（断网 / 被 GitHub 限流 /
-  这次发布没有可下载的资产）时写一句中文人话，下面一行是英文的技术原因，
-  旁边还有 *打开发布页* 可以手动下载。
+> 双击 `flowkeyd.exe` 等价于不带任何参数启动：它没有控制台，日志只进
+> `%USERPROFILE%\.config\flowkeyd\flowkeyd.log`（用托盘「查看日志」看），并且默认会
+> 弹一次 UAC 自提权（不想提权就在配置里写 `elevate = false`）。
 
 ## 命令行
 
@@ -418,41 +160,42 @@ flowkeyd [选项]
 
 ```console
 $ flowkeyd --check --config flowkeyd.lua.example
-D:\prj\flowkeyd\flowkeyd.lua.example: OK (43 hotkey(s), 3 remap(s), 7 window rule(s))
+flowkeyd.lua.example: OK (46 hotkey(s), 3 remap(s), 7 window rule(s))
 ```
 
-（`window rule(s)` 只在配置里真的写了 `window_rule` 时才出现，没有摆放规则的
-配置仍然输出老样子。）
+（`window rule(s)` 只在配置里真的写了 `window_rule` 时才出现，没有摆放规则的配置仍然
+输出老样子。）
 
-`--list` 的形状与 oskeyd 的 `print_bindings` 逐字形似（因此两边的输出可以对比）。
+**离线命令**（`--check` / `--list` / `--list-keys` / `--help` / `--version`）永远不会
+弹 UAC，也绝不安装钩子。`--quit` 同样不装钩子、不提权（它只去通知一个已经在跑的
+实例）。`--remove-autostart` 需要管理员权限才能删任务。
 
-**离线命令**（`--check` / `--list` / `--list-keys` / `--help` / `--version`）
-永远不会弹 UAC，也绝不安装钩子——为一个只读的校验弹窗很没道理。
-`--quit` 同样不装钩子、不提权（它只去通知一个已经在跑的实例，
-见[开机自启与更新](#开机自启与更新任务计划程序)），但它会去碰另一个进程，
-所以不算离线命令。`--remove-autostart` 也不在离线命令里：它要管理员权限才能删任务。
-
-守护进程模式（不带任何离线命令）下配置读不出来或校验不过时，flowkeyd 除了把
-错误写进 `stderr`，还会弹一个 Qt 标准消息框（标题 `flowkeyd 配置错误`，错误文本
-可选中复制），点确定后以退出码 1 退出。双击启动时进程没有控制台，只有弹窗能
-让你知道到底出了什么事。（例如一个和弦里写了两个普通键，
-`keys = "NumpadSub+NumpadAdd"`，就会在这里直接报出来的那条。）
+守护进程模式下配置读不出来或校验不过时，flowkeyd 除了把错误写进 `stderr`，还会弹一个
+Qt 标准消息框（标题 `flowkeyd 配置错误`，错误文本可选中复制），点确定后以退出码 1
+退出。双击启动时进程没有控制台，只有弹窗能让你知道到底出了什么事。
 
 守护进程模式下同一份配置只允许一个实例。再启动一次时会**先弹一个原生提示框**
-（`flowkeyd 已在运行`），点确定后以退出码 1 退出；这一步刻意放在 **UAC 提权之前**，
-所以重复双击不会白白弹一次 UAC，也不会动到正在运行的那个实例。
-（`--allow-multi` 跳过单实例检查；`--no-prompt` 只跳过提示、检查照做。）
+（`flowkeyd 已在运行`），点确定后以退出码 1 退出；这一步刻意放在 UAC 提权之前，所以
+重复双击不会白白弹一次 UAC，也不会动到正在运行的那个实例。（`--allow-multi` 跳过单
+实例检查；`--no-prompt` 只跳过提示、检查照做。）
+
+**构建版本号**长这样：`26-09-27-dc6b332` —— 前半是**构建这个 exe 的日期**
+（`yy-MM-dd`，取运行中的可执行文件自己的最后写入时间），后半是**构建时源码的 git
+提交缩写**。启动日志的第一行、`--version` 与 `--help` 打印的也是它：
+
+```console
+$ flowkeyd --version
+flowkeyd 26-09-27-dc6b332
+Lua 5.5.1
+```
 
 ## 配置
 
-一个逐项注释、覆盖全部特性的文件见 [`flowkeyd.lua.example`](flowkeyd.lua.example)
-——`--check` 就是拿它当样本跑的。
+配置文件是**一段真正的 Lua 5.5.1 脚本**，由 flowkeyd 以你的权限执行：可以算表达式、
+写循环、用 `os.getenv` / `string.format` 之类的标准库。它也能做任何你的账号能做的事，
+所以别去运行来路不明的配置。
 
 ### 配置脚本的写法
-
-配置文件是**一段真正的 Lua 5.5.1 脚本**，由 flowkeyd 以你的权限执行：可以算表达式、
-写循环、用 `os.getenv` / `string.format` 之类的标准库。它也能做任何你的账号
-能做的事，所以别去运行来路不明的配置。
 
 两种写法完全等价，可以混用：
 
@@ -469,10 +212,8 @@ end
 
 remap{ from = "CapsLock", to = "Esc" }
 
--- 按程序摆放窗口：第一次出现时放到第 2 个虚拟桌面、第 2 块显示器上并最大化
 window_rule{ process = "wezterm", desktop = 2, monitor = 2 }
 
--- 同一个程序的窗口规则、启动参数与唤起它的快捷键写在一起
 app{
   process = "wps",
   launch = { program = [[C:\tools\wps.exe]] },
@@ -492,9 +233,9 @@ return {
 }
 ```
 
-校验、错误信息、`--list` 的形状与 oskeyd 完全一致：每个条目都可以有 `name`，
-出错时会写成 `hotkey #3 (\`terminal\`): unknown field ...`，脚本本身的错误则带
-`config.lua:行号`。
+每个条目都可以有 `name`，出错时会写成 `hotkey #3 (\`terminal\`): unknown field ...`，
+脚本本身的错误则带 `config.lua:行号`。**未知字段一律报错**，拼写错误会被 `--check`
+抓出来而不是被静默忽略。
 
 ### Lua 的几个坑
 
@@ -506,15 +247,15 @@ return {
   只有 `\p` 这类非法转义才会报错。
 * **`{}` 既是空列表也是空表。** 配置里空表只应出现在列表位置（`args`），
   `env = {}` 会被判成空列表并报错，提示会说明这一点。
-* **动作不能是 Lua 函数**：`action = function() ... end` 会被拒绝，
-  因为钩子回调与工作线程只执行校验过的声明式动作。
-* 带 UTF-8 BOM 的配置（记事本、`Set-Content -Encoding UTF8` 的产物）与 CRLF
-  都能正常读：加载器会先剥掉 BOM。
+* **动作不能是 Lua 函数**：`action = function() ... end` 会被拒绝，因为钩子回调与
+  工作线程只执行校验过的声明式动作。想要“自定义逻辑”就用循环与表达式去生成声明式动作。
+* 带 UTF-8 BOM 的配置（记事本、`Set-Content -Encoding UTF8` 的产物）与 CRLF 都能
+  正常读：加载器会先剥掉 BOM。
 
 ### DSL 速查
 
-除了直接写 `{ type = "..." }` 之外，[`src/lua/lua_prelude.lua`](src/lua/lua_prelude.lua)
-还提供一组构造器（同时挂在 `flowkeyd.*` 下，免得与脚本自己的全局变量撞名）：
+除了直接写 `{ type = "..." }`，还提供一组构造器（同时挂在 `flowkeyd.*` 下，免得与
+脚本自己的全局变量撞名）：
 
 | 构造器                                        | 等价于                                                              |
 | --------------------------------------------- | ------------------------------------------------------------------- |
@@ -545,87 +286,8 @@ return {
 3. `%APPDATA%\flowkeyd\config.lua`
 4. 当前目录下的 `config.lua`
 
-回退到非默认位置时会打一条 warning 指出真正使用的位置；每一个都不存在时，
-报错会指向默认位置（也就是你该创建的那个文件）。
-
-### 从 TOML 迁移到 Lua
-
-oskeyd 0.2 起配置是 Lua；flowkeyd 继承了这个约定，`.toml` 后缀会被**明确拒绝**
-（而不是拿它去喂 Lua 解析器，那只会得到一屏看不懂的语法错误）：
-
-```console
-$ flowkeyd --check
-flowkeyd: C:\Users\me\.config\flowkeyd\config.toml is an old TOML config; flowkeyd reads
-Lua configs now — port it to C:\Users\me\.config\flowkeyd\config.lua (see the “从 TOML
-迁移到 Lua” section of README.md) or point --config at your .lua file
-```
-
-翻译规则几乎是一对一的，键名、取值、动作字段与校验规则都没有变：
-
-| TOML                        | Lua                                                             |
-| --------------------------- | --------------------------------------------------------------- |
-| `[settings]`                | `settings{ ... }`（或 `settings = { ... }`）                     |
-| `[[hotkey]]`                | `hotkey{ ... }`                                                 |
-| `[[remap]]`                 | `remap{ ... }`                                                   |
-| `x = [a, b]`                | `x = { a, b }`                                                   |
-| `repeat = true`             | `repeatable = true`（`repeat` 是 Lua 关键字）                    |
-| `'C:\path'`（字面字符串）   | `[[C:\path]]`（或 `'C:\\path'`）                                   |
-
-最快的方法是把 `flowkeyd.lua.example` 当模板拄一遍，然后让 `--check` 指出还没
-改完的地方。举个例子，这段 TOML：
-
-```toml
-[settings]
-elevate = false
-
-[[hotkey]]
-name = "wezterm"
-keys = "Win+s"
-action = { type = "window", op = "activate", process = "wezterm",
-           launch = { program = '{USERPROFILE}\scoop\shims\wezterm.exe', args = ["start"], wait_ms = 5000 } }
-```
-
-写成 Lua 就是：
-
-```lua
-settings{ elevate = false }
-
-hotkey{
-  name = "wezterm",
-  keys = "Win+s",
-  action = window("activate", {
-    process = "wezterm",
-    launch = {
-      program = [[{USERPROFILE}\scoop\shims\wezterm.exe]],
-      args = { "start" },
-      wait_ms = 5000,
-    },
-  }),
-}
-```
-
-改完存成同目录下的 `config.lua`（旧的 `.toml` 可以删掉或改名备份），再跑一次
-`flowkeyd --check`。
-
-### 管理员权限与托盘
-
-* **提权。** 以守护进程模式启动时，如果进程没有管理员令牌，flowkeyd 会用
-  `ShellExecuteW("runas")` 把同样的命令行转发给一个提权后的自己，然后退出。
-  所以相对路径的 `--config` 和工作目录在重启后依然有效。UAC 提示被拒绝时
-  它不会直接死掉：会打一条 warning 并以普通权限继续跑（钩子照样工作，
-  只是驱动不了提权进程的窗口）。**本机实测：用户点“否”时 `ShellExecuteW("runas")`
-  返回的是 5（拒绝访问），而不是 1223**，所以降级路径不能只判 `ERROR_CANCELLED`。
-* **不提权的场合。** `--check`、`--list`、`--list-keys` 都是离线命令，永远不会
-  弹 UAC。另外 `--no-elevate`（或 `settings.elevate = false`）能完全关掉提权。
-* **托盘。** 右键菜单是 *查看日志*、*挂起/恢复快捷键*、*重载配置*、
-  *打开配置文件*、*检查更新...*、*退出*，左键单击直接打开**日志窗口**（进程内的 QML 窗口，
-  见上文）。悬停提示会显示构建版本、当前虚拟桌面与挂起状态，因为“快捷键突然不响应”
-  和“flowkeyd 挂起了”必须能一眼分开。*检查更新* 见
-  [在线更新](#在线更新)。
-* **日志。** 守护进程模式下日志总是写两份：控制台（终端启动时）与
-  `%USERPROFILE%\.config\flowkeyd\flowkeyd.log`（目录会自动建）。后者就是日志
-  窗口尾随的那个文件（没有它，隐藏控制台之后就彻底看不到任何信息了）；
-  它与配置文件在同一个目录，排查时只需要看一个地方。
+回退到非默认位置时会打一条 warning 指出真正使用的位置；每一个都不存在时，报错会指向
+默认位置（也就是你该创建的那个文件）。`.toml` 后缀会被明确拒绝并提示迁移。
 
 ### `settings{ ... }`
 
@@ -645,8 +307,6 @@ settings{ log_level = "info", swallow = true, tick_ms = 15 }
 | `input_backend`      | `"auto"` | `auto`、`user32`，或 `ntuser`（未公开的 `win32u!NtUserSendInput`）                           |
 | `single_instance`    | `true`   | 另一个实例已占用同一配置时拒绝启动                                                           |
 | `elevate`            | `true`   | 以守护进程模式启动时，没有管理员权限就自动提权重启（`--no-elevate` 覆盖）                     |
-
-未知键会报错，因此拼写错误会被 `--check` 抓出来，而不是被静默忽略。
 
 ### `hotkey{ ... }`
 
@@ -680,14 +340,13 @@ hotkey{
 | `repeat`  | 按下即派发，之后按住期间按 `settings.repeat_interval_ms`/`repeat_delay_ms` 重复；等价于 `repeatable = true` |
 
 `trigger = "repeat"` 与 `repeatable = true` 是同一件事的两种写法（可以叠加
-`repeatable = { interval_ms = 40 }` 来给参数）；把它们写成互相矛盾的组合会被
-`--check` 拒绝。
+`repeatable = { interval_ms = 40 }` 来给参数）；把它们写成互相矛盾的组合会被 `--check`
+拒绝。
 
-`trigger = "release"` 写在**单个修饰键**上（例如 `keys = "LWin"`）时是「轻碰」
-语义：按下修饰键本身**照常放行给系统**（`Win+E` / `Win+L` 这些没被 flowkeyd
-接管的系统组合不受影响），只有期间没按过别的键、松开时才触发 —— 窗口切换器就是
-靠它绑在 Win 键上的（见[窗口切换器](#窗口切换器)）。单个修饰键配默认的
-`trigger = "press"` 仍然是老行为。
+`trigger = "release"` 写在**单个修饰键**上（例如 `keys = "LWin"`）时是「轻碰」语义：
+按下修饰键本身**照常放行给系统**（`Win+E` / `Win+L` 这些没被 flowkeyd 接管的系统组合
+不受影响），只有期间没按过别的键、松开时才触发 —— 窗口切换器就是靠它绑在 Win 键上的
+（见[窗口切换器](#窗口切换器)）。单个修饰键配默认的 `trigger = "press"` 仍然是老行为。
 
 和弦语法既接受名称也接受 AutoHotkey 前缀：
 
@@ -698,8 +357,8 @@ hotkey{
 | `~F4`               | 即使快捷键触发也放行该按键            |
 | `*F1`               | 即使额外按住了修饰键也触发            |
 
-只有修饰键的和弦也能用：`Ctrl+Shift` 会在 Ctrl 按着时、Shift 按下时触发，
-而通用的 `Shift`/`Ctrl`/`Alt` 名称会匹配键盘的任意一侧。
+只有修饰键的和弦也能用：`Ctrl+Shift` 会在 Ctrl 按着时、Shift 按下时触发，而通用的
+`Shift`/`Ctrl`/`Alt` 名称会匹配键盘的任意一侧。
 
 **单个字母的键名一律小写。** `h` 就是 H 键；想表达“按住 Shift 的 h”要显式写
 `Shift+h`，直接写成大写的 `H` 会被 `--check` 拒绝：
@@ -713,22 +372,18 @@ keys = "Alt+H"        -- 报错：字母键名要小写（写 Shift+h）
 
 同一条规则也适用于 `remap` 的 `from`/`to`、发送脚本里 `{...}` 中的键名
 （`send("{S}")` 要写成 `send("{s}")`），以及选单条目的 `key`。
-**发送脚本里的裸字符不受影响**：`send("A")` 仍然是 AutoHotkey 语义下的
-“打出大写 A”（等价于 `send("+a")`）；要按字面输入任意文本用 `type("...")`
-或 `send("{Text}...")`。
+**发送脚本里的裸字符不受影响**：`send("A")` 仍然是 AutoHotkey 语义下的“打出大写 A”
+（等价于 `send("+a")`）；要按字面输入任意文本用 `type("...")` 或 `send("{Text}...")`。
 
-一个和弦里**只能有一个按键**（其余片段必须是修饰键），所以「两个普通键一起按」
-是**不支持**的：`keys = "NumpadSub+NumpadAdd"` 会被拒绝，
-`--check` 报 `` `NumpadSub` in chord `NumpadSub+NumpadAdd` is not a modifier ``。
-要表达这种意图只能用修饰键组合（如 `Ctrl+NumpadMult`），或者换一个独立的键。
+一个和弦里**只能有一个按键**（其余片段必须是修饰键），所以「两个普通键一起按」是
+**不支持**的：`keys = "NumpadSub+NumpadAdd"` 会被拒绝。要表达这种意图只能用修饰键
+组合（如 `Ctrl+NumpadMult`），或者换一个独立的键。
 
-`Numpad*` 是小键盘上的那些键，与主键盘上的同名键是**不同的键**：
-`NumpadSub`（`VK_SUBTRACT`）不会匹配主键盘的 `-`（那是 `Minus`，
-`VK_OEM_MINUS`），`NumpadAdd`（`VK_ADD`）不会匹配主键盘的 `=`，
-`NumpadEnter` 也不会匹配主键盘的 `Enter`。小键盘的 Enter 与主键盘的 Enter
-共用 `VK_RETURN`，区分靠的是 Windows 的扩展键标志；而这个区别与 `NumLock`
-完全无关：这几个键上报的 `VK` 不随 `NumLock` 变化（`NumLock` 只影响字符翻译），
-所以开着或关着都一样能用。完整的按键名清单见 `flowkeyd --list-keys`。
+`Numpad*` 是小键盘上的那些键，与主键盘上的同名键是**不同的键**：`NumpadSub`
+（`VK_SUBTRACT`）不会匹配主键盘的 `-`（那是 `Minus`，`VK_OEM_MINUS`），`NumpadAdd`
+（`VK_ADD`）不会匹配主键盘的 `=`，`NumpadEnter` 也不会匹配主键盘的 `Enter`。小键盘的
+Enter 与主键盘的 Enter 共用 `VK_RETURN`，区分靠的是 Windows 的扩展键标志；而这个区别
+与 `NumLock` 完全无关。完整的按键名清单见 `flowkeyd --list-keys`。
 
 **完全没有动作**的快捷键就是一个按键屏蔽器：它会吞掉它匹配到的按键。
 
@@ -744,31 +399,30 @@ keys = "Alt+H"        -- 报错：字母键名要小写（写 Shift+h）
 | `caps_lock` | `state` = `off`                                                                                           | 仅当 CapsLock 当前开启时将其关闭；适合与 `send` 组合，实现 CapsLock 层快捷键的兜底逻辑                                                                                                                                                                                                    |
 | `type`      | `text`、`delay_ms`、`release_modifiers`                                                                   | 字面 Unicode 注入，与键盘布局无关                                                                                                                                                                                                                                                         |
 | `open`      | `target`、`args`、`cwd`、`show`                                                                           | `ShellExecuteW`：URL、文档、文件夹                                                                                                                                                                                                                                                        |
-| `volume`    | `op` = `up`/`down`/`set`/`mute`/`unmute`/`toggle`、`level`（0-100）、`step`                               | 对默认输出设备使用 Core Audio 的 `IAudioEndpointVolume`                                                                                                                                                                                                                                   |
+| `volume`    | `op` = `up`/`down`/`set`/`mute`/`unmute`/`toggle`、`level`（0-100）、`step`                               | 对默认输出设备使用 Core Audio                                                                                                                                                                                                                                                            |
 | `media`     | `op` = `play_pause`/`next`/`prev`/`stop`                                                                  |                                                                                                                                                                                                                                                                                           |
 | `clipboard` | `op` = `get`/`set`/`append`/`clear`、`text`                                                               |                                                                                                                                                                                                                                                                                           |
 | `window`    | `op` = `activate`/`minimize`/`maximize`/`restore`/`close`/`toggle_topmost`/`move_prev_desktop`/`move_next_desktop`/`move_left_monitor`/`move_right_monitor`、`target`、`process`、`launch`、`wait_ms`、`toggle`、`animate`、`follow` | `target` 匹配窗口标题的子串，`process` 匹配可执行文件名（`wezterm` 也能匹配 `wezterm-gui.exe`）；既没有 `target` 也没有 `process` 就表示前台窗口。`launch = { program, args[], cwd, show, shell, env{}, wait_ms }` 会在没有任何匹配时启动该程序，然后等待它的窗口（默认 3000 ms）并激活它。`toggle`（默认开，只对 `op = "activate"` 有意义）会在目标窗口已经在前台时改为最小化它。`animate`（默认**关**）控制这次状态变化要不要播放 DWM 的过渡动画。`wait_ms` 写在动作顶层时是 `launch.wait_ms` 的简写；在 `app{}` 里 `launch` 还会继承 app 的 `launch`（逐字段合并）。四个 `move_*` op 把**当前窗口**（不写 `target`/`process` 时）挪到相邻的虚拟桌面 / 显示器：`move_prev_desktop`/`move_next_desktop` 只动虚拟桌面且**首尾相接**（显示器上的几何不变，视图**不**跟着走），`move_left_monitor`/`move_right_monitor` 只动显示器（保留最大化状态，否则保持原有大小并居中到目标工作区；没有更左/更右那一块时失败，**不循环**）。这四个 op 都不套用 `toggle`、也不接受 `launch`。`follow = true` 只能写给 `move_prev_desktop`/`move_next_desktop`：搬完之后把视图也切到目标桌面并重新激活那个窗口（用户跟着窗口一起过去；不写时视图不动，与 Windows 自己的 `Win+Ctrl+Shift+←/→` 一致），写在其它的 op 上会被 `--check` 拒绝 |
 | `notify`    | `title`、`body`                                                                                           | 托盘气泡提示                                                                                                                                                                                                                                                                              |
-| `menu`      | `title`、`items[]`（每项 `{ key, label, hint, action }`）                                                  | 弹出一个 QML 选单让用户挑一项（见[选单与电源](#选单与电源)）；条目上的单字符 `key` 直接选中它，`↑`/`↓` + `Enter` 与鼠标也能选，`Esc`（或点到别的地方）只关窗口。没有 `action`（或 `none()`）的条目只是把选单关掉                                                                         |
-| `help`      | `title`（可选，默认「快捷键」）                                                                            | 弹出一个**快捷键帮助**（同一套卡片风格，见[快捷键帮助](#快捷键帮助)）：列出当前配置里全部生效的快捷键与重映射；筛选框里直接输入（鼠标点一下就进去）就筛选；`↑`/`↓`、`PgUp`/`PgDn` 或滚轮/拖动滚动条滚动（滚动不改选中项）；**`Enter` 或双击一行 = 关掉窗口并执行那一行的动作**；左键点一行 = 选中它并把它的按键复制到剪贴板；`quit`/`suspend`/`power` 这类危险动作要按两次（第一次只是等确认）；`Esc` 依次是「取消确认 → 清筛选 → 关窗」。列表由配置本身生成，所以没有别的参数 |
-| `windows`   | `title`（可选，只用作**窗口标题**）                                                                        | 弹出一个**窗口切换器**（同一套卡片风格，见[窗口切换器](#窗口切换器)）：列出当前所有打开的程序窗口（标题 + 进程名），输入按**进程名前缀**筛选（标题只显示、不参与匹配）；**筛选到只剩一个窗口就直接激活它**，多条时用 `↑`/`↓` + `Enter` 或鼠标点选，`Esc` 关窗；筛到一个进程、而它开了多个窗口时进入**数字选择模式**（前 10 行依次是 `1`..`9`、`0`，按数字直接切过去）。卡片**没有标题行**（筛选框就是第一行，列表与它同宽），打开的瞬间还会把输入法切成英文、关掉时把打开前的模式写回去；列表由当前枚举生成，所以没有别的参数 |
-| `power`     | `op` = `sleep`/`hibernate`/`shutdown`/`restart`/`logoff`/`lock`/`screen_off`                                | 系统电源：睡眠、休眠、关机、重启、注销、锁定、关屏。关机/重启/注销需要管理员权限（flowkeyd 默认就提权运行），失败时会写日志并弹一个气泡而不是静悄悄地什么都不做；`screen_off` 只是关掉全部显示器（不睡眠），不需要权限，任意按键/鼠标动作都会把屏幕重新点亮                                                                                      |
-| `desktop`   | `switch`（从 1 开始）                                                                                     | 切到第 N 个虚拟桌面（Task View 里从左到右的顺序）。用的是 shell 未公开的 `IVirtualDesktopManagerInternal`，所以可以按序号直达（详见[已知限制](#已知限制)）；版本对不上时错误会写进日志                                                                                                      |
+| `menu`      | `title`、`items[]`（每项 `{ key, label, hint, action }`）                                                  | 弹出一个选单让用户挑一项（见[选单与电源](#选单与电源)）；条目上的单字符 `key` 直接选中它，`↑`/`↓` + `Enter` 与鼠标也能选，`Esc`（或点到别的地方）只关窗口。没有 `action`（或 `none()`）的条目只是把选单关掉                                                                         |
+| `help`      | `title`（可选，默认「快捷键」）                                                                            | 弹出一个**快捷键帮助**（见[快捷键帮助](#快捷键帮助)）：列出当前配置里全部生效的快捷键与重映射；筛选框里直接输入（鼠标点一下就进去）就筛选；`↑`/`↓`、`PgUp`/`PgDn` 或滚轮/拖动滚动条滚动（滚动不改选中项）；**`Enter` 或双击一行 = 关掉窗口并执行那一行的动作**；左键点一行 = 选中它并把它的按键复制到剪贴板；`quit`/`suspend`/`power` 这类危险动作要按两次；`Esc` 依次是「取消确认 → 清筛选 → 关窗」。列表由配置本身生成，所以没有别的参数 |
+| `windows`   | `title`（可选，只用作**窗口标题**）                                                                        | 弹出一个**窗口切换器**（见[窗口切换器](#窗口切换器)）：列出当前所有打开的程序窗口（标题 + 进程名），输入按**进程名前缀**筛选（标题只显示、不参与匹配）；**筛选到只剩一个窗口就直接激活它**，多条时用 `↑`/`↓` + `Enter` 或鼠标点选，`Esc` 关窗；筛到一个进程、而它开了多个窗口时进入**数字选择模式**（前 10 行依次是 `1`..`9`、`0`，按数字直接切过去）。卡片**没有标题行**（筛选框就是第一行，列表与它同宽），打开的瞬间还会把输入法切成英文、关掉时把打开前的模式写回去 |
+| `power`     | `op` = `sleep`/`hibernate`/`shutdown`/`restart`/`logoff`/`lock`/`screen_off`                                | 系统电源：睡眠、休眠、关机、重启、注销、锁定、关屏。关机/重启/注销需要管理员权限（flowkeyd 默认就提权运行），失败时会写日志并弹一个气泡；`screen_off` 只是关掉全部显示器（不睡眠），不需要权限，任意按键/鼠标动作都会把屏幕重新点亮                                                                                      |
+| `desktop`   | `switch`（从 1 开始）                                                                                     | 切到第 N 个虚拟桌面（Task View 里从左到右的顺序）                                                                                                                                                                                                                                          |
 | `suspend`   | `state` = `on`/`off`/`toggle`                                                                             | 暂停快捷键匹配；suspend 快捷键本身仍然可用                                                                                                                                                                                                                                                |
 | `reload`    |                                                                                                           | 重新读取配置文件                                                                                                                                                                                                                                                                          |
 | `quit`      |                                                                                                           | 退出 flowkeyd                                                                                                                                                                                                                                                                             |
 | `none`      |                                                                                                           | 什么都不做（配合 `swallow` 很有用）                                                                                                                                                                                                                                                       |
 
 简写：`"run:notepad.exe file.txt"`、`"send:^{c}"`、`"type:hello"`、
-`"open:https://example.com"`、`"notify:title|body"`、`"volume:up"`、
-`"media:next"`、`"clipboard:get"`、`"window:minimize"`、`"window:move_next_desktop"`、
-`"desktop:1"`、`"power:sleep"`、`"reload"`、`"quit"`、`"help"`、`"windows"`、`"none"`。
+`"open:https://example.com"`、`"notify:title|body"`、`"volume:up"`、`"media:next"`、
+`"clipboard:get"`、`"window:minimize"`、`"window:move_next_desktop"`、`"desktop:1"`、
+`"power:sleep"`、`"reload"`、`"quit"`、`"help"`、`"windows"`、`"none"`。
 
-可能有多个窗口匹配；最近使用过的那个（Z 序里最靠前的）胜出，
-而已还原的窗口优于最小化的窗口。不可见窗口以及属于别的窗口的弹出窗口
-（对话框、工具提示、菜单）会被忽略。匹配会同时使用 `target` 和 `process`，
-这正是能可靠找到“那个 WezTerm 窗口”的方式——终端窗口的标题是里面运行的
-shell 决定打印的任意内容。
+可能有多个窗口匹配；最近使用过的那个（Z 序里最靠前的）胜出，而已还原的窗口优于最小化
+的窗口。不可见窗口以及属于别的窗口的弹出窗口（对话框、工具提示、菜单）会被忽略。匹配
+会同时使用 `target` 和 `process`，这正是能可靠找到“那个 WezTerm 窗口”的方式——终端
+窗口的标题是里面运行的 shell 决定打印的任意内容。
 
 ```lua
 -- Win+s 唤起 WezTerm，没有它的窗口时先启动它。
@@ -786,32 +440,28 @@ hotkey{
 }
 ```
 
-`launch` 只在窗口确实不存在时才会尝试，因此一次被拒绝的激活永远不会留下
-第二个正在运行的副本。
+`launch` 只在窗口确实不存在时才会尝试，因此一次被拒绝的激活永远不会留下第二个正在运行
+的副本。
 
-`op = "activate"` 默认带 `toggle`：要唤起的窗口**已经**在前台时就把它最小化，
-于是同一个快捷键在唤起与收起之间切换——和点击任务栏按钮、以及 Windows 自己的
-`Win+数字` 一样。已经最小化的窗口不算“已经在前台”，那种情况下按下去依然是
-把它恢复出来。只想让快捷键永远把窗口往前抬（比如“随时把日志窗口调到眼前”）就
-写 `toggle = false`。
+`op = "activate"` 默认带 `toggle`：要唤起的窗口**已经**在前台时就把它最小化，于是同一
+个快捷键在唤起与收起之间切换——和点击任务栏按钮、以及 Windows 自己的 `Win+数字`
+一样。已经最小化的窗口不算“已经在前台”，那种情况下按下去依然是把它恢复出来。只想让
+快捷键永远把窗口往前抬（比如“随时把日志窗口调到眼前”）就写 `toggle = false`。
 
 **“已经在前台”还要看虚拟桌面。** 窗口不在你当前那张虚拟桌面上时不算“已经在前台”
-（哪怕 Windows 仍然把它记成前台窗口 —— 被 `window_rule` 搬走之后就是这样），
-按下去是**切到它所在的那张桌面并激活它**，视图跟着过去。于是某一个程序被
-`window_rule` 固定在第 3 张桌面上时，用快捷键唤起它一次就能到位，不必先手动
-切桌面；再按一次才是收起（那时它已经真的在前台了）。
+（哪怕 Windows 仍然把它记成前台窗口），按下去是**切到它所在的那张桌面并激活它**，
+视图跟着过去。于是某一个程序被 `window_rule` 固定在第 3 张桌面上时，用快捷键唤起它
+一次就能到位，不必先手动切桌面；再按一次才是收起。
 
-（`target` 和 `process` 都不写时目标就是前台窗口本身，于是 `window("activate")`
-会变成“最小化当前窗口”——那种场合本来就该写 `window("minimize")`。）
+（`target` 和 `process` 都不写时目标就是前台窗口本身，于是 `window("activate")` 会变成
+“最小化当前窗口”——那种场合本来就该写 `window("minimize")`。）
 
-`launch` 那条路径**不**套用 `toggle`：刚启动的窗口往往自己就抢到了前台，
-在那种时候把“启动它”变成“立刻收起它”毫无道理。
+`launch` 那条路径**不**套用 `toggle`：刚启动的窗口往往自己就抢到了前台，在那种时候把
+“启动它”变成“立刻收起它”毫无道理。
 
-`launch.program` 是直接交给 `CreateProcess` 的（不像 `open` 那样走
-`ShellExecuteW`），所以它**不会**查注册表里的 `App Paths`，也不做 `PATH` 之外的
-搜索：Chrome 与 VS Code 这种不在 `PATH` 里的程序要写完整路径。
-（`run`/`window.launch` 用 `CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW`，
-**不用** `DETACHED_PROCESS`——后者会静默杀死控制台子进程。）
+`launch.program` 是直接交给 `CreateProcess` 的（不像 `open` 那样走 `ShellExecuteW`），
+所以它**不会**查注册表里的 `App Paths`，也不做 `PATH` 之外的搜索：Chrome 与 VS Code
+这种不在 `PATH` 里的程序要写完整路径。
 
 ```lua
 -- Win+1 激活 Chrome，没有窗口时先启动它。
@@ -830,14 +480,14 @@ hotkey{
 }
 ```
 
-`process` 写的是可执行文件名，所以得用那个**真正拥有窗口**的进程名：
-微信 4.x 是 `Weixin.exe`（写 `weixin`；`WeChatAppEx.exe` 只是它的小程序子进程），
-VS Code 的窗口属于 `Code.exe`。
+`process` 写的是可执行文件名，所以得用那个**真正拥有窗口**的进程名：微信 4.x 是
+`Weixin.exe`（写 `weixin`；`WeChatAppEx.exe` 只是它的小程序子进程），VS Code 的窗口
+属于 `Code.exe`。
 
 ### 把窗口挪到相邻的桌面 / 显示器
 
-`window` 动作还有四个只针对**当前窗口**（不写 `target`/`process` 就是前台窗口）
-的 `op`，用来把窗口搬到相邻的位置：
+`window` 动作还有四个只针对**当前窗口**（不写 `target`/`process` 就是前台窗口）的
+`op`，用来把窗口搬到相邻的位置：
 
 ```lua
 -- 只搬窗口，视图不动（和 Windows 自己的 Win+Ctrl+Shift+←/→ 一个语义）
@@ -851,245 +501,48 @@ hotkey{ keys = "Win+y", action = window("move_left_monitor") }
 hotkey{ keys = "Win+o", action = window("move_right_monitor") }
 ```
 
-* `move_prev_desktop` / `move_next_desktop` 只动**虚拟桌面**，窗口在显示器上的
-  大小与位置完全不变。默认视图也**不**跟着走（移动的是窗口，不是当前桌面；和
-  Windows 自己的 `Win+Ctrl+Shift+←/→` 一个语义）。两张桌面**首尾相接**：在
-  第一张再往前会到最右那一张，在最后一张再往后会回到第一张。
-* 这两个虚拟桌面 `op` 还可以带 `follow = true`：搬完之后把**视图也切到目标
-  桌面**，并让那个窗口重新拿到前台（`SwitchDesktop` 激活的是目标桌面上上次
-  用过的窗口，不一定是它）。搬窗口与切视图在同一个 shell 会话里一次做完，
-  所以不会出现“窗口搬走了、视图还留在原地”的中间态。“保持激活”是尽力而为：
-  真抢不到前台时只写一条 warning，动作本身算成功（窗口确实已经搬过去、视图
-  也确实跟过去了）。`Win+i` / `Win+u`（不按 Shift）用的就是这个，而
-  `Win+Shift+i` / `Win+Shift+u` 只搬窗口 —— 两者的区别就是“把窗口带着一起走”
-  与 Windows 自己的 `Win+Ctrl+Shift+←/→`。
-  `follow` 只能写在这两个 `op` 上（写在别的 `op` 上会被 `--check` 拒绝），
-  且**视图跟随必然伴随一次 `SwitchDesktop`**：如果你更想留在当前桌面，
-  就别写 `follow`。
-* `move_left_monitor` / `move_right_monitor` 只动**显示器**：按“先左后右、
-  再上后下”的排列顺序找相邻那一块（和 `window_rule` 里 `monitor = 2` 的 1
-  起序号是同一个排列）。虚拟桌面不变；**最大化窗口在新显示器上仍然最大化**
-  （保留 `IsZoomed` 状态），普通窗口保持原有大小并**居中**到目标显示器的工作区，
-  最小化的窗口只更新它的还原位置、不会被弹出来。已经在最左/最右那一块时
-  按下去只会写一条日志，**不循环**（与虚拟桌面那两条不同）。
+* `move_prev_desktop` / `move_next_desktop` 只动**虚拟桌面**，窗口在显示器上的大小与
+  位置完全不变。默认视图也**不**跟着走（移动的是窗口，不是当前桌面）。两张桌面
+  **首尾相接**：在第一张再往前会到最右那一张，在最后一张再往后会回到第一张。
+* 这两个虚拟桌面 `op` 还可以带 `follow = true`：搬完之后把**视图也切到目标桌面**，
+  并让那个窗口重新拿到前台。“保持激活”是尽力而为：真抢不到前台时只写一条 warning，
+  动作本身算成功。`Win+i` / `Win+u`（不按 Shift）用的就是这个，而 `Win+Shift+i` /
+  `Win+Shift+u` 只搬窗口。
+* `move_left_monitor` / `move_right_monitor` 只动**显示器**：按“先左后右、再上后下”
+  的排列顺序找相邻那一块（和 `window_rule` 里 `monitor = 2` 的 1 起序号是同一个排列）。
+  虚拟桌面不变；**最大化窗口在新显示器上仍然最大化**，普通窗口保持原有大小并**居中**
+  到目标显示器的工作区，最小化的窗口只更新它的还原位置。已经在最左/最右那一块时按下去
+  只会写一条日志，**不循环**（与虚拟桌面那两条不同）。
 * 这四个 `op` 都不套用 `toggle`（不会因为窗口已经在前台就把它收起），也不接受
-  `launch`；跨显示器移动会产生窗口过渡，所以 `animate` 对它有意义，而跨虚拟
-  桌面移动不产生过渡、写 `animate` 会被 `--check` 拒绝。`follow` 也不影响
-  这一条：它只决定要不要切视图，不产生窗口过渡。
-* 底层：跨桌面走 shell 未公开的 `IVirtualDesktopManagerInternal::MoveViewToDesktop`
-  （与 `window_rule` 的 `desktop` 同一套），跨显示器走 `SetWindowPlacement`
-  （与 `window_rule` 的几何摆放同一套），所以两者的已知限制也一样。
+  `launch`；跨显示器移动会产生窗口过渡，所以 `animate` 对它有意义，而跨虚拟桌面移动
+  不产生过渡、写 `animate` 会被 `--check` 拒绝。
 
 ### 前台窗口与覆盖层
 
 不写 `target`/`process` 的 `window` 动作作用于**前台窗口**（`GetForegroundWindow()`），
-但有一个例外：如果它是个**覆盖层**（`WS_EX_TOOLWINDOW`），flowkeyd 会沿 Z 序往下
-找到第一个真正的主窗口（可见、无属主、非工具窗口、有标题、尺寸非零）再动手。
+但有一个例外：如果它是个**覆盖层**（`WS_EX_TOOLWINDOW`），flowkeyd 会沿 Z 序往下找到
+第一个真正的主窗口（可见、无属主、非工具窗口、有标题、尺寸非零）再动手。
 
-最典型的覆盖层是 **PowerToys 的「快捷键指南」**（`PowerToys.ShortcutGuide.exe`）：
-按住 Win 约一秒它就会弹出来并成为 `GetForegroundWindow()`。以前这时按
-`Win+i` / `Win+u` 这类“对前台窗口”的快捷键会去操控那个覆盖层（它不属于任何
-虚拟桌面，跨桌面移动会报 `could not read the desktop id of the window`），
-现象就是**按住 Win 连按下一个和弦没反应、把 Win 和那个键都松开再按才行**。
-现在 flowkeyd 会跳过覆盖层，继续作用在你刚才那个窗口上。
+最典型的覆盖层是 **PowerToys 的「快捷键指南」**：按住 Win 约一秒它就会弹出来并成为
+`GetForegroundWindow()`。flowkeyd 会跳过它，继续作用在你刚才那个窗口上。
 
 ### 窗口动画
 
 flowkeyd 触发的窗口状态变化默认**不播放动画**：`minimize` 不再“缩”到任务栏，
-`maximize`/`restore`/`activate` 也不再伸缩，窗口直接到位。写 `animate = true`
-可以给某一条绑定把动画要回来：
+`maximize`/`restore`/`activate` 也不再伸缩，窗口直接到位。写 `animate = true` 可以给
+某一条绑定把动画要回来：
 
 ```lua
 hotkey{ keys = "Ctrl+Alt+f", action = window("maximize", { animate = true }) }
 ```
 
-实现用的是**按窗口**的 `DwmSetWindowAttribute(hwnd,
-DWMWA_TRANSITIONS_FORCEDISABLED, TRUE)`：调 `ShowWindow` 前设上、调完立刻设回，
-所以
-
-* **不改系统设置。** 系统里“辅助功能 / 视觉效果 → 最小化/最大化时播放动画”
-  （`SPI_SETANIMATION`）不会被碰，其它程序、以及你手动点标题栏按钮时的动画
-  都不受影响。
-* 只有会改变窗口状态的 `op` 有这个效果；`close`、`toggle_topmost` 与跨虚拟桌面
-  移动（`move_prev_desktop`/`move_next_desktop`）不产生过渡，写 `animate` 会被
-  `--check` 拒绝；跨显示器移动（`move_left_monitor`/`move_right_monitor`）会改变
-  几何，`animate` 对它有意义。
-* 这个属性读不回来（`DwmGetWindowAttribute` 对它返回 `E_INVALIDARG`），
-  所以 flowkeyd 在调用后只能把它设回 `FALSE`（即“按默认，带动画”）。
-  `dwmapi.dll` 是用运行时解析的（见 `src/platform/win/dwm.cpp`），拿不到它时
-  只是保留动画，动作不会失败。
-* 动画这类**只能看得见的效果**只能靠肉眼：本项目没有屏幕采样脚本，
-  改这块之后请自己最小化/还原一次看看。
-
-### 选单与电源
-
-`menu` 弹出一个 **QML（FluentWinUI3）的无边框圆角卡片**。列表是 Qt 自带的
-`ListView` + 标准的 `ItemDelegate`（和帮助窗口同一套），所以悬停、按下与高亮
-全部由 FluentWinUI3 的标准样式画，鼠标点击与滚轮也是标准列表控件的行为：
-
-```lua
-hotkey{
-  name = "power-menu",
-  comment = "Win+x：电源选单（S 睡眠 / P 关机 / R 重启 / L 锁定 / O 关屏 / Esc 关闭）",
-  keys = "Win+x",
-  action = menu{
-    title = "电源",
-    items = {
-      { key = "s", label = "睡眠", hint = "Sleep",     action = power("sleep") },
-      { key = "p", label = "关机", hint = "Shut down", action = power("shutdown") },
-      { key = "r", label = "重启", hint = "Restart",   action = power("restart") },
-      { key = "l", label = "锁定", hint = "Lock",      action = power("lock") },
-      { key = "o", label = "关闭屏幕", hint = "Screen off", action = power("screen_off") },
-      { label = "取消", hint = "Esc", action = none() },
-    },
-  },
-}
-```
-
-* **键盘**：条目上的 `key`（一个字符，不区分大小写）直接选中它；`↑`/`↓` 移动高亮、
-  `Enter` 执行高亮的条目、`Esc` 关闭。
-* **鼠标**：悬停到哪一行，高亮就在哪一行（`Enter` 执行的就是它）；**左键单击一行
-  = 执行它**；点到别的地方也会把选单关掉（和系统菜单一样）。指针离开卡片之后
-  高亮回到键盘选中项。选单不滚动（条目数决定卡片高度），所以滚轮在它上面不做事，
-  也不会把高亮从你的光标下拿走。
-* 不写 `action`（或写 `none()`）的条目只是把选单关掉；不带 `key` 的条目只能鼠标/方向键选。
-* 选中的动作照旧在**工作线程**上执行：窗口在 Qt GUI 线程上创建，用户选中后
-  “选了第几项”回投给工作线程，所以条目里可以放任何动作，不只是 `power`。
-* **配色跟随系统**：卡片全部走 Qt 的 `palette`（浅色/深色主题都会跟着变）。
-  窗口尺寸、内边距、圆角与字号按所在显示器的 DPI 缩放；Qt 6 在 Windows 上默认
-  就是 per-monitor DPI Aware V2。
-* **中文字体是微软雅黑**（西文也跟着用 YaHei 自带的字形）：FluentWinUI3 默认的族
-  是 `Segoe UI Variable`，它没有中文字形，不指定的话中文会落到宋体上，跟旁边的
-  西文摆在一起很违和。字体是写死的，不跟随系统字体设置（`help` 窗口同）。
-* 一次只会有一个选单：再按一次快捷键只是把它拿到前面。
-* **卡片不会出现在任务栏里**（也不会进 `Alt+Tab`）：它是一个 `Qt.Tool` 窗口
-  （= Windows 的 `WS_EX_TOOLWINDOW`），按完就没的东西不该在任务栏里留一个按钮。
-  `help` 与窗口切换器是同一套标志，而且在启动时就已经预热好了（见
-  [工作原理](#工作原理)）。
-
-`power` 的取值：`sleep`（睡眠；现代待机的机器上就是“屏幕关掉、系统继续待机”）、
-`hibernate`（休眠，先把内存写进磁盘）、`shutdown`、`restart`、`logoff`（注销）、
-`lock`（锁定）、`screen_off`（关屏）。睡眠/休眠走 `powrprof!SetSuspendState`，
-关机/重启/注销走 `user32!ExitWindowsEx`，只带 `EWX_FORCEIFHUNG`（只强杀已经卡住、
-不响应 `WM_QUERYENDSESSION` 的程序），**不会**用 `EWX_FORCE`：有未保存内容的程序
-照样会弹它自己的确认框，所以这个“关机”不会比开始菜单里的那个更粗暴。
-
-`screen_off` 走的是 Windows 自己那条“屏幕超时后关屏”的路径——`WM_SYSCOMMAND` +
-`SC_MONITORPOWER` 广播给所有顶层窗口（`SendMessageTimeoutW`，免得被某个卡住的窗口
-挂住）——所以它只把**全部**显示器送进待机，系统、应用和 flowkeyd 的钩子都继续照常
-运行（**不是**睡眠，也不锁屏）。点亮屏幕由内核的输入电源策略负责：随便按一个键或
-动一下鼠标，显示器就回来了，这与 flowkeyd 的钩子吞不吞那个键无关，也不需要任何
-额外的动作。
-
-关机、重启、注销需要管理员权限（flowkeyd 默认就是提权运行的）；没提权时会在日志里
-写一行错误并弹一个托盘气泡说明原因。睡眠、休眠、锁定与关屏不需要权限。
-
-上面那条 `Win+x` 会吞掉 Windows 自己的“快捷链接菜单”，和例子里的 `Win+s` 取代系统
-搜索是同一回事；想保留系统菜单就换一个键。
-
-### 快捷键帮助
-
-`help` 弹出同一套 QML 卡片，但它不是让你挑一项，而是把**当前配置里全部生效的
-快捷键**列出来：左边是按键徽标，右边是配置里的 `comment`（没写就用 `name`）
-和一行灰色小字（这个快捷键到底会做什么，由动作摘要生成）。
-
-```lua
-hotkey{
-  name = "help",
-  comment = "Win+/：列出当前所有快捷键（可输入筛选、Enter 执行）",
-  keys = "Win+/",
-  action = help(),
-}
-```
-
-* **筛选**：筛选框就是一个普通的输入框（Qt 的 `TextField`）：**用鼠标点一下就能
-  进去打字**，光标、选区、输入法、右键菜单、`Home`/`End`/左右箭头都是标准输入框
-  的行为。输入就按子串过滤，和弦、`comment`/`name`、动作摘要都参与匹配；
-  窗口会跟着结果变矮（顶边不动，所以不会跳），标题右侧显示 `可见 / 总数`。
-  `Esc` 依次是「取消待确认 → 清筛选 → 关窗」。
-* **滚动**：`↑`/`↓`、`PgUp`/`PgDn` 移动**键盘选中项**（高亮就是它）；鼠标滚轮与
-  右侧的滚动条（Qt 自带的，**可以拖**）只滚视图，**不会**动键盘选中项 ——
-  拖动滚动条时高亮不会跟着指针乱跳。条目比窗口高时滚动条才出现。
-* **鼠标**：把鼠标移过某一行**不会**改变高亮；**左键点某一行 = 选中它 + 把它的
-  按键文本复制走**（和系统列表控件一样，点选是唯一用鼠标改选中的方式）；
-  **双击某一行 = 选中它并执行它的动作**。
-* **执行**：`Enter`（或双击）= **执行键盘选中项那一行**。窗口会先关掉再执行 ——
-  这样 `send`/`type`/`window` 这类动作作用在原来的前台应用上，而不是打回帮助
-  窗口自己的筛选框。触发的效果等价于按一下那个快捷键（先执行按下时的动作、
-  再执行松开时的动作）；重映射那一行等价于按一下源键
-  （`CapsLock → Esc` 就会注入一次 `Esc`）。
-* **危险动作要两次**：`quit`、`suspend` 与 `power`（睡眠/关机/重启/注销/锁定/关屏）
-  这几类不会一按就执行 —— 第一次 `Enter`/双击只是把它标成「待确认」
-  （那一行变色，底部提示换成确认文案），再按一次才真的执行。
-  `Esc`、上下换行、改筛选都会取消确认。
-* **复制**：左键点某一行把它的按键文本复制到剪贴板，例如 `Win+s`。
-* 列表由配置本身生成（`--list` 看的就是同一批绑定，加上重映射），
-  所以 `help()` 不需要任何参数；卡片顶部的标题可以换：`help("我的快捷键")`。
-* 一次只会有一个帮助窗口：再按一次快捷键只是把它拿到前面并清空筛选。
-* **卡片不会出现在任务栏里**（也不会进 `Alt+Tab`），与选单、窗口切换器同一套
-  窗口标志（`Qt.Tool`）。
-* 和 `Win+x`/`Win+s` 一样，`Win+/` 会吞掉 Windows 自己的那个快捷键
-  （表情/输入法面板）；想保留就换一个键。
-
-### 窗口切换器
-
-`windows()` 弹出一张卡片，列出**当前所有打开的程序窗口**（标题 + 进程名），
-输入进程名前缀就筛选、选中就切过去：
-
-```lua
-hotkey{
-  name = "window-switcher",
-  comment = "轻碰一下 Win：切换窗口",
-  keys = "LWin",
-  trigger = "release",
-  action = windows(),
-}
-```
-
-* **卡片没有标题行**：筛选框就是卡片的第一行，窗口列表紧跟在它下面而且
-  **与筛选框一样宽**（行的高亮底不再比输入框宽出一截）；「N / M 个窗口」的
-  计数在底部提示里，与键盘提示同一行。`windows("切换窗口")` 给的名字只用作
-  **窗口标题**（卡片是无边框的，界面上看不到它；外面用它辨认这个窗口）。
-* **一打开就把输入法切成英文**（鼠标点回筛选框时也会再确认一次）：筛选框匹配的
-  是进程名（`chrome.exe` 这种），而用户经常正开着中文输入法 —— 那样打进去的是
-  候选字，一条都筛不出来。**关掉卡片时会把打开前的模式写回去**：这个模式是本
-  进程里这几个窗口共用的（实测在帮助窗口里按 `Shift` 切成中文之后，切换器窗口
-  读到的也是中文），不还原的话你接着打开帮助 / 日志窗口打字时就变成英文了。
-  它只影响 flowkeyd 自己这个**进程**，**不影响**你在别的应用里的中/英文状态；
-  想在卡片里打中文仍然可以自己按 `Shift` 切过去（关掉卡片时会被还原成打开前的
-  状态，所以不会留下痕迹）。
-* **筛选**：筛选框就是一个普通的输入框（Qt 的 `TextField`，鼠标点一下就进去）。
-  输入按**进程名的前缀**过滤（大小写无关）：打 `chr` 列出所有 Chrome 窗口，
-  打 `flow` 列出 `flowkeyd.exe`；窗口标题只显示、**不参与匹配**。
-* **自动激活**：筛选结果**只剩一个窗口**时直接激活它并把卡片关掉 —— 不必再按
-  `Enter`。刚打开（筛选框为空）时不会自动激活，哪怕只有一个窗口。
-* **数字选择模式**：筛选串命中的窗口**全属于同一个进程名**、而且不止一个时，
-  每一行左边会出现一个数字快捷键 —— 前 10 行依次是 `1`..`9`、`0`，按数字就
-  直接跳到那个窗口（超过 10 个的窗口不分到按键）。这正是「打 `chr` 筛出好几只
-  Chrome 窗口」的场景：标题不参与筛选，在那里打不下去了，数字键是最省事的
-  第二段输入。那种模式下数字归快捷键，**不会跑进筛选框**；没有对应行的数字
-  （比如只有 3 个窗口时按 `0`）什么都不做。
-* 多条时用 `↑`/`↓` 选择后 `Enter` 切换，或者把鼠标悬停在某一行（悬停即高亮）
-  再左键单击；`Esc` 关掉卡片。窗口多于屏幕能放下的行数时右侧的 `ScrollBar`
-  可以拖。数字选择模式下同样可以用这两套，不强制按数字。
-* 列表按 Z 序（最近用过的在前）排列，**跨虚拟桌面的窗口也会列出来**：选中它会把
-  视图切到那张桌面并激活它（与 `window` 动作的跨桌面唤醒同一条路）。
-  工具窗口、没有标题的窗口、尺寸为空的窗口，以及 flowkeyd 自己的弹窗 / 日志窗口
-  不在列表里。**被 Windows 藏起来的“假窗口”也不会列**：有些程序（最典型的是
-  Windows 输入法的宿主 `TextInputHost.exe` 的「Windows 输入体验」）有一个
-  `IsWindowVisible` 为真、坐标与尺寸都正常的顶层窗口，但它其实从来没有显示到
-  屏幕上（DWM 的 cloaked 标记说得很清楚），切过去也没有意义 —— 这正是
-  “只列真正有窗口的进程、与 `Alt+Tab` 同一套判据”。注意**在别的虚拟桌面上的
-  窗口是另一种情况，仍然会列**（激活时会切过去）。
-* 简写 `action = "windows"` 等价于 `windows()`（标题那个参数见上面第一条）。
-* **「轻碰 Win」= 单个修饰键 + `trigger = "release"`**。它的语义是：按下 Win
-  本身**照常传给系统**（所以 `Win+E`、`Win+L` 这些没被 flowkeyd 接管的系统组合
-  完全不受影响），期间没有按过别的键、松开时才触发；触发时注入一个未分配的标记
-  按键，挡掉 Windows 自己的开始菜单。也就是说：**只有“单独按一下 Win”被换成了
-  窗口切换器**。单个修饰键配默认的 `trigger = "press"` 仍然是老行为，
-  `Ctrl+Shift` 这类“只有修饰键的和弦”也不受影响。
-* **卡片不会出现在任务栏里**（也不会进 `Alt+Tab`），与选单、帮助同一套窗口标志
-  （`Qt.Tool`）。
+实现用的是**按窗口**的 `DwmSetWindowAttribute(hwnd, DWMWA_TRANSITIONS_FORCEDISABLED,
+TRUE)`：调 `ShowWindow` 前设上、调完立刻设回，所以**不改系统设置**——系统里“辅助功能 /
+视觉效果 → 最小化/最大化时播放动画”不会被碰，其它程序、以及你手动点标题栏按钮时的
+动画都不受影响。只有会改变窗口状态的 `op` 有这个效果；`close`、`toggle_topmost` 与跨
+虚拟桌面移动（`move_prev_desktop`/`move_next_desktop`）不产生过渡，写 `animate` 会被
+`--check` 拒绝；跨显示器移动（`move_left_monitor`/`move_right_monitor`）会改变几何，
+`animate` 对它有意义。
 
 ### 模板
 
@@ -1119,17 +572,15 @@ remap{
 }
 ```
 
-`hold` 在 `from` 按下时按下目标、在 `from` 松开时松开目标，
-这正是 `CapsLock -> Esc` 或 `CapsLock -> Ctrl` 想要的行为。
-`tap` 每次按下只执行整个脚本一次。
+`hold` 在 `from` 按下时按下目标、在 `from` 松开时松开目标，这正是 `CapsLock -> Esc`
+或 `CapsLock -> Ctrl` 想要的行为。`tap` 每次按下只执行整个脚本一次。
 
 `to = "Esc"` 表示 Escape 键，与 AutoHotkey 的 `CapsLock::Esc` 完全一致；
 `to = "hello"` 是一个脚本，会输入五个字母。
 
 ### `window_rule{ ... }`
 
-按程序摆放窗口：某个程序的窗口**第一次出现**时，把它放到指定的虚拟桌面 /
-显示器上。
+按程序摆放窗口：某个程序的窗口**第一次出现**时，把它放到指定的虚拟桌面 / 显示器上。
 
 ```lua
 window_rule{
@@ -1155,53 +606,45 @@ window_rule{
 * `monitor` 有三种写法：
   * `2` —— 1 起的序号，按显示器排列「先左后右、再上后下」；
   * `"primary"` —— 主显示器；
-  * `"DISPLAY2"` —— `EnumDisplayMonitors` 的设备名（也可写全名 `\\.\DISPLAY2`）。
+  * `"DISPLAY2"` —— 显示器设备名（也可写全名 `\\.\DISPLAY2`）。
 
   找不到匹配的显示器时只记一条 warning，窗口留在原处（例如笔记本没插外接屏时）。
 * `all_desktops = true` 把窗口**钉在所有虚拟桌面上**（Task View 里的「在所有桌面
-  显示」）：切到哪张桌面都看得见它。`false` 是显式取消钉住，不写就不去碰它。
-  它与 `desktop` 互斥（窗口既然在每张桌面上，就没有「搬到第几张」可言），
-  两个都写会被 `--check` 拒绝。
-* `topmost = true` 让窗口**始终在最上层**（`WS_EX_TOPMOST`）；`false` 是显式
-  取消置顶，不写就不去碰它。
-* `all_desktops` 与 `topmost` 都不算“几何”：只写它们（没写 `monitor`）时窗口的
-  大小与位置保持不动，也不会因为默认最大化而突然变大。
+  显示」）：切到哪张桌面都看得见它。`false` 是显式取消钉住，不写就不去碰它。它与
+  `desktop` 互斥，两个都写会被 `--check` 拒绝。
+* `topmost = true` 让窗口**始终在最上层**；`false` 是显式取消置顶，不写就不去碰它。
+* `all_desktops` 与 `topmost` 都不算“几何”：只写它们（没写 `monitor`）时窗口的大小
+  与位置保持不动，也不会因为默认最大化而突然变大。
 * **默认最大化。** 只写了 `monitor`（而没写位置 / 大小）时，窗口会铺满那块显示器的
   **工作区**（扣掉任务栏）。只写 `desktop` 时窗口的大小与位置保持不动；
   `maximize = true` 与 `x`/`y`/`width`/`height` 不能同时写。
-* `x`/`y` 是相对**目标显示器工作区左上角**的偏移，`width`/`height` 是像素；
-  没给的项保持窗口原来的大小 / 居中。窗口比工作区还大时对齐工作区左上角，
-  保证标题栏可见。
-* 同一个窗口只处理一次：已经摆放过的窗口再次显示（从托盘还原、最小化后还原）
-  不会再摆一次。规则按书写顺序匹配，**先写的赢**；两条规则匹配同一批窗口时
-  `--check` 会给一条 warning。
+* `x`/`y` 是相对**目标显示器工作区左上角**的偏移，`width`/`height` 是像素；没给的项
+  保持窗口原来的大小 / 居中。窗口比工作区还大时对齐工作区左上角，保证标题栏可见。
+* 同一个窗口只处理一次：已经摆放过的窗口再次显示（从托盘还原、最小化后还原）不会再摆
+  一次。规则按书写顺序匹配，**先写的赢**；两条规则匹配同一批窗口时 `--check` 会给一条
+  warning。
 
-**触发时机只有三个**：
+**触发时机只有三个：**
 
 1. 窗口第一次出现；
 2. 之前断开的显示器重新接上（设备名从无到有）；
 3. flowkeyd 启动时，对当前已经存在的窗口过一遍。
 
-之后**不再干预**：你自己移动 / 缩放窗口、取消钉住、取消置顶都不会被纠正，
-直到下次显示器重新接入或者重启 flowkeyd。被当成“主窗口”的条件是：可见、
-没有属主、不是工具窗口（`WS_EX_TOOLWINDOW`）、有标题、尺寸非零 ——
-应用的内部辅助窗口不会被误摆。
+之后**不再干预**：你自己移动 / 缩放窗口、取消钉住、取消置顶都不会被纠正，直到下次
+显示器重新接入或者重启 flowkeyd。被当成“主窗口”的条件是：可见、没有属主、不是工具
+窗口（`WS_EX_TOOLWINDOW`）、有标题、尺寸非零 —— 应用的内部辅助窗口不会被误摆。
 
-**规则真的把窗口移到了另一张桌面时，视图也跟着过去**（只限“窗口第一次出现”
-那一遍）：flowkeyd 会切到目标桌面并重新激活那个窗口，于是“启动它”一次就能看到
-它 —— `Win+3` 唤起 WPS 不会看起来毫无反应。启动与显示器重新接入那两遍只是重新
-摆放已经在位的窗口，从不切视图；窗口本来就在目标桌面上时（例如一个已经在第 3 张
-桌面的程序又开了一个窗口）也不算“搬迁”，同样不切。
-
-`desktop` 走的是 shell 内部的 `MoveViewToDesktop`（已公开的
-`IVirtualDesktopManager::MoveWindowToDesktop` 拒绝移动别的进程的窗口）。
-窗口会先在当前桌面上出现一瞬间，然后被移到目标桌面。
+**规则真的把窗口移到了另一张桌面时，视图也跟着过去**（只限“窗口第一次出现”那一遍）：
+flowkeyd 会切到目标桌面并重新激活那个窗口，于是“启动它”一次就能看到它 —— `Win+3`
+唤起 WPS 不会看起来毫无反应。启动与显示器重新接入那两遍只是重新摆放已经在位的窗口，
+从不切视图；窗口本来就在目标桌面上时（例如一个已经在第 3 张桌面的程序又开了一个窗口）
+也不算“搬迁”，同样不切。
 
 ### `app{ ... }`
 
 把**同一个程序**的窗口摆放规则、启动参数与快捷键写在一起，省掉重复的 `process` /
-`title` / `launch`。它本身不是新能力：加载配置时会展开成一条普通的 `window_rule`
-与若干条普通的 `hotkey`，排在同一次注册顺序的最后。
+`title` / `launch`。它本身不是新能力：加载配置时会展开成一条普通的 `window_rule` 与
+若干条普通的 `hotkey`，排在同一次注册顺序的最后。
 
 ```lua
 app{
@@ -1229,398 +672,333 @@ app{
 ```
 
 * `process` / `title` 至少要写一个（与 `window_rule` 一样）。
-* `window` 就是一条 `window_rule`，字段完全一样；`process` / `title` / `name`
-  自动继承，显式写在 `window` 里的优先。不写 `window` 就只展开快捷键。
+* `window` 就是一条 `window_rule`，字段完全一样；`process` / `title` / `name` 自动
+  继承，显式写在 `window` 里的优先。不写 `window` 就只展开快捷键。
 * `launch` 就是这个程序怎么启动，字段与 `window` 动作的 `launch` 完全一样
-  （`program`、`args[]`、`cwd`、`show`、`shell`、`env{}`、`wait_ms`）。
-  `hotkeys` 里的 `window()` 动作会自动继承它；动作自己写了 `launch` 时**逐字段合并**
-  （写了的覆盖，没写的继续继承），动作顶层的 `wait_ms` 覆盖 `launch.wait_ms`。
-  于是最常见的写法就是 `action = window("activate")`。
+  （`program`、`args[]`、`cwd`、`show`、`shell`、`env{}`、`wait_ms`）。`hotkeys` 里的
+  `window()` 动作会自动继承它；动作自己写了 `launch` 时**逐字段合并**（写了的覆盖，
+  没写的继续继承），动作顶层的 `wait_ms` 覆盖 `launch.wait_ms`。于是最常见的写法就是
+  `action = window("activate")`。
 * `hotkeys` 里每一项就是一条 `hotkey`；其中的 `window()` 动作会自动补上 app 的
   `process`（写到动作的 `process`）与 `title`（写到动作的 `target`），以及 app 的
-  `launch`，显式写的优先。
-  嵌套在 `menu` 条目里的 `window()` 动作同样继承。**只对表 / 构造器形式的
-  `window` 动作生效**：简写字符串（`"window:activate"`）里没有可继承的字段。
+  `launch`，显式写的优先。嵌套在 `menu` 条目里的 `window()` 动作同样继承。**只对
+  表 / 构造器形式的 `window` 动作生效**：简写字符串里没有可继承的字段。
 * 名字：`name` 不写时用 `process`，再退到 `title`。这个名字会给展开出来的
-  `window_rule` 用；app 里**只有一个 hotkey** 时也用它当这条绑定的默认名字
-  （多个时用第一个和弦，免得重名）。`--list` 的快捷键那一列显示的仍然是和弦，
-  但日志、`{name}` 模板与帮助窗口（没写 `comment` 时）用的是这个名字。
+  `window_rule` 用；app 里**只有一个 hotkey** 时也用它当这条绑定的默认名字（多个时用
+  第一个和弦，免得重名）。
 * `enabled = false` 把整条 app（规则 + 全部快捷键）都丢掉，并给一条 warning。
-* 出错时的标签是 `app #1 (\`wps\`)`：不写 `name` 就用 `process`（再退到 `title`）。
 
 **与全局条目的关系**：`hotkey{}` / `window_rule{}` 仍然照旧可用 —— 没有窗口规则的
-快捷键（例如 `Ctrl+Alt+F4` 退出）、或没有快捷键的规则（例如只把某个程序钉在所有
-桌面上），继续单独写。app 展开出来的条目排在全局条目**之后**（同一次注册顺序的
-最后）：快捷键冲突时先注册的赢，窗口规则仍然是先写的赢，所以全局规则会先于
-app 规则匹配。
+快捷键、或没有快捷键的规则，继续单独写。app 展开出来的条目排在全局条目**之后**：
+快捷键冲突时先注册的赢，窗口规则仍然是先写的赢，所以全局规则会先于 app 规则匹配。
 
-## 工作原理
+## 托盘、日志窗口与弹窗
 
+托盘图标、日志窗口与四个弹窗（选单 / 帮助 / 窗口切换器 / 在线更新）用的是**应用自己的
+图标**。exe 文件本身在资源管理器/任务栏里显示的那个图标是另一份东西——嵌在 PE 资源里
+的 `.ico`。
+
+### 日志窗口
+
+**日志窗口**（左键单击托盘图标）是一个**进程内的窗口**：它尾随日志文件，每 250 ms 追
+一次新行，最多显示最后 1000 行，按级别配色，带一个子串筛选框，新行会自动滚到底（你往
+上翻时不会打扰你）。窗口标题带着已显示的行数（`flowkeyd 日志 — 128 行`）。
+
+它是**同一个进程里的普通窗口**，所以：关掉它不会退出守护进程；再点一次托盘图标只会把
+它抬到前面，不会开出第二个；退出只能走托盘菜单的*退出*、`quit` 动作，或 `--quit`。
+
+日志写控制台，同时（守护进程模式下总是）追加写到
+`%USERPROFILE%\.config\flowkeyd\flowkeyd.log`（`--log-file` 可以指定别的地方，
+`--log-level` 调整级别）。
+
+### 选单与电源
+
+`menu` 弹出一个无边框圆角卡片。列表是 Qt 自带的 `ListView` + 标准 `ItemDelegate`，
+所以悬停、按下与高亮全部由标准样式画，鼠标点击与滚轮也是标准列表控件的行为：
+
+```lua
+hotkey{
+  name = "power-menu",
+  comment = "Win+x：电源选单（S 睡眠 / P 关机 / R 重启 / L 锁定 / O 关屏 / Esc 关闭）",
+  keys = "Win+x",
+  action = menu{
+    title = "电源",
+    items = {
+      { key = "s", label = "睡眠", hint = "Sleep",     action = power("sleep") },
+      { key = "p", label = "关机", hint = "Shut down", action = power("shutdown") },
+      { key = "r", label = "重启", hint = "Restart",   action = power("restart") },
+      { key = "l", label = "锁定", hint = "Lock",      action = power("lock") },
+      { key = "o", label = "关闭屏幕", hint = "Screen off", action = power("screen_off") },
+      { label = "取消", hint = "Esc", action = none() },
+    },
+  },
+}
 ```
-        ┌─────────────────────────── Qt GUI 线程（主线程）──────────────────────────┐
-        │ QApplication + QQmlApplicationEngine                                       │
-        │   * QSystemTrayIcon（右键菜单、气泡提示、悬停提示）                          │
-        │   * 日志窗口（QML，FluentWinUI3）：LogModel 尾随日志文件                     │
-        │   * menu 选单 / help 帮助（QML 窗口）：MenuModel / HelpModel                  │
-        │ 收到动作结果 → 只做“建/前置窗口”这一件事，绝不执行动作                       │
-        └───────▲──────────────────────────────────────────────┬────────────────────┘
-                │ 队列信号（Qt::QueuedConnection）              │ 用户选择 → 回投任务
-                │                                              ▼
-        ┌───────┴──────────────────────┐   PostThreadMessage  ┌──────────────────────┐
-        │ 钩子线程（自己的 Win32 消息   │◄─────────────────────│ 动作工作线程          │
-        │ 循环 + SetTimer）             │  WM_APP 控制消息      │ (QThread)            │
-        │  * WH_KEYBOARD_LL 回调        │                      │  run/send/open/...   │
-        │  * core::Engine（状态机）      │──── 任务队列 ───────►│  window/volume/...   │
-        │  * 内联注入重映射按键          │                      │  clipboard/power/... │
-        │  回调必须极快返回（300 ms）    │                      └──────────────────────┘
-        └──────────────────────────────┘
+
+* **键盘**：条目上的 `key`（一个字符，不区分大小写）直接选中它；`↑`/`↓` 移动高亮、
+  `Enter` 执行高亮的条目、`Esc` 关闭。
+* **鼠标**：悬停到哪一行，高亮就在哪一行（`Enter` 执行的就是它）；**左键单击一行 =
+  执行它**；点到别的地方也会把选单关掉（和系统菜单一样）。指针离开卡片之后高亮回到
+  键盘选中项。选单不滚动（条目数决定卡片高度），所以滚轮在它上面不做事。
+* 不写 `action`（或写 `none()`）的条目只是把选单关掉；不带 `key` 的条目只能鼠标/方向
+  键选。
+* **配色跟随系统**（浅色/深色主题都会跟着变），窗口尺寸、内边距、圆角与字号按所在
+  显示器的 DPI 缩放；**中文字体是微软雅黑**，不跟随系统字体设置。
+* 一次只会有一个选单：再按一次快捷键只是把它拿到前面。
+* **卡片不会出现在任务栏里**（也不会进 `Alt+Tab`）：它是一个工具窗口。`help` 与窗口
+  切换器是同一套标志。
+
+`power` 的取值：`sleep`（睡眠）、`hibernate`（休眠）、`shutdown`、`restart`、
+`logoff`（注销）、`lock`（锁定）、`screen_off`（关屏）。关机/重启/注销只带
+`EWX_FORCEIFHUNG`（只强杀已经卡住、不响应 `WM_QUERYENDSESSION` 的程序），**不会**用
+`EWX_FORCE`：有未保存内容的程序照样会弹它自己的确认框。
+
+`screen_off` 只把**全部**显示器送进待机，系统、应用和 flowkeyd 的钩子都继续照常运行
+（**不是**睡眠，也不锁屏）。随便按一个键或动一下鼠标，显示器就回来了。
+
+关机、重启、注销需要管理员权限（flowkeyd 默认就是提权运行的）；没提权时会在日志里写
+一行错误并弹一个托盘气泡说明原因。睡眠、休眠、锁定与关屏不需要权限。
+
+上面那条 `Win+x` 会吞掉 Windows 自己的“快捷链接菜单”；想保留系统菜单就换一个键。
+
+### 快捷键帮助
+
+`help` 弹出同一套卡片，但它不是让你挑一项，而是把**当前配置里全部生效的快捷键**列出
+来：左边是按键徽标，右边是配置里的 `comment`（没写就用 `name`）和一行灰色小字（这个
+快捷键到底会做什么）。
+
+```lua
+hotkey{
+  name = "help",
+  comment = "Win+/：列出当前所有快捷键（可输入筛选、Enter 执行）",
+  keys = "Win+/",
+  action = help(),
+}
 ```
 
-真正重要的设计要点：
+* **筛选**：筛选框就是一个普通的输入框（鼠标点一下就能进去打字，光标、选区、输入法、
+  右键菜单、`Home`/`End`/左右箭头都是标准行为）。输入就按子串过滤，和弦、
+  `comment`/`name`、动作摘要都参与匹配；窗口会跟着结果变矮（顶边不动），标题右侧显示
+  `可见 / 总数`。`Esc` 依次是「取消待确认 → 清筛选 → 关窗」。
+* **滚动**：`↑`/`↓`、`PgUp`/`PgDn` 移动**键盘选中项**（高亮就是它）；鼠标滚轮与右侧
+  的滚动条（可以拖）只滚视图，**不会**动键盘选中项。条目比窗口高时滚动条才出现。
+* **鼠标**：把鼠标移过某一行**不会**改变高亮；**左键点某一行 = 选中它 + 把它的按键
+  文本复制走**；**双击某一行 = 选中它并执行它的动作**。
+* **执行**：`Enter`（或双击）= **执行键盘选中项那一行**。窗口会先关掉再执行 —— 这样
+  `send`/`type`/`window` 这类动作作用在原来的前台应用上，而不是打回帮助窗口自己的筛选
+  框。触发的效果等价于按一下那个快捷键（先执行按下时的动作、再执行松开时的动作）；
+  重映射那一行等价于按一下源键（`CapsLock → Esc` 就会注入一次 `Esc`）。
+* **危险动作要两次**：`quit`、`suspend` 与 `power` 这几类不会一按就执行 —— 第一次
+  `Enter`/双击只是把它标成「待确认」（那一行变色，底部提示换成确认文案），再按一次才
+  真的执行。`Esc`、上下换行、改筛选都会取消确认。
+* 列表由配置本身生成，所以 `help()` 不需要任何参数；卡片顶部的标题可以换：
+  `help("我的快捷键")`。
+* 一次只会有一个帮助窗口：再按一次快捷键只是把它拿到前面并清空筛选。
+* 和 `Win+x`/`Win+s` 一样，`Win+/` 会吞掉 Windows 自己的那个快捷键（表情/输入法
+  面板）；想保留就换一个键。
 
-* **钩子回调永不阻塞。** 它解码事件、问引擎要一个决定、注入重映射按键
-  （已预先拆好，就是几条 `SendInput` 记录），其余一切排队给工作线程。
-  回调超时 `LowLevelHooksTimeout`（默认 300 ms）的低级钩子会被 Windows
-  静默移除——守护进程看起来还活着，却什么都不做。
-* **注入事件被忽略。** flowkeyd 合成的每个事件都在 `dwExtraInfo` 里带着 `"FLOW"`；
-  回调在触碰任何状态之前就把它们丢开，这也让 `SendInput` 从回调内部造成的
-  重入变得安全。由*其它*程序注入的事件同样被忽略（`LLKHF_INJECTED`），
-  因此 flowkeyd 永远不会对自动化脚本作出反应。
-* **钩子装在独立线程上。** QML 渲染的一次慢帧、以及托盘菜单弹出时跑的模态循环
-  都可能让主线程几十毫秒不回来，300 ms 的预算经不起这种抖动。独立线程还有第二个
-  好处：钩子的生命周期与 Qt 事件循环解耦，`quit` 时能确定地先卸钩子再退循环。
-* **自动重复不是快捷键触发。** 被按住按键的第二次及之后的 key-down 会被识别为
-  操作系统的自动重复：如果最初那次按下被吞掉了，它们也会被吞掉，但绝不会重新匹配。
-  也就是说默认的 `trigger = "press"` 每次按下只派发一次；需要按住重复时显式写
-  `trigger = "repeat"`（或 `repeatable = true`），那套重复是 flowkeyd 自己的、
-  由 `SetTimer`/`WM_TIMER` 驱动。
-* **触发时机默认是按下。** 和弦的最后一个按键一到就派发动作，包括被吞掉的
-  `Win+…` 和弦——`Win+s` 唤起窗口不会等到你松开 Windows 键。遮断标记（见
-  [已知限制](#已知限制)）仍然在 Windows 键松开时注入，那是外壳唯一会看它的时刻。
-* **发送前后会释放修饰键。** 否则 `Ctrl+Alt+t -> send:^{c}` 会发出 Ctrl+Alt+c。
-  flowkeyd 会松开你按住的修饰键、注入、再按回去，并且按注入层的规矩在中间补一次
-  菜单遮断空按键（`ModifierGuard` 注入的真实 key-up 引擎看不到）。
-* **日志窗口是同一个进程里的 QML 窗口。** 它只通过日志文件与守护进程交接：
-  `LogModel` 每 250 ms 按字节读一次文件，只消费能完整解码的 UTF-8 前缀，
-  半行留到下一轮，最多 1000 行。关闭它不退出应用（`setQuitOnLastWindowClosed(false)`）。
-  这与 oskeyd 有意不同：oskeyd 做成独立进程，是因为它的日志窗口就是守护进程自己
-  的控制台，用户点叉会给它发 `CTRL_CLOSE_EVENT`；Qt 窗口没有这个问题。
-* **选单与帮助窗口跑在 Qt GUI 线程上。** 钩子线程只把动作排给工作线程，
-  工作线程向 GUI 线程发一个队列信号请求建窗并立刻返回；用户选中（或按 `Enter`/
-  双击帮助里的一行）后，那一项的动作再回投给工作线程执行——两个窗口自己从头到尾
-  不执行动作（帮助窗口只是在把活儿交出去之前先把自己藏起来，好让 `send`/`type`
-  打在原来的前台应用上）。因为守护进程通常不持有前台锁，弹窗抢焦点走的是
-  `requestActivate()` → `SetForegroundWindow` → `AttachThreadInput` 的三级绕行。
-* **弹窗在启动时就已经预热好了。** 进程第一次渲染要初始化 QRhi/D3D11、建交换链、
-  编译 Quick 自己那批材质着色器，冷启动实测要 **220 ms 左右**才能画出第一帧 ——
-  用户看到的就是“第一次按快捷键卡一下”。所以守护进程启动、事件循环一开始转，
-  就把四个卡片窗口（选单 / 帮助 / 窗口切换器 / 在线更新）建出来、填一份假数据
-  各渲染一帧（**全透明 + 屏幕外**，用户
-  看不到也点不到），然后藏起来；真正弹出时只剩 `setItems` + 显示 + 首帧，
-  实测 **~30 ms**（与第二次、第三次一样）。四个卡片也因此不进任务栏
-  （`Qt.Tool`）。
-* **托盘图标上的数字来自一次 500 ms 的轮询。** 虚拟桌面没有任何“切换了”的通知
-  （Windows 自己的 `Win+Ctrl+←/→`、`desktop` 动作、以及 `window_rule` 跟随窗口时的
-  视图切换都会改它），所以动作线程上有一个定时器在问
-  `IVirtualDesktopManagerInternal` 当前是第几张桌面，变了就投回 GUI 线程把图标
-  换成对应的数字（画什么字由 `core::desktopBadgeText` 决定，画出来是
-  `app::desktopIcon`）。查不到时保留上一次的数字，不会来回闪。
-* **未公开 API 是可选的，并且会被探测。** `win32u!NtUserSendInput`、
-  `NtUserGetAsyncKeyState` 用 `LoadLibraryW`/`GetProcAddress` 解析，
-  `NtUserSendInput` 在使用前会用一次零输入调用验证。任何失败都会回退到 `user32`。
-  本机实测默认选中 `win32u!NtUserSendInput`。
-* **虚拟桌面走一次性 STA 线程。** 那些 shell 接口要 STA，而 Core Audio 要 MTA；
-  与其让工作线程的单元模型取决于哪个后端先初始化，不如给每次桌面调用一条
-  干净、用完即弃的 STA 线程。Qt 在 Windows 上会把主线程初始化成 STA（给 OLE/拖放），
-  所以音频**绝不能**在主线程上初始化。
-* **运行期没有第三方依赖。** Win32 声明是手写的（`src/platform/win/ffi.h`），
-  Lua 5.5.1 静态编进二进制（`vendor/lua`），UI 用 Qt 自带的 QML 模块。
-  刻意不引入会藏起未公开入口的封装层。
+### 窗口切换器
 
-## 验证它能工作
+`windows()` 弹出一张卡片，列出**当前所有打开的程序窗口**（标题 + 进程名），输入进程名
+前缀就筛选、选中就切过去：
+
+```lua
+hotkey{
+  name = "window-switcher",
+  comment = "轻碰一下 Win：切换窗口",
+  keys = "LWin",
+  trigger = "release",
+  action = windows(),
+}
+```
+
+* **卡片没有标题行**：筛选框就是卡片的第一行，窗口列表紧跟在它下面而且**与筛选框一样
+  宽**；「N / M 个窗口」的计数在底部提示里。`windows("切换窗口")` 给的名字只用作
+  **窗口标题**（卡片是无边框的，界面上看不到它）。
+* **一打开就把输入法切成英文**（鼠标点回筛选框时也会再确认一次）：筛选框匹配的是进程
+  名，而用户经常正开着中文输入法 —— 那样打进去的是候选字，一条都筛不出来。**关掉卡片
+  时会把打开前的模式写回去**。它只影响 flowkeyd 自己这个**进程**，**不影响**你在别的
+  应用里的中/英文状态；想在卡片里打中文仍然可以自己按 `Shift` 切过去。
+* **筛选**：筛选框就是一个普通的输入框，输入按**进程名的前缀**过滤（大小写无关）：
+  打 `chr` 列出所有 Chrome 窗口，打 `flow` 列出 `flowkeyd.exe`；窗口标题只显示、
+  **不参与匹配**。
+* **自动激活**：筛选结果**只剩一个窗口**时直接激活它并把卡片关掉 —— 不必再按 `Enter`。
+  刚打开（筛选框为空）时不会自动激活，哪怕只有一个窗口。
+* **数字选择模式**：筛选串命中的窗口**全属于同一个进程名**、而且不止一个时，每一行
+  左边会出现一个数字快捷键 —— 前 10 行依次是 `1`..`9`、`0`，按数字就直接跳到那个
+  窗口（超过 10 个的窗口不分到按键）。那种模式下数字归快捷键，**不会跑进筛选框**。
+* 多条时用 `↑`/`↓` 选择后 `Enter` 切换，或者把鼠标悬停在某一行（悬停即高亮）再左键
+  单击；`Esc` 关掉卡片。窗口多于屏幕能放下的行数时右侧的滚动条可以拖。
+* 列表按 Z 序（最近用过的在前）排列，**跨虚拟桌面的窗口也会列出来**：选中它会把视图
+  切到那张桌面并激活它。工具窗口、没有标题的窗口、尺寸为空的窗口，以及 flowkeyd 自己
+  的弹窗 / 日志窗口不在列表里。**被 Windows 藏起来的“假窗口”也不会列**（例如 Windows
+  输入法的宿主 `TextInputHost.exe` 的「Windows 输入体验」）—— 这正是“只列真正有窗口
+  的进程、与 `Alt+Tab` 同一套判据”。**在别的虚拟桌面上的窗口是另一种情况，仍然会
+  列**（激活时会切过去）。
+* 简写 `action = "windows"` 等价于 `windows()`。
+* **「轻碰 Win」= 单个修饰键 + `trigger = "release"`**：按下 Win 本身照常传给系统
+  （所以 `Win+E`、`Win+L` 这些没被 flowkeyd 接管的系统组合完全不受影响），期间没有按
+  过别的键、松开时才触发；触发时注入一个未分配的标记按键，挡掉 Windows 自己的开始
+  菜单。也就是说：**只有“单独按一下 Win”被换成了窗口切换器**。
+* **卡片不会出现在任务栏里**（也不会进 `Alt+Tab`）。
+
+## 管理员权限与开机自启
+
+* **提权。** 以守护进程模式启动时，如果进程没有管理员令牌，flowkeyd 会用
+  `ShellExecuteW("runas")` 把同样的命令行转发给一个提权后的自己，然后退出。UAC 提示
+  被拒绝时它不会直接死掉：会打一条 warning 并以普通权限继续跑（钩子照样工作，只是驱动
+  不了提权进程的窗口）。
+* **不提权的场合。** `--check`、`--list`、`--list-keys` 都是离线命令，永远不会弹 UAC。
+  另外 `--no-elevate`（或 `settings.elevate = false`）能完全关掉提权。
+
+flowkeyd **自己**会注册一个**登录时触发**的计划任务（*使用最高权限运行*）：每次启动时
+它检查这个任务，**不存在、或指向的 exe 与当前正在运行的这个不是同一个，就先弹一个确认
+框问你要不要注册 / 更新**，同意之后才用当前路径重新注册一次（不同意就保持原样，下次
+启动会再问）。之后每次登录、以及每次机器重启，flowkeyd 都会以管理员权限起来，**不弹
+UAC**。
+
+**没有安装目录**：自启跟着你运行的那个 `flowkeyd.exe` 走。把 exe 放到
+`D:\Tools\flowkeyd\flowkeyd.exe` 并运行一次，任务就指向那里；换到别处再运行一次，在
+确认框里同意之后任务就更新。
+
+为什么必须是计划任务，而不是 `shell:startup` 快捷方式或 `HKCU\...\Run`：
+
+* flowkeyd 需要管理员权限才能驱动提权进程的窗口、才能执行电源动作；只有计划任务能做到
+  「提权启动且不弹 UAC」。也**不要**给 exe 登记 `RUNASADMIN` 兼容性标记：那会让**任何**
+  调用都提权，连 `flowkeyd --check` 都会弹 UAC —— 离线命令本就不该弹 UAC。
+* 服务（Windows Service）不行：它跑在 session 0，`WH_KEYBOARD_LL` 看不到桌面的按键，
+  也没有托盘图标。
 
 ```powershell
-$C = 'C:\Qt\Tools\CMake_64\bin\cmake.exe'
-& $C --build --preset debug
-& $C --build --preset release
-& ctest --test-dir build/windows-debug --output-on-failure     # 27 个测试目标
-
-# 真实桌面后端（剪贴板 / 音量 / 窗口 / 虚拟桌面）
-$env:FLOWKEYD_ALLOW_INTERACTIVE_TESTS = '1'
-& build\windows-debug\tst_interactive.exe
-
-# 真的去 GitHub 查一次、下载精简升级包（会联网）
-$env:FLOWKEYD_ALLOW_NETWORK_TESTS = '1'
-& build\windows-debug\tst_interactive.exe checksAndDownloadsAnUpdateFromGitHub
+# 删掉自启（需要管理员）。先停实例，否则它下次启动会把任务注册回来。
+& D:\Tools\flowkeyd\flowkeyd.exe --quit
+& D:\Tools\flowkeyd\flowkeyd.exe --remove-autostart
 ```
 
-* **单元测试**（Qt Test，27 个目标）覆盖按键/和弦解析、发送脚本解析、模板展开、
-  配置校验（含 `menu` 的结构与条目动作、`help` 的标题、`window_rule` 的字段与
-  几何默认值）、Lua 脚本的求值与转换
-  （两种写法、DSL 构造器、内联函数被拒绝、空动作列表、UTF-8 BOM、`menu`/`power`/
-  `help`/`window_rule` 助手）、整个匹配状态机（优先级、吞键、重复、挂起、
-  重映射 hold/tap）、
-  选单与帮助窗口的几何/筛选/选中项/计数/危险动作的两次确认、日志尾随（增量、
-  半行、被截断的多字节
-  UTF-8）、跨 `SendInput` 的结构体布局（`INPUT` 必须是 40 字节）、
-  音量步进/钳位、窗口匹配、显示器选择与窗口摆放几何（`tst_placement`）、
-  托盘数字徽标的文字与字号（`tst_desktop_badge`）、
-  在线更新的纯逻辑（GitHub 发布 JSON 的解析、升级包的挑选、构建版本比较、
-  用 `QZipWriter` 现造的 zip 真的能解出新 exe）与更新窗口的状态机，
-  以及「把新 exe 换上 + 重启 + 失败回滚」那套替换逻辑（`tst_update_install`，
-  拿系统自带的 `cmd.exe` / `ping.exe` 当新旧两个版本，所以不需要桌面、
-  也不会起一个真 daemon），
-  电源与虚拟桌面的纯逻辑表。
-* **交互式测试**（`FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`，默认 skip，19 个用例）真的碰
-  这台机器的剪贴板/音量/前台窗口：剪贴板往返、音量读写与钳位并恢复原值、
-  启动记事本并按标题找到它、激活→最小化→恢复→关闭（这一步用测试进程自己的
-  顶层窗口，理由见下）、`{selection}` 的 Ctrl+c 往返、
-  虚拟桌面的只读探测 + 一次可逆的切换（切走再切回来；托盘数字图标用的那个
-  精简接口必须与 `probe()` 给出同一组数字），
-  以及 `window_rule` 的真机验证：把窗口移到另一个虚拟桌面再移回来
-  （用**已公开**的 `GetWindowDesktopId` 确认桌面 GUID 真的变了）、
-  跨桌面唤醒（把窗口搬到别的桌面后 `window::isActive` 必须为假、
-  `window::raiseWindow` 必须把视图切回去并让它拿到前台 —— 本机实测
-  `GetForegroundWindow()` 那时还指着那个看不见的窗口），
-  把窗口摆到另一块显示器并最大化再还原。
-  **“窗口后端”的那些断言作用在测试进程自己创建的顶层窗口上**（标题可控、进程
-  独占、`WM_CLOSE` 就是销毁），不用记事本 —— 这台机器的记事本已经是单实例、
-  带标签页与会话恢复的 Store 应用，拿它当载体时“关闭之后窗口消失”之类断言
-  已经不可靠。
-  **电源动作一个都不会被自动化测试触碰**：关机/重启/注销/睡眠/休眠/锁定/关屏
-  都不进测试（`tst_power_table` 只测纯逻辑表，不碰真实调用），
-  只能由你自己按键或点选单验证。
-  其中 `checksAndDownloadsAnUpdateFromGitHub` 要**联网**，所以另外一道门：
-  `FLOWKEYD_ALLOW_NETWORK_TESTS=1`。它报告一个很旧的当前版本，于是 GitHub 上
-  最新那个发布一定看起来是“新版本”；它只把新 exe 落到临时目录，
-  **不替换任何东西、不重启**。
-* **验收脚本**（`scripts\acceptance.ps1`）是“钩子真的吞了键”那类结论的**外部**
-  证据：它用一个一次性配置起一个非提权的守护进程，从另一个上下文用 `SendInput`
-  注入按键，再用一个获得焦点的 WinForms 窗口观察按键到底有没有到达前台
-  （未绑定的键做正对照，所以“焦点没拿到”不会被误会成“吞键成功”）。
-  它跑 119 项检查：吞键、被吞掉的 `Win+s`（常规 / 0 ms 轻按 / 一次、两次
-  Windows 键自动重复）、自动重复只派发一次、重映射 hold/tap/`CapsLock -> Esc`、
-  `send` 的修饰键释放、小键盘与主键盘互不触发、`window` 的
-  启动→激活→收起→恢复、`menu` 弹窗的键盘选择、**鼠标悬停与左键单击一行**、
-  鼠标滚轮、`help` 弹窗的鼠标语义与筛选（点筛选框、点列表项、拖滚动条、
-  滚轮都只滚视图不改选中项）、
-  **`Enter`/双击真的执行了选中那一行的动作**（先关窗再执行）、
-  **危险动作的两次确认**（第一次 `Enter` 不执行、`Esc` 取消；用可逆的 `suspend`
-  验证第二次真的执行）、`suspend`/`resume`/`reload`/`quit`，
-  以及最后没有按键卡在按下状态。
+`--no-autostart` 可以临时关掉自启管理；开发 / 测试实例（`--no-elevate`、
+`--allow-multi`、或没有提权的进程）本来就**不会**动这个任务。`--no-prompt` 则不弹任何
+交互提示：「已在运行」只记日志，自启按默认的「注册 / 更新」处理。
 
-  ```powershell
-  powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance.ps1
-  powershell.exe ... -Phase config                              # 只看配置，不注入按键
-  ```
+**任务失败是静默的**：路径写错、exe 被删、单实例冲突……结果都只是「没有托盘图标、快捷键
+不生效」，不会弹任何东西。排查顺序：任务计划程序里看 `flowkeyd` 这个任务（*上次运行
+结果*）、看 `%USERPROFILE%\.config\flowkeyd\flowkeyd.log`、再手动跑一次
+`Start-ScheduledTask -TaskName flowkeyd`。
 
-  它需要交互式桌面会话，并且约两分钟里会**持续注入按键、抢焦点**。
+想立刻关掉正在运行的实例：
 
-  钩子默认丢弃一切带 `LLKHF_INJECTED` 的事件，脚本伪造不了物理按键 ——
-  所以守护进程用 `FLOWKEYD_ACCEPT_INJECTED=1` 启动，那是**只给测试用的后门**
-  （与 oskeyd 的 `OSKEYD_ACCEPT_INJECTED` 同款），启用时日志里有一条警告。
-  flowkeyd 自己注入的按键带着 `"FLOW"` 标记，在钩子回调的第一步就被丢掉，
-  所以抬升这道过滤不会让重映射自己喂自己。
-* **只能看得见的效果**（`animate`、弹窗的配色与布局）只能靠肉眼：
-  改这块之后请自己试一遍。
+```powershell
+& 'D:\Tools\flowkeyd\flowkeyd.exe' --quit   # 换成你自己的 exe 路径
+```
 
-**在线更新**那一条我们真的端到端跑过一遍（手工，一次性）：本地起一个假的
-GitHub（`HttpListener` 发一份 `releases/latest` 与一个装着自家新 exe 的 slim zip）、
-把它当成更新源，让一个从 `build/dist-release` 拷出来的临时实例自己走完
-「检查 → 下载 → sha256 校验 → 解压 → 换名替换 → 重启」，新实例启动后用
-`--updated-from` 打了一条“更新成功”。它验证的是整条链路（包括重启与清理），
-而 `acceptance.ps1` 覆盖不到这一段（托盘菜单点不了）。
+`--quit` 按**配置文件路径**匹配实例（`--config` 可选），最多等 10 秒；它走的是一条命名
+的事件通道，让守护进程走**干净的退出路径**（卸钩子、退循环），而不是 `taskkill /F` ——
+后者会留下一个幽灵托盘图标。没有在跑的实例时它返回 1，不算错误。不提权的调用方也能请
+提权的守护进程退出。
 
-触碰真实用户状态的测试默认跳过；它们不会在普通 `ctest` 里运行。
+## 在线更新
+
+托盘右键菜单里的 *检查更新(&U)...* 会弹出一张「在线更新」卡片：它问一次 GitHub 上最新
+Release 的版本号与发布说明（这次更新大概改了什么），显示给你看；发现新版本时点「立即
+更新」，卡片里出现**下载进度条**，下载完校验通过之后 flowkeyd 会**自己把 exe 换掉并
+重启**，重启起来的那个新实例再弹一条 Windows 通知告诉你更新成功了。
+
+* **来源就是发布那套东西**：`https://api.github.com/repos/xingjianxu/flowkeyd/releases/latest`。
+  下载的是发布脚本传上去的**精简升级包**（`*-slim-windows-x64.zip`，里面只有
+  `flowkeyd.exe`）；某次发布万一没有精简包，会退回到完整包。HTTPS 由 Windows 自带的
+  Schannel 提供，并用发布资产里的 **sha256** 校验下载结果。
+* **只换 exe，不动运行时**：这就是「第一次安装用完整包、以后升级用精简包」那条约定。
+  所以**如果某个新版本依赖一个新的运行时文件，光换 exe 是起不来的**；那种情况下替换会
+  **自动回滚**，你应该手动下载完整包。
+* **替换是原子的，而且会回滚**：顺序是「旧的 `flowkeyd.exe` 改名成 `flowkeyd.exe.old`
+  → 新的改名就位 → 启动新实例 → 等 2.5 秒确认它还活着」。任何一步失败（安装目录写不
+  进去、新 exe 起不来）都会把旧的那份改回来，日志里有一条
+  `ERROR could not apply the update: ...` 并弹一个提示框（`--no-prompt` 时只写日志）。
+  新实例启动后会删掉 `flowkeyd.exe.old`。
+* **不会自动检查**：只有你点菜单才联网，不需要 token（公开仓库的匿名请求）。
+* **权限**：替换 exe 需要能写安装目录，所以安装目录在 `C:\Program Files` 这类地方时要
+  保持提权运行（flowkeyd 默认就是提权的）。
+* **不动你的东西**：配置文件、日志文件、开机自启的计划任务都原样保留。
+* 没有新版本时卡片里写「已经是最新版本」；检查失败（断网 / 被 GitHub 限流 / 这次发布
+  没有可下载的资产）时写一句中文人话，下面一行是英文的技术原因，旁边还有 *打开发布页*
+  可以手动下载。
 
 ## 已知限制
 
-* **发布包里的 Qt 运行时要 Windows 10 或 11。** 为了把 1378 个文件 / 150 MB 压到
-  211 个 / 63 MB，`cmake/PruneRuntime.cmake` 删掉了用不到的东西：没用到的那几个
-  Quick Controls 样式（只留 `FluentWinUI3` 与它依赖的 `Basic`/`Fusion`）、
-  QML 调试插件（`qmltooling`）、软件 OpenGL 回退与 D3D 编译器（改用系统自带的）、
-  以及只给 Qt Creator 用的 `plugins.qmltypes`；release 还会 `strip` 掉 exe 的
-  调试符号（符号仍在 `build/windows-debug`）。推到的机器上如果缺
-  `d3dcompiler_47.dll`（Win8.1 及更早），弹窗与日志窗口会起不来 —— 把
-  `C:\Qt\6.11.2\mingw_64\bin\` 里的 `D3Dcompiler_47.dll` 与 `opengl32sw.dll`
-  拷回 exe 旁边即可。从源码构建的话，删掉 `cmake/PruneRuntime.cmake` 里那几行
-  就恢复成完整运行时。
-* 精简过的产物里**不能再用 `-qmljsdebugger` 调 QML**（QML 调试插件被删了）：
-  要调 QML 就用 `build/windows-debug`（那个 profile 保留 `qmltooling`）。
-* 配置文件是**脚本**，不是数据：`--check` 会执行它（`print` 会打到 stdout，
-  `os.execute` 之类也真的会跑）。请只跑你信任的配置。
-* **动作不能是 Lua 函数。** 这不是技术限制，而是刻意的：动作要能被 `--list`
-  显示、要能在加载时校验完、还要在钩子回调与工作线程的边界上保持安全。
-  想要“自定义逻辑”就用循环与表达式去生成声明式动作。
-* DSL 报错时，如果那次 `hotkey{}`/`remap{}`/`settings{}` 调用正好是脚本的**最后
-  一条语句**，Lua 的尾调用会丢掉调用者栈帧，错误信息里因此没有行号
-  （消息本身仍然指名了出错的构造）。在它后面随便再写一条语句就能拿回行号。
-* 快捷键的修饰键仍然会被送达到前台应用；只有和弦的最后一个按键被隐藏。
-  AutoHotkey 会通过缓存修饰键按下、并在没有快捷键成形时重放来隐藏整个和弦。
-  这是与 AutoHotkey 的主要行为差异，也是下一件要做的事。
-* 重映射里的 `{Sleep}` 会被忽略（会睡觉的钩子会被 Windows 移除）；
-  `--check` 会对它给出警告。
+* **快捷键的修饰键仍然会被送达到前台应用**；只有和弦的最后一个按键被隐藏。AutoHotkey
+  会通过缓存修饰键按下、并在没有快捷键成形时重放来隐藏整个和弦。这是与 AutoHotkey 的
+  主要行为差异。
+* **动作不能是 Lua 函数**：动作要能被 `--list` 显示、要能在加载时校验完、还要在钩子
+  回调与工作线程的边界上保持安全。想要“自定义逻辑”就用循环与表达式去生成声明式动作。
+* DSL 报错时，如果那次 `hotkey{}`/`remap{}`/`settings{}` 调用正好是脚本的**最后一条
+  语句**，Lua 的尾调用会丢掉调用者栈帧，错误信息里因此没有行号（消息本身仍然指名了
+  出错的构造）。在它后面随便再写一条语句就能拿回行号。
+* 重映射里的 `{Sleep}` 会被忽略（会睡觉的钩子会被 Windows 移除）；`--check` 会对它
+  给出警告。
 * 小键盘只区分了 `Enter`。`NumLock` 关闭时，小键盘的
-  `8`/`2`/`4`/`6`/`0`/`.`/`Home`/`End`/`PgUp`/`PgDn` 会上报与主键盘方向键、
-  `Insert`、`Delete` 相同的 `VK`（同样只能靠扩展键标志区分，而 flowkeyd
-  目前没有为它们定义名字），因此绑定 `Up` 也会被小键盘的 `8` 触发。
-  小键盘的 `-`/`+`/`Enter` 不受影响：前两个本来就是独立的 `VK`，
-  Enter 已经按扩展键标志区分了，而且这三个键都与 `NumLock` 无关。
+  `8`/`2`/`4`/`6`/`0`/`.`/`Home`/`End`/`PgUp`/`PgDn` 会上报与主键盘方向键、`Insert`、
+  `Delete` 相同的 `VK`，因此绑定 `Up` 也会被小键盘的 `8` 触发。小键盘的
+  `-`/`+`/`Enter` 不受影响。
 * 挂起期间快捷键不触发、也不吞任何键，这正是 AutoHotkey 的 `Suspend` 行为。
-* 除非 flowkeyd 自己也提权，否则 `window` 动作无法驱动提权进程的窗口。
-* 反过来，提权后的 flowkeyd 启动的子进程会继承管理员令牌（`run`、`open`、
-  `window.launch` 都是）。这会造成一些奇怪的限制，比如从资源管理器往一个提权的
-  终端窗口里拖文件会失败。需要普通权限时可以让 `explorer.exe` 代劳
-  （`action = "run:explorer.exe path"`），或者直接用 `--no-elevate` 运行 flowkeyd。
-* `window op = "activate"` 必须绕过 Windows 的前台锁。flowkeyd 会通过
-  `AttachThreadInput` 重试（这正是你在另一个应用里打字时它也能生效的原因）；
-  位于另一个虚拟桌面上的窗口仍然无法被唤起。
-* 被吞掉的 `Win+…` 快捷键会在 Windows 键松开时注入一个未分配的按键
-  （`VK 0xE8`）。没有它，外壳会看到一个“被单独按下”的 Windows 键，
-  并在松开时打开开始菜单（对 `Win+s` 是搜索框）；这个遮断必须是外壳在 keyup
-  之前看到的*最后*一件事，因为和弦键之后的 Windows 键自动重复会重新武装它。
+* 除非 flowkeyd 自己也提权，否则 `window` 动作无法驱动提权进程的窗口。反过来，提权后
+  的 flowkeyd 启动的子进程会继承管理员令牌（`run`、`open`、`window.launch` 都是）。
+  需要普通权限时可以让 `explorer.exe` 代劳（`action = "run:explorer.exe path"`），
+  或者直接用 `--no-elevate` 运行 flowkeyd。
+* 被吞掉的 `Win+…` 快捷键会在 Windows 键松开时注入一个未分配的按键，挡掉开始菜单。
   遮断只影响外壳怎么看那个修饰键：动作本身在按键按下时就跑了（`trigger = "press"`，
-  默认），只有 `trigger = "release"` 的绑定才会等到松开。AutoHotkey 的 `#MenuMaskKey`
-  做的就是同一件事，它同样是在按下时执行动作。
+  默认），只有 `trigger = "release"` 的绑定才会等到松开。
 * 目前只挂钩键盘；鼠标按键和滚轮还不能做快捷键。
-* **日志窗口是进程内的 QML 窗口**，不是命令行窗口：它最多显示最后 1000 行
-  （完整内容见日志文件），带一个子串筛选框，但还没有 `--follow`/`--grep` 之类
-  的命令行参数，也不做“INFO 与 DEBUG 分色”之外的渲染。打开着日志窗口时，
-  `taskkill /PID`（**不带** `/F`）退不掉进程（`WM_CLOSE` 被它吃掉），要走托盘
-  *退出*、`quit` 动作、`--quit`，或直接 `/F`。
-* 守护进程**一直把日志文件开着写**，所以用 .NET 默认共享模式读它会报“文件正由
-  另一进程使用”（`[System.IO.File]::ReadAllLines` / `ReadAllText`）：它们要的是
-  `FileShare.Read`，与写句柄不兼容。用 `Get-Content -Encoding UTF8`，或者自己用
-  `FileShare.ReadWrite` 打开。
-* `menu` 与 `help` 的配色跟随系统 `palette`（比 oskeyd 的固定深色好），
-  但**字体固定为微软雅黑**（不跟随系统字体），条目左侧还没有图标，动画也比较朴素。
-* **四个弹窗在启动时就预热好了**（见 [工作原理](#工作原理)）：代价是常驻进程
-  一启动就把 Qt Quick 的图形栈与四张卡片的 QML 树常驻下来（release 构建实测：
-  工作集从 ~43 MB 升到 **~140 MB**，其中第四个卡片（在线更新）大约多 12 MB）。
-  这笔钱其实躲不掉 —— 只要打开过一次日志窗口
-  或任何弹窗，同一个图形栈也会常驻（旧构建 + 日志窗口实测 ~157 MB）；预热只是把
-  它从“第一次用到的时候”挑到启动时，换来的是第一次弹出与之后一样快。
-* 帮助窗口里 `Enter`/双击会**真的执行**那一行的动作（重映射那一行会真的注入
-  按键，`quit`/`suspend`/`power` 两次确认之后也真的执行）。只想把快捷键抄走就
-  用**左键单击**（写剪贴板，什么都不执行）。
-* **在线更新只换 `flowkeyd.exe`**（见 [在线更新](#在线更新)）：它用的是发布脚本
-  传的精简升级包。所以它**不自带签名**（Windows SmartScreen 可能对下载下来的
-  exe 有意见），也**不会**帮你更新 Qt / MinGW 运行时；如果某个新版本新增了运行时
-  依赖，替换会回滚（程序仍在，但不会变新）—— 那时要手动下载完整包。
-  反过来，安装目录不可写（只读介质、别人的账号装的）时也只会回滚，不会把
-  原来的程序弄坏。
-* **「轻碰 Win」会接管 `LWin` 的“单独按一下”**（`keys = "LWin"` +
-  `trigger = "release"`，见[窗口切换器](#窗口切换器)）：单独按一下 Win 不再打开
-  开始菜单，而是弹窗口切换器。Win 的按下仍然照常传给系统，所以 `Win+E`、
-  `Win+L`、`Win+Shift+S` 这些**没被 flowkeyd 接管**的系统组合不受影响；
-  被 flowkeyd 绑定的 `Win+…` 和弦照旧由配置决定。
-* 窗口切换器的筛选是按**进程名前缀**匹配（不是子串、不是模糊搜索），窗口标题
-  不参与；`help` 的筛选仍然是子串匹配。筛到一个程序、而它开了多个窗口时进入
-  **数字选择模式**：前 10 个窗口分到 `1`..`9`、`0`，超过 10 个的部分只能用
-  `↑`/`↓` + `Enter` 或鼠标点选。两者的列表都是按下快捷键那一刻枚举出来
-  的快照：之后新开的窗口要重新按一次才会出现。它按与 `Alt+Tab` 同一套「程序窗口」
-  判据过滤（可见、无属主或带 `WS_EX_APPWINDOW`、非工具窗口、有标题、尺寸非零，
-  并且没有被 shell 藏起来）——所以某些非标准程序的主窗口如果没标题就不会出现在
-  列表里，而被 Windows 藏起来、点不到的“假窗口”（如 Windows 输入法的宿主）
-  也不会列。卡片**没有标题行**（列表与筛选框同宽），`windows()` 的 `title`
-  现在只用作窗口标题；打开卡片时会把 flowkeyd 自己这个进程的输入法切成英文，
-  关掉卡片时再把它还原成打开前的状态（只影响这个进程，不影响你在别的应用里的
-  中/英文状态）。
-* `help` 的筛选是**子串匹配**（和弦、`comment`/`name`、动作摘要），不是模糊搜索。
-  筛选框是标准 `TextField`，所以输入法（中文）能用了，但匹配仍然是子串。
-  它列出的是当前配置里的绑定，改完配置要 `reload` 才会反映出来。
-* **动作表顶层的拼写错误是静默的。** `{ type = "..." }` 这一层不支持
-  未知字段报错（与 oskeyd 的 serde 内部标签枚举一致），所以
-  `window("activate", { togle = false })` 里的 `togle` 会被直接忽略。
-  `hotkey{}`、`settings{}`、`remap{}` 以及选单的**条目**都是严格检查的，
-  只有动作表这一层没有。
-* 关机/重启/注销需要 flowkeyd 提权（默认如此）；非提权的实例上按这些条目只会得到
-  一条日志和一个气泡提示。睡眠/休眠与锁定不挑权限。
-* 托盘菜单里的动作和控制台快捷键动作走同一条控制通道，但**菜单**本身没有自动化
-  覆盖（那需要 UI 自动化）；自提权的 UAC 流程也只能手工验证。
-* **托盘图标上的数字是轮询出来的**（每 500 ms 一次，见[工作原理](#工作原理)），
-  所以拿它当“切成功了吗”的反馈时最多会晚半秒。它和 `desktop` 动作共用同一张
-  未公开的版本表：锁屏、非交互会话或接口对不上时查不到当前桌面，这时图标退回
-  应用图标、悬停提示里也没有桌面信息。桌面到两位数时显示 `9+`（16 逻辑像素的
-  图标上两位数已经挤成一团），所以看不出具体是第几张。
-* 托盘图标还不跟随 explorer 重启（没有处理 `TaskbarCreated`）。也因为这个，计划任务的登录触发器加了 15 秒延迟：
-  启动得太早会拿不到托盘图标，而且本版本不会在 explorer 回来后自己补上。
-* **计划任务的失败是静默的**：任务里的 exe 路径失效、单实例冲突、任务被禁用……
-  表现都只是“没有托盘图标、快捷键不生效”，不会弹任何东西。排查看任务计划程序
-  里 `flowkeyd` 那一条的*上次运行结果*，再看日志文件。
-  自启任务指向当前运行的 exe（见[开机自启与更新](#开机自启与更新任务计划程序)），
-  所以手动启动一次 flowkeyd 就会把失效的路径刷新回来。
-* **没有 `--simulate` / `--selftest` / `--probe`。** 引擎与钩子的行为靠
-  `scripts/acceptance.ps1`（注入按键的外部观察）与 Qt Test 单测来验证，
-  但那三个开关仍然是明确的待办（见[路线图](#路线图)）：
-  `--simulate` 不需要焦点、不装钩子，是更便宜的一条路。
-* **`FLOWKEYD_ACCEPT_INJECTED=1` 是个测试后门**：设上它之后，**别的程序**
-  合成的按键也会触发绑定（启用时日志里有一条警告）。日常使用不要设置它；
-  它的存在理由是“物理按键”没法用脚本伪造。
-* 按桌面编号跳转虚拟桌面（`desktop`）依赖 shell 的未公开 COM 接口
-  `IVirtualDesktopManagerInternal`。它没有公开的 ABI 承诺：IID 与 vtable 布局
-  会随 Windows 版本（甚至补丁修订号）变化，`src/platform/win/desktop.cpp` 里是
-  一张按 `build.revision` 索引的表（事实与 AutoHotkey 的 VD.ahk 一致）。
-  本机（build 26200.9457）验证过的是“plain”布局；新的 Windows 版本如果又改了
-  接口，切换会以一条带 HRESULT 的日志失败。公开的 `IVirtualDesktopManager`
-  做不到这件事——它只能查询和移动窗口。
-* 跨桌面“唤醒”（`window` 动作发现目标窗口在别的虚拟桌面上时）还要把窗口所在
-  桌面与内部的桌面对象对上号，这一步用未公开的 `IVirtualDesktop::GetID`
-  （vtable 下标 4），并与**已公开**的 `GetWindowDesktopId` 逐个比对（事实同样来自
-  VD.ahk 的 `VD_goToDesktopOfWindow`）。对不上时只记一条错误日志、不去切一张
-  可能是错的桌面。另外，被 `window_rule` 搬到别的桌面之后，Windows 仍然把那个
-  窗口记成**前台窗口**（本机实测），所以“是否已经激活”的判定必须把虚拟桌面
-  一起算上——否则同一个快捷键会去*收起*一个用户根本看不见的窗口。
-* `window_rule` 的 `desktop` 用的是同一个未公开接口的 `MoveViewToDesktop`
-  （公开的 `IVirtualDesktopManager::MoveWindowToDesktop` 拒绝移动**别的进程**
-  的窗口），因此它与 `desktop` 动作共享同一张版本表与同样的风险。另外两点：
-  窗口会先在当前桌面上出现一瞬间、然后被移走；判断“这是不是主窗口”用的是
-  可见 / 无属主 / 非工具窗口 / 有标题 / 尺寸非零这套启发式，偶尔会漏掉一个
-  标题设置得很晚的窗口（`process` 匹配不受影响）。
-* `window_rule` 的 `all_desktops` 走的是 shell 另一个未公开接口
-  `IVirtualDesktopPinnedApps`（`{4CE81583-...}`，`QueryService` 的 SID 是
-  `{B5A399E7-...}`）。与 `IVirtualDesktopManagerInternal` 不同，**这个 IID 自
-  Windows 10 起就没变过**，所以它没有版本表；拿不到那个接口时只记一条 warning，
-  规则里其余部分照常生效。本机（build 26200.9457）已用 `IsViewPinned` 验证过
-  `PinView` / `UnpinView` 真的生效。`topmost` 用的是已公开的 `SetWindowPos`，
-  没有这个风险。
-* 跟着窗口切过去（`window_rule` 搬完窗口 / `window` 动作跨桌面唤起）是**故意的
-  行为变化**，不是所有程序都欢迎它：某个后台程序如果在启动时开了自己的窗口，
-  而你正好给它写了 `window_rule`，你的视图会被拽到那张桌面上。不想被拽就把
-  `desktop` 从那条规则里去掉（只留 `monitor`），或者把规则整个 `enabled = false`。
-* `window_rule` 只在**窗口第一次出现、显示器重新接入、以及 flowkeyd 启动时**
-  生效；之后你手动移动 / 缩放窗口、取消钉住、取消置顶都不会被纠正。它也不管
-  已经开着的窗口 ——
-  想重新归位就按一下 `reload`（会重新读配置，但不会重摆已有窗口）或重启
-  flowkeyd。
-
-* **前台窗口可以是个“覆盖层”。** 例如按住 Win 弹出的 PowerToys「快捷键指南」
-  （`WS_EX_TOOLWINDOW`）会变成 `GetForegroundWindow()`。`window` 动作会跳过它、
-  沿 Z 序找第一个真正的主窗口；如果你的某个正常窗口本身就是工具窗口，
-  它的快捷键可能就会落到别的窗口上（这是刻意与 `window_rule` 的“主窗口”判据
-  保持一致）。
-
-## 路线图
-
-1. `--simulate <SCRIPT>`：把脚本化按键事件重放给真正的引擎（干跑）。
-   这是最便宜的引擎验证手段，不需要焦点、不装钩子。
-2. `--selftest` / `--probe`：各平台后端探测与自检（Core Audio 的 COM vtable、
-   虚拟桌面接口表、未公开 API 的可用性）。
-3. `scripts/e2e.ps1`：`scripts/acceptance.ps1` 已经覆盖了它的大部分
-   （吞键、重映射、自动重复、挂起/重载/退出、`window`、`menu`/`help`、小键盘）；
-   还缺的是动画的屏幕采样、托盘菜单点击、自提权的 UAC 流程，
-   以及把日志窗口那一套从外面断言。
-4. 延迟修饰键抑制，让 `Ctrl+Alt+h` 也隐藏 Ctrl 和 Alt。
-5. 托盘图标跟随 explorer 重启（`TaskbarCreated`）并支持自定义图标。
-6. 通过 `WH_MOUSE_LL` 支持鼠标按键与滚轮快捷键。
-7. 配置文件变化时热重载（去抖的 `ReadDirectoryChangesW`）。
-8. 按应用限定的快捷键（只在匹配窗口获得焦点时才触发）。
-9. 日志窗口的增强：`--follow`/`--grep` 之类的参数、更细的分色渲染。
-10. 选单与帮助窗口的条目图标、更细的动画，以及帮助窗口的模糊搜索与 IME 输入。
-11. 在线更新还可以往前走：给发布资产加签名校验（现在只有 HTTPS + sha256 摘要）、
-    可选的启动时自动检查，以及「这次发布新增了运行时文件」时能把运行时也一并升级
-    （现在只换 `flowkeyd.exe`，换不动就会回滚并提醒手动下载完整包）。
+* **日志窗口是进程内的窗口**，不是命令行窗口：它最多显示最后 1000 行（完整内容见日志
+  文件），带一个子串筛选框，但还没有 `--follow`/`--grep` 之类的命令行参数。打开着日志
+  窗口时，`taskkill /PID`（**不带** `/F`）退不掉进程，要走托盘 *退出*、`quit` 动作、
+  `--quit`，或直接 `/F`。
+* 守护进程**一直把日志文件开着写**，所以用 .NET 默认共享模式读它会报“文件正由另一进程
+  使用”：用 `Get-Content -Encoding UTF8`，或者自己用 `FileShare.ReadWrite` 打开。
+* **四个弹窗在启动时就预热好了**：代价是常驻进程一启动就把图形栈与四张卡片的界面常驻
+  下来（实测工作集约 140 MB）。这笔钱其实躲不掉 —— 只要打开过一次日志
+  窗口或任何弹窗，同一个图形栈也会常驻；预热只是把它从“第一次用到的时候”挑到启动时，
+  换来的是第一次弹出与之后一样快。
+* 帮助窗口里 `Enter`/双击会**真的执行**那一行的动作。只想把快捷键抄走就用**左键单击**。
+* **在线更新只换 `flowkeyd.exe`**：它**不自带签名**（Windows SmartScreen 可能对下载
+  下来的 exe 有意见），也**不会**帮你更新 Qt / MinGW 运行时；如果某个新版本新增了运行
+  时依赖，替换会回滚（程序仍在，但不会变新）—— 那时要手动下载完整包。
+* **「轻碰 Win」会接管 `LWin` 的“单独按一下”**：单独按一下 Win 不再打开开始菜单，而是
+  弹窗口切换器。Win 的按下仍然照常传给系统，所以 `Win+E`、`Win+L`、`Win+Shift+S` 这些
+  **没被 flowkeyd 接管**的系统组合不受影响。
+* 窗口切换器的筛选是按**进程名前缀**匹配（不是子串、不是模糊搜索），窗口标题不参与；
+  `help` 的筛选仍然是子串匹配。两者的列表都是按下快捷键那一刻枚举出来的快照：之后新
+  开的窗口要重新按一次才会出现。`help` 列出的是当前配置里的绑定，改完配置要 `reload`
+  才会反映出来。
+* **动作表顶层的拼写错误是静默的**：`window("activate", { togle = false })` 里的
+  `togle` 会被直接忽略。`hotkey{}`、`settings{}`、`remap{}` 以及选单的**条目**都是
+  严格检查的，只有动作表这一层没有。
+* 关机/重启/注销需要 flowkeyd 提权（默认如此）；非提权的实例上按这些条目只会得到一条
+  日志和一个气泡提示。睡眠/休眠与锁定不挑权限。
+* **托盘图标上的数字是轮询出来的**（每 500 ms 一次），所以拿它当“切成功了吗”的反馈时
+  最多会晚半秒。锁屏、非交互会话或接口对不上时查不到当前桌面，这时图标退回应用图标、
+  悬停提示里也没有桌面信息。桌面到两位数时显示 `9+`。
+* 托盘图标还不跟随 explorer 重启，所以计划任务的登录触发器加了 15 秒延迟：启动得太早
+  会拿不到托盘图标，而且本版本不会在 explorer 回来后自己补上。
+* 按桌面编号跳转虚拟桌面（`desktop`）与 `window_rule` 的 `desktop`、跨桌面唤醒依赖
+  shell 未公开的 COM 接口。它们没有公开的 ABI 承诺：IID 与 vtable 布局会随 Windows
+  版本变化，flowkeyd 里是一张按 `build.revision` 索引的表。新的 Windows 版本如果又改了
+  接口，切换会以一条带 HRESULT 的日志失败。
+* `window_rule` 的 `all_desktops` 走的是 shell 另一个未公开接口；**这个 IID 自 Windows
+  10 起就没变过**，所以它没有版本表。拿不到那个接口时只记一条 warning，规则里其余部分
+  照常生效。`topmost` 用的是公开的 `SetWindowPos`，没有这个风险。
+* 跟着窗口切过去（`window_rule` 搬完窗口 / `window` 动作跨桌面唤起）是**故意的行为
+  变化**，不是所有程序都欢迎它：某个后台程序如果在启动时开了自己的窗口，而你正好给它写
+  了 `window_rule`，你的视图会被拽到那张桌面上。不想被拽就把 `desktop` 从那条规则里
+  去掉（只留 `monitor`），或者把规则整个 `enabled = false`。
+* `window_rule` 只在**窗口第一次出现、显示器重新接入、以及 flowkeyd 启动时**生效；之后
+  你手动移动 / 缩放窗口、取消钉住、取消置顶都不会被纠正。它也不管已经开着的窗口 ——
+  想重新归位就重启 flowkeyd。
+* **前台窗口可以是个“覆盖层”**：`window` 动作会跳过 `WS_EX_TOOLWINDOW` 的覆盖层、沿
+  Z 序找第一个真正的主窗口；如果你的某个正常窗口本身就是工具窗口，它的快捷键可能就会
+  落到别的窗口上。
+* 目前**没有** `--simulate` / `--selftest` / `--probe` 这些调试开关；鼠标钩子、延迟
+  修饰键抑制（让 `Ctrl+Alt+h` 也隐藏 Ctrl 和 Alt）、配置文件热重载、按应用限定的快捷
+  键也都在待办里。
 
 ## 许可证
 
-MIT（与 oskeyd 相同）。
+MIT。

@@ -18,7 +18,7 @@ class TestPowerTable : public QObject
 
 private slots:
     void tableCoversEveryOpWithItsCanonicalName();
-    void privilegeFlagsMatchOskeyd();
+    void privilegeFlagsOnlyForShutdownOps();
     void namesRoundTripThroughPowerOpFromName();
     void aliasesMapToTheSameOp();
     void unknownNamesAreRejected();
@@ -40,7 +40,7 @@ void TestPowerTable::tableCoversEveryOpWithItsCanonicalName()
 }
 
 /// 只有关机 / 重启 / 注销需要管理员权限；其余四个都不需要。
-void TestPowerTable::privilegeFlagsMatchOskeyd()
+void TestPowerTable::privilegeFlagsOnlyForShutdownOps()
 {
     using platform::win::power::requiresShutdownPrivilege;
     QVERIFY(!requiresShutdownPrivilege(core::PowerOp::Sleep));

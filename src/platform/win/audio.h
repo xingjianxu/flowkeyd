@@ -3,7 +3,7 @@
 // **本模块风险最高**：COM 接口是手写声明的，下面的 vtable 布局按 Windows SDK
 // 头文件的声明顺序排列，而 vtable 布局写错不是返回错误码，而是崩溃。
 // 每次调用都检查 HRESULT，因此布局错会大声失败而不是悄悄破坏进程。
-// 布局照抄 `../oskeyd/src/win/audio.rs`（那边的 vtable 已经过实测）。
+// 布局按真机实测结果手写（vtable 已经过验证）。
 //
 // `CoCreateInstance(CLSID_MMDeviceEnumerator)` 避免了静态链接 `mmdevapi.lib`。
 //

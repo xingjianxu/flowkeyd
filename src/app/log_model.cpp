@@ -4,7 +4,7 @@ namespace flowkeyd::app {
 
 namespace {
 
-/// 尾随日志文件的轮询间隔（与 oskeyd 一致）。
+/// 尾随日志文件的轮询间隔。
 constexpr int kPollIntervalMs = 250;
 
 } // namespace

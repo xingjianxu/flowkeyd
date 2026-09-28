@@ -12,7 +12,7 @@
 // `dwmapi` 不在本仓库链接的导入库集合里（见 AGENTS.md 第 2 节），
 // 因此和 `win32u` 一样用 `LoadLibraryW` + `GetProcAddress` 解析，绝不静态链接。
 //
-// 实测（Windows 11 build 26200，与 oskeyd 的 `scripts/repro-anim.ps1` 结论一致）：
+// 实测（Windows 11 build 26200）：
 // 设置后最小化在一帧内完成、还原从 ~150 ms 降到 ~20 ms；而
 // `DwmGetWindowAttribute` 对这个属性返回 `E_INVALIDARG`，**读不回来**，
 // 所以调用方只能“设 TRUE → ShowWindow → 设回 FALSE”。

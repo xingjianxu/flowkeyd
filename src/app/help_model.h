@@ -3,7 +3,7 @@
 // 与 `menu_model` 一样只依赖 QtCore：筛选、`可见/总数` 计数、`Enter` 复制哪一行、
 // 两级 `Esc` 与键盘选中行都在这里，`tst_help_model` 直接覆盖它们。
 //
-// 对应 oskeyd 的 `../oskeyd/src/win/help.rs` 里的 `Metrics` + `State`。
+// 卡片外框的几何与键盘状态都收在这个类里。
 //
 // **有意偏离（2026-09，项目所有者拍板）：滚动不归模型管。**
 // 列表是一个真正的 QML `ListView` + Qt 自带的 `ScrollBar`，滚轮、拖动滑块、
@@ -136,7 +136,7 @@ public:
     void setMaxRows(int rows);
     int maxRows() const { return m_maxRows; }
 
-    /// 给定一块工作区的高度，最多能放几行（与 oskeyd 的 `max_rows_for` 同源）。
+    /// 给定一块工作区的高度，最多能放几行。
     /// 纯算术，所以单测直接盯着它。
     static int rowsForAvailableHeight(int availableHeight);
 
@@ -196,7 +196,7 @@ public:
     QVariantList badgesForVisible(int line) const;
     QVariantList badgesForItem(std::size_t itemIndex) const;
 
-    /// 上下移动选中项（高亮跟着它走）；到边界夹住（与选单的回绕不同，与 oskeyd 一致）。
+    /// 上下移动选中项（高亮跟着它走）；到边界夹住（与选单的回绕不同）。
     Q_INVOKABLE void moveSelection(int delta);
 
     /// 鼠标点选某一行（`ItemDelegate.onClicked`）。越界时夹进 `[0, 可见条数-1]`。

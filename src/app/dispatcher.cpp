@@ -113,7 +113,7 @@ QString describeRemapTarget(const core::CompiledRemap &remap)
 /// 弹出 `menu` 动作的选单。
 ///
 /// 选单窗口在 GUI 线程上，用户选中后才把那一项的动作回投给**工作线程**：
-/// 弹窗本身从不执行动作（与 oskeyd 的 `dispatch.rs::open_menu` 一致）。
+/// 弹窗本身从不执行动作。
 void openMenuAction(Runtime *runtime,
                     Dispatcher *dispatcher,
                     const std::shared_ptr<const core::Compiled> &config,

@@ -1,7 +1,7 @@
 // 启动进程与打开外部目标（`run` / `open` 动作）。
 //
 // 终端窗口不能靠标题找，也不能用 `DETACHED_PROCESS`（会静默杀死控制台子进程），
-// 详见 AGENTS.md 第 10 节与 ../oskeyd/AGENTS.md 第 6 节。
+// 详见 AGENTS.md 第 10 节。
 #pragma once
 
 #include "core/action.h"

@@ -96,7 +96,7 @@ std::optional<QString> parseCli(const QStringList &args, CliOptions *out)
             if (!ok) {
                 return QStringLiteral("--parent-pid 需要一个进程号，得到 `%1`").arg(*value);
             }
-            // 兼容 oskeyd 的 CLI：本项目不需要它（日志窗口是进程内的），
+            // 兼容用的参数：本项目不需要它（日志窗口是进程内的），
             // 因此接受但忽略。
             cli.parentPid = pid;
         } else if (name == QLatin1String("--no-color")) {

@@ -172,7 +172,7 @@ void PopupHost::menuChoose(int index)
         return;
     }
     // 先把窗口藏起来再交出去：回调可能立刻触发睡眠/关机之类的动作，
-    // 用户不该还看着残影（与 oskeyd 的 `State::choose` 一致）。
+    // 用户不该还看着残影。
     m_menuWindow->setProperty("visible", false);
     MenuRequest request = std::move(m_menuRequest);
     m_menuRequest = MenuRequest{};
@@ -194,7 +194,7 @@ void PopupHost::helpCopy(int index)
     if (m_helpModel == nullptr) {
         return;
     }
-    // 帮助窗口复制完不关：用户可能还要抄下一条（与 oskeyd 一致）。
+    // 帮助窗口复制完不关：用户可能还要抄下一条。
     const QString text = m_helpModel->copyTextForVisible(index);
     if (text.isEmpty()) {
         return;

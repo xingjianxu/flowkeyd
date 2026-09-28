@@ -57,8 +57,8 @@ Window {
     readonly property int rowPitch: root.rowHeight + root.rowSpacing
     readonly property int listTop: root.menuModel ? root.menuModel.listTop : 40
 
-    // 刚显示出来的 300 ms 内失去焦点不算「用户点了别处」（与 oskeyd 的
-    // `DISMISS_GRACE_MS` 一致，否则窗口会闪一下就不见了）。
+    // 刚显示出来的 300 ms 内失去焦点不算「用户点了别处」（否则窗口会闪一下
+    // 就不见了）。
     property double armedAt: 0
     onActiveChanged: {
         if (active) {

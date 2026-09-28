@@ -139,7 +139,7 @@ void TestLogTail::pollRestartsAfterAFileRotation()
     QCOMPARE(tailer.poll(), QStringList({QStringLiteral("first")}));
 
     // 轮转：新文件比已经读过的偏移短，于是从头再读。
-    // （只按文件大小判断轮转，与 oskeyd 的 `Tailer` 一致：flowkeyd 自己的日志
+    // （只按文件大小判断轮转：flowkeyd 自己的日志
     // 只会被追加，永远不会在“偏移之后”换成另一份更长的内容。）
     QFile file(path);
     QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));

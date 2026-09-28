@@ -52,7 +52,7 @@
 #
 # 钩子默认丢弃一切带 `LLKHF_INJECTED` 的事件（不变量 2），所以脚本没法伪造
 # 物理按键。守护进程因此用 `FLOWKEYD_ACCEPT_INJECTED=1` 启动：那是个**只给
-# 测试用的后门**（与 oskeyd 的 `OSKEYD_ACCEPT_INJECTED` 同款），它会抬升那道
+# 测试用的后门**，它会抬升那道
 # 过滤并在日志里打一条警告。flowkeyd 自己的注入带着 `"FLOW"` 标记，仍然在钩子
 # 回调的第一步就被丢掉，所以重映射不会自己喂自己。
 #
@@ -309,7 +309,7 @@ public static class FlowInject {
 
     // `mouseData` 的符号：负数 = 系统列表控件里「往下滚」。本机实测（一个
     // WinForms `ListBox` 加 Qt 的 `ListView`）：+120 往上、-120 往下。
-    // oskeyd（以及旧的自绘实现）把 +120 当成「往列表后面走」，方向正好相反；
+    // 旧的自绘实现把 +120 当成「往列表后面走」，方向正好相反；
     // flowkeyd 现在用的是 Qt 自带的 `ListView`，方向跟着系统走（见 AGENTS.md）。
     public static void Wheel(int delta) {
         INPUTMOUSE[] inputs = new INPUTMOUSE[1];
@@ -412,7 +412,7 @@ public static class FlowInject {
 # =============================================================================
 # 一次性配置：所有用到的和弦都是真实应用不会碰的键（F13..F24 / Ctrl+Alt+Fx），
 # 唯一例外是 `Win+S` —— 它就是要测“被吞掉的 Win 和弦外壳看不见”这件事，
-# 万一遮断失效，代价只是弹一个搜索框（oskeyd 的 e2e 用的也是这个和弦）。
+# 万一遮断失效，代价只是弹一个搜索框。
 # 选单里**只有无害的剪贴板动作**：睡眠/关机/重启这类条目在验收里永远不会被按下。
 # =============================================================================
 $targetScriptBody = @'
@@ -880,7 +880,7 @@ try {
         Check '点完选单关掉了' (-not [FlowInject]::HasWindowTitled($daemon.Id, $MENU_TITLE))
     }
 
-    # 滚轮在选单上应该什么都不做（与 oskeyd 一致），而且不能把高亮从光标下
+    # 滚轮在选单上应该什么都不做，而且不能把高亮从光标下
     # 拿走：光标压在“cancel”那一条上滚几格再 Enter，必须还是不执行任何动作。
     FocusCatcher
     CtrlAlt $VK_F9
@@ -1165,7 +1165,7 @@ try {
     Check 'quit 快捷键停掉了守护进程' $gone
     if ($gone) {
         # PowerShell 读不到用 `-PassThru` 启动的进程的退出码（只有 `-Wait` 才有），
-        # 所以和 oskeyd 的 e2e 一样：干净的退出靠日志与进程表来判定。
+        # 干净的退出靠日志与进程表来判定。
         $logText = DaemonText
         Check '退出过程里没有 ERROR' ($logText -notmatch 'ERROR')
         $lines = @(Get-Content $daemonLog | Where-Object { $_.Trim() -ne '' })

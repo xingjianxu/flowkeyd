@@ -1,7 +1,7 @@
 // 需要真实桌面的交互式测试：剪贴板、Core Audio、窗口后端、虚拟桌面。
 //
 // 它们会碰这台机器的真实剪贴板 / 音量 / 前台窗口，所以**默认跳过**，
-// 必须显式开启（与 oskeyd 的 `OSKEYD_ALLOW_INTERACTIVE_TESTS` 同一套约定）：
+// 必须显式开启：
 //
 //   $env:FLOWKEYD_ALLOW_INTERACTIVE_TESTS = "1"
 //   .\build\windows-release\tst_interactive.exe

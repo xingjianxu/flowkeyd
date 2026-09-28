@@ -1,4 +1,4 @@
-// flowkeyd —— 由 Lua 配置驱动的键盘钩子守护进程（oskeyd 的 Qt/C++ 复刻版）。
+// flowkeyd —— 由 Lua 配置驱动的键盘钩子守护进程。
 //
 // 这里只做「组装」：解析命令行 → 处理离线命令 → 构造 Qt 应用 → 托盘 + 日志窗口。
 // 钩子、引擎、动作分发分别在 stage 3 之后接进来。
@@ -71,7 +71,7 @@ QString boolText(bool value)
     return value ? QStringLiteral("true") : QStringLiteral("false");
 }
 
-/// 与 oskeyd 的 `print_bindings` 逐字形似：形状一致，`--list` 的输出可以对比。
+/// `--list` 的输出形状固定：脚本可以直接对它的文本做断言。
 QString renderBindings(const core::Compiled &compiled)
 {
     QString out;

@@ -1,7 +1,7 @@
 // 剪贴板访问（`CF_UNICODETEXT`），对“另一个进程占着剪贴板”这种常见情况做了重试。
 //
 // 剪贴板是全局资源：`OpenClipboard` 在别人打开着的时候会失败，而那个窗口可能
-// 只有几毫秒。因此这里重试若干次再放弃（照抄 oskeyd 的 `clipboard.rs`）。
+// 只有几毫秒。因此这里重试若干次再放弃。
 #pragma once
 
 #include <QString>

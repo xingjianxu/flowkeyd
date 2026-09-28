@@ -3,8 +3,8 @@
 // 分成三块：
 //
 // * **睡眠与休眠**是 `powrprof!SetSuspendState`（`TRUE` 是休眠，`FALSE` 是睡眠）。
-//   `powrprof` 在本仓库允许静态链接的集合里，所以直接链，不像 oskeyd 那样
-//   运行时解析（那边是 rust-mingw 的导入库缺这个符号，见 AGENTS.md 第 2 节）。
+//   `powrprof` 在本仓库允许静态链接的集合里，所以直接链，不需要运行时解析
+//   （见 AGENTS.md 第 2 节）。
 // * **关机 / 重启 / 注销**是 `user32!ExitWindowsEx`，**锁定**是
 //   `user32!LockWorkStation`。前三个需要调用进程的令牌里启用
 //   `SeShutdownPrivilege`（`enableShutdownPrivilege`），所以 flowkeyd 平时默认
@@ -39,7 +39,7 @@ struct PowerOpInfo
     bool needsShutdownPrivilege = false;
 };
 
-/// 全部电源操作（顺序与 oskeyd 的 `PowerOp` 一致）。
+/// 全部电源操作。
 const std::vector<PowerOpInfo> &powerOpTable();
 
 /// 纯函数：这个 op 是否**必须**启用 `SeShutdownPrivilege` 才能成功？

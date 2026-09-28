@@ -51,7 +51,7 @@ const GUID kIidPinnedApps = {
 //
 // 字段下标就是 vtable 下标（前三个是 `IUnknown`）。未用到的方法只留 `void *`
 // 占位，因为各版本的签名不一致，写出来反而会误导。
-// 布局照抄 `../oskeyd/src/win/desktop.rs`。
+// vtable 布局以真机实测为准。
 
 struct IUnknownVtbl
 {

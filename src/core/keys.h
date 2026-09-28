@@ -160,7 +160,7 @@ public:
     static KeyError uppercaseLetter(const QString &name) { return KeyError(Kind::UppercaseLetter, name); }
     static KeyError syntax(const QString &message) { return KeyError(Kind::Syntax, message); }
 
-    /// 与 oskeyd 一致的英文错误文案。
+    /// 英文错误文案。
     QString message() const;
 };
 

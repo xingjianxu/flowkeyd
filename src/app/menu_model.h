@@ -125,7 +125,7 @@ public:
     ///
     /// `key` 是 `Qt::Key`，`text` 是 `QKeyEvent::text()`（Qt 已经按当前键盘布局
     /// 翻译过）。`VK_UNASSIGNED`(0xE8) 那条菜单遮断注入没有文本，因此不会
-    /// 被当成字符键——这正是 oskeyd 里那段显式判断要解决的问题。
+    /// 被当成字符键。
     Q_INVOKABLE QVariantMap handleKey(int key, const QString &text);
 
     int rowCount(const QModelIndex &parent = QModelIndex()) const override;

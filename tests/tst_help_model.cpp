@@ -235,7 +235,7 @@ void TestHelpModel::enterRunsTheActiveRow()
     QCOMPARE(decisionOf(first), QStringLiteral("run"));
     QCOMPARE(indexOf(first), 0);
 
-    // 多个和弦用 ` / ` 连起来（与 oskeyd 的 `copy_active` 一致），执行的是同一个下标。
+    // 多个和弦用 ` / ` 连起来，执行的是同一个下标。
     model.moveSelection(1);
     QCOMPARE(model.copyText(), QStringLiteral("Win+X / Ctrl+Alt+X"));
     const QVariantMap second = model.handleKey(Qt::Key_Enter);

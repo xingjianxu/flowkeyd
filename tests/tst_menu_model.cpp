@@ -254,7 +254,7 @@ void TestMenuModel::hoverOverridesTheKeyboardHighlight()
     model.setHover(3);
     QCOMPARE(model.hover(), 3);
     QCOMPARE(model.accept(), 3);
-    // `Enter` 选的是鼠标悬停那一条（与 oskeyd 的 `State::active` 一致）。
+    // `Enter` 选的是鼠标悬停那一条。
     QCOMPARE(indexOf(model.handleKey(Qt::Key_Return, QString())), 3);
 
     // 悬停到一个不存在的行就是“不在任何条目上”。
@@ -337,7 +337,7 @@ void TestMenuModel::rolesExposeWhatTheDelegateNeeds()
     QCOMPARE(model.rowCount(), 4);
     QCOMPARE(model.data(model.index(0, 0), labelRole).toString(), QStringLiteral("睡眠"));
     QCOMPARE(model.data(model.index(0, 0), hintRole).toString(), QStringLiteral("Sleep"));
-    // 徽标显示大写（与 oskeyd 的 `key.to_uppercase()` 一致）。
+    // 徽标显示大写。
     QCOMPARE(model.data(model.index(0, 0), keyRole).toString(), QStringLiteral("S"));
     QCOMPARE(model.data(model.index(3, 0), keyRole).toString(), QString());
     QCOMPARE(model.data(model.index(0, 0), selectedRole).toBool(), true);

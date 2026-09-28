@@ -435,8 +435,7 @@ bool raiseWindow(HWND hwnd)
         }
     }
     // 除非调用进程拥有前台锁，否则 `SetForegroundWindow` 会被拒绝，
-    // 而钩子守护进程不能指望拥有它。三级递进尝试（照抄 oskeyd 的
-    // `raise_window`）：
+    // 而钩子守护进程不能指望拥有它。三级递进尝试：
     // 1. `SetForegroundWindow`（常见情况下唯一需要的）。
     // 2. 附着到持有锁的那个线程的输入队列，再从那里重试。
     // 3. `BringWindowToTop` + `SetWindowPos(HWND_TOP)`，然后再重试一次。

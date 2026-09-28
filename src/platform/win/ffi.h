@@ -42,7 +42,7 @@ QString winErrorMessage(unsigned long code);
 /// `"<what> failed: <message>"`，`code` 默认取 `GetLastError()`。
 QString lastErrorMessage(const char *what);
 
-/// 常见 `HRESULT` 的人话说明（与 oskeyd 的 `hresult_text` 同源）。
+/// 常见 `HRESULT` 的人话说明。
 ///
 /// COM 接口的失败信息对定位“vtable 布局与系统不匹配”很重要：`E_NOINTERFACE`
 /// 意味着版本表选错了 IID，而不是随便一个内部错误。

@@ -22,8 +22,8 @@ Tray::Tray(const QIcon &icon, QObject *parent) : QObject(parent)
 
     m_menu = new QMenu();
     // 菜单文案是界面，用中文；日志与错误信息仍然保持英文（工作约定第 4 条）。
-    // 顺序与 oskeyd 一致：日志放最上面（提权/隐藏控制台之后它是唯一能看运行
-    // 情况的地方），挂起/重载/打开配置在中间，退出在最下面。
+    // 日志放最上面（提权/隐藏控制台之后它是唯一能看运行情况的地方），
+    // 挂起/重载/打开配置在中间，退出在最下面。
     m_logAction = m_menu->addAction(QStringLiteral("查看日志(&V)"));
     m_menu->addSeparator();
     m_suspendAction = m_menu->addAction(QStringLiteral("挂起快捷键(&S)"));

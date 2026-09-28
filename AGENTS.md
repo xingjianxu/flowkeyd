@@ -58,7 +58,14 @@
 >    **`scripts\install.ps1` / `scripts\uninstall.ps1` 已经删除** —— 自启的注册、
 >    刷新与删除现在全在程序自己身上，**不要**再去写部署脚本、也不要再把常驻指向
 >    某个预设目录（如 `C:\Program Files\flowkeyd`）：任务跟着 exe 走。
->    细节见第 10 节与 `README.md` 的「开机自启与更新」。
+>    细节见第 10 节与 `README.md` 的「管理员权限与开机自启」。
+>
+>    **例外（2026-09，项目所有者要求）**：仓库根目录有一个 **`install.ps1`**，
+>    它是给**外部用户**的一键安装器（从 GitHub Release 下载完整包、校验 sha256、
+>    解压到 `%LOCALAPPDATA%\Programs\flowkeyd` 并可选启动），**不是**当年那个
+>    「部署到预设安装目录」的脚本，也不参与自启任务。README 最上面那条 curl
+>    命令用的就是它（先 `-o` 落盘，再用 `powershell -File` 跑，**不要**用管道喂
+>    stdin，见第 10 节），见第 4 节与第 11 节末尾的 DoD 记录。
 >
 >    **注意（2026-09 实测）**：这台机器上 agent 的 `powershell.exe` **是提权的**
 >    （`WindowsPrincipal.IsInRole(Administrator)` 为真），所以它能注册/启停那个
@@ -248,7 +255,7 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
       启动会把任务注册回来）。
     * 任务的每个参数（`PT15S` 延迟、`ExecutionTimeLimit=PT0S`、电池两项、
       `InteractiveToken`、`IgnoreNew`、`RestartOnFailure`）与当年 `install.ps1`
-      的 XML 逐字段一致，为什么见第 10 节与 `README.md` 的「开机自启与更新」。
+      的 XML 逐字段一致，为什么见第 10 节与 `README.md` 的「管理员权限与开机自启」。
     * **注册 / 刷新之前先问用户**（2026-09 要求）：任务缺失、或指向的 exe 不是
       当前这一个时，先弹一个原生确认框；同意才动任务，拒绝就保持原样。
       `--no-prompt` 跳过这个询问、按默认「注册 / 更新」处理。
@@ -724,7 +731,8 @@ UI 只有托盘图标、日志窗口、`menu` 选单、`help` 帮助这四样，
 | `CMakePresets.json`                       | `windows-debug` / `windows-release` 两个 preset（Ninja + `mingw1310_64` + Qt 6.11.2）                                                                                                                                       |
 | `cmake/VendorLua.cmake`                   | 把 `vendor/lua` 编成静态库 `lua_static`（排除 `lua.c`/`luac.c`/`onelua.c`/`ltests.c`，定义 `LUA_USE_WINDOWS`）                                                                                                              |
 | `flowkeyd.lua.example`                    | 有文档、覆盖全部特性的参考配置（中文注释、无警告），`--check` 就是拿它跑的                                                                                                                                                  |
-| `README.md`                               | 用户文档（中文，含完整配置/动作/schema 说明），是配置 schema 的权威定义                                                                                                                                                      |
+| `README.md`                               | **用户文档（只写使用方法，不含开发内容）**：安装（curl 一键装）、快速上手、命令行、配置/动作/schema 全部字段、托盘与弹窗、开机自启、在线更新、已知限制。是配置 schema 的权威定义                                                                                                                                                      |
+| `install.ps1` | **对外的一键安装器**（仓库根目录，UTF-8 with BOM）：从 GitHub Release 读最新版本 → 下载完整包 `flowkeyd-<版本>-windows-x64.zip` 并校验 `.sha256` → 解压到 `%LOCALAPPDATA%\Programs\flowkeyd` → `flowkeyd.exe --quit` 停掉正在跑的实例 → 覆盖安装 + 创建开始菜单快捷方式 → 启动。参数：`-Version` / `-InstallDir` / `-NoLaunch` / `-NoShortcut` / `-SkipChecksum`。README 最上面的 curl 命令就是「下载它 + 用 `powershell -File` 跑它」。**它不是部署脚本**，与自启任务无关（见第 2 节第 10 条的例外说明）
 | `logo.svg`                                | **应用图标的美术源**（仓库根目录，唯一的真源）。它不被任何构建步骤读取，只在改图标时被 `tools/icon_gen` 光栅化（见第 10 节）                                                                                                |
 | `assets/flowkeyd.ico`                     | **exe 的 Windows 图标资源**（9 帧：16–64 为 DIB，128/256 为 PNG），由 windres 通过配置时生成的 `assets/flowkeyd.rc.in` 嵌进 exe。改了 `logo.svg` 要重新生成：`cmake --build --preset debug --target icons`。**要提交** |
 | `assets/icons/flowkeyd-<n>.png`           | 运行时 `QIcon` 的 9 个尺寸（16/20/24/32/40/48/64/128/256），编在 exe 自己的 qrc 里（`:/icons/…`，见 `src/app/app_icon.*`）。**要提交**                                        |
@@ -1959,7 +1967,7 @@ checks: 68, failures: 0
 > 当前正在运行的 exe 路径**（实现见 `src/platform/win/autostart.*`，剥离自启用
 > `--no-autostart`，删除用 `--remove-autostart`）。为什么用计划任务（而不是启动
 > 文件夹 / 服务）、为什么开发实例要跳过、任务的每个参数为什么是那样，
-> 见第 2 节第 10 条、第 10 节「开机自启」那几条与 `README.md` 的「开机自启与更新」。
+> 见第 2 节第 10 条、第 10 节「开机自启」那几条与 `README.md` 的「管理员权限与开机自启」。
 > 下面那段历史记录保留，只为说明当时的处境。
 
 **剩下要用户做的一件事**：agent 的 shell 没有提权，启动提权进程会弹 UAC 而
@@ -3370,6 +3378,11 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 
 下面这些每一条都值得在动钩子/引擎/窗口/电源之前先读一遍：
 
+* **`curl | powershell -Command -` 在中文 Windows 上会把脚本里的 UTF-8 中文按
+  GBK 解码**（本机 ACP=936；实测 `"安装完成"` 变成 `28729,22798,58826,…` 六七个
+  字符），给 stdin 加 UTF-8 BOM 也不行（BOM 会被当成第一个标识符，报
+  `ObjectNotFound`）。所以 `install.ps1` 是**带 BOM 的 UTF-8**，README 给的是
+  「`curl -o` 落盘 + `powershell -File` 跑」两段式命令，而不是管道喂 stdin。
 * 通用修饰键 `VK_SHIFT` vs 分侧 `VK_LSHIFT`/`VK_RSHIFT`（`same_key`）。
 * 小键盘 Enter 与主键盘 Enter 共用 `VK_RETURN`，只能靠扩展键标志区分；
   **`SendInput` 不带 `KEYEVENTF_EXTENDEDKEY` 就造不出小键盘的 Enter**。
@@ -4277,7 +4290,7 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > * `scripts/acceptance.ps1` 的「第二个实例被拒绝」改用 `--no-prompt` 启动。
 > 行为变化：重复启动不再静默退出，而是（提权之前）弹一个「已在运行」提示框；
 > 注册 / 刷新开机自启之前先问用户；新增 CLI 开关 `--no-prompt`。
-> `README.md` 的「开机自启与更新」「命令行」两节与 `AGENTS.md` 第 2 节第 11 条
+> `README.md` 的「管理员权限与开机自启」「命令行」两节与 `AGENTS.md` 第 2 节第 11 条
 > 已同步。
 
 > **2026-09 新增（构建版本号：托盘右键 + 启动日志 + `--help`）的 DoD**：
@@ -5100,6 +5113,59 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 > 自启任务仍指向 `build\dist-release\flowkeyd.exe`。
 > （第一次误用 `Start-Process` 时弹了一个 UAC 框、进程卡在 `ShellExecuteW` 里，
 > 已经停掉那个进程改用任务；这条已经写进第 10 节的“agent 的 shell 是不是提权的”。）
+
+> **2026-09 新增（curl 一键安装 + README 只留使用方法 + 清掉旧参考实现的名字）的 DoD**：
+> 项目所有者要求：写一个能用 curl 一键安装本项目的 PowerShell 脚本；把它的用法命令
+> 放在 `README.md` 最上面；`README.md` 只保留使用方法、不要开发内容；并且把项目
+> 代码与文档里所有旧参考实现（Rust 版）的字样全部去掉，以后不再提它的名字。
+>
+> * **`install.ps1`（仓库根目录，UTF-8 with BOM + CRLF）**：问 GitHub 要最新
+>   Release 的 `tag_name`（`-Version` 可指定）→ 下载完整包
+>   `flowkeyd-<版本>-windows-x64.zip` → 用 `*.sha256` 校验 → `Expand-Archive`
+>   → `flowkeyd.exe --quit --no-prompt` 让正在跑的实例干净退出（15 秒不退再
+>   `Stop-Process`，再不行就报错）→ 覆盖安装到 `-InstallDir`（默认
+>   `%LOCALAPPDATA%\Programs\flowkeyd`）+ 创建开始菜单快捷方式 → 启动
+>   （`-NoLaunch` 跳过）。README 最上面那条命令是
+>   `curl.exe -fsSL <raw>/install.ps1 -o "$env:TEMP\flowkeyd-install.ps1";
+>   powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\flowkeyd-install.ps1"`。
+>
+> * **为什么是「先落盘再 `-File`」而不是 `curl | powershell -Command -`**：本机
+>   ACP=936，`powershell.exe -Command -` 用 GBK 解码 stdin 里的 UTF-8 中文，
+>   字符串字面量会变乱码（实测 `"安装完成"` 的字符码变成
+>   `28729,22798,58826,…`）；给 stdin 加 UTF-8 BOM 也不行（BOM 会被当成第一个
+>   标识符的一部分，报 `ObjectNotFound`）。**BOM + `-File` 才正确**（实测字符码
+>   正是 `23433,35013,23436,25104`）。已经在「领域坑清单」里记了一条。
+>
+> * **README 重写**（1626 行 → 约 1000 行）：只留安装 / 快速上手 / 命令行 /
+>   配置（`settings`、`hotkey`、动作表、模板、`remap`、`window_rule`、`app`）/
+>   托盘与弹窗（日志窗口、选单、帮助、窗口切换器）/ 管理员权限与开机自启 /
+>   在线更新 / 已知限制。删掉了「与参考实现的关系」「状态」「环境要求（构建）」
+>   「构建与运行」「发布」「从 TOML 迁移」「工作原理」「验证它能工作」「路线图」
+>   等开发内容；「安装」一节移到标题正下方（第一条命令就是 curl 一键装）。
+>
+> * **旧参考实现的名字全部清掉**：对它的名字做大小写无关的全仓库搜索，现在**零
+>   命中**。40 多个改动文件里都是注释或测试函数名（例如测试函数
+>   `privilegeFlagsOnlyForShutdownOps` 就是这次从旧名字改过来的），
+>   没有一条是功能性的（真正使用的环境变量一直是
+>   `FLOWKEYD_ACCEPT_INJECTED`、注入标记一直是 `"FLOW"`）。
+>
+> 本次 DoD：`cmake --build --preset debug` 与 `--preset release` 都是 **exit 0**、
+> 零编译警告（release 里那句 `dxcompiler.dll` 仍是 `windeployqt` 自己的提示）；
+> `ctest --test-dir build/windows-debug` **27 个测试目标全绿**（`tst_power_table`
+> 只改了函数名）；`flowkeyd --check --config flowkeyd.lua.example` →
+> `OK (46 hotkey(s), 3 remap(s), 7 window rule(s))`、零警告。
+> `install.ps1` 真机端到端（`-InstallDir tmp\install-test -NoLaunch -NoShortcut`）：
+> 解析到 `26-09-27-dc6b332`、下载 24.2 MB、sha256 通过、用 `--quit` 让常驻实例
+> （pid 31200）干净退出、装了 213 个文件、退出码 0；装出来的 exe `--version` →
+> `flowkeyd 26-09-27-dc6b332`；`-Version 99-99-99-abcdef0` 在下载 404 时给出可读
+> 的中文报错、退出码 1、不创建安装目录。
+> **注意**：测试安装器会停掉正在跑的常驻实例，所以收尾顺序是「先跑安装器测试 →
+> 再构建 release（exe 已解锁）→ `schtasks /Run /TN flowkeyd` 重新拉起」；本机
+> agent 的 shell **不是**提权的（`IsInRole(Administrator)` 为 False），拉起只能走
+> 计划任务。日志确认常驻跑的是新构建：`flowkeyd 26-09-28-dc6b332 starting` +
+> `31 hotkey(s), 0 remap(s), 4 window rule(s)` + `keyboard hook installed`。
+> 未跑 `scripts/acceptance.ps1`：本次只改注释 / 文档 / 一个新脚本，没碰钩子 /
+> 引擎 / 分发 / 窗口后端。
 
 ---
 

@@ -65,7 +65,7 @@ void TestInput::backendPreferenceParsing()
 
 void TestInput::syntheticTagSpellsFlow()
 {
-    // 与 oskeyd 的 `"OSKE"` 同一套约定：按大端读出四个字节。
+    // 注入标记按大端读出四个字节。
     const ULONG_PTR tag = platform::win::kSyntheticTag;
     const auto byte = [tag](int shift) { return static_cast<char>((tag >> shift) & 0xFF); };
     QCOMPARE(byte(24), 'F');

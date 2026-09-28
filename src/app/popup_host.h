@@ -4,12 +4,10 @@
 // 为什么必须有这一层：QML 窗口只能在 GUI 线程上碰，而动作是在**工作线程**上
 // 执行的（`app::Dispatcher`）。所以 `requestMenu` / `requestHelp` 可以从任意
 // 线程调用，内部一律 `Qt::QueuedConnection` 投到 GUI 线程；用户选了第几项之后，
-// 由 `onChoose` / `onCopy` 回调把活儿交回工作线程——**弹窗自己从不执行动作**
-// （照抄 oskeyd 的 `win::menu` / `win::help` 的分工）。
+// 由 `onChoose` / `onCopy` 回调把活儿交回工作线程——**弹窗自己从不执行动作**。
 //
-// 与 oskeyd 的差异：oskeyd 给每个弹窗开一条自己的线程（因为它是自绘的原生
-// 窗口，而钩子线程不能停在可见窗口里）；flowkeyd 的窗口是 Qt 窗口，只能在
-// GUI 线程上创建，而 GUI 线程本来就不跑钩子回调，所以直接在 GUI 线程上跑。
+// 每个弹窗都跑在 Qt GUI 线程上（QML 窗口只能在 GUI 线程上创建，而 GUI 线程
+// 本来就不跑钩子回调），不需要每个弹窗再开一条自己的线程。
 #pragma once
 
 #include "app/help_model.h"

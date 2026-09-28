@@ -9,7 +9,7 @@ namespace flowkeyd::app {
 
 namespace {
 
-// 96 DPI 下的逻辑像素（与 oskeyd 的 `help.rs::Metrics` 同源）。
+// 96 DPI 下的逻辑像素。
 constexpr int kCardWidth = 500;
 constexpr int kPad = 12;
 constexpr int kHeaderHeight = 30;

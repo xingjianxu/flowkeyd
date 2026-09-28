@@ -1,9 +1,9 @@
 // 弹窗（`menu` / `help`）共用的几何类型与常量。
 //
 // 这里刻意只放**逻辑像素**：Qt 6 在 Windows 上已经是 Per-Monitor DPI Aware V2，
-// 所以 QML 里的坐标天然就是缩放过的。oskeyd 那边要手动按 `dpi / 96` 缩放，
-// flowkeyd 不需要；本文件里的数字就是 oskeyd 在 96 DPI 下的取值
-// （见 `../oskeyd/src/win/menu.rs` 的 `Metrics` 与 `help.rs` 的同名结构）。
+// 所以 QML 里的坐标天然就是缩放过的，不需要再手动按 `dpi / 96` 缩放；
+// 本文件里的数字都是 96 DPI 下的逻辑取值（`menu_model` 与 `help_model`
+// 里的 `Metrics` 用的就是这些常量）。
 #pragma once
 
 #include <QRect>

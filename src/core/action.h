@@ -19,8 +19,8 @@ struct ActionSpec;
 
 /// 把字符串渲染成 Rust `{:?}` 的样子（带引号、转义）。
 ///
-/// `--list` 与帮助窗口显示的就是这些摘要，与 oskeyd 保持逐字一致，
-/// 这样 e2e 脚本里的断言将来可以复用。
+/// `--list` 与帮助窗口显示的就是这些摘要，形状固定，
+/// 这样脚本里的断言可以复用。
 QString rustDebug(const QString &text);
 
 // ---------------------------------------------------------------------------
@@ -66,7 +66,7 @@ QString windowOpDebugName(WindowOp op);
 QString toggleStateDebugName(ToggleState state);
 QString capsLockStateDebugName(CapsLockState state);
 
-/// 配置里书写的名字（snake_case）；`power` 用它，因为 oskeyd 的摘要也用它。
+/// 配置里书写的名字（snake_case）；`power` 的摘要也用它。
 QString powerOpName(PowerOp op);
 
 /// snake_case 名字 → 枚举；给 Lua 层与简写解析共用。
@@ -156,8 +156,8 @@ struct MenuItemDef
 
 /// 一个具体动作。
 ///
-/// 用「一个结构体 + Kind 判别式」而不是 `std::variant`：字段与 oskeyd 的
-/// 同名枚举变体一一对应，但省掉了 20 个包装结构体与到处 `std::visit` 的噪音，
+/// 用「一个结构体 + Kind 判别式」而不是 `std::variant`：字段与各动作类型
+/// 一一对应，但省掉了 20 个包装结构体与到处 `std::visit` 的噪音，
 /// 而且 `menu` 的递归（Menu → MenuItemDef → ActionSpec → Action）天然成立。
 struct Action
 {
@@ -284,7 +284,7 @@ bool isDestructive(const std::vector<Action> &actions);
 ///
 /// `menu:` 没有简写：一张选单至少要有条目，那写成一张表比塞进一个字符串清楚。
 ///
-/// 出错时返回一条英文错误信息（与 oskeyd 的 `ConfigError::Validation` 一致）。
+/// 出错时返回一条英文错误信息。
 std::optional<QString> parseActionShorthand(const QString &input, Action *out);
 
 } // namespace flowkeyd::core

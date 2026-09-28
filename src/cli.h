@@ -38,7 +38,7 @@ struct CliOptions
     bool console = false;
     /// 启动时直接打开日志窗口。
     bool logWindow = false;
-    /// 兼容 oskeyd 的内部参数；本项目接受但忽略它。
+    /// 兼容用的内部参数；本项目接受但忽略它。
     std::optional<qint64> parentPid;
     /// 内部标记：本进程已经以管理员权限运行，不要再重启自己。
     bool elevated = false;
