@@ -3379,6 +3379,27 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   注意沙箱 exe 要用**带临时钩子**的那份（否则没人点菜单，它不会自己检查），
   而 zip 里的“新版本”要用**不带钩子**的那份（否则重启后会再检查一次、无限循环）。
 
+#### 2026-10 新增：方向键的「按住重复」（`repeatable`）
+
+* **需求**（项目所有者）：让 `Alt` + 方向键那组绑定「按住后持续触发相关动作」。
+* **结论：这是纯配置的事，引擎侧不需要改任何代码。** `hotkey{ repeatable = true }`
+  等价于 `trigger = "repeat"`：按下即派发一次，之后在 `settings.repeat_delay_ms`
+  （默认 400ms）后开始、每 `settings.repeat_interval_ms`（默认 50ms）重复一次
+  那条绑定的**按下那半程**动作，松开 / 挂起 / 重载 / 退出时停。
+  引擎那半条逻辑（`Engine::m_repeating` + `Engine::tick()`）由
+  `tst_engine::longPressRepeat` / `triggerRepeatUsesTheSettingsDefaults` 盯着；
+  钩子侧的 `WM_TIMER` 之前踩过「`SetTimer(nullptr, id, …)` 忽略 `id`」的坑
+  （见上文「`window_rule`」那一节），现在比较的是 `SetTimer` 的返回值。
+  所以给那几条方向键各加一行 `repeatable = true` 就够了，**没有改产品代码**。
+* **一个容易误判的验证 blocker**：当时的注入式端到端跑不起来，`SendInput` 返回 0、
+  `GetForegroundWindow()` 也是 0。但按所有常见判据它都**像**一个正常的交互桌面：
+  进程在 `WinSta0\Default`、`WTSConnectState` 是 `WTSActive`、
+  `OpenInputDesktop` 返回的也是 `Default`、medium IL 非提权。结论：
+  **除了“锁屏时 `SendInput` 报 5”那一种，还存在这种“判据全对、注入就是不落地”
+  （RDP 会话当时没有真正接收输入）的状态**。先看 `GetForegroundWindow()` 是不是 0，
+  是的话就别在产品代码里找原因；配置正确性靠 `--check` / `--list` 与引擎单测覆盖，
+  让用户自己按住键自查即可。
+
 ### 领域坑清单（动手前先看这一遍）
 
 下面这些每一条都值得在动钩子/引擎/窗口/电源之前先读一遍：
