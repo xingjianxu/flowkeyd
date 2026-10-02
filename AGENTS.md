@@ -2056,6 +2056,13 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
   虚拟桌面那条路要 STA、音频要 MTA，**别把音频初始化放到主线程**
   （否则会把主线程的单元模型定死成 MTA，Qt 的拖放/剪贴板可能出问题）。
   做法：桌面调用走一次性 STA 线程，音频在它自己的一次性 MTA 线程上。
+* **字体引擎是平台插件的构造参数，只能在 `QApplication` 之前选。** Windows 上
+  默认走 DirectWrite，本机 225% 缩放下 Qt Quick 界面发虚；`main()` 第一行
+  （先于任何 `QApplication`）的 `qputenv("QT_QPA_PLATFORM",
+  "windows:fontengine=freetype")` 换成 FreeType。同一个值的另一个写法是命令行
+  `-platform windows:fontengine=freetype`，但对守护进程来说 `main()` 里设环境
+  变量更可靠（它同时盖住配置错误弹窗那条自建 `QApplication` 的路径）。
+  **不要在 `main()` 之后、更不要在 QML 里设它** —— 平台插件一加载就定死了。
 * **`PostThreadMessage` 在目标线程还没消息队列时会静默失败。** 钩子线程要先
   `PeekMessage` 建出队列并把就绪状态告诉启动方，否则最早发出的
   “suspend/reload” 控制消息会丢。
@@ -5302,6 +5309,32 @@ Start-Process -Verb RunAs -FilePath 'D:\prj\flowkeyd\build\windows-release\flowk
 >   按本文件“不想动二进制就别在提交之后再构建”的约定办；`build/dist-release/`
 >   仍然是最新的代码产物，常驻实例继续跑它（不需要 `--quit` / 重新拉起）。
 > * 提醒：README 里那条命令要等 `install.ps1` **推到 master** 之后才真的可用。
+
+> **2026-10 修复（Windows 上强制用 FreeType 字体引擎消掉界面发虚）的 DoD**：
+> 项目所有者要求「必须在创建 `QApplication` 之前设置环境变量，强制 Windows 平台下
+> 使用 freetype 字体引擎解决模糊问题」，并明确这次**只编译、不跑测试**。
+> * 改动只有一处：`src/main.cpp` 的 `main()` **第一行**（在 `attachParentConsole()`
+>   之前）加了 `#ifdef Q_OS_WIN qputenv("QT_QPA_PLATFORM",
+>   "windows:fontengine=freetype"); #endif`，中文注释写明了「这是平台插件的构造
+>   参数，必须在任何 `QApplication`/`QGuiApplication` 之前设好」。放在 `main()` 的
+>   最前面还顺带覆盖了 `reportConfigFailure()` 那条路径（配置错误弹窗会自己建一个
+>   `QApplication`，而它后面还会建 `QMessageBox`）。
+> * 本仓库只有 `main.cpp` 构造 `QApplication`（`tray.cpp` 只是用它的静态方法），
+>   所以这一处就够了；`QT_QPA_PLATFORM` 在本仓库的脚本、测试、CMake 里都没有被
+>   别的地方设置过，不存在互相打架。
+> * 按项目所有者要求**没有跑 `ctest`、也没有跑 `scripts/acceptance.ps1`**
+>   （这次按“只编译”执行）。两个 profile 都构建通过、零编译警告：
+>   `cmake --build --preset debug`（日志末尾 `prune_runtime: … 857 file(s)`）与
+>   `cmake --build --preset release`（`prune_runtime: D:/prj/flowkeyd/build/dist-release
+>   -> 212 file(s), 64989 KB`）。
+> * 收尾按工作约定第 11 条：`build\dist-release\flowkeyd.exe --quit` 停常驻（本机
+>   agent 的 shell **不提权**，`Admin=False`，所以停完用 `schtasks /Run /TN flowkeyd`
+>   拉起，不用 `Start-Process`）→ 构建 release → 重新拉起。新实例的日志第一行是
+>   `flowkeyd 26-10-02-2905cde starting`（= 当时的 HEAD），随后
+>   `31 hotkey(s), 0 remap(s), 4 window rule(s)` + `keyboard hook installed`，
+>   **零 QML / 字体相关警告** —— 也就是说四个预热弹窗在 FreeType 引擎下照样渲染。
+> * 待观察（只能由人的眼睛判断）：界面是否真的更清晰、以及 `send`/`type` 注入
+>   与输入法（`platform/win/ime`）在 FreeType 下有没有变化 —— 这两样自动化看不出来。
 
 ---
 

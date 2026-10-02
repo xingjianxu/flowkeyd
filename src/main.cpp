@@ -189,6 +189,16 @@ bool confirmAutostartAction(win::AutostartState state,
 
 int main(int argc, char *argv[])
 {
+    // Windows 上用 FreeType 字体引擎替换系统那个 DirectWrite 后端：它渲染出来的
+    // 字形更清晰，能消掉 Qt Quick 界面里的发虚/发糊（本机 225% 缩放下尤其明显）。
+    // 字体引擎是平台插件的**构造参数**，平台插件一被加载就定死了，所以必须在
+    // 任何 `QApplication` / `QGuiApplication` 之前设好。放在 `main()` 的最前面
+    // 还有一个好处：`reportConfigFailure()` 会自己建一个 `QApplication`（配置
+    // 错误弹窗），那条路也盖住了。
+#ifdef Q_OS_WIN
+    qputenv("QT_QPA_PLATFORM", "windows:fontengine=freetype");
+#endif
+
     // 第一件事：把输出接回启动我们的终端（GUI 子系统进程默认没有控制台）。
     win::attachParentConsole();
 
