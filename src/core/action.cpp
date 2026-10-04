@@ -458,6 +458,11 @@ QString Action::summary() const
             return QStringLiteral("windows %1").arg(rustDebug(*windowsTitle));
         }
         return QStringLiteral("windows");
+    case Kind::Apps:
+        if (appsTitle.has_value()) {
+            return QStringLiteral("apps %1").arg(rustDebug(*appsTitle));
+        }
+        return QStringLiteral("apps");
     case Kind::Power:
         return QStringLiteral("power %1").arg(powerOpName(powerOp));
     case Kind::Suspend:
@@ -639,6 +644,12 @@ std::optional<QString> parseActionShorthand(const QString &input, Action *out)
         out->kind = Action::Kind::Windows;
         return std::nullopt;
     }
+    // `apps` 同样是裸关键字：程序列表来自开始菜单扫描，标题可选（走 `apps(title)`）。
+    if (prefix == QLatin1String("apps") || prefix == QLatin1String("launcher")
+        || prefix == QLatin1String("programs")) {
+        out->kind = Action::Kind::Apps;
+        return std::nullopt;
+    }
     if (prefix == QLatin1String("none") || prefix == QLatin1String("noop")
         || prefix == QLatin1String("block")) {
         out->kind = Action::Kind::Noop;
@@ -646,7 +657,7 @@ std::optional<QString> parseActionShorthand(const QString &input, Action *out)
     }
     return bad(QStringLiteral("unknown action shorthand `%1:` (expected run:, send:, type:, open:, "
                               "notify:, desktop:, volume:, media:, clipboard:, window:, power:, "
-                              "reload, quit, help, windows, none)")
+                              "reload, quit, help, windows, apps, none)")
                    .arg(prefix));
 }
 

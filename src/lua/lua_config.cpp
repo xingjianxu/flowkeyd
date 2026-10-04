@@ -574,6 +574,9 @@ core::Action convertAction(lua_State *L, int index)
     } else if (type == QLatin1String("windows")) {
         action.kind = core::Action::Kind::Windows;
         action.windowsTitle = optString(L, index, "title");
+    } else if (type == QLatin1String("apps")) {
+        action.kind = core::Action::Kind::Apps;
+        action.appsTitle = optString(L, index, "title");
     } else if (type == QLatin1String("power")) {
         action.kind = core::Action::Kind::Power;
         action.powerOp = *core::powerOpFromName(
@@ -601,6 +604,7 @@ core::Action convertAction(lua_State *L, int index)
                                   QStringLiteral("window"), QStringLiteral("notify"),
                                   QStringLiteral("desktop"), QStringLiteral("menu"),
                                   QStringLiteral("help"), QStringLiteral("windows"),
+                                  QStringLiteral("apps"),
                                   QStringLiteral("power"),
                                   QStringLiteral("suspend"), QStringLiteral("reload"),
                                   QStringLiteral("quit"), QStringLiteral("none")})));

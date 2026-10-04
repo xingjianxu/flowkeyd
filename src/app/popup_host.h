@@ -1,5 +1,5 @@
-// 弹窗宿主：在 Qt GUI 线程上创建/复用 `menu` / `help` / 窗口切换器 / 在线更新
-// 四个 QML 窗口。
+// 弹窗宿主：在 Qt GUI 线程上创建/复用 `menu` / `help` / 窗口切换器 / 程序启动器 /
+// 在线更新五个 QML 窗口。
 //
 // 为什么必须有这一层：QML 窗口只能在 GUI 线程上碰，而动作是在**工作线程**上
 // 执行的（`app::Dispatcher`）。所以 `requestMenu` / `requestHelp` 可以从任意
@@ -10,6 +10,7 @@
 // 本来就不跑钩子回调），不需要每个弹窗再开一条自己的线程。
 #pragma once
 
+#include "app/app_list_model.h"
 #include "app/help_model.h"
 #include "app/menu_model.h"
 #include "app/update_model.h"
@@ -30,6 +31,10 @@ class QQmlEngine;
 class QQuickWindow;
 
 namespace flowkeyd::app {
+
+/// 程序启动器的图标提供者（在 `main` 里注册到 QML 引擎上）。
+/// 这里只持一个裸指针：提供者的生命周期归引擎（`addImageProvider` 接管所有权）。
+class AppIconProvider;
 
 /// 打开选单需要的一切。
 struct MenuRequest
@@ -73,6 +78,29 @@ struct SwitchRequest
     std::function<void(int)> onChoose;
 };
 
+/// 程序启动器里的一行请求数据。
+struct AppLauncherItem
+{
+    /// 程序名。
+    QString name;
+    /// 快捷方式（`.lnk`）的完整路径；空串表示这一行没有图标（预热用的假数据）。
+    QString shortcut;
+};
+
+/// 打开程序启动器需要的一切。
+///
+/// 传给窗口的是**名字 + 快捷方式路径**（而不是现成的图标 URL）：图标键与 URL
+/// 都在宿主这边算（`core::appIconUrl`），顺便把「键 → 路径」登记给图标提供者。
+struct AppRequest
+{
+    std::optional<QString> title;
+    std::vector<AppLauncherItem> items;
+    /// 用户选中第 `index` 个**条目**（不是筛选后的可见格）时调用。
+    /// 此时窗口已经在屏幕上消失，回调在 GUI 线程上执行；实现只应该把活儿转交
+    /// 给别处（`Dispatcher` 再投一次队列），不要阻塞。
+    std::function<void(int)> onChoose;
+};
+
 /// 打开「在线更新」窗口需要的一切。
 ///
 /// 窗口要显示的模型（`app::UpdateModel`）不在这里传：它由 `setUpdateModel()`
@@ -91,7 +119,8 @@ struct UpdateRequest
     std::function<void()> onOpenRelease;
 };
 
-/// `menu` / `help` / 窗口切换器 / 在线更新四个弹窗的宿主（GUI 线程亲和）。
+/// `menu` / `help` / 窗口切换器 / 程序启动器 / 在线更新五个弹窗的宿主
+/// （GUI 线程亲和）。
 class PopupHost : public QObject
 {
     Q_OBJECT
@@ -108,6 +137,9 @@ public:
     /// 弹出窗口切换器；**已经开着时按同一个快捷键就是关掉它**（与 `Esc` 同义，
     /// 见 `showSwitch()`）。
     void requestSwitch(SwitchRequest request);
+    /// 弹出程序启动器；**已经开着时按同一个快捷键就是关掉它**（与 `Esc` 同义，
+    /// 与窗口切换器同一条规则）。
+    void requestApps(AppRequest request);
     /// 显示「在线更新」卡片（托盘菜单「检查更新」）。窗口已经开着时只前置，
     /// 不重置里面的状态（状态是 `UpdateModel` 的事，`Updater` 已经改好了）。
     void requestUpdate(UpdateRequest request);
@@ -124,7 +156,7 @@ public:
     /// 实例化，以及 `ListView` ／ `ItemDelegate` ／ `TextField` ／ `ScrollBar`
     /// 这些 FluentWinUI3 件的装配。预热把两者都提前付掉：同一份测量里，预热之后
     /// 第一次弹出只要 **30–60 ms**（menu 27 / help 59 / switch 52，后续 13–37），
-    /// 而预热本身只让启动多花约 310 ms（三个窗口的首帧，全在后台）。
+    /// 而预热本身只让启动多花约 310 ms（那次量的是三个窗口的首帧，全在后台）。
     ///
     /// 守护进程是长期运行的，启动时多花这一点看不见；而“按了快捷键等四分之一秒
     /// 才看到卡片”每次都看得见。
@@ -144,7 +176,12 @@ public:
     bool menuVisible() const;
     bool helpVisible() const;
     bool switchVisible() const;
+    bool appsVisible() const;
     bool updateVisible() const;
+
+    /// 把程序启动器的图标提供者交给宿主（GUI 线程、启动时调一次）。
+    /// 必须在 `preload()` 之前调，否则那张卡片的图标表是空的。
+    void setAppIconProvider(AppIconProvider *provider) { m_appIcons = provider; }
 
     /// 把「在线更新」卡片要显示的模型交给宿主（GUI 线程、启动时调一次）。
     /// 必须在 `preload()` 之前调，否则那张卡片不会被预热。
@@ -161,6 +198,9 @@ public:
     Q_INVOKABLE void helpDismiss();
     Q_INVOKABLE void switchChoose(int index);
     Q_INVOKABLE void switchDismiss();
+    // 程序启动器（GUI 线程）：同上面几个，只把活儿转交出去。
+    Q_INVOKABLE void appChoose(int index);
+    Q_INVOKABLE void appDismiss();
     // 「在线更新」卡片上的按钮（GUI 线程；只把活儿转交给 `Updater`）。
     Q_INVOKABLE void updateInstall();
     Q_INVOKABLE void updateDismiss();
@@ -186,10 +226,12 @@ private:
     void showMenu(MenuRequest request);
     void showHelp(HelpRequest request);
     void showSwitch(SwitchRequest request);
+    void showApps(AppRequest request);
     void showUpdate();
     QQuickWindow *ensureMenuWindow();
     QQuickWindow *ensureHelpWindow();
     QQuickWindow *ensureSwitchWindow();
+    QQuickWindow *ensureAppWindow();
     QQuickWindow *ensureUpdateWindow();
     void placePopup(QQuickWindow *window, int width, int height);
     void activate(QQuickWindow *window);
@@ -235,7 +277,13 @@ private:
     WindowListModel *m_switchModel = nullptr;
     SwitchRequest m_switchRequest;
 
-    // 「在线更新」卡片（第四个弹窗）。模型由 `Updater` 拥有，宿主只持有指针。
+    QQuickWindow *m_appWindow = nullptr;
+    AppListModel *m_appModel = nullptr;
+    AppRequest m_appRequest;
+    /// 图标提供者（引擎拥有它；这里只用来登记「图标键 → 快捷方式路径」）。
+    AppIconProvider *m_appIcons = nullptr;
+
+    // 「在线更新」卡片（第五个弹窗）。模型由 `Updater` 拥有，宿主只持有指针。
     QQuickWindow *m_updateWindow = nullptr;
     UpdateModel *m_updateModel = nullptr;
     UpdateRequest m_updateRequest;
@@ -258,7 +306,7 @@ private:
     QString m_frameName;
     QElapsedTimer m_frameTimer;
 
-    // 正在预热的窗口（通常三个）。真实弹出先从里面拿掉一个，于是它的首帧回调
+    // 正在预热的窗口（通常五个）。真实弹出先从里面拿掉一个，于是它的首帧回调
     // 不会再把它藏起来（用户已经把它打开了）。
     QSet<QQuickWindow *> m_warming;
     bool m_preloaded = false;

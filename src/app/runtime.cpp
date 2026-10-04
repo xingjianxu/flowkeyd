@@ -77,6 +77,10 @@ bool Runtime::start(const QString &configPath,
     // （`startDesktopWatch` 必须在它自己那条线程上建定时器，所以用排队调用）。
     QMetaObject::invokeMethod(m_dispatcher, &Dispatcher::startDesktopWatch, Qt::QueuedConnection);
 
+    // 程序启动器的目录：启动时先扫一遍（工作线程，真机上约 80 ms），这样第一次
+    // 按 Win+Space 不必现场等扫描。
+    QMetaObject::invokeMethod(m_dispatcher, &Dispatcher::startAppScan, Qt::QueuedConnection);
+
     // 启动时按 `window_rule` 把已有窗口归位一次（用户要求）。工作线程已经起来，
     // 所以这里只是投一个队列任务。
     if (m_dispatcher != nullptr && m_hook != nullptr) {
@@ -224,6 +228,13 @@ void Runtime::showSwitchFromAnyThread(SwitchRequest request)
 {
     if (m_popupHost != nullptr) {
         m_popupHost->requestSwitch(std::move(request));
+    }
+}
+
+void Runtime::showAppsFromAnyThread(AppRequest request)
+{
+    if (m_popupHost != nullptr) {
+        m_popupHost->requestApps(std::move(request));
     }
 }
 

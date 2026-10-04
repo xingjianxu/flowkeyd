@@ -97,13 +97,14 @@
 `flowkeyd` 是一个由 **Lua 脚本**配置的 Windows 键盘钩子守护进程，用 **C++20 + Qt 6** 写成。
 它安装一个 `WH_KEYBOARD_LL` 钩子，匹配按键和弦，按需把匹配到的按键从前台应用那里隐藏掉
 （AutoHotkey 的行为），然后执行绑定的动作（启动进程、发送按键、控制音量/媒体、操作窗口、
-切换虚拟桌面与剪贴板、弹出通知、弹出选单、弹出快捷键帮助、窗口切换器、睡眠/关机/重启/关屏）。
+切换虚拟桌面与剪贴板、弹出通知、弹出选单、弹出快捷键帮助、窗口切换器、程序启动器、
+睡眠/关机/重启/关屏）。
 它也能做按键重映射。
 
 一句话：**用 Lua 配置、用 Qt/C++ 写的 AutoHotkey。**
 
-UI 只有托盘图标与四个 QML 卡片（日志窗口、`menu` 选单、`help` 帮助、`windows` 窗口切换器、
-`update` 在线更新），全部是 **Qt Quick（QML）+ FluentWinUI3 样式**，跑在**同一个进程**里。
+UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help` 帮助、`windows` 窗口切换器、
+`apps` 程序启动器、`update` 在线更新），全部是 **Qt Quick（QML）+ FluentWinUI3 样式**，跑在**同一个进程**里。
 
 **当前的非目标**：图形化编辑器、鼠标钩子、把 Lua 函数当动作（配置是脚本，
 但动作只能是声明式的表/字符串）。
@@ -118,7 +119,7 @@ UI 只有托盘图标与四个 QML 卡片（日志窗口、`menu` 选单、`help
 | 互斥体     | `Local\flowkeyd-<配置路径散列>`                                                 |
 | 开机自启   | 计划任务 `flowkeyd` 指向**当前运行 exe**（启动时自注册自检）                    |
 | 在线更新   | 托盘菜单 *检查更新* → GitHub `releases/latest` → slim 包 → sha256 → 换 exe + 重启 |
-| 自动化测试 | Qt Test 单元测试 + `scripts/acceptance.ps1`（134 项检查，需交互式桌面）         |
+| 自动化测试 | Qt Test 单元测试 + `scripts/acceptance.ps1`（134 → 144 项检查，需交互式桌面）         |
 | 依赖管理   | CMake Presets + Ninja，`vendor/lua` 静态编进二进制                             |
 
 ---
@@ -360,14 +361,14 @@ UI 只有托盘图标与四个 QML 卡片（日志窗口、`menu` 选单、`help
       `footerText` 在这种模式下换成「数字键直接切换」，所以从 `CONSTANT` 改成
       `NOTIFY stateChanged`）。界面只是把 `rowKey` 画成行左侧的徽标（空串时不占位，
       标题与进程名跟着缩进 30 px）。
-23. **四个弹窗不进任务栏，而且启动时就预热好。**
+23. **五个弹窗不进任务栏，而且启动时就预热好。**
     * **不进任务栏**：`MenuPopup.qml` / `HelpPopup.qml` / `SwitchPopup.qml` /
       `UpdatePopup.qml` 的 `flags` 都加 `Qt.Tool`（Windows 上就是 `WS_EX_TOOLWINDOW`）。
       `Qt.Tool` 窗口仍然能被激活、能拿键盘焦点（验证过），只是不加任务栏按钮、
       不进 `Alt+Tab`。日志窗口**没有**改（它留在任务栏里是对的）。
       选 `Qt.Tool` 而不是 `Qt.Popup`：后者要抓鼠标、点外面自动关。
     * **首次弹出不再现场付钱**：`PopupHost::preload()` 在启动后的第一个事件循环回合被
-      `main` 排队调用，把四个窗口建出来、填一份假数据各渲染一帧
+      `main` 排队调用，把五个窗口建出来、填一份假数据各渲染一帧
       （**透明度 0 + 屏幕之外**，用户看不到也点不到），首帧到了就藏起来。
       实测冷启动第一次弹出要 **224 ms** 才画出第一帧（~170 ms 是进程首次渲染的固定开销：
       QRhi/D3D11 设备、交换链、Quick 材质着色器首次编译；~50 ms 是该窗口的 QML 加载与
@@ -426,7 +427,7 @@ UI 只有托盘图标与四个 QML 卡片（日志窗口、`menu` 选单、`help
       见第 12 条）：不对齐的话更新完重启，版本号会变成“下载那一天”。
     * 替换需要能写安装目录（默认提权运行，正常路径没影响）；更新**不碰**配置、日志与
       开机自启任务。更新失败时的模态框在 `--no-prompt` 下不弹（自动化用）。
-    * 新增静态库 **`flowkeyd_update`** 与 `platform/win/update.*`；第四个 QML 卡片
+    * 新增静态库 **`flowkeyd_update`** 与 `platform/win/update.*`；一张 QML 卡片
       `UpdatePopup.qml`（同样预热、同样 `Qt.Tool`）；`Qt6::Network` 进入依赖，
       所以 `cmake/PruneRuntime.cmake` **必须留下 `tls/qschannelbackend.dll`**。
 26. **远程桌面放行（`settings.remote_desktop`，默认开）。**
@@ -451,6 +452,42 @@ UI 只有托盘图标与四个 QML 卡片（日志窗口、`menu` 选单、`help
    * 纯逻辑在 `core/remote_desktop.{h,cpp}`（`builtinRemoteDesktopProcesses()` /
      `isRemoteDesktopProcess()`），引擎侧是 `Engine::setRemoteDesktop()`，平台侧只有
      `platform/win/hook.cpp` 的 `noteForegroundWindow()`。
+27. **程序启动器 `apps()`：开始菜单里的程序，摆成一张图标网格。**
+    绑定写法就是普通快捷键（本机绑在 **`Win+Space`** 上，会吞掉 Windows 自己的
+    输入法切换；真实配置不进仓库，见§14）。
+    * **数据源 = 扫开始菜单**（项目所有者 2026-10 拍板，另一个选项是“配置里手写
+      程序列表”）：递归扫 `%ProgramData%\…\Start Menu\Programs` 与
+      `%APPDATA%\…\Start Menu\Programs` 两个目录，用 `IShellLink` 解析每条
+      `.lnk`，**只留程序** —— 目标以 `.exe` 结尾的（绝大多数），加上只有 IDList 的
+      商店/UWP 条目；文件夹、文档、网址、坏掉的快捷方式全部丢掉（判据是
+      `core::appTargetIsProgram()`）。真机：123 个 `.lnk` → 100 个程序，解析约 80 ms。
+    * **名字取 `.lnk` 的文件名**（去后缀）：真机实测 `SHGFI_DISPLAYNAME`（一半是空的
+      或截断的）与 `IShellLink::GetDescription`（“Open Visual Studio 2026 Tools… ”
+      这种冗长提示语）都不好用；文件名与资源管理器看到的一致。
+    * **启动走快捷方式本身**（`ShellExecuteW("open", <lnk>)`）：参数、工作目录、
+      `runas` 标记、商店应用的激活全部交给 shell，与点开始菜单一致。
+      **代价是提权实例启动的程序也是提权的**（与 `run` 同一个已知限制，已写进 README）。
+    * **列表按需重扫**：缓存在动作线程上，最多 30 秒；`Runtime::start()` 还会排队扫
+      一次（第一次按快捷键就不必等），所以装完程序不用重启 flowkeyd。
+    * **网格是 5 列**（`AppListModel` 的 `columns()`），默认最多 6 行、按屏幕高度自动收；
+      `↑`/`↓` 走一整行、`←`/`→` 走一格、`PgUp`/`PgDn` 翻页、`Home`/`End` 到头尾，
+      到边界夹住不回绕。筛选是**名字的子串**（与窗口切换器的前缀匹配不同：那边切的是
+      进程，这边是“记得名字里一段就行”）。
+    * **筛选到只剩一个也不自动启动**（那是“切窗口”的语义；这里会真的拉起一个进程）。
+      卡片开着时再按一次同一个快捷键 = 关掉它（与窗口切换器同一条规则）。
+    * **不切输入法**（与窗口切换器相反）：名字可能是中文，切英文反而筛不出来。
+    * **图标必须异步取**：真机实测 `IShellItemImageFactory::GetImage()` 每个图标约
+      **3 ms**（首次冷启动那一个可达 148 ms，123 个连取一遍约 400 ms）——同步做会让
+      卡片等小半秒，而且 `QQuickImageProvider` 的同步回调跑在渲染线程上（那里没有
+      COM 单元）。所以 `app::AppIconProvider` 是一条常驻 STA 线程 + `QQuickAsyncImageProvider`：
+      模型给每一行一个 `image://flowkeyd-app/<core::appIconKey(lnk)>`，图标取好就
+      `finished()`，用户看到图标一格格“长出来”。键是路径的 64 位 FNV-1a（小写十六进制），
+      所以 URL 里没有反斜杠/空格/中文，而且同一个程序永远是同一个 URL。
+    * **尺寸按屏幕缩放**：QML 的 `Image.sourceSize` 给设备像素（逻辑 40 ×
+      `Window.devicePixelRatio`；用 `Window.devicePixelRatio` 而不是
+      `Screen.devicePixelRatio`，后者要额外 `import QtQuick.Window`，发布包会多一个 QML 模块）。
+    * 与 `app{...}` 区分：那个是**花括号**的注册构造器（窗口规则 + 快捷键），这个是
+      **圆括号**的动作；简写 `apps`（别名 `launcher`/`programs`）。
 
 ---
 
@@ -485,7 +522,12 @@ UI 只有托盘图标与四个 QML 卡片（日志窗口、`menu` 选单、`help
   `find_package(Qt6 …)` **之前**设 `QT_FIND_PRIVATE_MODULES ON`。
 * **允许静态链接的集合**（MinGW 工具链自带这些导入库）：
   `user32`、`kernel32`、`shell32`、`ole32`、`ntdll`、`advapi32`、`powrprof`、`uxtheme`、
-  `comctl32`、`shlwapi`。
+  `comctl32`、`shlwapi`、**`gdi32`**。
+  * `gdi32` 是 2026-10 为了程序启动器加进来的（见§2 第 27 条）：
+    `IShellItemImageFactory::GetImage()` 给的是 `HBITMAP`，读出像素只能用
+    `GetObjectW` / `GetDIBits` / `CreateCompatibleDC`。它与名单里其它 DLL 一样是
+    每个 GUI 进程都会加载的核心系统 DLL（Qt6Gui 自己就导入它），不存在
+    “某些机器上没有”的可能。
 * **必须 `LoadLibraryW` + `GetProcAddress` 运行时解析**：未公开入口
   （`win32u!NtUserSendInput`、`NtUserGetAsyncKeyState`……，没有 `libwin32u.a`）
   以及任何不在上面那个集合里的 DLL（`dwmapi`、`imm32`、`d3dcompiler`…）。
@@ -520,6 +562,7 @@ UI 只有托盘图标与四个 QML 卡片（日志窗口、`menu` 选单、`help
 | `src/core/template.*` | `{clipboard}`、`{selection}`、`{date}` 等占位符展开 |
 | `src/core/window_match.*` | 窗口匹配与 `window` 动作决策的纯函数 + 「什么算一个程序窗口」的纯判据（`TopLevelWindowFacts`、`isMainWindow()`、`isSwitchableWindow()`） |
 | `src/core/remote_desktop.*` | 「这个前台进程算不算远程桌面客户端」的纯逻辑：内置名单 + 子串匹配（§2 第 26 条） |
+| `src/core/app_list.*` | **程序启动器**的纯逻辑：条目类型（`AppEntry`）、「算不算程序」的判据、图标键（路径的 64 位 FNV-1a）、扫描结果的去重/排序、名字子串匹配（§2 第 27 条） |
 | `src/core/placement.*` | `window_rule` 的纯逻辑：显示器排序与选择、重连检测、摆放几何、规则匹配、`stepIndex()` |
 | `src/core/log_tail.*` | 日志文件的增量尾随（纯逻辑）：按字节读、末尾不完整的 UTF-8 序列不消费、半行留到下一轮、一次最多 1000 行 |
 | `src/core/update_check.*` | 在线更新纯逻辑：仓库地址、`releases/latest` JSON 解析、资产挑选、版本比较、`buildVersionDate()` |
@@ -533,6 +576,7 @@ UI 只有托盘图标与四个 QML 卡片（日志窗口、`menu` 选单、`help
 | `input.h/.cpp` | 按键注入（`SendInput`/`NtUserSendInput`）、按键状态、`ModifierGuard`（含菜单遮断标记）、`FLOWKEYD_ACCEPT_INJECTED` 测试后门、`copySelection` |
 | `ime.h/.cpp` | 运行时解析的 `imm32.dll`：`readMode`/`useAlphanumericMode`/`restoreMode`。拿不到 `imm32` 或没有输入上下文时**不当错误** |
 | `hook.h/.cpp` | 钩子回调、**钩子线程自己的 Win32 消息循环**、`SetTimer`、控制消息、重载；还有 `window_rule` 的两个监听：`SetWinEventHook`（`EVENT_OBJECT_SHOW`/`DESTROY`，按 HWND 去重）与 350 ms 显示器轮询，外加 `EVENT_SYSTEM_FOREGROUND`（远程桌面放行，`noteForegroundWindow()`）。**定时器 id 必须用 `SetTimer` 的返回值**（§10） |
+| `apps.h/.cpp` | 程序启动器（`apps` 动作）的 Win32 后端：扫两个开始菜单目录 + `IShellLink` 解析 + 「只留程序」的过滤（`listStartMenuApps()`，自己开一条一次性 STA 线程）；`shellIcon(path, size)` 取某个路径的图标（`IShellItemImageFactory::GetImage` → `GetDIBits`，返回 32 位 **直通 alpha** 的 BGRA，§2 第 27 条）；`StaThread` 是给调用方（图标工作线程）用的 STA 守卫 |
 | `audio.h/.cpp` | Core Audio `IAudioEndpointVolume`，手写 COM vtable（**高风险**，MTA） |
 | `clipboard.h/.cpp` | 剪贴板读写（`CF_UNICODETEXT`，`OpenClipboard` 重试 10 次） |
 | `window.h/.cpp` | 窗口查找/激活/最小化/最大化/还原/关闭/置顶、前台锁绕行、启动回退、`TransitionGuard`（RAII）、`setTopmost`、`isMainWindow`/`isSwitchableWindow`/`listOpenWindows`。**“是否已经激活”还要看虚拟桌面**；**前台查询会跳过 `WS_EX_TOOLWINDOW` 覆盖层** |
@@ -545,13 +589,14 @@ UI 只有托盘图标与四个 QML 卡片（日志窗口、`menu` 选单、`help
 | `dispatcher.h/.cpp` | **动作工作线程**（`QThread`）：执行动作列表、`window` 的“先启动再激活”与默认开的 `toggle`、`menu`/`help`/`windows` 的窗口请求、`window_rule`（三遍）、`startDesktopWatch()`/`pollDesktop()` |
 | `runtime.h/.cpp` | 引擎 + 钩子 + 分发 + 托盘 + 弹窗的总装；`ControlCmd`（suspend/reload/quit）通道；`--quit` 的事件句柄（`QWinEventNotifier` 在 GUI 线程上监听）；`reportDesktop()`/`desktopChanged`；`showSwitchFromAnyThread()` 等 |
 | `log_model.h/.cpp` | 日志窗口的模型：尾随日志文件、最多 1000 行、按级别配色、子串过滤 |
-| `menu_model.h/.cpp` / `help_model.h/.cpp` / `window_list_model.h/.cpp` | 三个卡片的**纯逻辑**（`QAbstractListModel`，只用 QtCore）。行几何与鼠标命中**不归它们管**（`ListView` + `ItemDelegate`）；`help` 只管筛选/选中项/`Enter`/`Esc`/`setSelected`；`menu` 还持有悬停（`Enter` 执行光标下那一条）；`window_list` 管进程名前缀筛选、自动激活与数字选择模式 |
+| `menu_model.h/.cpp` / `help_model.h/.cpp` / `window_list_model.h/.cpp` / `app_list_model.h/.cpp` | 四个卡片的**纯逻辑**（`QAbstractListModel`，只用 QtCore）。行几何与鼠标命中**不归它们管**（`ListView`/`GridView` + `ItemDelegate`）；`help` 只管筛选/选中项/`Enter`/`Esc`/`setSelected`；`menu` 还持有悬停（`Enter` 执行光标下那一条）；`window_list` 管进程名前缀筛选、自动激活与数字选择模式；`app_list` 管 5 列网格的几何、名字子串筛选与网格方向键（§2 第 27 条） |
 | `popup_layout.h/.cpp` / `popup_host.h/.cpp` | 弹窗共用的几何类型与 `centrePopup()`（先在工作区居中、再夹进屏幕）；把模型挂到 QML 窗口上、抢前台、在 GUI 线程上创建/复用窗口、`helpRun()`（可见行下标 → 条目下标，**先藏窗口再执行**）、`preload()`、`switchUseEnglishInput()`/`restoreSwitchInputMode()` |
+| `app_icons.h/.cpp` | **程序启动器的图标**：`QQuickAsyncImageProvider` + 一条常驻 STA 线程（队列 + 按「路径@边长」缓存），把 `platform/win/apps::shellIcon()` 的 BGRA 变成 `QImage`（`Format_ARGB32`，**直通 alpha**）；表是“图标键 → 快捷方式路径”，只增不改（§2 第 27 条） |
 | `update_model.h/.cpp` / `update_archive.h/.cpp` / `updater.h/.cpp` | 更新卡片的状态机（八个阶段、版本号/发布说明/进度/按钮可见性，**不联网不解压不换文件**）；从 zip 里取出新 exe（`QZipReader` + PE 魔数检查）；联网编排（异步 `QNetworkAccessManager` + sha256 + 解压到 `<exe>.new` + mtime 对齐发布日） |
 | `app_icon.h/.cpp` | 把 qrc 里的 9 张 PNG 帧拼成多尺寸 `QIcon`（`applicationIcon()`）；`desktopIcon(number)` 现画桌面号徽标 |
-| `src/qml/` | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`、`SwitchPopup.qml`、`UpdatePopup.qml`。都写 `pragma ComponentBehavior: Bound`；**四个弹窗的 `flags` 都带 `Qt.Tool`**；配色一律用 `palette`（没有单独的 `Style.qml`）；中文一律 `font.family: "Microsoft YaHei"`；列表全部是标准 `ListView` + `ItemDelegate`（+ `ScrollBar`） |
-| `tests/` | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_remote_desktop`、`tst_log_tail`、`tst_audio`、`tst_autostart`、`tst_menu_model`、`tst_help_model`、`tst_window_list_model`、`tst_power_table`、`tst_desktop_table`、`tst_placement`、`tst_layout`、`tst_version`、`tst_desktop_badge`、`tst_update`、`tst_update_model`、`tst_update_install`、`tst_command_line`、`tst_instance`、`tst_input`，以及需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1` 的 `tst_interactive`（真机：剪贴板/音量/窗口/虚拟桌面/钉住/置顶/输入法/覆盖层/更新下载；联网那条还要 `FLOWKEYD_ALLOW_NETWORK_TESTS=1`） |
-| `scripts/acceptance.ps1` | 桌面行为验收（注入按键 + 焦点捕捉窗口的外部观察，134 项检查），需交互式桌面，**不属于 `ctest`** |
+| `src/qml/` | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`、`SwitchPopup.qml`、`AppPopup.qml`、`UpdatePopup.qml`。都写 `pragma ComponentBehavior: Bound`；**五个弹窗的 `flags` 都带 `Qt.Tool`**；配色一律用 `palette`（没有单独的 `Style.qml`）；中文一律 `font.family: "Microsoft YaHei"`；列表/网格全部是标准 `ListView`/`GridView` + `ItemDelegate`（+ `ScrollBar`） |
+| `tests/` | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_remote_desktop`、`tst_log_tail`、`tst_audio`、`tst_autostart`、`tst_menu_model`、`tst_help_model`、`tst_window_list_model`、`tst_app_list`、`tst_app_list_model`、`tst_power_table`、`tst_desktop_table`、`tst_placement`、`tst_layout`、`tst_version`、`tst_desktop_badge`、`tst_update`、`tst_update_model`、`tst_update_install`、`tst_command_line`、`tst_instance`、`tst_input`，以及需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1` 的 `tst_interactive`（真机：剪贴板/音量/窗口/虚拟桌面/钉住/置顶/输入法/覆盖层/更新下载；联网那条还要 `FLOWKEYD_ALLOW_NETWORK_TESTS=1`） |
+| `scripts/acceptance.ps1` | 桌面行为验收（注入按键 + 焦点捕捉窗口的外部观察，134 → 144 项检查），需交互式桌面，**不属于 `ctest`** |
 | `scripts/release.ps1` | 构建 release + 打包（完整包 + 精简升级包，各附 `.sha256`）+ 用 `gh` 上传 GitHub Release。tag 取刚构建的 exe 的 `--version`。**发布说明由脚本自己写**（上一个 Release 的 tag → HEAD 的提交主题，按提交信息前缀分类成新功能/修复/变更/其它，纯文档/测试类只计数；`-Notes`/`-NotesFile` 可以整份替换），不用 `gh --generate-notes`。工作区脏或 HEAD 没推到 origin 会直接拒绝（要 `-AllowDirty`/`-Push`）。**唯一的新前置依赖是 `gh`**。开关：`-SkipBuild`/`-SkipResident`/`-SkipUpload`/`-Clobber` |
 
 > `scripts/install.ps1` / `uninstall.ps1` **已删除**：自启的注册、刷新与删除现在全在
@@ -563,7 +608,7 @@ UI 只有托盘图标与四个 QML 卡片（日志窗口、`menu` 选单、`help
 | ---- | ---- | ------ |
 | `flowkeyd_core` | `src/core/*`（纯逻辑，只用 QtCore） | exe + 全部单测 |
 | `flowkeyd_lua` | `src/lua/*` + 编成 qrc 的 `lua_prelude.lua` | exe + `tst_lua` |
-| `flowkeyd_models` | `src/app/{menu,help}_model.*` + `window_list_model.*` + `popup_layout.*` | exe + 三个 model 测试 |
+| `flowkeyd_models` | `src/app/{menu,help,window_list,app_list}_model.*` + `popup_layout.*` | exe + 四个 model 测试 |
 | `flowkeyd_update` | `src/app/{update_model,update_archive,updater}.*`（`Qt6::Core` + `Network` + **`CorePrivate`**） | exe + 三个 update 测试 + `tst_interactive` |
 | `flowkeyd_platform` | `src/platform/win/*`（不碰 Qt GUI 的 Win32 后端） | exe + 平台层单测 |
 | `flowkeyd` | `src/main.cpp`、`src/cli.*`、`src/app/*`、`tray.*`、QML、图标 qrc + 图标 .rc | —— |
@@ -580,7 +625,7 @@ UI 只有托盘图标与四个 QML 卡片（日志窗口、`menu` 选单、`help
   release profile 还额外把干净的发布目录写到 `build/dist-release/`：**212 个文件 / 63.0 MB**
   （精简前 1378 个 / 149.8 MB），可以直接拷到别的机器上跑。
   `flowkeyd` 上还挂了 `LINK_DEPENDS`（`cmake/PruneRuntime.cmake`）：改了精简清单就会重新链接。
-* **分层铁律**：`src/core/`、`src/app/{menu,help,window_list}_model.*`、
+* **分层铁律**：`src/core/`、`src/app/{menu,help,window_list,app_list}_model.*`、
   `src/app/popup_layout.*`、`src/core/update_check.*` **不许出现 `<windows.h>`、
   不许出现 QML/QtWidgets、不许出现窗口句柄**。这正是 `--check`/`--list` 能在没有桌面的
   情况下跑、以及单元测试能覆盖核心逻辑的原因。`platform/win/window.cpp` 里“候选窗口如何
@@ -644,7 +689,7 @@ dir build\dist-release               # 发布包（release 构建自动产出，
 ### 桌面行为怎么验证
 
 ```powershell
-# 134 项检查，约三分钟，会持续注入按键/抢焦点；按工作约定第 6 条先提醒用户
+# 134 → 144 项检查，约三分钟，会持续注入按键/抢焦点；按工作约定第 6 条先提醒用户
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance.ps1
 powershell.exe ... -Phase config      # 只看配置，不注入按键
 ```
@@ -665,6 +710,15 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
 全绿：`checks: 134, failures: 0`（对最终产物又跑了一次：只用 `msrdc.exe` 那种真客户端
 没人替你按，所以那一条靠常驻实例的日志确认过：聚焦 Windows App 时出现
 `remote desktop detected (msrdc.exe)`，切回普通窗口后出现 `left the remote desktop (…)`）。
+
+2026-10-04 又加上了「程序启动器」那一段（9 条：`Ctrl+Alt+F14` 弹出、不在任务栏里、
+拿到键盘焦点、标题里读得出条数、**在卡片里打字真的筛掉条目**、再按一次快捷键关掉它、
+重新打开时筛选已复位、`Esc` 关掉、关掉之后前台回到捕捉窗口）。
+**卡片里绝不能按 `Enter`** —— 那会真的启动列表里第一个程序。
+`-Phase config` 那条路（`--check` 17 个快捷键 / `--list`）已验证通过；
+**完整的 `-Phase all` 那一次写这几条时还没跑**：当时桌面正锁着（`LogonUI` 在跑，
+`GetForegroundWindow()` 返回 0），按下面那条“锁屏时脚本必然挂”的规矩，那不是产品问题。
+**解锁后要补跑一次，并把 `checks:` 计数更新到上面。**
 
 **桌面被锁住时（`LogonUI` 在跑）脚本必然挂**：`GetForegroundWindow()` 返回 0，
 `SendInput` 报 `5`（ACCESS_DENIED）。这不是产品 bug，先去解锁再跑。
@@ -698,7 +752,7 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
         ┌─────────────────── Qt GUI 线程（主线程）───────────────────┐
         │ QApplication + QQmlApplicationEngine                        │
         │   * QSystemTrayIcon（右键菜单、气泡、悬停提示）              │
-        │   * 日志窗口 + menu/help/switch/update 四个 QML 卡片         │
+        │   * 日志窗口 + menu/help/switch/apps/update 五个 QML 卡片         │
         │ 收到动作结果 → 只做“建/前置窗口”这一件事，绝不执行动作       │
         └───────▲──────────────────────────────┬────────────────────┘
                 │ 队列信号（QueuedConnection）  │ 用户选择 → 回投任务
@@ -829,14 +883,14 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
 | 6 弹窗 `menu` / `help` | **已完成** | `flowkeyd_models` + 两张 QML 卡片；`tst_menu_model`/`tst_help_model` 全绿 |
 | 7 虚拟桌面 + 电源 | **已完成** | `desktop`/`power` + dispatcher 接线；`tst_desktop_table`/`tst_power_table` 全绿 |
 | 8 示例配置 + README | **已完成** | 覆盖全特性的 `flowkeyd.lua.example`（`--check` 零警告）；README 已写全 |
-| 9 验收（无 e2e 的替代） | **已完成** | `scripts/acceptance.ps1`（当时 119 项，现在 134 项）+ `FLOWKEYD_ACCEPT_INJECTED` 测试后门 |
+| 9 验收（无 e2e 的替代） | **已完成** | `scripts/acceptance.ps1`（当时 119 项，现在 144 项）+ `FLOWKEYD_ACCEPT_INJECTED` 测试后门 |
 | 10 接管 | **已完成** | 真实配置迁到 `.config\flowkeyd\config.lua`；常驻由计划任务 `flowkeyd` 指向当前运行的 exe |
 
 第 10 阶段之后新增的能力（都在本文件对应章节有记录）：
 `window_rule`（+`all_desktops`/`topmost`/`follow`）、`app{...}`、四个「挪窗口」op、
 字母键名小写、托盘数字徽标、窗口切换器（+数字选择模式+IME 切换）、弹窗不进任务栏 + 预热、
 发布包精简、精简升级包、`scripts/release.ps1`、在线更新、`install.ps1` 一键安装、
-FreeType 字体引擎。
+FreeType 字体引擎、程序启动器（`apps()` + 异步图标）。
 
 ---
 
@@ -981,7 +1035,7 @@ FreeType 字体引擎。
   * **改了精简清单必须重新链接**（prune 挂在 `POST_BUILD` 上，只在链接时跑）→
     `set_property(TARGET flowkeyd APPEND PROPERTY LINK_DEPENDS …/cmake/PruneRuntime.cmake)`
     已加。否则光改脚本是 `ninja: no work to do`，部署目录里还是旧内容。
-  * **精简过头的及早发现**：四个弹窗启动时就预热，缺模块会立刻报
+  * **精简过头的及早发现**：五个弹窗启动时就预热，缺模块会立刻报
     `could not load ….qml: module "…" is not installed`；`scripts/acceptance.ps1` 有一条
     哨兵检查盯着这个。**日志窗口不在预热里**，它只 import `QtQuick`/`Controls`/`Layouts`。
 * **`Compress-Archive` / `ZipFile::CreateFromDirectory` 在 Windows PowerShell 5.1 里把 zip
@@ -1112,6 +1166,29 @@ FreeType 字体引擎。
 * **提权后的进程会把它启动的子进程一起提权**（写进 README 的已知限制）。
 * **中文错误文案不可断言**（`FormatMessageW` 是本地化的）—— 这也是我们日志与校验信息
   保持英文的实际原因。
+* **`IShellItemImageFactory::GetImage()` 在 `.lnk` 上很慢**：真机实测每个图标约 **3 ms**
+  （首次冷启动那一个可 148 ms；123 个连取一遍约 400 ms）。所以它只能在“按需 + 缓存 +
+  异步”的路径上用（`src/app/app_icons.cpp`），不要想在弹出时一次性全取完。
+  它给回来的 `HBITMAP` 是 32 位 **直通 alpha（不是预乘）**、**自顶向下**的 BGRA：
+  真机验过（83 个图标里 32973 个半透明像素中有 15155 个 `RGB > alpha`，预乘的数据
+  不可能出现），对应 `QImage::Format_ARGB32`，`GetDIBits` 时必须给**负的** `biHeight`。
+* **`CreateIconIndirect(hbmMask = nullptr)` 会失败**（即使 hbmColor 是 32 位带 alpha 的）：
+  文档说 mask “被忽略”，但它仍然要一个有效的位图句柄。想走 `QImage::fromHICON()`
+  那条路得自己造一张 1bpp 的掩码；本项目改成直接读 DIB 像素（代价是 `flowkeyd_platform`
+  多静态链一个 `gdi32`，见§3）。
+* **快捷方式的名字不能用 shell 那两套**：`SHGFI_DISPLAYNAME` 对一半的 `.lnk` 返回空串
+  或被截断的值（真机：`iSCSI Initiator` → `iSCSI`、两个 ODBC 都变成 `ODBC`），
+  `IShellLink::GetDescription` 是 “Open Visual Studio 2026 Tools Command Prompt for
+  targeting x64” 这种冗长的提示语。**用文件名去掉 `.lnk`**。
+* **`IShellLink::GetPath` 可能返回 `%windir%\system32\...` 这种没展开的路径**
+  （`SLGP_RAWPATH` 就是“原样”）→ 去重前先 `ExpandEnvironmentStringsW`，否则同一个
+  程序的两条快捷方式（一条写环境变量、一条写绝对路径）会被当成两个。
+* **`Q_PROPERTY` 写自定义结构体是静默失效的**：`AppListModel` 一开始写的是
+  `Q_PROPERTY(PopupRect filterRect …)`（成员确实是 `PopupRect`），QML 那边
+  `filterRect.x` 全是 `undefined` → 筛选框、底部提示、整个网格全堆在左上角，
+  而且**没有一条 QML 警告**。必须像 `window_list_model` 那样把属性类型写成
+  `QRect`（`PopupRect` 有隐式转换）。光看 `qmllint` 与单测都发现不了，
+  是“把窗口 grab 成图看一眼”看出来的。
 * **输入法（IMM32/TSF）的转换模式：别的应用不受影响，但本进程的几个窗口互相看得见**
   （在一个窗口里按 `Shift` 切中文，另一个窗口读到的也带 `NATIVE` 位）。
   同一台机器上不同窗口报出的标志位还不一样（见过 `0x800`/`0xc00`/`0xfb0`）——
@@ -1175,6 +1252,12 @@ FreeType 字体引擎。
   打印“与上一帧不同”的帧号；把抓到的帧存成 PNG 用 `imgdiff` 打印“不同像素数 + 包围盒”。
   注入 `MOUSEEVENTF_WHEEL` 之后**再注入 1 px 的 `MOUSEEVENTF_MOVE`**（真鼠标滚轮几乎总会带
   一点位移）；而且**弹窗必须是前台窗口**（背景窗口收不到 `WM_MOUSEWHEEL`）。
+* **锁屏时“看渲染”只剩一条路**：`QScreen::grabWindow()` / `CopyFromScreen` 会报“句柄无效”
+  （拿到的是黑图），但 **`QQuickWindow::grabWindow()`（进程内渲染）照常能用**，
+  `QTest::keyClick(window, …)` 的进程内注入也照常能用 —— `tmp/preview/` 那套就靠这两条
+  在锁屏时验证弹窗（2026-10 就用它抓到了上面那条 `Q_PROPERTY` 的坑）。
+  注意：锁屏时委托是**逐帧惰性创建**的，而且推不推帧说不准，所以“到底建了多少个格”
+  这种断言不要写死（只断言“至少有几个”）。
 * **从外面看见托盘图标变了**：`SetCursorPos` + 一次**相对**的 `mouse_event(MOUSEEVENTF_MOVE)`
   把光标推到屏幕边缘，自动隐藏的任务栏才会滑出来；然后 `CopyFromScreen` 整条任务栏，
   像素差求包围盒。新起的实例图标会落进「隐藏的图标」溢出弹窗里，要看真实效果就重启常驻实例。
@@ -1267,6 +1350,16 @@ FreeType 字体引擎。
 14. **托盘图标跟随 explorer 重启**（处理 `TaskbarCreated`）。
 15. **把发布包再缩到更小**：再往下（静态链 Qt、把 Qt 自己的 QML 模块也编进 exe、单文件
     自解压）要换一套 Qt 构建或引入新的打包机制，为了几十 MB 不划算。
+16. **程序启动器的打磨**：现在列出的就是开始菜单里的条目本身，所以「卸载微信」、
+    「【小狼毫】输入法设定」这类名字也在里面（它们确实是指向 exe 的程序，「只包含程序」
+    就是这个意思）。可做的：按名字/目录过滤掉卸载程序与工具项（需要给 `apps()` 加参数
+    与校验）、最近使用优先排序、按开始菜单子目录分组、把图标缓存到磁盘。
+17. **以“登录用户”（中等完整性）权限启动程序**：现在走 `ShellExecuteW(open, <lnk>)`，
+    提权实例启动的子进程会继承管理员令牌（与 `run` 同一个已知限制，README 里写着）。
+    真做法是从 `explorer.exe` 复制一份令牌（`DuplicateTokenEx` + `CreateProcessWithTokenW`）
+    并走解析出来的`target`/`args`/`cwd`；商店/UWP 应用还得让 explorer 代劳。
+    **没做是因为当时没法验证**（agent 的 shell 没有提权，拉不起一个提权实例；
+    UAC 提示也不该由 agent 去点）。
 
 ---
 
@@ -1294,6 +1387,15 @@ FreeType 字体引擎。
   按键的哪一半」——「轻碰 Win」是**松开**时触发的）。每加一条可从外面观察到的行为，
   就在 `scripts/acceptance.ps1` 的「窗口切换器」那一段加一条检查：那是这条路径唯一的
   自动化覆盖。
+* **程序启动器的新行为**：分四层，改哪层就看哪层 ——
+  `core/app_list.*`（“算不算程序”、去重/排序、名字子串匹配、图标键）、
+  `platform/win/apps.*`（扫两个开始菜单目录 + `IShellLink` 解析 + `shellIcon`）、
+  `app/app_list_model.*`（5 列网格、可见行/卡片高度、方向键）、
+  `app/app_icons.*`（异步图标的线程/缓存/尺寸）、卡片 `AppPopup.qml`。
+  把条目喂给卡片、以及**启动那一步**都在 `Dispatcher::openAppsAction()`。
+  改完要跑 `tst_app_list` / `tst_app_list_model`；能从外面观察到的行为就在
+  `scripts/acceptance.ps1` 的「程序启动器」那一段加一条检查（**注意别按 `Enter`**，
+  那会真的启动列表里第一个程序）；纯粹的渲染/图标质量用 `tmp/preview/` 那套抓图看。
 * **新的 QML 弹窗**：`import QtQuick.Controls.FluentWinUI3`；颜色一律从 `palette`
   （`base`/`text`/`placeholderText`/`highlight`/`highlightedText`/`alternateBase`/`mid`）取；
   字号用现在这套 `pointSize`（12.5 标题 / 11 正文 / 10.5 帮助正文 / 9 副标题与徽标 /
@@ -1418,10 +1520,10 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、`--ch
   （`NumpadSub` 不是修饰键），守护进程会直接拒绝启动。
 * **单个字母的键名必须小写**（§2 第 17 条）。
 * 动作：`run`/`send`/`type`/`open`/`volume`/`media`/`clipboard`/`window`/`notify`/`menu`/
-  `help`/`windows`/`power`/`desktop`/`caps_lock`/`suspend`/`reload`/`quit`/`none`，字段逐条见
+  `help`/`windows`/`apps`/`power`/`desktop`/`caps_lock`/`suspend`/`reload`/`quit`/`none`，字段逐条见
   README 的动作表。简写字符串：`"run:…"`、`"send:…"`、`"type:…"`、`"open:…"`、
   `"notify:t|b"`、`"volume:up"`、`"media:next"`、`"clipboard:get"`、`"window:minimize"`、
-  `"desktop:1"`、`"power:sleep"`、裸关键字 `reload`/`quit`/`help`/`windows`/`none`。
+  `"desktop:1"`、`"power:sleep"`、裸关键字 `reload`/`quit`/`help`/`windows`/`apps`/`none`。
 * **完全没有动作**的快捷键就是一个按键屏蔽器（会吞掉它匹配到的按键）。
 * `window` 的 `toggle`（默认**开**）只对 `op = "activate"` 有意义；`launch` 回退不套用它；
   显式 `toggle = false` 才关闭。“已经激活”要同时满足：前台、未最小化、
@@ -1430,6 +1532,8 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、`--ch
 * `window` 的 `animate`（默认**关**）只对会改变窗口状态的 `op` 有意义。
 * `windows([title])` 是窗口切换器（§2 第 21/22/24 条）。常见绑法是 `keys = "LWin"` +
   `trigger = "release"`（「轻碰 Win」）。
+* `apps([title])` 是程序启动器（§2 第 27 条）：列表来自开始菜单扫描，只列程序；筛选是
+  **名字子串**（不是前缀）、筛到一个也**不**自动启动；**不切输入法**（与 `windows` 相反）。
 
 ### 本机真实配置不进仓库
 

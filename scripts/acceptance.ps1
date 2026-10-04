@@ -19,6 +19,8 @@
 #     Windows 键自动重复四种情况）
 #   * 窗口切换器（`windows()`）：「轻碰 Win」弹出卡片、再轻碰一次关掉它
 #     （与 `Esc` 同义）、卡片不在任务栏里、遮断标记保住了前台
+#   * 程序启动器（`apps()`）：弹出现象、不在任务栏里、拿到键盘焦点、标题里的条数
+#     读得出来、在卡片里打字会真的筛掉条目、再按一次快捷键关掉它、筛选不复位
 #   * 按住不放只派发一次
 #   * 重映射的 hold / tap / CapsLock -> Esc
 #   * `send` 会先松开用户按住的修饰键（前台看到的是 Ctrl+C 而不是 Ctrl+Alt+C）
@@ -100,6 +102,7 @@ function Check($name, $condition) {
 $MENU_TITLE = 'flowkeyd ' + [char]0x9009 + [char]0x5355                                  # flowkeyd 选单
 $HELP_TITLE = 'flowkeyd ' + [char]0x5FEB + [char]0x6377 + [char]0x952E                   # flowkeyd 快捷键
 $SWITCH_TITLE = 'flowkeyd ' + [char]0x7A97 + [char]0x53E3                             # flowkeyd 窗口
+$APPS_TITLE = 'flowkeyd ' + [char]0x7A0B + [char]0x5E8F                             # flowkeyd 程序
 
 # --- 用到的虚拟键码 ---
 $VK_SHIFT = 0x10
@@ -117,7 +120,10 @@ $VK_F10 = 0x79
 $VK_F11 = 0x7A
 $VK_F12 = 0x7B
 $VK_F13 = 0x7C
+$VK_F14 = 0x7D
 $VK_F15 = 0x7E
+$VK_Q = 0x51
+$VK_Z = 0x5A
 $VK_F17 = 0x80
 $VK_F18 = 0x81
 $VK_F19 = 0x82
@@ -516,6 +522,11 @@ remap { name = "accept-caps", from = "CapsLock", to = "Esc" }
 --     卡片里不会再按别的键（只验证“两次轻碰”），所以这个动作碰不到任何东西。
 hotkey { name = "accept-switch", comment = "window switcher", keys = "LWin",
   trigger = "release", action = windows() }
+
+-- 15. 程序启动器。卡片里**不会**按 Enter（那会真的启动列表里第一个程序）；
+--     打字筛选是安全的（`zzq` 什么都匹配不到）。
+hotkey { name = "accept-apps", comment = "app launcher", keys = "Ctrl+Alt+F14",
+  action = apps() }
 "@
     # `-Encoding UTF8` 会写出 BOM：顺带把“带 BOM 的配置也能读”一起覆盖了。
     Set-Content -Path $config -Value $text -Encoding UTF8
@@ -581,7 +592,7 @@ $p = Start-Process -FilePath $Exe -ArgumentList @('--check', '--config', $config
     -RedirectStandardOutput $checkOut -RedirectStandardError $checkErr -Wait -PassThru -NoNewWindow
 $checkText = (Get-Content $checkOut -Raw -ErrorAction SilentlyContinue) + (Get-Content $checkErr -Raw -ErrorAction SilentlyContinue)
 Check '--check 接受验收配置' ($p.ExitCode -eq 0 -and $checkText -match 'OK \(\d+ hotkey')
-Check '--check 报告 16 个快捷键' ($checkText -match 'OK \(16 hotkey')
+Check '--check 报告 17 个快捷键' ($checkText -match 'OK \(17 hotkey')
 
 $listOut = Join-Path $WorkDir 'list.out'
 $listErr = Join-Path $WorkDir 'list.err'
@@ -815,6 +826,51 @@ try {
     Check '关掉之后前台回到捕捉窗口' (
         WaitUntil { [FlowInject]::ForegroundTitle() -eq 'flowkeyd-accept-catcher' } 3000)
 
+    # --- 程序启动器（`apps()` 动作）---------------------------------------
+    # 卡片里**不会**按 `Enter`：那会真的启动列表里第一个程序（在验收里是不允许的
+    # 副作用）。验证的是：卡片出现、不进任务栏、拿到键盘焦点、标题里的条数读得出来、
+    # **在卡片里打字真的筛掉条目**、再按一次快捷键关掉它、重新打开时筛选已复位。
+    Write-Host '--- 程序启动器 ---'
+    function AppsCount {
+        $t = [FlowInject]::TitlesOfPid($daemon.Id) | Where-Object { $_ -like "$APPS_TITLE*" } | Select-Object -First 1
+        if ($t -match '\d+') { return [int]$Matches[0] }
+        return -1
+    }
+    Dismiss-ShellUi
+    NeedFocus '程序启动器'
+    CtrlAlt $VK_F14
+    $appsUp = WaitUntil { [FlowInject]::HasWindowTitled($daemon.Id, $APPS_TITLE) } 6000
+    Check 'Ctrl+Alt+F14 弹出程序启动器' $appsUp
+    Check '启动器卡片不在任务栏里（Qt.Tool）' (
+        -not [FlowInject]::IsTaskbarWindow($daemon.Id, $APPS_TITLE))
+    Check '启动器卡片拿到了键盘焦点' (
+        WaitUntil { [FlowInject]::ForegroundTitle() -like "$APPS_TITLE*" } 4000)
+    $appsTotal = AppsCount
+    Write-Host "         apps caption: $appsTotal"
+    Check '标题里读得出程序条数（至少 1 个）' ($appsTotal -ge 1)
+    # 打三个字符：`zzq` 不可能匹配任何程序名，所以计数必须变小（那就同时证明了
+    # 按键真的到了筛选框里，而不是被卡片自己吃掉）。
+    foreach ($ch in @($VK_Z, $VK_Z, $VK_Q)) { TapKey $ch }
+    Pump 500
+    $appsFiltered = AppsCount
+    if ($appsFiltered -eq $appsTotal) { Diag "app launcher filter did not change the count: $(FgInfo)" }
+    Write-Host "         apps caption after typing zzq: $appsFiltered"
+    Check '在卡片里打字会按名字筛选（计数变小）' ($appsFiltered -ge 0 -and $appsFiltered -lt $appsTotal)
+    # 卡片开着时再按一次同一个快捷键 = 关掉它（与 Esc 同义）。
+    CtrlAlt $VK_F14
+    Check '再按一次快捷键关掉了启动器' (
+        WaitUntil { -not [FlowInject]::HasWindowTitled($daemon.Id, $APPS_TITLE) } 3000)
+    # 重新打开：同一个窗口复用，而且筛选已复位（计数回到满）。
+    CtrlAlt $VK_F14
+    Check '重新打开启动器' (WaitUntil { [FlowInject]::HasWindowTitled($daemon.Id, $APPS_TITLE) } 6000)
+    Pump 300
+    Check '重新打开时筛选已清空（计数回到满）' ((AppsCount) -eq $appsTotal)
+    TapKey $VK_ESC
+    Check 'Esc 关掉了启动器' (
+        WaitUntil { -not [FlowInject]::HasWindowTitled($daemon.Id, $APPS_TITLE) } 3000)
+    Check '关掉启动器之后前台回到捕捉窗口' (
+        WaitUntil { [FlowInject]::ForegroundTitle() -eq 'flowkeyd-accept-catcher' } 3000)
+
     # --- 自动重复 ------------------------------------------------------------
     Write-Host '--- 自动重复 ---'
     Remove-Item $onceLog -ErrorAction SilentlyContinue
@@ -1008,7 +1064,7 @@ try {
     Check '帮助窗口不在任务栏里（Qt.Tool）' (-not [FlowInject]::IsTaskbarWindow($daemon.Id, $HELP_TITLE))
     $full = HelpCounts
     Write-Host "         help caption: $($full.Visible)/$($full.Total)"
-    Check '标题里的可见/总数是满的' ($null -ne $full -and $full.Total -eq 19)  # 16 个快捷键 + 3 个重映射
+    Check '标题里的可见/总数是满的' ($null -ne $full -and $full.Total -eq 20)  # 17 个快捷键 + 3 个重映射
 
     # --- 执行：`Enter` / 双击一行 = 触发那一行的动作 --------------------------
     # 判据都是从外面能看到的：

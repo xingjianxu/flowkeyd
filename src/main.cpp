@@ -13,6 +13,7 @@
 #include <QTimer>
 
 #include "app/app_icon.h"
+#include "app/app_icons.h"
 #include "app/log_window.h"
 #include "app/popup_host.h"
 #include "app/runtime.h"
@@ -551,12 +552,18 @@ int main(int argc, char *argv[])
 
     QQmlApplicationEngine engine;
 
+    // 程序启动器的图标：一个异步的 `image://flowkeyd-app/<key>` 提供者。引擎接管
+    // 它的所有权（所以这里不 delete）；数字必须在任何 QML 去取图标之前就注册好。
+    auto *appIcons = new app::AppIconProvider;
+    engine.addImageProvider(QString::fromLatin1(app::AppIconProvider::kProviderId), appIcons);
+
     app::LogWindow logWindow(&engine, win::logFilePath());
     platform::win::Tray tray(appIcon);
 
-    // `menu` / `help` 的窗口：必须在 GUI 线程上创建，所以放在这里，
-    // 由 Runtime 转发（动作跑在工作线程上）。
+    // `menu` / `help` / 窗口切换器 / 程序启动器的窗口：必须在 GUI 线程上创建，所以
+    // 放在这里，由 Runtime 转发（动作跑在工作线程上）。
     app::PopupHost popupHost(&engine);
+    popupHost.setAppIconProvider(appIcons);
 
     // 在线更新：只负责查 GitHub、下载、解压、把新 exe 落到 `<exe>.new`。
     // 实时替换 exe 与重启在事件循环退出之后做（见文件末尾）。

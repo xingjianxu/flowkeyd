@@ -940,6 +940,13 @@ void validateAction(const QString &label, const Action &action, QStringList *err
                                .arg(label));
         }
         break;
+    case Action::Kind::Apps:
+        if (action.appsTitle.has_value() && action.appsTitle->trimmed().isEmpty()) {
+            errors->append(QStringLiteral(
+                               "%1: `apps` title must not be empty; drop it to use the default")
+                               .arg(label));
+        }
+        break;
     default:
         break;
     }

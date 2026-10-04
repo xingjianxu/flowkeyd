@@ -7,6 +7,7 @@
 // `app::PopupHost` 创建，用户选完之后再回到这个线程执行（见 `submitActions`）。
 #pragma once
 
+#include "core/app_list.h"
 #include "core/config.h"
 #include "core/engine.h"
 #include "platform/win/hook.h"
@@ -56,6 +57,14 @@ public:
     /// GUI 线程上，而窗口后端（`window::applyTo`）只在动作线程上跑。
     void submitCall(std::function<void()> work);
 
+    /// **只能在动作线程上调用**（`Runtime::start()` 用排队调用投进来）：先把
+    /// 开始菜单扫一遍，这样第一次按启动器的快捷键不必现场等那几十毫秒。
+    void startAppScan();
+
+    /// `apps` 动作的程序目录：过期（或从没扫过）就重扫一次，然后返回它。
+    /// **只能在动作线程上调用**（扫描会开一条一次性的 STA 线程）。
+    const std::vector<core::AppEntry> &appCatalog();
+
     /// **只能在动作线程上调用**（`Runtime::start()` 用排队调用投进来）：起一个
     /// 定时器轮询「当前是第几号虚拟桌面」，变化时通知 GUI 线程去换托盘图标。
     ///
@@ -75,7 +84,21 @@ private:
     /// `startDesktopWatch()` 与那个 500 ms 的定时器共用的轮询体。
     void pollDesktop();
 
+    /// 重扫开始菜单（只能在动作线程上跑：它会开一条一次性的 STA 线程）。
+    void refreshAppCatalog();
+
     Runtime *m_runtime = nullptr;
+
+    /// 程序启动器的目录（`apps` 动作）：已经在动作线程上经过
+    /// `core::prepareAppEntries()` 整理的条目，加上扫描时间戳。
+    ///
+    /// 为什么要缓存：扫描（递归目录 + `IShellLink` 解析 123 个快捷方式）在真机
+    /// 上要 80 ms 左右 —— 每次弹出都现场扫一遍会让卡片等小半秒。**图标不在
+    /// 这里**（每个约 3 ms，那是 `AppIconProvider` 的分内事）。
+    std::vector<core::AppEntry> m_appCatalog;
+    /// 上一次扫描的 `monotonicMs()`；`m_appScanned` 为 false 时无意义。
+    std::uint64_t m_appScannedAt = 0;
+    bool m_appScanned = false;
     /// 托盘数字图标的轮询定时器（在动作线程上创建与运行，见 `startDesktopWatch`）。
     QTimer *m_desktopTimer = nullptr;
     int m_desktopNumber = 0;

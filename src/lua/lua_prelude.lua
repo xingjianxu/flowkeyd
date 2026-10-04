@@ -361,6 +361,23 @@ function quit()
   return { type = "quit" }
 end
 
+-- 弹出程序启动器：一张图标网格，列出开始菜单里的程序（只列**程序**：指向 .exe 的
+-- 快捷方式，以及商店/UWP 应用的条目；文档、文件夹、网址不会进来）。
+--   apps()
+--   apps("程序")
+-- 直接输入就按程序名筛选（大小写无关的子串），方向键在网格里移动，
+-- Enter（或鼠标点一下）= 启动它，Esc 关闭。
+-- 列表来自「全局开始菜单 + 当前用户开始菜单」的扫描（每一次弹出都会重新扫一遍），
+-- 所以新装的程序不需要重启 flowkeyd 就会出现。
+-- 注意与 `app{...}` 区分：那个是用花括号的**注册**构造器（把窗口规则与快捷键写在
+-- 一起），这个是带圆括号的**动作**。
+function apps(title)
+  if title ~= nil and type(title) ~= "string" then
+    error("apps() expects an optional title string, got " .. type(title), 2)
+  end
+  return { type = "apps", title = title }
+end
+
 -- 什么也不做：配合 `swallow = false` 就能屏蔽一个按键。
 function none()
   return { type = "none" }
@@ -389,6 +406,7 @@ flowkeyd = {
   menu = menu,
   help = help,
   windows = windows,
+  apps = apps,
   reload = reload,
   quit = quit,
   none = none,

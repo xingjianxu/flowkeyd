@@ -6,6 +6,7 @@
 #include "core/placement.h"
 #include "core/template.h"
 #include "core/window_match.h"
+#include "platform/win/apps.h"
 #include "platform/win/audio.h"
 #include "platform/win/clipboard.h"
 #include "platform/win/desktop.h"
@@ -18,6 +19,7 @@
 #include "platform/win/window.h"
 
 #include <QCoreApplication>
+#include <QDir>
 #include <QFileInfo>
 #include <QThread>
 #include <QTimer>
@@ -298,6 +300,50 @@ void openWindowsAction(Runtime *runtime,
     };
     runtime->showSwitchFromAnyThread(std::move(request));
     win::logInfo(QStringLiteral("`%1` -> windows (%2 window(s))").arg(hotkey).arg(count));
+}
+
+/// 弹出程序启动器（`apps` 动作）。
+///
+/// 目录已经在动作线程上扫好（`refreshAppCatalog()`），这里只把它转成窗口要显示的
+/// 数据结构；用户选中第几项之后，回调把「启动那一个快捷方式」再投回动作线程执行。
+///
+/// **启动用的是快捷方式本身**（`ShellExecuteW("open", <lnk>)`）：参数、工作
+/// 目录、`runas` 标记、商店/UWP 应用的激活全部交给 shell，与点开始菜单一致。
+void openAppsAction(Runtime *runtime,
+                    Dispatcher *dispatcher,
+                    const std::vector<core::AppEntry> &catalog,
+                    const QString &hotkey,
+                    const core::Action &action)
+{
+    AppRequest request;
+    request.title = action.appsTitle;
+    // 启动要的是快捷方式路径，而模型要的是名字；两者一一对应，所以按下标带过去。
+    std::vector<QString> shortcuts;
+    shortcuts.reserve(catalog.size());
+    request.items.reserve(catalog.size());
+    for (const core::AppEntry &entry : catalog) {
+        request.items.push_back(AppLauncherItem{entry.name, entry.shortcut});
+        shortcuts.push_back(entry.shortcut);
+    }
+    const int count = static_cast<int>(shortcuts.size());
+    request.onChoose = [dispatcher, hotkey, shortcuts = std::move(shortcuts)](int index) {
+        if (index < 0 || index >= static_cast<int>(shortcuts.size())) {
+            return;
+        }
+        const QString shortcut = shortcuts[static_cast<std::size_t>(index)];
+        dispatcher->submitCall([shortcut, hotkey]() {
+            QString error;
+            if (!win::openTarget(shortcut, std::nullopt, std::nullopt, core::ShowMode::Normal,
+                                 &error)) {
+                win::logError(QStringLiteral("`%1` app launcher: %2").arg(hotkey, error));
+                return;
+            }
+            win::logInfo(QStringLiteral("`%1` -> launched %2 (from the app launcher)")
+                             .arg(hotkey, QDir::toNativeSeparators(shortcut)));
+        });
+    };
+    runtime->showAppsFromAnyThread(std::move(request));
+    win::logInfo(QStringLiteral("`%1` -> apps (%2 program(s))").arg(hotkey).arg(count));
 }
 
 /// 一次触发的模板展开上下文：把剪贴板/选中文本的读取缓存起来。
@@ -936,6 +982,9 @@ void executeAction(Runtime *runtime,
     case core::Action::Kind::Windows:
         openWindowsAction(runtime, dispatcher, hotkey, action);
         break;
+    case core::Action::Kind::Apps:
+        openAppsAction(runtime, dispatcher, dispatcher->appCatalog(), hotkey, action);
+        break;
     default:
         win::logWarn(QStringLiteral("`%1`: action `%2` is not implemented yet")
                          .arg(hotkey, action.summary()));
@@ -948,6 +997,47 @@ void executeAction(Runtime *runtime,
 Dispatcher::Dispatcher(Runtime *runtime, QObject *parent)
     : QObject(parent), m_runtime(runtime)
 {
+}
+
+/// 启动器目录的缓存有效期：超过它就在下一次弹出前重扫一遍。
+///
+/// 30 秒足够短（刚装完程序按下去就能看到），也足够长（连着按几次不必重复扫、
+/// 不会每次都多花那 80 ms）。
+namespace {
+constexpr std::uint64_t kAppCatalogTtlMs = 30000;
+} // namespace
+
+void Dispatcher::startAppScan()
+{
+    refreshAppCatalog();
+}
+
+const std::vector<core::AppEntry> &Dispatcher::appCatalog()
+{
+    const std::uint64_t now = win::monotonicMs();
+    if (m_appScanned && now - m_appScannedAt < kAppCatalogTtlMs) {
+        return m_appCatalog;
+    }
+    refreshAppCatalog();
+    return m_appCatalog;
+}
+
+void Dispatcher::refreshAppCatalog()
+{
+    const win::apps::StartMenuScan scan = win::apps::listStartMenuApps();
+    if (!scan.error.isEmpty()) {
+        win::logWarn(QStringLiteral("app launcher: %1").arg(scan.error));
+        if (m_appScanned) {
+            // 上一份目录还能用：保留它（顺便让下一次弹出再试一遍）。
+            return;
+        }
+    }
+    m_appCatalog = core::prepareAppEntries(scan.entries);
+    m_appScanned = true;
+    m_appScannedAt = win::monotonicMs();
+    win::logDebug(QStringLiteral("app launcher: %1 shortcut(s) found, %2 program(s) listed")
+                      .arg(scan.shortcuts)
+                      .arg(static_cast<qulonglong>(m_appCatalog.size())));
 }
 
 void Dispatcher::startDesktopWatch()

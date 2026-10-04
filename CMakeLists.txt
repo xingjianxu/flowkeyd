@@ -157,6 +157,8 @@ endif()
 add_library(flowkeyd_core STATIC
     src/core/action.cpp
     src/core/action.h
+    src/core/app_list.cpp
+    src/core/app_list.h
     src/core/config.cpp
     src/core/config.h
     src/core/desktop_badge.cpp
@@ -210,6 +212,8 @@ qt_add_resources(flowkeyd_lua "lua_prelude"
 # 与 core 一样只用 QtCore，所以能被 Qt Test 直接链接。
 # ---------------------------------------------------------------------------
 add_library(flowkeyd_models STATIC
+    src/app/app_list_model.cpp
+    src/app/app_list_model.h
     src/app/help_model.cpp
     src/app/help_model.h
     src/app/menu_model.cpp
@@ -228,6 +232,8 @@ flowkeyd_strict_warnings(flowkeyd_models)
 # 系统库写成 PUBLIC，静态库的使用者自己不用再列一遍。
 # ---------------------------------------------------------------------------
 add_library(flowkeyd_platform STATIC
+    src/platform/win/apps.cpp
+    src/platform/win/apps.h
     src/platform/win/audio.cpp
     src/platform/win/audio.h
     src/platform/win/autostart.cpp
@@ -277,6 +283,13 @@ target_link_libraries(flowkeyd_platform PUBLIC
     ole32
     advapi32
     powrprof
+    # `gdi32` 是 2026-10 为了程序启动器加进来的（见 AGENTS.md「依赖政策」）：
+    # shell 的 `IShellItemImageFactory::GetImage` 给的是一张 `HBITMAP`，把它的像素
+    # 读出来只能用 `GetObjectW` / `GetDIBits` / `CreateCompatibleDC`，这三个都在
+    # gdi32 里。它不在原来那份「允许静态链接」的名单里，但风险与名单里的 user32 等价：
+    # 它是每个 GUI 进程都会加载的核心系统 DLL（Qt6Gui 自己就导入它），不存在
+    # “某些机器上没有”的可能。
+    gdi32
 )
 flowkeyd_strict_warnings(flowkeyd_platform)
 
@@ -319,6 +332,7 @@ set(FLOWKEYD_QML_FILES
     src/qml/MenuPopup.qml
     src/qml/HelpPopup.qml
     src/qml/SwitchPopup.qml
+    src/qml/AppPopup.qml
     src/qml/UpdatePopup.qml
 )
 set_source_files_properties(src/qml/LogWindow.qml
@@ -329,6 +343,8 @@ set_source_files_properties(src/qml/HelpPopup.qml
     PROPERTIES QT_RESOURCE_ALIAS HelpPopup.qml)
 set_source_files_properties(src/qml/SwitchPopup.qml
     PROPERTIES QT_RESOURCE_ALIAS SwitchPopup.qml)
+set_source_files_properties(src/qml/AppPopup.qml
+    PROPERTIES QT_RESOURCE_ALIAS AppPopup.qml)
 set_source_files_properties(src/qml/UpdatePopup.qml
     PROPERTIES QT_RESOURCE_ALIAS UpdatePopup.qml)
 
@@ -339,6 +355,8 @@ qt_add_executable(flowkeyd
     src/cli.h
     src/app/app_icon.cpp
     src/app/app_icon.h
+    src/app/app_icons.cpp
+    src/app/app_icons.h
     src/app/dispatcher.cpp
     src/app/dispatcher.h
     src/app/log_model.cpp
@@ -564,6 +582,8 @@ flowkeyd_add_test(tst_interactive LIBS flowkeyd_platform flowkeyd_update)
 flowkeyd_add_test(tst_menu_model LIBS flowkeyd_models)
 flowkeyd_add_test(tst_help_model LIBS flowkeyd_models)
 flowkeyd_add_test(tst_window_list_model LIBS flowkeyd_models)
+flowkeyd_add_test(tst_app_list)
+flowkeyd_add_test(tst_app_list_model LIBS flowkeyd_models)
 flowkeyd_add_test(tst_update LIBS flowkeyd_update Qt6::CorePrivate)
 flowkeyd_add_test(tst_update_model LIBS flowkeyd_update)
 flowkeyd_add_test(tst_update_install LIBS flowkeyd_update)

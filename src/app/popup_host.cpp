@@ -1,5 +1,7 @@
 #include "app/popup_host.h"
 
+#include "app/app_icons.h"
+#include "core/app_list.h"
 #include "platform/win/ime.h"
 #include "platform/win/logging.h"
 #include "platform/win/window.h"
@@ -13,6 +15,7 @@
 #include <QThread>
 #include <QTimer>
 #include <QVariant>
+#include <QVector>
 
 #include <memory>
 #include <utility>
@@ -105,6 +108,16 @@ void PopupHost::requestSwitch(SwitchRequest request)
     showSwitch(std::move(request));
 }
 
+void PopupHost::requestApps(AppRequest request)
+{
+    if (QThread::currentThread() != thread()) {
+        QMetaObject::invokeMethod(
+            this, [this, request]() { showApps(request); }, Qt::QueuedConnection);
+        return;
+    }
+    showApps(std::move(request));
+}
+
 void PopupHost::requestUpdate(UpdateRequest request)
 {
     if (QThread::currentThread() != thread()) {
@@ -130,6 +143,11 @@ void PopupHost::closeAll()
         m_switchWindow->setProperty("visible", false);
     }
     m_switchRequest = SwitchRequest{};
+    // 程序启动器也归这里管（它的回调碰 `Dispatcher`，与 `onChoose` 同理）。
+    if (m_appWindow != nullptr) {
+        m_appWindow->setProperty("visible", false);
+    }
+    m_appRequest = AppRequest{};
     // 「在线更新」窗口也归这里管：退出时它必须消失，而它里面的回调会碰
     // `Updater`（与 `onChoose` 碰 `Dispatcher` 同理）。
     if (m_updateWindow != nullptr) {
@@ -152,6 +170,11 @@ bool PopupHost::helpVisible() const
 bool PopupHost::switchVisible() const
 {
     return m_switchWindow != nullptr && m_switchWindow->isVisible();
+}
+
+bool PopupHost::appsVisible() const
+{
+    return m_appWindow != nullptr && m_appWindow->isVisible();
 }
 
 bool PopupHost::updateVisible() const
@@ -258,6 +281,29 @@ void PopupHost::switchDismiss()
     }
     m_switchRequest = SwitchRequest{};
     restoreSwitchInputMode();
+}
+
+void PopupHost::appChoose(int index)
+{
+    if (m_appWindow == nullptr) {
+        return;
+    }
+    // 先把窗口藏起来再交出去（与 `menuChoose` / `switchChoose` 一致）：启动的
+    // 程序会自己抢前台，弹窗不该还留在那里。
+    m_appWindow->setProperty("visible", false);
+    AppRequest request = std::move(m_appRequest);
+    m_appRequest = AppRequest{};
+    if (request.onChoose && index >= 0 && index < static_cast<int>(request.items.size())) {
+        request.onChoose(index);
+    }
+}
+
+void PopupHost::appDismiss()
+{
+    if (m_appWindow != nullptr) {
+        m_appWindow->setProperty("visible", false);
+    }
+    m_appRequest = AppRequest{};
 }
 
 void PopupHost::updateInstall()
@@ -391,7 +437,8 @@ void PopupHost::preload()
     QQuickWindow *menu = ensureMenuWindow();
     QQuickWindow *help = ensureHelpWindow();
     QQuickWindow *switchWindow = ensureSwitchWindow();
-    if (menu == nullptr || help == nullptr || switchWindow == nullptr) {
+    QQuickWindow *appsWindow = ensureAppWindow();
+    if (menu == nullptr || help == nullptr || switchWindow == nullptr || appsWindow == nullptr) {
         return;
     }
     // 「在线更新」卡片也预热：它没有列表，装配很便宜，但能把「首次弹出要现场
@@ -430,7 +477,17 @@ void PopupHost::preload()
     }
     m_switchModel->setItems(std::nullopt, std::move(switchItems));
 
-    // 屏幕之外 + 全透明。三个都是 `WindowStaysOnTopHint` 的卡片，留在屏幕里
+    // 启动器是多于一屏的（5 列 × 7 行 > 默认的 6 行上限），所以预热也会把
+    // 网格的 `ScrollBar` 装配一遍。图标 URL 是空串：预热不需要真去 shell 里取
+    // 图标（那会白白花掉几十毫秒）。
+    std::vector<AppListEntry> appItems;
+    appItems.reserve(35);
+    for (int i = 0; i < 35; ++i) {
+        appItems.push_back(AppListEntry{QStringLiteral("preload"), QString()});
+    }
+    m_appModel->setItems(std::nullopt, std::move(appItems));
+
+    // 屏幕之外 + 全透明。它们都是 `WindowStaysOnTopHint` 的卡片，留在屏幕里
     // 万一赶上鼠标点击就会把那次点击吃掉（透明窗口仍然可能命中），所以放到
     // 整个虚拟桌面右上角的外面去。
     QRect desktop;
@@ -443,6 +500,7 @@ void PopupHost::preload()
     warmUpWindow(menu, QStringLiteral("menu"), offscreen);
     warmUpWindow(help, QStringLiteral("help"), offscreen);
     warmUpWindow(switchWindow, QStringLiteral("switch"), offscreen);
+    warmUpWindow(appsWindow, QStringLiteral("apps"), offscreen);
     if (update != nullptr) {
         warmUpWindow(update, QStringLiteral("update"), offscreen);
     }
@@ -590,6 +648,88 @@ void PopupHost::showSwitch(SwitchRequest request)
     // 卡片一出来就把输入法切成英文（筛选框匹配的是进程名，不是中文）。
     switchUseEnglishInput();
     noteShown(QStringLiteral("switch"), created);
+}
+
+void PopupHost::showApps(AppRequest request)
+{
+    const bool created = m_appWindow == nullptr;
+    QQuickWindow *window = ensureAppWindow();
+    if (window == nullptr) {
+        return;
+    }
+    // 预热还没收尾时用户就按了快捷键：取消预热，把这次当成**第一次**弹出。
+    const bool warming = cancelPreload(window);
+    // 卡片已经开着时，再按一次同一个快捷键就是关掉它（与窗口切换器同一条规则）。
+    if (window->isVisible() && !warming) {
+        win::logDebug(QStringLiteral("app launcher: dismissed by its own hotkey"));
+        appDismiss();
+        return;
+    }
+    m_frameTimer.start();
+    m_appRequest = std::move(request);
+
+    // 图标：把「图标键 → 快捷方式路径」登记给图片提供者，并把每一行的 URL 算好。
+    // 键是快捷方式路径的哈希（`core::appIconKey`），所以列表重扫、条目换位置都
+    // 不会让已经缓存下来的 `image://` URL 指向别的程序。
+    QVector<QPair<QString, QString>> icons;
+    icons.reserve(static_cast<int>(m_appRequest.items.size()));
+    std::vector<AppListEntry> entries;
+    entries.reserve(m_appRequest.items.size());
+    for (const AppLauncherItem &item : m_appRequest.items) {
+        if (item.shortcut.isEmpty()) {
+            entries.push_back(AppListEntry{item.name, QString()});
+            continue;
+        }
+        entries.push_back(AppListEntry{item.name, core::appIconUrl(item.shortcut)});
+        icons.append(qMakePair(core::appIconKey(item.shortcut), item.shortcut));
+    }
+    if (m_appIcons != nullptr) {
+        m_appIcons->publish(icons);
+    }
+    m_appModel->setItems(m_appRequest.title, std::move(entries));
+
+    QScreen *screen = QGuiApplication::screenAt(QCursor::pos());
+    if (screen == nullptr) {
+        screen = QGuiApplication::primaryScreen();
+    }
+    m_appModel->setMaxRows(screen != nullptr
+                               ? AppListModel::rowsForAvailableHeight(
+                                     screen->availableGeometry().height())
+                               : 6);
+    window->setProperty("visible", true);
+    // 位置总是这时候算：卡片可见时上面已经 return 了（那时按快捷键是「关掉」）。
+    centreOnCursorScreen(window, m_appModel->cardWidth(), m_appModel->cardHeight());
+    activateWindow(window);
+    // **不切输入法**：切换器那边匹配的是进程名（ASCII），而这里的名字可能是
+    // 中文（「记事本」），切成英文反而筛不出东西。
+    noteShown(QStringLiteral("apps"), created);
+}
+
+QQuickWindow *PopupHost::ensureAppWindow()
+{
+    if (m_appWindow != nullptr) {
+        return m_appWindow;
+    }
+    QQmlComponent component(m_engine);
+    component.loadFromModule(QStringLiteral("Flowkeyd"), QStringLiteral("AppPopup"));
+    if (component.isError()) {
+        win::logError(QStringLiteral("could not load AppPopup.qml: %1")
+                          .arg(component.errorString()));
+        return nullptr;
+    }
+    QObject *object = component.create();
+    m_appWindow = qobject_cast<QQuickWindow *>(object);
+    if (m_appWindow == nullptr) {
+        delete object;
+        win::logError(QStringLiteral("AppPopup.qml did not create a window"));
+        return nullptr;
+    }
+    m_appModel = new AppListModel(this);
+    m_appWindow->setProperty("appModel",
+                             QVariant::fromValue(static_cast<QObject *>(m_appModel)));
+    m_appWindow->setProperty("host", QVariant::fromValue(static_cast<QObject *>(this)));
+    QObject::connect(m_appWindow, &QQuickWindow::frameSwapped, this, &PopupHost::noteFirstFrame);
+    return m_appWindow;
 }
 
 QQuickWindow *PopupHost::ensureMenuWindow()
