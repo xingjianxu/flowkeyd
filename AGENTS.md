@@ -115,7 +115,7 @@ UI 只有托盘图标与四个 QML 卡片（日志窗口、`menu` 选单、`help
 | 互斥体     | `Local\flowkeyd-<配置路径散列>`                                                 |
 | 开机自启   | 计划任务 `flowkeyd` 指向**当前运行 exe**（启动时自注册自检）                    |
 | 在线更新   | 托盘菜单 *检查更新* → GitHub `releases/latest` → slim 包 → sha256 → 换 exe + 重启 |
-| 自动化测试 | Qt Test 单元测试 + `scripts/acceptance.ps1`（119 项检查，需交互式桌面）         |
+| 自动化测试 | Qt Test 单元测试 + `scripts/acceptance.ps1`（125 项检查，需交互式桌面）         |
 | 依赖管理   | CMake Presets + Ninja，`vendor/lua` 静态编进二进制                             |
 
 ---
@@ -376,10 +376,20 @@ UI 只有托盘图标与四个 QML 卡片（日志窗口、`menu` 选单、`help
     * 真实弹出要先 `cancelPreload()`（用户可能在启动后的那 300 ms 里就按了快捷键）；
       用 `QSet<QQuickWindow*> m_warming` 判断，**不要用全局“代”号**
       （会把另外几个还在预热的窗口的首帧回调一起废掉）。
-24. **窗口切换器卡片的三处调整。**
+24. **窗口切换器卡片的几处调整。**
     * **没有标题行**：卡片里只剩筛选框、列表与底部提示；筛选框就是第一行，
       `listTop` = **50**（`kPad 12 + 筛选框 30 + 间隙 8`），卡片高度 238（3 行时）。
       计数挪到了**底部提示**里（省掉与筛选框占位文本重复的「输入筛选」）；`countText()` 保留。
+    * **每一行是「进程名在上、窗口标题在下」**（项目所有者 2026-09 要求）：位置与样式
+      一起对换 —— 主行是进程名（`pointSize 10.5` + `palette.text`），窗口标题退成副行的
+      浅色小字（`8.5` + `palette.placeholderText`）。两个字符串还是只有都非空时才分两行。
+      理由：筛选匹配的本来就是进程名，标题只用来分辨同一个程序的多个窗口。
+      这只是 QML 里两个 `Label` 的上下关系，**模型层不知道也不管**。
+    * **卡片开着时再按一次同一个快捷键 = 关掉它**（与 `Esc` 同义）。判断在
+      `PopupHost::showSwitch()`：`window->isVisible() && !warming` 时直接 `switchDismiss()`
+      返回，**不要在那里重新弹一次** —— 「轻碰 Win」的触发发生在 Win 键**松开**时，
+      所以第二次轻碰进来时卡片正开着；重新弹就是「关掉又立刻重开」。`windows()` 动作
+      因此是「开/关」切换，不是单纯的「开」。
     * `windows()` 的 `title` 参数现在只用作**窗口标题**（`caption()` =
       `<title> — N 个`），验收/诊断脚本靠它读“现在列了几个窗口”。
     * **列表宽度 = 筛选框宽度**：QML 里 `ListView` 的 `x`/`width` 直接用 `filterRect`。
@@ -515,7 +525,7 @@ UI 只有托盘图标与四个 QML 卡片（日志窗口、`menu` 选单、`help
 | `app_icon.h/.cpp` | 把 qrc 里的 9 张 PNG 帧拼成多尺寸 `QIcon`（`applicationIcon()`）；`desktopIcon(number)` 现画桌面号徽标 |
 | `src/qml/` | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`、`SwitchPopup.qml`、`UpdatePopup.qml`。都写 `pragma ComponentBehavior: Bound`；**四个弹窗的 `flags` 都带 `Qt.Tool`**；配色一律用 `palette`（没有单独的 `Style.qml`）；中文一律 `font.family: "Microsoft YaHei"`；列表全部是标准 `ListView` + `ItemDelegate`（+ `ScrollBar`） |
 | `tests/` | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_log_tail`、`tst_audio`、`tst_autostart`、`tst_menu_model`、`tst_help_model`、`tst_window_list_model`、`tst_power_table`、`tst_desktop_table`、`tst_placement`、`tst_layout`、`tst_version`、`tst_desktop_badge`、`tst_update`、`tst_update_model`、`tst_update_install`、`tst_command_line`、`tst_instance`、`tst_input`，以及需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1` 的 `tst_interactive`（真机：剪贴板/音量/窗口/虚拟桌面/钉住/置顶/输入法/覆盖层/更新下载；联网那条还要 `FLOWKEYD_ALLOW_NETWORK_TESTS=1`） |
-| `scripts/acceptance.ps1` | 桌面行为验收（注入按键 + 焦点捕捉窗口的外部观察，119 项检查），需交互式桌面，**不属于 `ctest`** |
+| `scripts/acceptance.ps1` | 桌面行为验收（注入按键 + 焦点捕捉窗口的外部观察，125 项检查），需交互式桌面，**不属于 `ctest`** |
 | `scripts/release.ps1` | 构建 release + 打包（完整包 + 精简升级包，各附 `.sha256`）+ 用 `gh` 上传 GitHub Release。tag 取刚构建的 exe 的 `--version`。工作区脏或 HEAD 没推到 origin 会直接拒绝（要 `-AllowDirty`/`-Push`）。**唯一的新前置依赖是 `gh`**。开关：`-SkipBuild`/`-SkipResident`/`-SkipUpload` |
 
 > `scripts/install.ps1` / `uninstall.ps1` **已删除**：自启的注册、刷新与删除现在全在
@@ -608,7 +618,7 @@ dir build\dist-release               # 发布包（release 构建自动产出，
 ### 桌面行为怎么验证
 
 ```powershell
-# 119 项检查，约三分钟，会持续注入按键/抢焦点；按工作约定第 6 条先提醒用户
+# 125 项检查，约三分钟，会持续注入按键/抢焦点；按工作约定第 6 条先提醒用户
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance.ps1
 powershell.exe ... -Phase config      # 只看配置，不注入按键
 ```
@@ -620,6 +630,11 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
 
 脚本**不做**的：动画的屏幕采样、托盘菜单点击、自提权的 UAC 流程、“托盘图标真的消失了”
 的直接观察，以及**一切电源动作**。这几项仍然只能靠人的手。
+
+「轻碰 Win」（`keys = "LWin"` + `trigger = "release"`）这条路径由脚本里
+「窗口切换器」那一段兜住：一次轻碰弹卡片、**再轻碰一次关掉**（与 `Esc` 同义）、
+卡片不在任务栏里，而且 Win 松开后前台没有被外壳抢走（遮断标记生效的判据）。
+2026-10 加上这 6 条后跑过一次全绿（`checks: 125, failures: 0`）。
 
 **桌面被锁住时（`LogonUI` 在跑）脚本必然挂**：`GetForegroundWindow()` 返回 0，
 `SendInput` 报 `5`（ACCESS_DENIED）。这不是产品 bug，先去解锁再跑。
@@ -778,7 +793,7 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
 | 6 弹窗 `menu` / `help` | **已完成** | `flowkeyd_models` + 两张 QML 卡片；`tst_menu_model`/`tst_help_model` 全绿 |
 | 7 虚拟桌面 + 电源 | **已完成** | `desktop`/`power` + dispatcher 接线；`tst_desktop_table`/`tst_power_table` 全绿 |
 | 8 示例配置 + README | **已完成** | 覆盖全特性的 `flowkeyd.lua.example`（`--check` 零警告）；README 已写全 |
-| 9 验收（无 e2e 的替代） | **已完成** | `scripts/acceptance.ps1`（119 项）+ `FLOWKEYD_ACCEPT_INJECTED` 测试后门 |
+| 9 验收（无 e2e 的替代） | **已完成** | `scripts/acceptance.ps1`（当时 119 项，现在 125 项）+ `FLOWKEYD_ACCEPT_INJECTED` 测试后门 |
 | 10 接管 | **已完成** | 真实配置迁到 `.config\flowkeyd\config.lua`；常驻由计划任务 `flowkeyd` 指向当前运行的 exe |
 
 第 10 阶段之后新增的能力（都在本文件对应章节有记录）：
@@ -1141,6 +1156,11 @@ FreeType 字体引擎。
   `[System.IO.File]::ReadAllText/WriteAllText(..., UTF8Encoding($true))` 做字符串替换
   （**必须保 BOM**），再加一条只含 ASCII 的探针把失败的检查名写进 diag。
   **把临时脚本的中文检查名打到控制台会被代码页弄成乱码，很容易误判成另一条检查挂了。**
+* **窗口切换器的行为只能靠验收脚本验证**（`PopupHost` 要真 QML 窗口，单测碰不到）：
+  用**注入的「轻碰 Win」+ 窗口标题前缀**这套组合从外面看。两个容易踩的点：
+  （1）触发发生在 **Win 键松开时**，所以“第二次轻碰”进来时卡片已经开着；
+  （2）遮断标记要是没生效，外壳会弹开始菜单、卡片会在 300 ms 内自己关掉 ——
+  所以“卡片还在前台”要**再等半秒**再断言，只看“它出现过”会放过这种失败。
 
 ---
 
@@ -1212,6 +1232,13 @@ FreeType 字体引擎。
   要让一行能执行动作就在 `openHelpAction()` 的 `targets` 里给它一个条目
   （绑定用 `press`+`release`，`remap` 用两串 `SendOp`），**不要往 `HelpEntry` 里塞
   `core::Action`**。新加模型角色名时注意别和标准控件自己的属性撞名。
+* **窗口切换器的新行为**：纯逻辑在 `WindowListModel`（筛选/选中/按键决定，
+  `tst_window_list_model` 直接测），行里画什么在 `SwitchPopup.qml`，
+  **窗口本身的开/关在 `PopupHost::showSwitch()`**（它只能看到窗口、看不到按键，
+  所以像「再按一次同一个快捷键 = 关掉」这类判断要放在那里，而且要想清楚「触发发生在
+  按键的哪一半」——「轻碰 Win」是**松开**时触发的）。每加一条可从外面观察到的行为，
+  就在 `scripts/acceptance.ps1` 的「窗口切换器」那一段加一条检查：那是这条路径唯一的
+  自动化覆盖。
 * **新的 QML 弹窗**：`import QtQuick.Controls.FluentWinUI3`；颜色一律从 `palette`
   （`base`/`text`/`placeholderText`/`highlight`/`highlightedText`/`alternateBase`/`mid`）取；
   字号用现在这套 `pointSize`（12.5 标题 / 11 正文 / 10.5 帮助正文 / 9 副标题与徽标 /

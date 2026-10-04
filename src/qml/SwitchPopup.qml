@@ -27,6 +27,13 @@ import QtQuick.Controls.FluentWinUI3
 // **输入法**：一打开就把输入法切成英文（`host.switchUseEnglishInput()`，见
 // `platform/win/ime.*`）—— 筛选框匹配的是进程名（ASCII），中文输入法的候选字
 // 一条都筛不出来。输入框拿到焦点时再确认一次（鼠标点进来也算）。
+//
+// **每一行是「进程名在上、窗口标题在下」**（项目所有者 2026-09 要求，位置与样式
+// 一起对换）：主行是进程名，因为筛选按它匹配；标题退成副行的浅色小字。
+//
+// **再按一次触发它的快捷键 = 关掉卡片**（与 `Esc` 同义）：对常见的「轻碰 Win」
+// 绑法来说，就是「再轻碰一次 Win」把卡片收起来。这个判断在 `PopupHost` 里
+// （`showSwitch()`），不在这里 —— 触发发生在 Win 键**松开**时。
 Window {
     id: root
 
@@ -273,14 +280,17 @@ Window {
                         anchors.top: parent.top
                         anchors.bottom: parent.bottom
 
+                        // **主行是进程名、副行是窗口标题**（项目所有者 2026-09
+                        // 要求）：位置与样式一起对换 —— 筛选框匹配的本来就是进程名，
+                        // 标题只是用来分辨同一个程序的多个窗口。
                         Label {
-                            id: titleText
+                            id: processText
 
-                            // 有进程名时标题占上面 55%；没有就占满整行。
+                            // 有标题时进程名占上面 55%；没有就占满整行。
                             width: parent.width
-                            height: rowItem.windowProcess.length > 0 ? parent.height * 55 / 100
-                                                                    : parent.height
-                            text: rowItem.windowTitle
+                            height: rowItem.windowTitle.length > 0 ? parent.height * 55 / 100
+                                                                   : parent.height
+                            text: rowItem.windowProcess
                             color: root.palette.text
                             font.family: root.uiFontFamily
                             font.pointSize: 10.5
@@ -289,11 +299,11 @@ Window {
                         }
 
                         Label {
-                            visible: rowItem.windowProcess.length > 0
-                            y: titleText.height
+                            visible: rowItem.windowTitle.length > 0
+                            y: processText.height
                             width: parent.width
-                            height: parent.height - titleText.height
-                            text: rowItem.windowProcess
+                            height: parent.height - processText.height
+                            text: rowItem.windowTitle
                             color: root.palette.placeholderText
                             font.family: root.uiFontFamily
                             font.pointSize: 8.5

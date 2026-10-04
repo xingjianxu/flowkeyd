@@ -17,6 +17,8 @@
 #     否则就是焦点压根没拿到，本次验证无效）
 #   * 被吞掉的 Win 和弦不会让外壳打开搜索（常规 / 0 ms 轻按 / 一次、两次
 #     Windows 键自动重复四种情况）
+#   * 窗口切换器（`windows()`）：「轻碰 Win」弹出卡片、再轻碰一次关掉它
+#     （与 `Esc` 同义）、卡片不在任务栏里、遮断标记保住了前台
 #   * 按住不放只派发一次
 #   * 重映射的 hold / tap / CapsLock -> Esc
 #   * `send` 会先松开用户按住的修饰键（前台看到的是 Ctrl+C 而不是 Ctrl+Alt+C）
@@ -94,6 +96,7 @@ function Check($name, $condition) {
 # --- 期望的窗口标题：用码点拼，理由见文件头 ---
 $MENU_TITLE = 'flowkeyd ' + [char]0x9009 + [char]0x5355                                  # flowkeyd 选单
 $HELP_TITLE = 'flowkeyd ' + [char]0x5FEB + [char]0x6377 + [char]0x952E                   # flowkeyd 快捷键
+$SWITCH_TITLE = 'flowkeyd ' + [char]0x7A97 + [char]0x53E3                             # flowkeyd 窗口
 
 # --- 用到的虚拟键码 ---
 $VK_SHIFT = 0x10
@@ -501,6 +504,11 @@ hotkey { name = "accept-numpad-enter", comment = "numpad enter", keys = "NumpadE
 remap { name = "accept-remap-hold", from = "F20", to = "F21" }
 remap { name = "accept-remap-tap", from = "F22", to = "F23", mode = "tap" }
 remap { name = "accept-caps", from = "CapsLock", to = "Esc" }
+
+-- 14. 窗口切换器：单个修饰键 + `trigger = "release"` 就是「轻碰 Win」。
+--     卡片里不会再按别的键（只验证“两次轻碰”），所以这个动作碰不到任何东西。
+hotkey { name = "accept-switch", comment = "window switcher", keys = "LWin",
+  trigger = "release", action = windows() }
 "@
     # `-Encoding UTF8` 会写出 BOM：顺带把“带 BOM 的配置也能读”一起覆盖了。
     Set-Content -Path $config -Value $text -Encoding UTF8
@@ -537,7 +545,7 @@ $p = Start-Process -FilePath $Exe -ArgumentList @('--check', '--config', $config
     -RedirectStandardOutput $checkOut -RedirectStandardError $checkErr -Wait -PassThru -NoNewWindow
 $checkText = (Get-Content $checkOut -Raw -ErrorAction SilentlyContinue) + (Get-Content $checkErr -Raw -ErrorAction SilentlyContinue)
 Check '--check 接受验收配置' ($p.ExitCode -eq 0 -and $checkText -match 'OK \(\d+ hotkey')
-Check '--check 报告 15 个快捷键' ($checkText -match 'OK \(15 hotkey')
+Check '--check 报告 16 个快捷键' ($checkText -match 'OK \(16 hotkey')
 
 $listOut = Join-Path $WorkDir 'list.out'
 $listErr = Join-Path $WorkDir 'list.err'
@@ -735,6 +743,34 @@ try {
     Test-WinChord '一次 Win 自动重复' 40 1
     Test-WinChord '两次 Win 自动重复' 40 2
 
+    # --- 窗口切换器（`windows()` 动作）---------------------------------------
+    # 「轻碰 Win」的两次轻碰：第一次弹出卡片，第二次与 `Esc` 同义（关掉）。这一段
+    # 同时是「轻碰 Win」这条路径唯一的自动化覆盖 —— 单独按一下 Win 时外壳不能弹
+    # 开始菜单（那会把卡片的前台抢走），所以两条检查连在一起看才有意义。
+    Write-Host '--- 窗口切换器 ---'
+    function TapWinAlone { [FlowInject]::Key($VK_LWIN, $true); Start-Sleep -Milliseconds 40; [FlowInject]::Key($VK_LWIN, $false) }
+    Dismiss-ShellUi
+    NeedFocus '窗口切换器'
+    TapWinAlone
+    $switchUp = WaitUntil { [FlowInject]::HasWindowTitled($daemon.Id, $SWITCH_TITLE) } 5000
+    Check '轻碰一下 Win 弹出窗口切换器' $switchUp
+    Check '切换器卡片不在任务栏里（Qt.Tool）' (
+        -not [FlowInject]::IsTaskbarWindow($daemon.Id, $SWITCH_TITLE))
+    Check '切换器卡片拿到了键盘焦点' (WaitUntil { [FlowInject]::ForegroundTitle() -like "$SWITCH_TITLE*" } 4000)
+    # 再等半秒看一眼：遮断标记（未分配的标记按键）要是没生效，外壳会在 Win
+    # 松开时弹开始菜单，卡片就会因此丢掉前台（`active` 一变、超过 300 ms 自关）。
+    Pump 700
+    if ([FlowInject]::ForegroundTitle() -notlike "$SWITCH_TITLE*") {
+        Diag "window switcher lost the foreground: $(FgInfo)"
+    }
+    Check '轻碰 Win 之后前台没被外壳抢走（卡片还在前台）' (
+        [FlowInject]::ForegroundTitle() -like "$SWITCH_TITLE*")
+    TapWinAlone
+    Check '再轻碰一次 Win 关掉了切换器（与 Esc 同义）' (
+        WaitUntil { -not [FlowInject]::HasWindowTitled($daemon.Id, $SWITCH_TITLE) } 3000)
+    Check '关掉之后前台回到捕捉窗口' (
+        WaitUntil { [FlowInject]::ForegroundTitle() -eq 'flowkeyd-accept-catcher' } 3000)
+
     # --- 自动重复 ------------------------------------------------------------
     Write-Host '--- 自动重复 ---'
     Remove-Item $onceLog -ErrorAction SilentlyContinue
@@ -928,7 +964,7 @@ try {
     Check '帮助窗口不在任务栏里（Qt.Tool）' (-not [FlowInject]::IsTaskbarWindow($daemon.Id, $HELP_TITLE))
     $full = HelpCounts
     Write-Host "         help caption: $($full.Visible)/$($full.Total)"
-    Check '标题里的可见/总数是满的' ($null -ne $full -and $full.Total -eq 18)
+    Check '标题里的可见/总数是满的' ($null -ne $full -and $full.Total -eq 19)  # 16 个快捷键 + 3 个重映射
 
     # --- 执行：`Enter` / 双击一行 = 触发那一行的动作 --------------------------
     # 判据都是从外面能看到的：

@@ -105,7 +105,8 @@ public:
     void requestMenu(MenuRequest request);
     /// 弹出帮助窗口；已经开着时只是前置并清空筛选。
     void requestHelp(HelpRequest request);
-    /// 弹出窗口切换器；已经开着时只是前置、清空筛选并把窗口列表换成最新的。
+    /// 弹出窗口切换器；**已经开着时按同一个快捷键就是关掉它**（与 `Esc` 同义，
+    /// 见 `showSwitch()`）。
     void requestSwitch(SwitchRequest request);
     /// 显示「在线更新」卡片（托盘菜单「检查更新」）。窗口已经开着时只前置，
     /// 不重置里面的状态（状态是 `UpdateModel` 的事，`Updater` 已经改好了）。

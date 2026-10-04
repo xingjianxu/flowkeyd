@@ -555,13 +555,23 @@ void PopupHost::showHelp(HelpRequest request)
 void PopupHost::showSwitch(SwitchRequest request)
 {
     const bool created = m_switchWindow == nullptr;
-    m_frameTimer.start();
     QQuickWindow *window = ensureSwitchWindow();
     if (window == nullptr) {
         return;
     }
+    // 预热还没收尾时用户就按了快捷键：取消预热，把这次当成**第一次**弹出。
     const bool warming = cancelPreload(window);
-    const bool wasVisible = window->isVisible() && !warming;
+    // **卡片已经开着时，再按一次同一个快捷键就是关掉它**（项目所有者 2026-09
+    // 要求，与 `Esc` 同义）。常见的绑法是「轻碰 Win」（`keys = "LWin"` +
+    // `trigger = "release"`）：触发发生在 Win 键**松开**时，所以第二次轻碰走到
+    // 这里时卡片正开着 —— 在这里收起来就是用户要的效果（如果在这里重新弹一次，
+    // 卡片就会“关掉又立刻重开”）。
+    if (window->isVisible() && !warming) {
+        win::logDebug(QStringLiteral("window switcher: dismissed by its own hotkey"));
+        switchDismiss();
+        return;
+    }
+    m_frameTimer.start();
     m_switchRequest = std::move(request);
     m_switchModel->setItems(m_switchRequest.title, m_switchRequest.items);
     QScreen *screen = QGuiApplication::screenAt(QCursor::pos());
@@ -573,9 +583,9 @@ void PopupHost::showSwitch(SwitchRequest request)
                                         screen->availableGeometry().height())
                                   : 12);
     window->setProperty("visible", true);
-    if (!wasVisible) {
-        centreOnCursorScreen(window, m_switchModel->cardWidth(), m_switchModel->cardHeight());
-    }
+    // 位置总是这时候算：卡片可见时上面已经 return 了（那时按快捷键是「关掉」），
+    // 所以走到这里一定是刚打开（包括刚取消掉预热的那种）。
+    centreOnCursorScreen(window, m_switchModel->cardWidth(), m_switchModel->cardHeight());
     activateWindow(window);
     // 卡片一出来就把输入法切成英文（筛选框匹配的是进程名，不是中文）。
     switchUseEnglishInput();
