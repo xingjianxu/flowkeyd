@@ -115,7 +115,7 @@ UI 只有托盘图标与四个 QML 卡片（日志窗口、`menu` 选单、`help
 | 互斥体     | `Local\flowkeyd-<配置路径散列>`                                                 |
 | 开机自启   | 计划任务 `flowkeyd` 指向**当前运行 exe**（启动时自注册自检）                    |
 | 在线更新   | 托盘菜单 *检查更新* → GitHub `releases/latest` → slim 包 → sha256 → 换 exe + 重启 |
-| 自动化测试 | Qt Test 单元测试 + `scripts/acceptance.ps1`（125 项检查，需交互式桌面）         |
+| 自动化测试 | Qt Test 单元测试 + `scripts/acceptance.ps1`（134 项检查，需交互式桌面）         |
 | 依赖管理   | CMake Presets + Ninja，`vendor/lua` 静态编进二进制                             |
 
 ---
@@ -426,6 +426,28 @@ UI 只有托盘图标与四个 QML 卡片（日志窗口、`menu` 选单、`help
     * 新增静态库 **`flowkeyd_update`** 与 `platform/win/update.*`；第四个 QML 卡片
       `UpdatePopup.qml`（同样预热、同样 `Qt.Tool`）；`Qt6::Network` 进入依赖，
       所以 `cmake/PruneRuntime.cmake` **必须留下 `tls/qschannelbackend.dll`**。
+26. **远程桌面放行（`settings.remote_desktop`，默认开）。**
+   前台窗口的属主进程命中名单（默认只有微软的 RDP 客户端：`mstsc.exe`、`msrdc.exe`、
+   `msrdcw.exe`、`RdClient.Windows.exe`）时，**所有快捷键与重映射一律放行** ——
+   不拦截、不触发，键原样送给对面那台机器；单条例外是条目自己的
+   `remote_desktop = true`（在远程桌面里也照常拦、照常执行）。
+   * 判据只有「**前台窗口的属主进程名**」（大小写无关的子串，与 `window_rule.process`
+     同一套），不看标题、不看是否全屏。`GetSystemMetrics(SM_REMOTESESSION)` 那条路
+     （“flowkeyd 自己跑在远程会话里”）**没做**：被 RDP 进来操控是另一种场景，需要时
+     再加一个信号。
+   * 检测全在**钩子线程**上：`SetWinEventHook(EVENT_SYSTEM_FOREGROUND)` 立刻更新
+     （故意**不带** `WINEVENT_SKIPOWNPROCESS`：自家弹窗拿到前台就算“不在远程桌面里”）、
+     启动时查一次、350 ms 的 placement tick 再兜一次（前台事件漏了也能纠回来）。
+     按键路径上没有额外开销（引擎里只是一个 bool 与一次判断）。
+   * 名单空表 = 谁都不算（等于关掉）；`processes` 里的**空串是错误** —— 空串在
+     `windowProcessMatches()` 里表示“不限制”，会让**所有**窗口都算远程桌面。运行时也
+     跳过空条目（双层保险），见 §10 的坑。
+   * 进入这个状态时清掉长按重复与待定的「轻碰 Win」，并把**已经被放行**的重映射按住的
+     目标键松开（`remote_desktop = true` 的例外不动）；已经吞掉、还按着的键在松开时仍然
+     吞掉 —— 否则前台会看到一个孤立的 key-up。
+   * 纯逻辑在 `core/remote_desktop.{h,cpp}`（`builtinRemoteDesktopProcesses()` /
+     `isRemoteDesktopProcess()`），引擎侧是 `Engine::setRemoteDesktop()`，平台侧只有
+     `platform/win/hook.cpp` 的 `noteForegroundWindow()`。
 
 ---
 
@@ -494,6 +516,7 @@ UI 只有托盘图标与四个 QML 卡片（日志窗口、`menu` 选单、`help
 | `src/core/action.*` | 声明式动作的表示 + 摘要文本（`--list` 与 `help()` 都用它）+ `isDestructive()` |
 | `src/core/template.*` | `{clipboard}`、`{selection}`、`{date}` 等占位符展开 |
 | `src/core/window_match.*` | 窗口匹配与 `window` 动作决策的纯函数 + 「什么算一个程序窗口」的纯判据（`TopLevelWindowFacts`、`isMainWindow()`、`isSwitchableWindow()`） |
+| `src/core/remote_desktop.*` | 「这个前台进程算不算远程桌面客户端」的纯逻辑：内置名单 + 子串匹配（§2 第 26 条） |
 | `src/core/placement.*` | `window_rule` 的纯逻辑：显示器排序与选择、重连检测、摆放几何、规则匹配、`stepIndex()` |
 | `src/core/log_tail.*` | 日志文件的增量尾随（纯逻辑）：按字节读、末尾不完整的 UTF-8 序列不消费、半行留到下一轮、一次最多 1000 行 |
 | `src/core/update_check.*` | 在线更新纯逻辑：仓库地址、`releases/latest` JSON 解析、资产挑选、版本比较、`buildVersionDate()` |
@@ -506,7 +529,7 @@ UI 只有托盘图标与四个 QML 卡片（日志窗口、`menu` 选单、`help
 | `monitor.h/.cpp` | 显示器枚举、窗口在哪块屏、`applyPlacement`（`SetWindowPlacement` + `SetWindowPos`，带 `SWP_NOACTIVATE`，最大化时先还原再最大化）。**几何判断不在这一层** |
 | `input.h/.cpp` | 按键注入（`SendInput`/`NtUserSendInput`）、按键状态、`ModifierGuard`（含菜单遮断标记）、`FLOWKEYD_ACCEPT_INJECTED` 测试后门、`copySelection` |
 | `ime.h/.cpp` | 运行时解析的 `imm32.dll`：`readMode`/`useAlphanumericMode`/`restoreMode`。拿不到 `imm32` 或没有输入上下文时**不当错误** |
-| `hook.h/.cpp` | 钩子回调、**钩子线程自己的 Win32 消息循环**、`SetTimer`、控制消息、重载；还有 `window_rule` 的两个监听：`SetWinEventHook`（`EVENT_OBJECT_SHOW`/`DESTROY`，按 HWND 去重）与 350 ms 显示器轮询。**定时器 id 必须用 `SetTimer` 的返回值**（§10） |
+| `hook.h/.cpp` | 钩子回调、**钩子线程自己的 Win32 消息循环**、`SetTimer`、控制消息、重载；还有 `window_rule` 的两个监听：`SetWinEventHook`（`EVENT_OBJECT_SHOW`/`DESTROY`，按 HWND 去重）与 350 ms 显示器轮询，外加 `EVENT_SYSTEM_FOREGROUND`（远程桌面放行，`noteForegroundWindow()`）。**定时器 id 必须用 `SetTimer` 的返回值**（§10） |
 | `audio.h/.cpp` | Core Audio `IAudioEndpointVolume`，手写 COM vtable（**高风险**，MTA） |
 | `clipboard.h/.cpp` | 剪贴板读写（`CF_UNICODETEXT`，`OpenClipboard` 重试 10 次） |
 | `window.h/.cpp` | 窗口查找/激活/最小化/最大化/还原/关闭/置顶、前台锁绕行、启动回退、`TransitionGuard`（RAII）、`setTopmost`、`isMainWindow`/`isSwitchableWindow`/`listOpenWindows`。**“是否已经激活”还要看虚拟桌面**；**前台查询会跳过 `WS_EX_TOOLWINDOW` 覆盖层** |
@@ -524,8 +547,8 @@ UI 只有托盘图标与四个 QML 卡片（日志窗口、`menu` 选单、`help
 | `update_model.h/.cpp` / `update_archive.h/.cpp` / `updater.h/.cpp` | 更新卡片的状态机（八个阶段、版本号/发布说明/进度/按钮可见性，**不联网不解压不换文件**）；从 zip 里取出新 exe（`QZipReader` + PE 魔数检查）；联网编排（异步 `QNetworkAccessManager` + sha256 + 解压到 `<exe>.new` + mtime 对齐发布日） |
 | `app_icon.h/.cpp` | 把 qrc 里的 9 张 PNG 帧拼成多尺寸 `QIcon`（`applicationIcon()`）；`desktopIcon(number)` 现画桌面号徽标 |
 | `src/qml/` | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`、`SwitchPopup.qml`、`UpdatePopup.qml`。都写 `pragma ComponentBehavior: Bound`；**四个弹窗的 `flags` 都带 `Qt.Tool`**；配色一律用 `palette`（没有单独的 `Style.qml`）；中文一律 `font.family: "Microsoft YaHei"`；列表全部是标准 `ListView` + `ItemDelegate`（+ `ScrollBar`） |
-| `tests/` | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_log_tail`、`tst_audio`、`tst_autostart`、`tst_menu_model`、`tst_help_model`、`tst_window_list_model`、`tst_power_table`、`tst_desktop_table`、`tst_placement`、`tst_layout`、`tst_version`、`tst_desktop_badge`、`tst_update`、`tst_update_model`、`tst_update_install`、`tst_command_line`、`tst_instance`、`tst_input`，以及需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1` 的 `tst_interactive`（真机：剪贴板/音量/窗口/虚拟桌面/钉住/置顶/输入法/覆盖层/更新下载；联网那条还要 `FLOWKEYD_ALLOW_NETWORK_TESTS=1`） |
-| `scripts/acceptance.ps1` | 桌面行为验收（注入按键 + 焦点捕捉窗口的外部观察，125 项检查），需交互式桌面，**不属于 `ctest`** |
+| `tests/` | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_remote_desktop`、`tst_log_tail`、`tst_audio`、`tst_autostart`、`tst_menu_model`、`tst_help_model`、`tst_window_list_model`、`tst_power_table`、`tst_desktop_table`、`tst_placement`、`tst_layout`、`tst_version`、`tst_desktop_badge`、`tst_update`、`tst_update_model`、`tst_update_install`、`tst_command_line`、`tst_instance`、`tst_input`，以及需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1` 的 `tst_interactive`（真机：剪贴板/音量/窗口/虚拟桌面/钉住/置顶/输入法/覆盖层/更新下载；联网那条还要 `FLOWKEYD_ALLOW_NETWORK_TESTS=1`） |
+| `scripts/acceptance.ps1` | 桌面行为验收（注入按键 + 焦点捕捉窗口的外部观察，134 项检查），需交互式桌面，**不属于 `ctest`** |
 | `scripts/release.ps1` | 构建 release + 打包（完整包 + 精简升级包，各附 `.sha256`）+ 用 `gh` 上传 GitHub Release。tag 取刚构建的 exe 的 `--version`。工作区脏或 HEAD 没推到 origin 会直接拒绝（要 `-AllowDirty`/`-Push`）。**唯一的新前置依赖是 `gh`**。开关：`-SkipBuild`/`-SkipResident`/`-SkipUpload` |
 
 > `scripts/install.ps1` / `uninstall.ps1` **已删除**：自启的注册、刷新与删除现在全在
@@ -618,7 +641,7 @@ dir build\dist-release               # 发布包（release 构建自动产出，
 ### 桌面行为怎么验证
 
 ```powershell
-# 125 项检查，约三分钟，会持续注入按键/抢焦点；按工作约定第 6 条先提醒用户
+# 134 项检查，约三分钟，会持续注入按键/抢焦点；按工作约定第 6 条先提醒用户
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance.ps1
 powershell.exe ... -Phase config      # 只看配置，不注入按键
 ```
@@ -634,7 +657,9 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
 「轻碰 Win」（`keys = "LWin"` + `trigger = "release"`）这条路径由脚本里
 「窗口切换器」那一段兜住：一次轻碰弹卡片、**再轻碰一次关掉**（与 `Esc` 同义）、
 卡片不在任务栏里，而且 Win 松开后前台没有被外壳抢走（遮断标记生效的判据）。
-2026-10 加上这 6 条后跑过一次全绿（`checks: 125, failures: 0`）。
+2026-10 加上这 6 条后跑过一次全绿（`checks: 125, failures: 0`）。2026-10-04 又加上
+「远程桌面放行」那 9 条（名单里写的是捕捉窗口自己那个进程，因此不碰真 RDP 客户端），
+全绿：`checks: 134, failures: 0`。
 
 **桌面被锁住时（`LogonUI` 在跑）脚本必然挂**：`GetForegroundWindow()` 返回 0，
 `SendInput` 报 `5`（ACCESS_DENIED）。这不是产品 bug，先去解锁再跑。
@@ -652,7 +677,13 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
 6. `animate = true/false` 的肉眼区别；`volume` 的实际听感；托盘菜单点击。
 7. `window_rule`：`DisplaySwitch.exe /internal` → `/extend` 制造一次“显示器重新接入”，
    确认日志里出现 `monitor connected: ...; re-applying window rules` 且手工挪走的窗口被摆回。
-8. 按顺序做完以上之后，**检查没有任何按键卡在按下状态**。
+8. **远程桌面放行**（验收脚本用的是假名单，真机要手过一遍）：用 `mstsc.exe` /
+   Windows App 连上一台机器，聚焦那个窗口，按一个被绑定的和弦（例如 `Ctrl+Alt+t`）——
+   对面那台机器应当收到它、本机不该有任何动作；日志里出现
+   `remote desktop detected (mstsc.exe)`。把焦点切回本机窗口，日志出现
+   `left the remote desktop (…)`，和弦又回到本机行为；示例配置里 `remote_desktop = true`
+   的 `Ctrl+Alt+m`（静音）在远程桌面里仍然生效。
+9. 按顺序做完以上之后，**检查没有任何按键卡在按下状态**。
 
 ---
 
@@ -793,7 +824,7 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
 | 6 弹窗 `menu` / `help` | **已完成** | `flowkeyd_models` + 两张 QML 卡片；`tst_menu_model`/`tst_help_model` 全绿 |
 | 7 虚拟桌面 + 电源 | **已完成** | `desktop`/`power` + dispatcher 接线；`tst_desktop_table`/`tst_power_table` 全绿 |
 | 8 示例配置 + README | **已完成** | 覆盖全特性的 `flowkeyd.lua.example`（`--check` 零警告）；README 已写全 |
-| 9 验收（无 e2e 的替代） | **已完成** | `scripts/acceptance.ps1`（当时 119 项，现在 125 项）+ `FLOWKEYD_ACCEPT_INJECTED` 测试后门 |
+| 9 验收（无 e2e 的替代） | **已完成** | `scripts/acceptance.ps1`（当时 119 项，现在 134 项）+ `FLOWKEYD_ACCEPT_INJECTED` 测试后门 |
 | 10 接管 | **已完成** | 真实配置迁到 `.config\flowkeyd\config.lua`；常驻由计划任务 `flowkeyd` 指向当前运行的 exe |
 
 第 10 阶段之后新增的能力（都在本文件对应章节有记录）：
@@ -1047,6 +1078,11 @@ FreeType 字体引擎。
   “主窗口”判据还必须带上 **非 `WS_EX_TOOLWINDOW`** 与 **有标题**：按 `process` 匹配会一次
   命中一堆内部窗口（`Non Client Input Sink Window`、无标题的 `NotepadTextBox`）。
   `WS_EX_APPWINDOW` 那一条照任务栏/Alt+Tab 的规则来（“无属主 **或** 带 `WS_EX_APPWINDOW`”）。
+* **`core::windowProcessMatches()` 里的空 needle 是「不限制」的意思、返回 true**（它本来
+  是给 `window` 动作的可选 `process` 用的）。所以任何拿它做名单匹配的地方都**不能**把
+  空串当普通条目：远程桌面名单里混进一个 `""` 会让**所有**前台窗口都算远程桌面、
+  快捷键整片失效。修法是两层：加载时拒绝空条目（`settings.remote_desktop.processes[%1]`），
+  运行时的 `isRemoteDesktopProcess()` 也 `continue` 跳过它。
 * **`SetWindowPlacement` 是跨显示器摆放的关键。** 顺序是：`IsZoomed` 就先 `SW_RESTORE`，
   然后写 `WINDOWPLACEMENT.rcNormalPosition`（屏幕坐标）并设 `showCmd`，最后对非最大化的
   情况再补一次 `SetWindowPos`（`SWP_NOACTIVATE`）。最小化的窗口只更新“还原位置”。
@@ -1201,6 +1237,8 @@ FreeType 字体引擎。
    差距）。
 6. **配置文件热重载**（去抖的 `ReadDirectoryChangesW`）。
 7. **按应用限定的快捷键**（等价于 AutoHotkey 的 `#If WinActive(...)`）。
+   * 唯一的例外是 §2 第 26 条的「远程桌面放行」：那只是一个明确的前台条件（属主进程命中
+     名单），做成全局策略 + 单条例外，而不是通用的按应用绑定。
 8. **把 Lua 函数当动作**：刻意不做（声明式动作才能被 `--list` 显示、在加载时校验完、
    并在钩子/工作线程边界上保持安全）。
 9. **配置里的 `require`/模块支持**（现在只有一份脚本）。
@@ -1286,6 +1324,13 @@ FreeType 字体引擎。
 * **新的未公开 API**：在 `platform/win/nt` 里用 `GetProcAddress` 解析，使用前先用一次无害调用
   校验，并永远保留一个已公开的回退。已公开但不在静态链接集合里的库走同一条路
   （`dwmapi`、`imm32` 是范例）。
+* **远程桌面检测的新信号**（例如「本进程跑在远程会话里」的
+  `GetSystemMetrics(SM_REMOTESESSION)`）：纯逻辑放 `core/remote_desktop.*`，判定点只有
+  `platform/win/hook.cpp` 的 `updateRemoteDesktop()`（钩子线程），引擎只接一个 bool
+  （`Engine::setRemoteDesktop()`）。加信号时记住三件事：名单要可配
+  （`settings.remote_desktop`）、默认名单要窄、状态翻转时释放被放行的重映射按键由引擎负责。
+  只加一个内置进程名时改 `builtinRemoteDesktopProcesses()` + README + 示例配置 +
+  `tst_remote_desktop` 四处就够。
 * **新的动作后端**：在 `src/platform/win/` 下新建模块，从 `dispatcher` 调用。
 * **在线更新的新行为**（启动时自动检查、签名校验、把运行时也一并升级）：纯逻辑在
   `src/core/update_check.*`，状态与文案在 `src/app/update_model.*`，联网/下载/校验/落盘在
@@ -1332,13 +1377,17 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、`--ch
 
 * `settings{}`：`log_level`、`swallow`、`exact_modifiers`、`release_modifiers`、
   `repeat_interval_ms`、`repeat_delay_ms`、`tick_ms`、`input_backend`、`single_instance`、
-  `elevate`。**未知键报错。**
+  `elevate`、`remote_desktop`。**未知键报错。**
 * `hotkey{}`：`keys`（单个和弦或一组）、`name`、`trigger`（`press`/`release`/`repeat`）、
   `action`（别名 `press`、`on_press`）、`on_release`、`swallow`、`repeatable`
-  （`true` 或 `{ interval_ms, delay_ms }`；也认 `["repeat"]`）、`enabled`、`comment`。
+  （`true` 或 `{ interval_ms, delay_ms }`；也认 `["repeat"]`）、`enabled`、`comment`、
+  `remote_desktop`。
   `trigger = "repeat"` 与 `repeatable = true` 是同一件事；**互相矛盾的组合要被拒绝**。
 * `remap{}`：`from`（键或和弦）、`to`（键名或发送脚本）、`mode`（`hold` 默认 / `tap`）、
-  `swallow`、`name`。
+  `swallow`、`name`、`remote_desktop`。
+* `remote_desktop`（`settings` 一项 + 每个 `hotkey`/`remap` 一项）：见 §2 第 26 条。
+  `settings.remote_desktop` 是 `true` / `false`，或者 `{ enabled = …, processes = { … } }`；
+  条目上的 `remote_desktop = true` = 在远程桌面里也照常拦（默认 `false` = 放行）。
 * `window_rule{}`：见 §2 第 13 条。
 * `app{}`：见 §2 第 15 条；声明式写法叫 `apps`。
 * 和弦语法：`~` 放行原始按键、`*` 忽略额外修饰键；`Numpad*` 与主键盘同名键不同。

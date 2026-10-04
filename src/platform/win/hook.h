@@ -28,6 +28,7 @@
 #include <future>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <unordered_set>
@@ -106,6 +107,9 @@ public:
     bool processHookEvent(WPARAM message, KBDLLHOOKSTRUCT *info);
     /// 只在钩子线程上调用：`SetWinEventHook` 的回调（窗口出现 / 销毁）。
     void noteWindowEvent(DWORD event, HWND hwnd);
+    /// 只在钩子线程上调用：前台窗口变了（`EVENT_SYSTEM_FOREGROUND`）。
+    /// 这决定了「键盘现在在不在远程桌面里」（`hwnd` 为 `nullptr` = 没有前台窗口）。
+    void noteForegroundWindow(HWND hwnd);
 
 private:
     void threadMain(std::promise<QString> ready);
@@ -114,6 +118,8 @@ private:
     void handlePlacementTick();
     void handleControlCommand(ControlCmd cmd);
     void injectOps(std::vector<core::SendOp> ops);
+    /// 按当前配置重新判定“在不在远程桌面里”，变化时通知引擎并写一条日志。
+    void updateRemoteDesktop(const std::optional<QString> &executableName);
 
     std::thread m_thread;
     std::atomic<DWORD> m_threadId{0};
@@ -130,6 +136,11 @@ private:
     std::unique_ptr<core::Engine> m_engine;
     HHOOK m_hook = nullptr;
     HWINEVENTHOOK m_winEventHook = nullptr;
+    /// 前台窗口监听（`EVENT_SYSTEM_FOREGROUND`）：远程桌面放行的判据就是它。
+    HWINEVENTHOOK m_foregroundHook = nullptr;
+    /// 键盘现在是不是在远程桌面客户端里（钩子线程自己的缓存，见
+    /// `updateRemoteDesktop()`）。
+    bool m_remoteDesktop = false;
     /// 已经交给过工作线程的顶层窗口；`EVENT_OBJECT_DESTROY` 时移除，
     /// 这样句柄被系统复用时不会误判成“已经处理过”。
     std::unordered_set<HWND> m_knownWindows;

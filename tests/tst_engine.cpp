@@ -85,6 +85,12 @@ private slots:
     void loneModifierTapOnlyFiresWithoutOtherKeys();
     void loneModifierTapIsCancelledByAnotherKey();
     void loneModifierTapIsCancelledByAnUnboundKey();
+    void remoteDesktopPassesEverythingThrough();
+    void remoteDesktopKeepsTheMarkedExceptions();
+    void remoteDesktopSkipsRemapsAndReleasesTheirKeys();
+    void remoteDesktopKeepsExceptionsHeldByARemap();
+    void remoteDesktopStopsRepeatsAndLoneModifierTaps();
+    void leavingTheRemoteDesktopRestoresHotkeys();
 };
 
 void TestEngine::firesOnChordAndSwallows()
@@ -650,6 +656,131 @@ void TestEngine::loneModifierTapIsCancelledByAnUnboundKey()
     const Reaction up = engine.onKey(KeyEvent::keyUp(vk::LWIN), 0);
     QVERIFY(up.triggers.empty());
     QVERIFY(up.inject.empty());
+}
+
+void TestEngine::remoteDesktopPassesEverythingThrough()
+{
+    Config config;
+    config.hotkeys.push_back(hotkey(QStringLiteral("Ctrl+Alt+t"),
+                                    specOne(runAction(QStringLiteral("wt.exe")))));
+    Engine engine = engineOf(config);
+
+    QVERIFY(!engine.isRemoteDesktop());
+    QVERIFY(engine.setRemoteDesktop(true).empty());
+    QVERIFY(engine.isRemoteDesktop());
+    QVERIFY(engine.stateSummary().contains(QStringLiteral("remote_desktop=true")));
+
+    // 键盘在远程桌面里：这个和弦既不吞键也不触发，原样送给对面那台机器。
+    press(&engine, {CTRL});
+    press(&engine, {ALT});
+    QVERIFY(press(&engine, {static_cast<Vk>(u'T')}).isEmpty());
+    QVERIFY(release(&engine, {static_cast<Vk>(u'T')}).isEmpty());
+    QVERIFY(release(&engine, {ALT, CTRL}).isEmpty());
+
+    // 幂等：重复置位不再产生状态变化。
+    QVERIFY(engine.setRemoteDesktop(true).empty());
+}
+
+void TestEngine::remoteDesktopKeepsTheMarkedExceptions()
+{
+    Config config;
+    config.hotkeys.push_back(hotkey(QStringLiteral("F1"), specOne(noneAction())));
+    HotkeyDef exception = hotkeyNamed(QStringLiteral("volume"),
+                                      QStringLiteral("F2"),
+                                      specOne(noneAction()));
+    exception.remoteDesktop = true;
+    config.hotkeys.push_back(exception);
+    Engine engine = engineOf(config);
+
+    engine.setRemoteDesktop(true);
+    // 没写 `remote_desktop = true` 的那一条被放行……
+    QVERIFY(press(&engine, {0x70}).isEmpty());
+    release(&engine, {0x70});
+    // ……写了的那一条照常拦截、照常触发。
+    const Reaction fired = press(&engine, {0x71});
+    QVERIFY(fired.swallow);
+    QCOMPARE(fired.triggers, (std::vector<Trigger>{onPress(1)}));
+    // 按下那一半被吞掉了，所以松开那一半也必须跟着吞（否则前台会看到一个
+    // 孤立的 key-up），但仍然不会触发任何东西。
+    const Reaction up = release(&engine, {0x71});
+    QVERIFY(up.swallow);
+    QVERIFY(up.triggers.empty());
+}
+
+void TestEngine::remoteDesktopSkipsRemapsAndReleasesTheirKeys()
+{
+    Config config;
+    config.remaps.push_back(remap(QStringLiteral("CapsLock"), QStringLiteral("Esc")));
+    Engine engine = engineOf(config);
+
+    // 不在远程桌面里时照旧。
+    press(&engine, {vk::CAPITAL});
+    QVERIFY(engine.stateSummary().contains(QStringLiteral("active_remaps=1")));
+    // 进入远程桌面时把已经按下去的 Esc 还回去（绝不能让按键留在按下状态）。
+    QCOMPARE(engine.setRemoteDesktop(true), (std::vector<SendOp>{SendOp::keyUp(vk::ESCAPE)}));
+    // 先把上一段按着的物理键松开：当时它被吞掉了，所以这一半仍然要吞。
+    QVERIFY(engine.onKey(KeyEvent::keyUp(vk::CAPITAL), 0).swallow);
+    // 之后的物理按键完全不看：不吞、不注入、不触发。
+    QVERIFY(engine.onKey(KeyEvent::keyDown(vk::CAPITAL), 0).isEmpty());
+    QVERIFY(engine.onKey(KeyEvent::keyUp(vk::CAPITAL), 0).isEmpty());
+}
+
+void TestEngine::remoteDesktopKeepsExceptionsHeldByARemap()
+{
+    Config config;
+    RemapDef def = remap(QStringLiteral("CapsLock"), QStringLiteral("Esc"));
+    def.remoteDesktop = true;
+    config.remaps.push_back(def);
+    Engine engine = engineOf(config);
+
+    press(&engine, {vk::CAPITAL});
+    // 例外在进入远程桌面时不动：目标键仍然由我们按着。
+    QVERIFY(engine.setRemoteDesktop(true).empty());
+    QCOMPARE(engine.onKey(KeyEvent::keyUp(vk::CAPITAL), 0).inject,
+             (std::vector<SendOp>{SendOp::keyUp(vk::ESCAPE)}));
+}
+
+void TestEngine::remoteDesktopStopsRepeatsAndLoneModifierTaps()
+{
+    Config config;
+    HotkeyDef repeatable = hotkey(QStringLiteral("F1"), specOne(noneAction()));
+    repeatable.repeat = RepeatSpec::makeConfig(50, 100);
+    config.hotkeys.push_back(repeatable);
+    // 「轻碰 Win」：按下时只是待定，松开才触发。
+    HotkeyDef tap = hotkeyNamed(QStringLiteral("switcher"),
+                                QStringLiteral("LWin"),
+                                specOne(noneAction()));
+    tap.trigger = TriggerMode::Release;
+    config.hotkeys.push_back(tap);
+    Engine engine = engineOf(config);
+
+    press(&engine, {0x70});
+    QCOMPARE(engine.tick(1000).triggers.size(), std::size_t(1));
+    // 进入远程桌面：长按重复立刻停下。
+    engine.setRemoteDesktop(true);
+    QVERIFY(engine.tick(2000).triggers.empty());
+
+    // 已经待定的「轻碰 Win」也会被清掉（否则会在松开时突然冒出一次切换器）。
+    Engine second = engineOf(config);
+    QVERIFY(second.onKey(KeyEvent::keyDown(vk::LWIN), 0).isEmpty());
+    second.setRemoteDesktop(true);
+    QVERIFY(second.onKey(KeyEvent::keyUp(vk::LWIN), 0).triggers.empty());
+}
+
+void TestEngine::leavingTheRemoteDesktopRestoresHotkeys()
+{
+    Config config;
+    config.hotkeys.push_back(hotkey(QStringLiteral("F1"), specOne(noneAction())));
+    Engine engine = engineOf(config);
+
+    engine.setRemoteDesktop(true);
+    QVERIFY(press(&engine, {0x70}).isEmpty());
+    release(&engine, {0x70});
+    QVERIFY(engine.setRemoteDesktop(false).empty());
+    QVERIFY(!engine.isRemoteDesktop());
+    const Reaction fired = press(&engine, {0x70});
+    QVERIFY(fired.swallow);
+    QCOMPARE(fired.triggers, (std::vector<Trigger>{onPress(0)}));
 }
 
 QTEST_MAIN(TestEngine)

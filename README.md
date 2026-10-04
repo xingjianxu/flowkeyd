@@ -77,6 +77,10 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\flowkeyd-inst
 上层**（`topmost = true`）。要给同一个程序同时配「窗口规则」与「唤起它的快捷键」，
 用 `app{...}` 写到一起即可，`process` / `title` / `launch` 只写一遍。
 
+它也认得**远程桌面**：前台窗口是 RDP 客户端（远程桌面连接 / Windows App）时，所有快捷键
+与重映射都**放行**，键原样送给对面那台机器（想保留哪一条就在它自己身上写
+`remote_desktop = true`，见[远程桌面](#远程桌面)）。
+
 托盘通知区域里的图标平时是应用图标，但**主体内容是当前是第几号虚拟桌面**：守护进程
 每 500 ms 问一次 shell 现在在第几张桌面，把图标换成对应的数字（蓝底白字，`10` 以上
 显示 `9+`），悬停提示里也写着 `桌面 2/4`。查不到当前桌面时（锁屏、非交互会话）退回
@@ -310,6 +314,51 @@ settings{ log_level = "info", swallow = true, tick_ms = 15 }
 | `input_backend`      | `"auto"` | `auto`、`user32`，或 `ntuser`（未公开的 `win32u!NtUserSendInput`）                           |
 | `single_instance`    | `true`   | 另一个实例已占用同一配置时拒绝启动                                                           |
 | `elevate`            | `true`   | 以守护进程模式启动时，没有管理员权限就自动提权重启（`--no-elevate` 覆盖）                     |
+| `remote_desktop`     | `true`   | 前台窗口是远程桌面客户端时**放行**（不拦截、不触发）；`false` 关掉检测；写成表可以换进程名单（见[远程桌面](#远程桌面)） |
+
+### 远程桌面
+
+你在本机开着 RDP 客户端（`mstsc.exe`、Windows App）连到另一台机器时，按键本来是发给
+**对面那台**的：flowkeyd 不该把它们吞掉、也不该触发本机的动作。所以只要前台窗口属于
+远程桌面客户端，所有快捷键与重映射就一律**放行**（不拦截、不触发），键原样送到对面。
+
+```lua
+settings{ remote_desktop = true }        -- 默认就是 true
+settings{ remote_desktop = false }       -- 关掉这项检测（行为与本功能存在之前完全一样）
+
+settings{                                -- 换进程名单（整体替换内置的那份）
+  remote_desktop = {
+    enabled = true,
+    processes = { "mstsc.exe", "ToDesk.exe", "SunloginClient.exe" },
+  },
+}
+```
+
+| 项                       | 默认 | 含义                                                                                                                                     |
+| ------------------------ | ---- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `remote_desktop`         | `true` | 检测开关；`false` 表示完全不去判断前台是什么                                                                                            |
+| `remote_desktop.processes` | 微软 RDP 客户端 | 视为远程桌面的可执行文件名，大小写无关的**子串**匹配（与 `window_rule` 的 `process` 同一套）；写了就整体替换默认名单，`{}` 表示谁都不算 |
+
+默认名单是 **`mstsc.exe`、`msrdc.exe`、`msrdcw.exe`、`RdClient.Windows.exe`**（经典远程
+桌面连接与「Windows App」）。第三方远程控制软件（ToDesk / 向日葵 / AnyDesk /
+TeamViewer / RustDesk…）**不在**默认名单里：把它们的窗口也算成远程桌面是另一种口味，
+需要时写进 `processes`。
+
+想**在远程桌面里也照常拦截、照常触发**的快捷键或重映射，在它自己身上写
+`remote_desktop = true`：
+
+```lua
+-- 音量是**本机**的事：前台是远程桌面时这一条也照常拦下来、照常执行
+hotkey{ keys = "Ctrl+Alt+m", remote_desktop = true, action = volume("toggle") }
+
+remap{ from = "CapsLock", to = "Esc", remote_desktop = true }
+```
+
+判定只看**前台窗口的属主进程名**（不看标题，也不管是否全屏），而且只在**前台窗口换了**
+时做一次（外加一个 350 ms 的兜底轮询），所以按键路径上没有任何额外开销。日志里会看到
+`remote desktop detected (mstsc.exe): hotkeys and remaps pass through` 与
+`left the remote desktop (…): hotkeys and remaps are active again`；`--list` 会把它当前
+认的名单与例外一起打出来。
 
 ### `hotkey{ ... }`
 
@@ -330,6 +379,7 @@ hotkey{
 | `action`     | 按下时执行什么（`press` 和 `on_press` 是别名）                |
 | `on_release` | 松开时执行什么                                                |
 | `swallow`    | 为该快捷键覆盖 `settings.swallow`                             |
+| `remote_desktop` | `true` 表示「在远程桌面里也照常拦截、照常触发」（默认 `false`，见[远程桌面](#远程桌面)） |
 | `repeatable` | `true`，或 `{ interval_ms = 40, delay_ms = 300 }`（也认 `["repeat"]`） |
 | `enabled`    | `false` 会在不删除条目的前提下禁用它                          |
 | `comment`    | 由 `--list` 显示的自由文本备注                                |
@@ -572,6 +622,7 @@ remap{
   to = "Esc",            -- 一个按键名，或者 "^{c}" 这样的发送脚本
   mode = "hold",         -- hold（默认）或 tap
   swallow = true,        -- 默认取 settings.swallow
+  remote_desktop = true, -- 可选：在远程桌面里也照常生效（默认 false，见[远程桌面](#远程桌面)）
 }
 ```
 
@@ -947,6 +998,12 @@ Release 的版本号与发布说明（这次更新大概改了什么），显示
   `Delete` 相同的 `VK`，因此绑定 `Up` 也会被小键盘的 `8` 触发。小键盘的
   `-`/`+`/`Enter` 不受影响。
 * 挂起期间快捷键不触发、也不吞任何键，这正是 AutoHotkey 的 `Suspend` 行为。
+* **远程桌面放行只看前台窗口的属主进程名**（大小写无关的子串匹配）：不看窗口标题，也不管
+  它是不是全屏。名单写得太宽（比如 `processes = { "rdp" }`）会命中一堆无关程序。
+  第三方远程控制软件（ToDesk / 向日葵 / AnyDesk…）不在默认名单里，要自己写。
+* 进入 / 离开远程桌面那一刻，**长按重复**与待定的「轻碰 Win」会作废；已经被呑掉、还按着
+  的键在松开时仍然呑掉（否则前台会看到一个孤立的 key-up），而之前被某条重映射按住的目标键
+  会立刻松开（`remote_desktop = true` 的例外不动它）。
 * 除非 flowkeyd 自己也提权，否则 `window` 动作无法驱动提权进程的窗口。反过来，提权后
   的 flowkeyd 启动的子进程会继承管理员令牌（`run`、`open`、`window.launch` 都是）。
   需要普通权限时可以让 `explorer.exe` 代劳（`action = "run:explorer.exe path"`），

@@ -50,6 +50,8 @@ private slots:
     void appLaunchIsInheritedAndOverridden();
     void appProblemsAreReported();
     void settingsValidation();
+    void remoteDesktopDefaultsAndOverrides();
+    void remoteDesktopProcessListIsValidated();
     void evaluationErrorsAreReported();
     void legacyTomlIsReportedInsteadOfParsed();
     void utf8BomIsStrippedBeforeEvaluation();
@@ -1099,6 +1101,77 @@ void TestConfig::settingsValidation()
     error = compileConfig(backend);
     QVERIFY(error.has_value());
     QVERIFY2(error->toString().contains(QStringLiteral("input_backend")), qPrintable(error->toString()));
+}
+
+void TestConfig::remoteDesktopDefaultsAndOverrides()
+{
+    // 默认：检测开着，名单是内置的微软 RDP 客户端；单条绑定默认**没有**例外。
+    Config config;
+    config.hotkeys.push_back(hotkey(QStringLiteral("Ctrl+Alt+t"),
+                                    specOne(runAction(QStringLiteral("wt.exe")))));
+    config.remaps.push_back(remap(QStringLiteral("CapsLock"), QStringLiteral("Esc")));
+    auto compiled = compileOrDie(config);
+    QVERIFY(compiled->settings.remoteDesktop);
+    QCOMPARE(compiled->settings.remoteDesktopProcesses, builtinRemoteDesktopProcesses());
+    QVERIFY(!compiled->bindings.at(0).remoteDesktop);
+    QVERIFY(!compiled->remaps.at(0).remoteDesktop);
+
+    // 关掉检测。
+    Config off;
+    off.settings.remoteDesktop = false;
+    compiled = compileOrDie(off);
+    QVERIFY(!compiled->settings.remoteDesktop);
+
+    // 自定义名单（整体替掉内置的）。
+    Config custom;
+    custom.settings.remoteDesktopProcesses = QStringList{QStringLiteral("ToDesk.exe")};
+    compiled = compileOrDie(custom);
+    QCOMPARE(compiled->settings.remoteDesktopProcesses,
+             QStringList{QStringLiteral("ToDesk.exe")});
+
+    // 单条例外：`remote_desktop = true` 的绑定与重映射在远程桌面里照常工作。
+    Config exceptions;
+    HotkeyDef hotkeyDef = hotkey(QStringLiteral("F2"), specOne(noneAction()));
+    hotkeyDef.remoteDesktop = true;
+    exceptions.hotkeys.push_back(hotkeyDef);
+    RemapDef remapDef = remap(QStringLiteral("CapsLock"), QStringLiteral("Esc"));
+    remapDef.remoteDesktop = true;
+    exceptions.remaps.push_back(remapDef);
+    compiled = compileOrDie(exceptions);
+    QVERIFY(compiled->bindings.at(0).remoteDesktop);
+    QVERIFY(compiled->remaps.at(0).remoteDesktop);
+
+    // 显式写 false 与默认值一样。
+    Config explicitFalse;
+    HotkeyDef plain = hotkey(QStringLiteral("F2"), specOne(noneAction()));
+    plain.remoteDesktop = false;
+    explicitFalse.hotkeys.push_back(plain);
+    compiled = compileOrDie(explicitFalse);
+    QVERIFY(!compiled->bindings.at(0).remoteDesktop);
+}
+
+void TestConfig::remoteDesktopProcessListIsValidated()
+{
+    // 空串在匹配里是「不限制」，会让任何前台窗口都算远程桌面：必须拦住它。
+    Config config;
+    config.settings.remoteDesktopProcesses = QStringList{QStringLiteral("")};
+    auto error = compileConfig(config);
+    QVERIFY(error.has_value());
+    QVERIFY2(error->toString().contains(QStringLiteral("remote_desktop.processes")),
+             qPrintable(error->toString()));
+
+    Config blank;
+    blank.settings.remoteDesktopProcesses = QStringList{QStringLiteral("mstsc.exe"),
+                                                        QStringLiteral("   ")};
+    error = compileConfig(blank);
+    QVERIFY(error.has_value());
+    QVERIFY2(error->toString().contains(QStringLiteral("remote_desktop.processes[2]")),
+             qPrintable(error->toString()));
+
+    // 空名单是合法的（谁都不算 = 等于关掉这项检测）。
+    Config empty;
+    empty.settings.remoteDesktopProcesses = QStringList{};
+    QVERIFY(!compileConfig(empty).has_value());
 }
 
 void TestConfig::evaluationErrorsAreReported()

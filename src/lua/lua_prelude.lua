@@ -70,11 +70,16 @@ local function registration(t, what)
 end
 
 -- 注册一个快捷键：hotkey{ keys = "Ctrl+Alt+t", action = run("wt.exe") }
+-- 字段：name / keys / trigger / swallow / action（= press / on_press）/ on_release /
+--       repeatable（= repeat）/ enabled / comment / remote_desktop。
+-- remote_desktop = true 表示「键盘在远程桌面里时也照常拦截、照常触发」；
+-- 默认 false —— 检测到前台是远程桌面客户端时这条快捷键会被放行（见 settings）。
 function hotkey(t)
   state.hotkeys[#state.hotkeys + 1] = registration(t, "hotkey")
 end
 
 -- 注册一个重映射：remap{ from = "CapsLock", to = "Esc" }
+-- remote_desktop = true 的含义与 hotkey 上那一个相同（默认 false：在远程桌面里放行）。
 function remap(t)
   state.remaps[#state.remaps + 1] = registration(t, "remap")
 end
@@ -120,6 +125,15 @@ function app(t)
 end
 
 -- 注册一组全局设置。可以多次调用，后写的键覆盖先写的。
+-- 字段：log_level / swallow / exact_modifiers / release_modifiers /
+--       repeat_interval_ms / repeat_delay_ms / tick_ms / input_backend /
+--       single_instance / elevate / remote_desktop。
+--
+-- remote_desktop（默认 true）：前台窗口的属主进程命中远程桌面客户端名单时，
+--   **不拦截、不触发**任何快捷键与重映射（键要原样送给对面那台机器）。
+--   remote_desktop = false 就完全关掉这项检测；写成表可以换名单：
+--     remote_desktop = { enabled = true, processes = { "mstsc.exe", "ToDesk.exe" } }
+--   （processes 写了就是整体替换内置的微软 RDP 客户端名单；空表 = 谁都不算。）
 function settings(t)
   state.settings[#state.settings + 1] = registration(t, "settings")
 end

@@ -447,6 +447,16 @@ std::optional<ConfigError> compile(const Config &config,
         errors.append(QStringLiteral("settings.input_backend `%1` is not one of auto|user32|ntuser")
                           .arg(config.settings.inputBackend));
     }
+    // 空串在 `windowProcessMatches()` 里是「不限制」的意思，那会让**任何**前台窗口
+    // 都被当成远程桌面（所有快捷键一起失效）。所以这里必须拦住它。
+    for (int i = 0; i < config.settings.remoteDesktopProcesses.size(); ++i) {
+        if (config.settings.remoteDesktopProcesses.at(i).trimmed().isEmpty()) {
+            errors.append(QStringLiteral(
+                              "settings.remote_desktop.processes[%1] must not be empty (an empty "
+                              "process name would match every window)")
+                              .arg(i + 1));
+        }
+    }
 
     for (std::size_t i = 0; i < hotkeys.size(); ++i) {
         const HotkeyDef &def = hotkeys.at(i);
@@ -567,6 +577,7 @@ std::optional<ConfigError> compile(const Config &config,
         binding.release = std::move(release);
         binding.repeat = repeat;
         binding.comment = def.comment;
+        binding.remoteDesktop = def.remoteDesktop.value_or(false);
         bindings.push_back(std::move(binding));
     }
 
@@ -635,6 +646,7 @@ std::optional<ConfigError> compile(const Config &config,
                                           : QStringLiteral("%1 -> %2").arg(from.render(), def.to);
         remap.from = from;
         remap.swallow = def.swallow.value_or(config.settings.swallow);
+        remap.remoteDesktop = def.remoteDesktop.value_or(false);
         remaps.push_back(std::move(remap));
     }
 

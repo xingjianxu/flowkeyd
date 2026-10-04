@@ -67,12 +67,23 @@ public:
 
     const std::shared_ptr<const Compiled> &config() const { return m_config; }
     bool isSuspended() const { return m_suspended; }
+    /// 键盘现在是不是在远程桌面客户端里（见 `setRemoteDesktop()`）。
+    bool isRemoteDesktop() const { return m_remoteDesktop; }
 
     /// 替换配置，返回为避免遗留合成按键按住不放而需要的注入操作。
     std::vector<SendOp> setConfig(std::shared_ptr<const Compiled> config);
 
     /// 挂起/恢复，返回释放重映射当前按住的按键所需的注入操作。
     std::vector<SendOp> setSuspended(bool suspended);
+
+    /// 告诉引擎「键盘现在在/不在远程桌面客户端里」（判定在
+    /// `platform/win/hook`：前台窗口的属主进程命中 `settings.remote_desktop`）。
+    ///
+    /// 置位期间，**没有**写 `remote_desktop = true` 的绑定与重映射一律不拦截、
+    /// 不触发：键要原样送给对面那台机器。返回进入该状态时为了释放「已经被放行
+    /// 的重映射按住的按键」而需要的注入操作（照抄挂起的做法：绝不让按键留在
+    /// 按下状态）。
+    std::vector<SendOp> setRemoteDesktop(bool active);
 
     /// 送入一个键盘事件。
     Reaction onKey(const KeyEvent &event, std::uint64_t nowMs);
@@ -140,6 +151,8 @@ private:
     /// 正在等待松开的「轻碰修饰键」（见 `PendingTap`）。
     std::vector<PendingTap> m_pendingTaps;
     bool m_suspended = false;
+    /// 键盘在远程桌面客户端里（见 `setRemoteDesktop()`）。
+    bool m_remoteDesktop = false;
 
     /// 某个被吞掉的和弦让 Windows 或 Alt 键在外壳眼中显得“赤裸”，
     /// 因此它的松开必须用未分配的标记按键伪装。

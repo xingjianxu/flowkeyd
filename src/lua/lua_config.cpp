@@ -718,7 +718,7 @@ core::Settings convertSettings(lua_State *L, int index)
     checkFields(L, index,
                 {"log_level", "swallow", "exact_modifiers", "release_modifiers",
                  "repeat_interval_ms", "repeat_delay_ms", "tick_ms", "input_backend",
-                 "single_instance", "elevate"});
+                 "single_instance", "elevate", "remote_desktop"});
     core::Settings settings;
     if (auto value = optString(L, index, "log_level")) {
         settings.logLevel = *value;
@@ -750,6 +750,33 @@ core::Settings convertSettings(lua_State *L, int index)
     if (auto value = optBool(L, index, "elevate")) {
         settings.elevate = *value;
     }
+    // `remote_desktop = true|false`，或者一张表：
+    //
+    //   remote_desktop = { enabled = true, processes = { "mstsc.exe" } }
+    //
+    // 后者才能改进程名单（写了就整体替掉内置名单，空表 = 谁都不算）。
+    if (hasField(L, index, "remote_desktop")) {
+        int v = 0;
+        pushField(L, index, "remote_desktop", &v);
+        if (lua_type(L, v) == LUA_TBOOLEAN) {
+            settings.remoteDesktop = lua_toboolean(L, v) != 0;
+        } else if (lua_type(L, v) == LUA_TTABLE) {
+            checkFields(L, v, {"enabled", "processes"});
+            if (auto value = optBool(L, v, "enabled")) {
+                settings.remoteDesktop = *value;
+            }
+            if (hasField(L, v, "processes")) {
+                settings.remoteDesktopProcesses = oneOrManyStrings(L, v, "processes");
+            }
+        } else {
+            const QString type = luaTypeName(lua_type(L, v));
+            lua_pop(L, 1);
+            fail(QStringLiteral("remote_desktop: invalid type: %1, expected `true`, `false` or a "
+                                "table with `enabled` / `processes`")
+                     .arg(type));
+        }
+        lua_pop(L, 1);
+    }
     return settings;
 }
 
@@ -757,7 +784,7 @@ core::HotkeyDef convertHotkey(lua_State *L, int index)
 {
     checkFields(L, index,
                 {"name", "keys", "trigger", "swallow", "action", "press", "on_press",
-                 "on_release", "repeat", "repeatable", "enabled", "comment"});
+                 "on_release", "repeat", "repeatable", "enabled", "comment", "remote_desktop"});
     core::HotkeyDef hotkey;
     hotkey.name = optString(L, index, "name");
     hotkey.keys = oneOrManyStrings(L, index, "keys");
@@ -804,12 +831,13 @@ core::HotkeyDef convertHotkey(lua_State *L, int index)
 
     hotkey.enabled = optBool(L, index, "enabled").value_or(true);
     hotkey.comment = optString(L, index, "comment");
+    hotkey.remoteDesktop = optBool(L, index, "remote_desktop");
     return hotkey;
 }
 
 core::RemapDef convertRemap(lua_State *L, int index)
 {
-    checkFields(L, index, {"name", "from", "to", "mode", "swallow", "enabled"});
+    checkFields(L, index, {"name", "from", "to", "mode", "swallow", "enabled", "remote_desktop"});
     core::RemapDef remap;
     remap.name = optString(L, index, "name");
     remap.from = reqString(L, index, "from");
@@ -818,6 +846,7 @@ core::RemapDef convertRemap(lua_State *L, int index)
     remap.mode = mode == QLatin1String("tap") ? core::RemapMode::Tap : core::RemapMode::Hold;
     remap.swallow = optBool(L, index, "swallow");
     remap.enabled = optBool(L, index, "enabled").value_or(true);
+    remap.remoteDesktop = optBool(L, index, "remote_desktop");
     return remap;
 }
 

@@ -83,6 +83,8 @@ private slots:
     void emptyActionListIsAnErrorNotASilentNoop();
     void emptyTableInAMapPositionExplainsItself();
     void repeatedSettingsWarnInsteadOfFailing();
+    void remoteDesktopIsConverted();
+    void remoteDesktopRejectsBadShapes();
     void luaIsActuallyLua();
     void longStringsKeepWindowsPathsIntact();
     void bomIsStrippedBeforeLuaSeesIt();
@@ -443,6 +445,76 @@ void TestLua::repeatedSettingsWarnInsteadOfFailing()
         }
     }
     QVERIFY(warned);
+}
+
+void TestLua::remoteDesktopIsConverted()
+{
+    // 默认：检测开着，名单是内置的。
+    const auto defaults = parse(R"(settings{ log_level = "info" })");
+    QVERIFY(defaults.has_value());
+    QVERIFY(defaults->settings.remoteDesktop);
+    QCOMPARE(defaults->settings.remoteDesktopProcesses,
+             core::builtinRemoteDesktopProcesses());
+
+    // 布尔简写。
+    const auto off = parse(R"(settings{ remote_desktop = false })");
+    QVERIFY(off.has_value());
+    QVERIFY(!off->settings.remoteDesktop);
+
+    // 表：开关 + 名单（名单整体替掉内置的那份）。
+    const auto table = parse(R"(
+        settings{ remote_desktop = { enabled = true, processes = { "ToDesk.exe", "mstsc" } } }
+    )");
+    QVERIFY(table.has_value());
+    QVERIFY(table->settings.remoteDesktop);
+    QCOMPARE(table->settings.remoteDesktopProcesses,
+             QStringList({QStringLiteral("ToDesk.exe"), QStringLiteral("mstsc")}));
+
+    // 只写 processes：`enabled` 保持默认的 true。
+    const auto onlyProcesses = parse(R"(settings{ remote_desktop = { processes = "mstsc.exe" } })");
+    QVERIFY(onlyProcesses.has_value());
+    QVERIFY(onlyProcesses->settings.remoteDesktop);
+    QCOMPARE(onlyProcesses->settings.remoteDesktopProcesses,
+             QStringList{QStringLiteral("mstsc.exe")});
+
+    // 空表 = 名单为空 = 谁都不算。
+    const auto empty = parse(R"(settings{ remote_desktop = { processes = {} } })");
+    QVERIFY(empty.has_value());
+    QVERIFY(empty->settings.remoteDesktopProcesses.isEmpty());
+
+    // 单条例外：hotkey 与 remap 都认。
+    const auto exceptions = parse(R"(
+        hotkey{ keys = "F1", action = none(), remote_desktop = true }
+        hotkey{ keys = "F2", action = none() }
+        remap{ from = "CapsLock", to = "Esc", remote_desktop = true }
+    )");
+    QVERIFY(exceptions.has_value());
+    QVERIFY(exceptions->bindings.at(0).remoteDesktop);
+    QVERIFY(!exceptions->bindings.at(1).remoteDesktop);
+    QVERIFY(exceptions->remaps.at(0).remoteDesktop);
+}
+
+void TestLua::remoteDesktopRejectsBadShapes()
+{
+    const QString type = failure(R"(settings{ remote_desktop = "yes" })");
+    QVERIFY2(type.contains(QStringLiteral("remote_desktop")), qPrintable(type));
+    QVERIFY2(type.contains(QStringLiteral("invalid type")), qPrintable(type));
+
+    const QString unknown = failure(R"(settings{ remote_desktop = { process = { "x" } } })");
+    QVERIFY2(unknown.contains(QStringLiteral("unknown field")), qPrintable(unknown));
+    QVERIFY2(unknown.contains(QStringLiteral("process`")), qPrintable(unknown));
+
+    const QString notBoolean = failure(R"(settings{ remote_desktop = { enabled = 1 } })");
+    QVERIFY2(notBoolean.contains(QStringLiteral("invalid type")), qPrintable(notBoolean));
+
+    const QString badList = failure(R"(settings{ remote_desktop = { processes = { 1 } } })");
+    QVERIFY2(badList.contains(QStringLiteral("expected a string")), qPrintable(badList));
+
+    // 单条绑定上的例外也必须是布尔。
+    const QString hotkeyBad = failure(R"(hotkey{ keys = "F1", remote_desktop = "maybe" })");
+    QVERIFY2(hotkeyBad.contains(QStringLiteral("invalid type")), qPrintable(hotkeyBad));
+    const QString remapBad = failure(R"(remap{ from = "F1", to = "F2", remote_desktop = 1 })");
+    QVERIFY2(remapBad.contains(QStringLiteral("invalid type")), qPrintable(remapBad));
 }
 
 void TestLua::luaIsActuallyLua()

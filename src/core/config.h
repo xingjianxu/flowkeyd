@@ -11,6 +11,7 @@
 
 #include "core/action.h"
 #include "core/keys.h"
+#include "core/remote_desktop.h"
 
 #include <QByteArray>
 #include <QString>
@@ -101,6 +102,14 @@ struct Settings
     bool singleInstance = true;
     /// 守护进程模式启动时，如果没有管理员权限就自动以管理员身份重启。
     bool elevate = true;
+    /// 前台窗口属于远程桌面客户端（`remoteDesktopProcesses`）时**放行**：不拦截、
+    /// 不触发。目的：在本机开着 RDP 客户端时，键要原样送给对面那台机器。
+    /// 单条例外写在 `hotkey` / `remap` 上的 `remote_desktop = true`。
+    bool remoteDesktop = true;
+    /// 视为「远程桌面客户端」的可执行文件名（大小写无关的子串匹配）。
+    /// 默认 = `builtinRemoteDesktopProcesses()`；配置里写了就**整体替换**
+    /// （空表 = 谁都不算，等于关掉这个功能）。
+    QStringList remoteDesktopProcesses = builtinRemoteDesktopProcesses();
 };
 
 /// 一个或多个动作。
@@ -162,6 +171,8 @@ struct HotkeyDef
     std::optional<RepeatSpec> repeat;
     bool enabled = true;
     std::optional<QString> comment;
+    /// 在远程桌面里也照常拦截/触发（默认 false：检测到远程桌面时放行）。
+    std::optional<bool> remoteDesktop;
 };
 
 /// 一条 `remap{...}`。
@@ -175,6 +186,8 @@ struct RemapDef
     RemapMode mode = RemapMode::Hold;
     std::optional<bool> swallow;
     bool enabled = true;
+    /// 在远程桌面里也照常生效（默认 false：检测到远程桌面时放行）。
+    std::optional<bool> remoteDesktop;
 };
 
 /// `window_rule{...}` 里的目标显示器。
@@ -287,6 +300,9 @@ struct Binding
     std::vector<Action> release;
     std::optional<Repeat> repeat;
     std::optional<QString> comment;
+    /// 在远程桌面里也照常拦截/触发（`remote_desktop = true`）；
+    /// 默认 false = 检测到远程桌面时放行。
+    bool remoteDesktop = false;
 };
 
 /// 编译后的重映射：按下/松开两半已经预先切分好。
@@ -297,6 +313,8 @@ struct CompiledRemap
     std::vector<SendOp> press;
     std::vector<SendOp> release;
     bool swallow = true;
+    /// 在远程桌面里也照常生效（见 `Binding::remoteDesktop`）。
+    bool remoteDesktop = false;
 };
 
 /// 编译后的 `window_rule`。

@@ -71,6 +71,34 @@ std::vector<SendOp> Engine::setSuspended(bool suspended)
     return {};
 }
 
+std::vector<SendOp> Engine::setRemoteDesktop(bool active)
+{
+    if (m_remoteDesktop == active) {
+        return {};
+    }
+    m_remoteDesktop = active;
+    // 长按重复与待定的「轻碰修饰键」都不该跨过一次前台切换继续存在。
+    m_repeating.clear();
+    m_pendingTaps.clear();
+    if (!active) {
+        return {};
+    }
+    // 进入远程桌面：把「刚刚被放行」的重映射按住的目标键松开。**例外**
+    // （`remote_desktop = true`）保持不动，它仍然归我们管。
+    std::vector<SendOp> ops;
+    for (auto it = m_activeRemaps.begin(); it != m_activeRemaps.end();) {
+        const std::size_t index = it->second;
+        if (index < m_config->remaps.size() && !m_config->remaps.at(index).remoteDesktop) {
+            const CompiledRemap &remap = m_config->remaps.at(index);
+            ops.insert(ops.end(), remap.release.begin(), remap.release.end());
+            it = m_activeRemaps.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    return ops;
+}
+
 Modifiers Engine::heldModifiers() const
 {
     Modifiers mods;
@@ -130,6 +158,10 @@ std::optional<std::pair<std::size_t, Chord>> Engine::bestBinding(Vk key,
         if (suspendedOnly && !isSuspendControl(index)) {
             continue;
         }
+        // 键盘在远程桌面里：没写 `remote_desktop = true` 的绑定一律放行。
+        if (m_remoteDesktop && !m_config->bindings.at(index).remoteDesktop) {
+            continue;
+        }
         for (const Chord &chord : m_config->bindings.at(index).chords) {
             if (const auto score = chordMatches(chord, key, held, exactModifiers); score.has_value()) {
                 // 严格更优者胜出；同分时保留配置中靠前的条目。
@@ -151,6 +183,10 @@ std::optional<std::pair<std::size_t, Chord>> Engine::bestRemap(Vk key,
 {
     std::optional<std::tuple<std::uint32_t, std::size_t, Chord>> best;
     for (std::size_t index = 0; index < m_config->remaps.size(); ++index) {
+        // 键盘在远程桌面里：没写 `remote_desktop = true` 的重映射一律放行。
+        if (m_remoteDesktop && !m_config->remaps.at(index).remoteDesktop) {
+            continue;
+        }
         const Chord &from = m_config->remaps.at(index).from;
         if (const auto score = chordMatches(from, key, held, exactModifiers); score.has_value()) {
             if (!best.has_value() || *score > std::get<0>(*best)) {
@@ -355,9 +391,10 @@ QString Engine::stateSummary() const
     for (const Vk vk : m_physical) {
         held.append(nameFromKey(vk));
     }
-    return QStringLiteral("suspended=%1 held=[%2] suppressed=%3 active_bindings=%4 active_remaps=%5 "
-                          "repeating=%6")
+    return QStringLiteral("suspended=%1 remote_desktop=%2 held=[%3] suppressed=%4 active_bindings=%5 "
+                          "active_remaps=%6 repeating=%7")
         .arg(m_suspended ? QStringLiteral("true") : QStringLiteral("false"),
+             m_remoteDesktop ? QStringLiteral("true") : QStringLiteral("false"),
              held.join(QLatin1Char(',')),
              QString::number(m_suppressed.size()),
              QString::number(m_activeBindings.size()),

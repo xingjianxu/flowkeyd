@@ -169,6 +169,8 @@ add_library(flowkeyd_core STATIC
     src/core/log_tail.h
     src/core/placement.cpp
     src/core/placement.h
+    src/core/remote_desktop.cpp
+    src/core/remote_desktop.h
     src/core/template.cpp
     src/core/template.h
     src/core/update_check.cpp
@@ -555,6 +557,7 @@ flowkeyd_add_test(tst_command_line LIBS flowkeyd_platform)
 flowkeyd_add_test(tst_instance LIBS flowkeyd_platform)
 flowkeyd_add_test(tst_log_tail)
 flowkeyd_add_test(tst_window_match)
+flowkeyd_add_test(tst_remote_desktop)
 flowkeyd_add_test(tst_placement)
 flowkeyd_add_test(tst_audio LIBS flowkeyd_platform)
 flowkeyd_add_test(tst_interactive LIBS flowkeyd_platform flowkeyd_update)

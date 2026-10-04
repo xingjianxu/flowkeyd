@@ -80,6 +80,32 @@ QString renderBindings(const core::Compiled &compiled)
                .arg(compiled.remaps.size())
                .arg(compiled.windowRules.size())
                .arg(compiled.source);
+    // 远程桌面放行是一项全局行为，却由单条绑定上的 `remote_desktop = true` 决定
+    // 例外，所以在这里把两边一起列出来。
+    if (compiled.settings.remoteDesktop) {
+        const QStringList &processes = compiled.settings.remoteDesktopProcesses;
+        QStringList keep;
+        for (const core::Binding &binding : compiled.bindings) {
+            if (!binding.remoteDesktop) {
+                continue;
+            }
+            QStringList chords;
+            for (const core::Chord &chord : binding.chords) {
+                chords.append(chord.render());
+            }
+            keep.append(chords.join(QStringLiteral(", ")));
+        }
+        for (const core::CompiledRemap &remap : compiled.remaps) {
+            if (remap.remoteDesktop) {
+                keep.append(remap.from.render());
+            }
+        }
+        out += QStringLiteral("  remote desktop: pass through in front of %1; keep working: %2\n")
+                   .arg(processes.isEmpty()
+                            ? QStringLiteral("(no process configured)")
+                            : processes.join(QStringLiteral(", ")),
+                        keep.isEmpty() ? QStringLiteral("-") : keep.join(QStringLiteral("; ")));
+    }
     for (const core::Binding &binding : compiled.bindings) {
         QStringList chords;
         for (const core::Chord &chord : binding.chords) {

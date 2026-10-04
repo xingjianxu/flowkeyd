@@ -1,9 +1,11 @@
 #include "platform/win/hook.h"
 
 #include "core/placement.h"
+#include "core/remote_desktop.h"
 #include "platform/win/input.h"
 #include "platform/win/logging.h"
 #include "platform/win/monitor.h"
+#include "platform/win/window.h"
 
 #include <QStringList>
 
@@ -43,10 +45,11 @@ LRESULT CALLBACK keyboardHookProc(int code, WPARAM wparam, LPARAM lparam)
     return 1;
 }
 
-/// `SetWinEventHook` 的回调：只关心顶层窗口的“出现”与“销毁”。
+/// `SetWinEventHook` 的回调：顶层窗口的“出现”与“销毁”，以及前台窗口的切换。
 ///
 /// `WINEVENT_OUTOFCONTEXT` 的回调运行在装钩子的那个线程（钩子线程）上，
-/// 所以这里只把窗口记下来，真正的摆放交给工作线程。
+/// 所以这里只把窗口记下来，真正的摆放交给工作线程；而“在不在远程桌面里”
+/// 只影响引擎，就地更新就行。
 void CALLBACK winEventProc(HWINEVENTHOOK,
                            DWORD event,
                            HWND hwnd,
@@ -55,13 +58,19 @@ void CALLBACK winEventProc(HWINEVENTHOOK,
                            DWORD,
                            DWORD)
 {
+    HookThread *self = s_active.load();
+    if (self == nullptr) {
+        return;
+    }
+    if (event == EVENT_SYSTEM_FOREGROUND) {
+        // 没有任何前台窗口时 `hwnd` 是 0：那当然不在远程桌面里。
+        self->noteForegroundWindow(hwnd);
+        return;
+    }
     if (hwnd == nullptr || idObject != OBJID_WINDOW || idChild != CHILDID_SELF) {
         return;
     }
-    HookThread *self = s_active.load();
-    if (self != nullptr) {
-        self->noteWindowEvent(event, hwnd);
-    }
+    self->noteWindowEvent(event, hwnd);
 }
 
 } // namespace
@@ -161,6 +170,18 @@ void HookThread::threadMain(std::promise<QString> ready)
     } else {
         logDebug(QStringLiteral("window watcher installed (EVENT_OBJECT_SHOW)"));
     }
+    // 前台窗口监听：远程桌面放行靠它立刻生效（不然要等下一次 placement tick）。
+    // **故意不带** `WINEVENT_SKIPOWNPROCESS`：flowkeyd 自己的弹窗拿到前台时就应该
+    // 算“不在远程桌面里”（那时按的键是给我们自己的）。
+    m_foregroundHook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND,
+                                       nullptr, winEventProc, 0, 0, WINEVENT_OUTOFCONTEXT);
+    if (m_foregroundHook == nullptr) {
+        logWarn(QStringLiteral("could not watch foreground changes (%1); the remote desktop "
+                               "check will only run when a window appears")
+                    .arg(lastErrorMessage("SetWinEventHook")));
+    } else {
+        logDebug(QStringLiteral("foreground watcher installed (EVENT_SYSTEM_FOREGROUND)"));
+    }
     if (acceptInjectedInput()) {
         logWarn(QStringLiteral(
             "FLOWKEYD_ACCEPT_INJECTED is set: input synthesized by other programs will "
@@ -179,6 +200,9 @@ void HookThread::threadMain(std::promise<QString> ready)
                  .arg(static_cast<qulonglong>(m_placementTimerId))
                  .arg(kPlacementIntervalMs));
     m_running.store(true);
+    // 启动时先看一眼前台窗口：如果键盘一启动就在远程桌面客户端里，第一个按键
+    // 就该放行。
+    noteForegroundWindow(GetForegroundWindow());
     ready.set_value(QString());
 
     while (GetMessageW(&message, nullptr, 0, 0) > 0) {
@@ -203,6 +227,10 @@ void HookThread::threadMain(std::promise<QString> ready)
     if (m_winEventHook != nullptr) {
         UnhookWinEvent(m_winEventHook);
         m_winEventHook = nullptr;
+    }
+    if (m_foregroundHook != nullptr) {
+        UnhookWinEvent(m_foregroundHook);
+        m_foregroundHook = nullptr;
     }
     if (m_hook != nullptr) {
         UnhookWindowsHookEx(m_hook);
@@ -292,11 +320,46 @@ void HookThread::noteWindowEvent(DWORD event, HWND hwnd)
     logDebug(QStringLiteral("window appeared: hwnd %1").arg(reinterpret_cast<quintptr>(hwnd)));
 }
 
+void HookThread::noteForegroundWindow(HWND hwnd)
+{
+    if (!m_running.load() || !m_engine) {
+        return;
+    }
+    updateRemoteDesktop(hwnd != nullptr ? window::processName(hwnd) : std::nullopt);
+}
+
+void HookThread::updateRemoteDesktop(const std::optional<QString> &executableName)
+{
+    if (!m_engine) {
+        return;
+    }
+    const core::Settings &settings = m_engine->config()->settings;
+    const bool active = settings.remoteDesktop
+        && core::isRemoteDesktopProcess(executableName, settings.remoteDesktopProcesses);
+    if (active == m_remoteDesktop) {
+        return;
+    }
+    m_remoteDesktop = active;
+    // 进入这个状态时要松开已经被放行的重映射按住的键（`setRemoteDesktop()`
+    // 会告诉我们该注入什么），否则那些键会留在按下状态。
+    injectOps(m_engine->setRemoteDesktop(active));
+    if (active) {
+        logInfo(QStringLiteral("remote desktop detected (%1): hotkeys and remaps pass through")
+                    .arg(executableName.value_or(QStringLiteral("unknown window"))));
+    } else {
+        logInfo(QStringLiteral("left the remote desktop (%1): hotkeys and remaps are active again")
+                    .arg(executableName.value_or(QStringLiteral("no foreground window"))));
+    }
+}
+
 void HookThread::handlePlacementTick()
 {
     if (!m_engine) {
         return;
     }
+    // 兜底：万一 `EVENT_SYSTEM_FOREGROUND` 的监听没装上（或者漏了一次），
+    // 这个 tick 也会把状态纠回来。每 350 ms 一次 `OpenProcess`，不值得省。
+    noteForegroundWindow(GetForegroundWindow());
     const bool enabled = !m_engine->config()->windowRules.empty() && !m_suspended.load();
     if (!enabled) {
         m_pendingWindows.clear();
@@ -393,6 +456,8 @@ void HookThread::handleControlCommand(ControlCmd cmd)
         }
         injectOps(m_engine->setConfig(pending));
         m_suspended.store(m_engine->isSuspended());
+        // 新配置可能改了远程桌面的开关或进程名单，重新判一次。
+        noteForegroundWindow(GetForegroundWindow());
         logInfo(QStringLiteral("reloaded %1 (%2 hotkey(s), %3 remap(s))")
                     .arg(pending->source)
                     .arg(pending->bindings.size())

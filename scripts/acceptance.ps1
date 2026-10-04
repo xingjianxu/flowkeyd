@@ -39,6 +39,9 @@
 #   * suspend / resume（挂起时别的绑定不触发，而 suspend 自己仍然可用）
 #   * reload（改过的配置文本立刻生效）
 #   * quit（钩子卸掉、之后按键重新到达前台、没有按键卡在按下状态）
+#   * 远程桌面放行（名单里写的是捕捉窗口自己那个进程）：前台在名单里时，没写例外的
+#     绑定被放行（键到达前台、动作不跑）、`remote_desktop = true` 的例外照常拦下来
+#     并执行；换掉名单重载之后，绑定又回到正常行为，而且 quit 例外能停掉它
 #
 # 需要交互式桌面会话，而且会真的注入按键、抢焦点（约两分钟）。按 AGENTS.md
 # 工作约定第 6 条先提醒用户再跑。
@@ -107,11 +110,13 @@ $VK_S = 0x53
 $VK_ESC = 0x1B
 $VK_RETURN = 0x0D
 $VK_F6 = 0x75
+$VK_F7 = 0x76
 $VK_F8 = 0x77
 $VK_F9 = 0x78
 $VK_F10 = 0x79
 $VK_F11 = 0x7A
 $VK_F12 = 0x7B
+$VK_F13 = 0x7C
 $VK_F15 = 0x7E
 $VK_F17 = 0x80
 $VK_F18 = 0x81
@@ -129,6 +134,8 @@ New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
 $config = Join-Path $WorkDir 'accept.lua'
 $daemonLog = Join-Path $WorkDir 'daemon.log'
 $daemonOut = Join-Path $WorkDir 'daemon.out'
+$rdLog = Join-Path $WorkDir 'remote-desktop.log'
+$rdOut = Join-Path $WorkDir 'remote-desktop.out'
 $onceLog = Join-Path $WorkDir 'once.log'
 $targetTitle = 'flowkeyd-accept-target'
 $targetScript = Join-Path $WorkDir 'target-window.ps1'
@@ -514,6 +521,35 @@ hotkey { name = "accept-switch", comment = "window switcher", keys = "LWin",
     Set-Content -Path $config -Value $text -Encoding UTF8
 }
 
+# 远程桌面那一段用的一次性配置。`$processes` 是一段已经带引号的 Lua 列表：
+# 把**捕捉窗口自己那个进程**写进名单，就能在不碰真 RDP 的前提下验证整条链：
+# 前台是它时，没写例外的绑定放行（键到达前台、动作不跑），写了
+# `remote_desktop = true` 的例外照常拦、照常执行。
+function Write-RdConfig([string]$processes) {
+    $rdConfig = Join-Path $WorkDir 'remote-desktop.lua'
+    $text = @"
+settings {
+  log_level = "debug",
+  remote_desktop = { enabled = true, processes = { $processes } },
+}
+
+-- 没写例外：在远程桌面里必须放行。
+hotkey { name = "accept-rd-pass", comment = "rd pass", keys = "Ctrl+Alt+F7",
+  action = clipboard("set", { text = "RD-ACTION" }) }
+
+-- 写了例外：在远程桌面里也照常拦、照常执行。
+hotkey { name = "accept-rd-keep", comment = "rd keep", keys = "Ctrl+Alt+F13",
+  remote_desktop = true, action = clipboard("set", { text = "RD-KEEP" }) }
+
+-- 换名单要用它：这条自己也得带例外，否则在远程桌面里按不动。
+hotkey { name = "accept-rd-reload", comment = "rd reload", keys = "Ctrl+Alt+F6",
+  remote_desktop = true, action = reload() }
+hotkey { name = "accept-rd-quit", comment = "rd quit", keys = "Ctrl+Alt+F10",
+  remote_desktop = true, action = quit() }
+"@
+    Set-Content -Path $rdConfig -Value $text -Encoding UTF8
+}
+
 Set-Content -Path $targetScript -Value $targetScriptBody -Encoding UTF8
 Write-Config 'MARKER-1'
 
@@ -652,6 +688,14 @@ function DaemonText {
     if (Test-Path $daemonLog) { $a = (Get-Content $daemonLog -Raw -ErrorAction SilentlyContinue) }
     $b = ''
     if (Test-Path $daemonOut) { $b = (Get-Content $daemonOut -Raw -ErrorAction SilentlyContinue) }
+    return "$a$b"
+}
+function RdText {
+    # 远程桌面那一段跑的是第二个实例（它自己的配置与日志）。
+    $a = ''
+    if (Test-Path $rdLog) { $a = (Get-Content $rdLog -Raw -ErrorAction SilentlyContinue) }
+    $b = ''
+    if (Test-Path $rdOut) { $b = (Get-Content $rdOut -Raw -ErrorAction SilentlyContinue) }
     return "$a$b"
 }
 # 诊断信息写进 UTF-8 文件：控制台的代码页会把中文窗口标题糟蹋掉，
@@ -1220,6 +1264,56 @@ try {
     foreach ($pair in @(@('Ctrl', $VK_CTRL), @('Alt', $VK_ALT), @('Shift', $VK_SHIFT), @('Win', $VK_LWIN))) {
         Check "没有卡住的 $($pair[0]) 键" (-not [FlowInject]::IsDown($pair[1]))
     }
+
+    # --- 远程桌面放行 --------------------------------------------------------
+    # 判定依据是**前台窗口的属主进程名**，而捕捉窗口就在本进程里，所以把本进程的名字
+    # 写进名单，就能在不碰真 RDP 客户端的前提下验证整条链：没写例外的绑定放行
+    # （键到达前台、动作不跑），写了 `remote_desktop = true` 的例外照常拦、照常执行。
+    # 启用的那个实例在这里是**第二个**：第一个已经在上面退出了。
+    Write-Host '--- 远程桌面 ---'
+    Write-RdConfig '"powershell", "pwsh"'
+    Remove-Item $rdLog, $rdOut -ErrorAction SilentlyContinue
+    $rd = Start-Process -FilePath $Exe `
+        -ArgumentList @('--config', (Join-Path $WorkDir 'remote-desktop.lua'), '--no-elevate',
+                        '--console', '--allow-multi', '--no-prompt', '--log-file', $rdLog) `
+        -RedirectStandardOutput $rdOut -RedirectStandardError "$rdOut.err" `
+        -PassThru -NoNewWindow
+    Pump 1200
+    NeedFocus '远程桌面'
+    $rdDetected = WaitUntil { (RdText) -match 'remote desktop detected' } 6000
+    Check '前台（本进程）被认成了远程桌面' $rdDetected
+    if (-not $rdDetected) { Diag "rd startup: $(RdText)" }
+    Clear-Seen
+    ClipSet 'RD-SENTINEL'
+    CtrlAlt $VK_F7
+    Pump 800
+    Check '远程桌面里没写例外的绑定被放行：按键到达前台' (SeenHas 'D:F7')
+    Check '远程桌面里没写例外的绑定不执行动作' ((ClipGet) -eq 'RD-SENTINEL')
+
+    Clear-Seen
+    ClipSet 'RD-SENTINEL'
+    CtrlAlt $VK_F13
+    Pump 800
+    Check 'remote_desktop = true 的例外照常执行动作' ((ClipGet) -eq 'RD-KEEP')
+    Check 'remote_desktop = true 的例外仍然把按键拦下来' (-not (SeenHas 'D:F13'))
+
+    # 换掉名单再重载：重载自己那条也带着例外标志。
+    Write-RdConfig '"no-such-rd-client.exe"'
+    NeedFocus '离开远程桌面'
+    Clear-Seen
+    ClipSet 'RD-SENTINEL'
+    CtrlAlt $VK_F6
+    $rdLeft = WaitUntil { (RdText) -match 'left the remote desktop' } 6000
+    Check '离开远程桌面时写进了日志' $rdLeft
+    CtrlAlt $VK_F7
+    Pump 800
+    Check '离开之后绑定又执行动作了' ((ClipGet) -eq 'RD-ACTION')
+    Check '离开之后按键又被吞掉了' (-not (SeenHas 'D:F7'))
+
+    CtrlAlt $VK_F10
+    Check '远程桌面里的 quit 例外能停掉第二个实例' ($rd.WaitForExit(6000))
+    if (-not $rd.HasExited) { $rd.Kill() }
+    FocusCatcher
 }
 catch {
     Write-Host "EXCEPTION: $_"
@@ -1227,6 +1321,7 @@ catch {
 }
 finally {
     if (-not $daemon.HasExited) { $daemon.Kill() }
+    if ($null -ne $rd -and -not $rd.HasExited) { $rd.Kill() }
     foreach ($proc in @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -eq $targetTitle })) {
         $proc.Kill()
     }

@@ -79,6 +79,20 @@ settings{
   -- （会弹 UAC；`--no-elevate` 或 false 可以关掉）。
   -- 提权后的好处：动作可以驱动提权进程的窗口（否则会被 UIPI 拦下）。
   elevate = true,
+
+  -- 前台窗口属于远程桌面客户端时，**放行**：不拦截、不触发任何快捷键与重映射，
+  -- 键原样送给对面那台机器（本机开着 mstsc / Windows App 时按 Win+S，
+  -- 弹的应该是对面那台机器的搜索框）。
+  --   * 默认名单是微软自己的 RDP 客户端（mstsc.exe / msrdc.exe / msrdcw.exe /
+  --     RdClient.Windows.exe）；第三方远程控制软件（ToDesk / 向日葵 / AnyDesk……）
+  --     要自己写。
+  --   * 写成 false 就完全关掉这项检测。
+  --   * 写成表可以换名单；`processes` 写了就是**整体替换**内置名单
+  --     （大小写无关的子串匹配），空表 `{}` = 谁都不算：
+  --       remote_desktop = { enabled = true, processes = { "mstsc.exe", "ToDesk.exe" } }
+  --   * 单条例外：想「在远程桌面里也照常拦」的快捷键 / 重映射上写
+  --     `remote_desktop = true`（见下面的 mute）。
+  remote_desktop = true,
 }
 
 -- =============================================================================
@@ -102,6 +116,9 @@ settings{
 -- repeatable true，或 { interval_ms = 40, delay_ms = 300 }；等价于
 --            trigger = "repeat"。名字不叫 `repeat`，因为那是 Lua 关键字。
 -- swallow    为这个快捷键覆盖 settings.swallow。
+-- remote_desktop  true 表示「键盘在远程桌面里时也照常拦截、照常触发」；
+--            默认 false —— 前台是远程桌面客户端时这条会被放行
+--            （见 settings 里的 remote_desktop）。
 -- enabled    false 表示忽略这条（调试时很方便）。
 -- comment    自由文本，`--list` 会显示出来。
 --
@@ -201,6 +218,9 @@ hotkey{
 hotkey{
   name = "mute",
   keys = "Ctrl+Alt+m",
+  -- 音量是**本机**的事：就算前台是远程桌面客户端，这一条也照常拦、照常执行。
+  -- 没写这一句的快捷键在那种情况下会被放行给对面那台机器。
+  remote_desktop = true,
   action = volume("toggle"),
 }
 
@@ -692,6 +712,9 @@ app{
 -- `from` 是按键或和弦，`to` 是按键名（类似 AutoHotkey 的 `CapsLock::Esc`）
 -- 或一个发送脚本。mode = "hold"（默认）在按住 `from` 期间一直按住目标；
 -- mode = "tap" 每次按下只触发一次目标。
+--
+-- 重映射与快捷键一样，默认在远程桌面里**被放行**（见 settings 里的
+-- remote_desktop）；想让某一条在那里也生效就写 `remote_desktop = true`。
 
 remap{
   name = "capslock-to-escape",
