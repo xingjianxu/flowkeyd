@@ -54,7 +54,7 @@
 # 这个仓库是直接往 master 上提交的（不开 Pull Request），`--generate-notes`
 # 除了一行 Full Changelog 什么都给不出来 —— 发布页上看起来「只有下载哪个包」。
 #
-# 正文三段：
+# 正文只有 changelog（发布页上不再写「下载哪个包」那一段）：
 #
 #   1. 「本次更新」：上一个 GitHub Release 的 tag 到 HEAD 之间的提交主题
 #      （`git log --no-merges --pretty=format:%s`），按提交信息的前缀分类成
@@ -62,8 +62,10 @@
 #      超过 40 条只列前 40 条。前缀表就是下面的 $script:NoteCategories ——
 #      **按现有习惯写提交信息（`新增：` / `修复：` / `变更：` / `配置：`），
 #      发布说明才认得出来**；认不出的前缀（以及本来就没前缀的）落进「其它」。
-#   2. 「下载哪个包」：完整包与精简包怎么选。
-#   3. 一行 **Full Changelog** 比较链接（自己拼的，因为不走 --generate-notes）。
+#   2. 一行 **Full Changelog** 比较链接（自己拼的，因为不走 --generate-notes）。
+#
+# 完整包 / 精简包怎么选**不写进正文**：两个 zip 里各有一份 README.txt 讲这件事，
+# 仓库 README.md 的「安装」一节也写着。要临时加回来就用 `-Notes`/`-NotesFile`。
 #
 # 上一个 Release 的 tag 优先问 GitHub（`gh release list`，顺序与发布页一致），
 # 问不到就退回本地 tag。gh 建的 tag 只在远端，所以那个 tag 本地解析不了时
@@ -812,24 +814,9 @@ function Get-ChangeSummaryLines {
     return $lines
 }
 
-# 「下载哪个包」：完整包与精简包的区别。
-function Get-DownloadLines {
-    param([string]$Version)
-    $full = "flowkeyd-$Version-windows-x64.zip"
-    $slim = "flowkeyd-$Version-windows-x64-slim.zip"
-    return @(
-        '## 下载哪个包',
-        '',
-        "- **第一次安装**：完整包 ``$full`` —— flowkeyd.exe 加上 Qt / MinGW 运行时，整个目录解压出来双击即可。",
-        "- **已经装过、只想升级**：精简包 ``$slim`` —— 里面只有 flowkeyd.exe；先让正在运行的实例退出（``flowkeyd.exe --quit``），再把 exe 覆盖到原来的目录。",
-        '',
-        '两个包各带一份同名 `.sha256`。'
-    )
-}
-
-# 写出完整的发布说明：本次更新 + 下载哪个包 + Full Changelog 比较链接。
+# 写出发布说明：本次更新（changelog） + Full Changelog 比较链接。
 function Write-GeneratedNotes {
-    param([string]$Path, [string]$Version, [string]$Tag, [string]$PreviousTag)
+    param([string]$Path, [string]$Tag, [string]$PreviousTag)
 
     # gh 建的 tag 只在远端，本地解析不了时先补一次 fetch（只动 tag，不动工作区）。
     if ($PreviousTag -and ((Test-Native -Exe 'git' -ArgList @('rev-parse', '--verify', '--quiet', "$PreviousTag^{commit}")) -ne 0)) {
@@ -847,8 +834,6 @@ function Write-GeneratedNotes {
     if ($PreviousTag) { $range = "$PreviousTag..HEAD" }
 
     $lines = @(Get-ChangeSummaryLines -Range $range -PreviousTag $PreviousTag)
-    $lines += ''
-    $lines += @(Get-DownloadLines -Version $Version)
     if ($PreviousTag) {
         $slug = Get-RepositorySlug
         if ($slug) {
@@ -958,7 +943,7 @@ try {
         [System.IO.File]::WriteAllText($notePath, $Notes, (New-Object System.Text.UTF8Encoding($false)))
         Info "using -Notes (written to $notePath)"
     } else {
-        Write-GeneratedNotes -Path $notePath -Version $script:version -Tag $script:tag `
+        Write-GeneratedNotes -Path $notePath -Tag $script:tag `
             -PreviousTag (Get-PreviousReleaseTag -ExcludeTag $script:tag)
     }
 

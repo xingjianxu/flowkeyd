@@ -83,6 +83,9 @@
       `build/dist-release` 是最新的。
     * 纯文档任务通常 `ninja: no work to do`：什么都不用做。
     * 不想动二进制就别在提交之后再构建（提交会改分支 ref、触发重新配置 + 重新链接）。
+    * **刚发过版、之后只改了文档 / 脚本的提交，不要重新构建**：HEAD 已经离开已发布的那个
+      修订，再构建出来的 `dist-release` 就不是发布页上那一份了（版本号里的修订也跟着变）。
+      让它停在已发布的那一份上，等下一次真要发版时由 `scripts\release.ps1` 一起构建。
 12. **不要把某台机器上真实使用的配置文件写进仓库**：只放产品文档与参考配置
     （`README.md`、`flowkeyd.lua.example`）。真实配置的绑定清单、`--check` 计数、路径、
     以及“本机现在跑的是哪一个 exe”都不记录。**修改真实配置后不需要更新 README 或本文件。**
@@ -989,11 +992,13 @@ FreeType 字体引擎。
 * **发布时“哪个文件进哪个包”用白名单 + 兜底报错**（`scripts/release.ps1` 的 `$SlimFiles` /
   `$DependencyPatterns`）：`dist` 里出现两边都不认识的文件就直接失败，逼人当场分类。
 * **发布说明要自己写，不要指望 `gh --generate-notes`**：这个仓库是直接往 master 上提交的
-  （不开 Pull Request），`--generate-notes` 除了一行 `**Full Changelog**` 什么都给不出来 ——
-  发布页上看起来「只有下载哪个包」。现在 `scripts/release.ps1` 自己拼整份正文
-  （「本次更新」按提交信息前缀分类 + 「下载哪个包」 + 自己拼的 Full Changelog 比较链接），
-  用 `--notes-file` 交出去；`-Clobber` 重发同一个 tag 时也顺手 `gh release edit` 刷新正文 ——
-  **`gh release edit` 没有 `--generate-notes`**，所以整份正文必须我们自己写全。
+  （不开 Pull Request），`--generate-notes` 除了一行 `**Full Changelog**` 什么都给不出来。
+  现在 `scripts/release.ps1` 自己拼整份正文 —— **正文只有 changelog**：
+  「本次更新」按提交信息前缀分类，末尾一行自己拼的 Full Changelog 比较链接；
+  「下载哪个包」那一段**不写进发布页**（两个 zip 里各有 README.txt，README.md 的
+  安装一节也写着）。用 `--notes-file` 交出去；`-Clobber` 重发同一个 tag 时也顺手
+  `gh release edit` 刷新正文 —— **`gh release edit` 没有 `--generate-notes`**，
+  所以整份正文必须我们自己写全。
 * **PowerShell 5.1 按控制台代码页（本机 GBK/936）解码原生命令的 stdout**：`git log` 里
   中文提交信息的 UTF-8 字节会被解成乱码，而且 **GBK 的双字节序列会把 `"\n"` 当尾字节吃掉**
   —— 表现为 `git log` 少一条提交、两条提交粘成一行（发布说明直接少列一个改动）。
@@ -1368,10 +1373,11 @@ FreeType 字体引擎。
   新的部署产物按“每次构建都会变吗”分类：会变的写进 `$SlimFiles`（进完整包与精简包），
   不变的（新加的运行时 dll / 插件 / QML 模块）写进 `$DependencyPatterns`（只进完整包）。
 * **发布说明的正文**：`scripts/release.ps1` 的 `Get-ChangeSummaryLines`（分类） /
-  `Get-DownloadLines`（两个包怎么选） / `Write-GeneratedNotes`（拼起来 + 写文件）。
+  `Get-PreviousReleaseTag` / `Get-RepositorySlug` / `Write-GeneratedNotes`（拼起来 + 写文件）。
   分类靠**提交信息的前缀**，表就是函数上面的 `$script:NoteCategories`（要认新的前缀就加一行；
   不想逐条列出的前缀加进 `$script:NoteSkippedPrefixes`）。**它只读提交信息，不看 diff** ——
   所以写提交信息时的前缀（`新增：` / `修复：` / `变更：` / `配置：`）就是发布页的分类依据。
+  **正文只有 changelog**（用户明确要求，不要加回「下载哪个包」那一段）。
 
 ---
 
