@@ -659,7 +659,9 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
 卡片不在任务栏里，而且 Win 松开后前台没有被外壳抢走（遮断标记生效的判据）。
 2026-10 加上这 6 条后跑过一次全绿（`checks: 125, failures: 0`）。2026-10-04 又加上
 「远程桌面放行」那 9 条（名单里写的是捕捉窗口自己那个进程，因此不碰真 RDP 客户端），
-全绿：`checks: 134, failures: 0`。
+全绿：`checks: 134, failures: 0`（对最终产物又跑了一次：只用 `msrdc.exe` 那种真客户端
+没人替你按，所以那一条靠常驻实例的日志确认过：聚焦 Windows App 时出现
+`remote desktop detected (msrdc.exe)`，切回普通窗口后出现 `left the remote desktop (…)`）。
 
 **桌面被锁住时（`LogonUI` 在跑）脚本必然挂**：`GetForegroundWindow()` 返回 0，
 `SendInput` 报 `5`（ACCESS_DENIED）。这不是产品 bug，先去解锁再跑。
