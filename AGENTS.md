@@ -549,7 +549,7 @@ UI 只有托盘图标与四个 QML 卡片（日志窗口、`menu` 选单、`help
 | `src/qml/` | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`、`SwitchPopup.qml`、`UpdatePopup.qml`。都写 `pragma ComponentBehavior: Bound`；**四个弹窗的 `flags` 都带 `Qt.Tool`**；配色一律用 `palette`（没有单独的 `Style.qml`）；中文一律 `font.family: "Microsoft YaHei"`；列表全部是标准 `ListView` + `ItemDelegate`（+ `ScrollBar`） |
 | `tests/` | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_remote_desktop`、`tst_log_tail`、`tst_audio`、`tst_autostart`、`tst_menu_model`、`tst_help_model`、`tst_window_list_model`、`tst_power_table`、`tst_desktop_table`、`tst_placement`、`tst_layout`、`tst_version`、`tst_desktop_badge`、`tst_update`、`tst_update_model`、`tst_update_install`、`tst_command_line`、`tst_instance`、`tst_input`，以及需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1` 的 `tst_interactive`（真机：剪贴板/音量/窗口/虚拟桌面/钉住/置顶/输入法/覆盖层/更新下载；联网那条还要 `FLOWKEYD_ALLOW_NETWORK_TESTS=1`） |
 | `scripts/acceptance.ps1` | 桌面行为验收（注入按键 + 焦点捕捉窗口的外部观察，134 项检查），需交互式桌面，**不属于 `ctest`** |
-| `scripts/release.ps1` | 构建 release + 打包（完整包 + 精简升级包，各附 `.sha256`）+ 用 `gh` 上传 GitHub Release。tag 取刚构建的 exe 的 `--version`。工作区脏或 HEAD 没推到 origin 会直接拒绝（要 `-AllowDirty`/`-Push`）。**唯一的新前置依赖是 `gh`**。开关：`-SkipBuild`/`-SkipResident`/`-SkipUpload` |
+| `scripts/release.ps1` | 构建 release + 打包（完整包 + 精简升级包，各附 `.sha256`）+ 用 `gh` 上传 GitHub Release。tag 取刚构建的 exe 的 `--version`。**发布说明由脚本自己写**（上一个 Release 的 tag → HEAD 的提交主题，按提交信息前缀分类成新功能/修复/变更/其它，纯文档/测试类只计数；`-Notes`/`-NotesFile` 可以整份替换），不用 `gh --generate-notes`。工作区脏或 HEAD 没推到 origin 会直接拒绝（要 `-AllowDirty`/`-Push`）。**唯一的新前置依赖是 `gh`**。开关：`-SkipBuild`/`-SkipResident`/`-SkipUpload`/`-Clobber` |
 
 > `scripts/install.ps1` / `uninstall.ps1` **已删除**：自启的注册、刷新与删除现在全在
 > `src/platform/win/autostart.*` 里，由守护进程自己在启动时做。
@@ -988,8 +988,18 @@ FreeType 字体引擎。
   `System.IO.Compression.FileSystem`，**两个都要 `Add-Type`**。）
 * **发布时“哪个文件进哪个包”用白名单 + 兜底报错**（`scripts/release.ps1` 的 `$SlimFiles` /
   `$DependencyPatterns`）：`dist` 里出现两边都不认识的文件就直接失败，逼人当场分类。
-* **`gh release create --notes` 的内容会加在自动生成说明前面**；那段文字故意写成一行
-  （带换行的参数在 Windows 上要多绕一道）。
+* **发布说明要自己写，不要指望 `gh --generate-notes`**：这个仓库是直接往 master 上提交的
+  （不开 Pull Request），`--generate-notes` 除了一行 `**Full Changelog**` 什么都给不出来 ——
+  发布页上看起来「只有下载哪个包」。现在 `scripts/release.ps1` 自己拼整份正文
+  （「本次更新」按提交信息前缀分类 + 「下载哪个包」 + 自己拼的 Full Changelog 比较链接），
+  用 `--notes-file` 交出去；`-Clobber` 重发同一个 tag 时也顺手 `gh release edit` 刷新正文 ——
+  **`gh release edit` 没有 `--generate-notes`**，所以整份正文必须我们自己写全。
+* **PowerShell 5.1 按控制台代码页（本机 GBK/936）解码原生命令的 stdout**：`git log` 里
+  中文提交信息的 UTF-8 字节会被解成乱码，而且 **GBK 的双字节序列会把 `"\n"` 当尾字节吃掉**
+  —— 表现为 `git log` 少一条提交、两条提交粘成一行（发布说明直接少列一个改动）。
+  修法：脚本开头 `[Console]::OutputEncoding = UTF8`（没有控制台时这个赋值会抛异常，
+  包在 try/catch 里）。读原生命令的**中文**输出时都要先想这一步，`acceptance.ps1`
+  那种把诊断写进文件的写法就是为了绕开它。
 * **tar/zip 里的 `README.txt` 用带 BOM 的 UTF-8 写，`.sha256` 不带 BOM**
   （`sha256sum -c` 认的是逐字节内容）。
 
@@ -1357,6 +1367,11 @@ FreeType 字体引擎。
   就是“哪个文件进哪个包”的**唯一清单**；`dist` 里出现两边都不认识的文件时发布脚本会直接失败。
   新的部署产物按“每次构建都会变吗”分类：会变的写进 `$SlimFiles`（进完整包与精简包），
   不变的（新加的运行时 dll / 插件 / QML 模块）写进 `$DependencyPatterns`（只进完整包）。
+* **发布说明的正文**：`scripts/release.ps1` 的 `Get-ChangeSummaryLines`（分类） /
+  `Get-DownloadLines`（两个包怎么选） / `Write-GeneratedNotes`（拼起来 + 写文件）。
+  分类靠**提交信息的前缀**，表就是函数上面的 `$script:NoteCategories`（要认新的前缀就加一行；
+  不想逐条列出的前缀加进 `$script:NoteSkippedPrefixes`）。**它只读提交信息，不看 diff** ——
+  所以写提交信息时的前缀（`新增：` / `修复：` / `变更：` / `配置：`）就是发布页的分类依据。
 
 ---
 

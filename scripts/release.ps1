@@ -25,7 +25,7 @@
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\release.ps1
 #   powershell.exe ... -SkipUpload              # 只打包，不上传（先看一眼产物）
 #   powershell.exe ... -SkipBuild               # 用现有的 build/dist-release 打包
-#   powershell.exe ... -NotesFile notes.md      # 自定义说明（默认让 gh 自己生成）
+#   powershell.exe ... -NotesFile notes.md      # 用自己的说明替换自动生成的正文
 #   powershell.exe ... -Draft -Prerelease       # 建草稿 / 标成预发布
 #
 # ### 两个包：完整包 + 精简包
@@ -47,6 +47,30 @@
 #
 # 精简包在打包后会逐条目检查一遍（用的是 zip 里的条目名）：只允许出现
 # $SlimFiles 那几项加一份 README.txt，且 exe 与 dist 里的那个 SHA-256 相同。
+#
+# ### 发布说明（release notes）
+#
+# 正文**由脚本自己写**（`$WorkDir\notes.md`），不走 `gh --generate-notes`：
+# 这个仓库是直接往 master 上提交的（不开 Pull Request），`--generate-notes`
+# 除了一行 Full Changelog 什么都给不出来 —— 发布页上看起来「只有下载哪个包」。
+#
+# 正文三段：
+#
+#   1. 「本次更新」：上一个 GitHub Release 的 tag 到 HEAD 之间的提交主题
+#      （`git log --no-merges --pretty=format:%s`），按提交信息的前缀分类成
+#      新功能 / 修复 / 变更 / 其它；纯文档、测试、构建类提交只计数不逐条列出；
+#      超过 40 条只列前 40 条。前缀表就是下面的 $script:NoteCategories ——
+#      **按现有习惯写提交信息（`新增：` / `修复：` / `变更：` / `配置：`），
+#      发布说明才认得出来**；认不出的前缀（以及本来就没前缀的）落进「其它」。
+#   2. 「下载哪个包」：完整包与精简包怎么选。
+#   3. 一行 **Full Changelog** 比较链接（自己拼的，因为不走 --generate-notes）。
+#
+# 上一个 Release 的 tag 优先问 GitHub（`gh release list`，顺序与发布页一致），
+# 问不到就退回本地 tag。gh 建的 tag 只在远端，所以那个 tag 本地解析不了时
+# 先 `git fetch --tags`；全都拿不到（首次发布、没网）时正文就覆盖整段历史。
+#
+# `-Notes` / `-NotesFile` 传自己的说明时，上面三段都不生成（整份替换）。
+# 生成好的 notes.md 在 `-SkipUpload` 时也会留下，可以先看一眼再发。
 #
 # ### 需要先装好的东西（脚本会自己检查，缺了会直接告诉你）
 #
@@ -84,6 +108,13 @@ $ErrorActionPreference = 'Stop'
 
 $here = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 Set-Location -LiteralPath $here
+
+# 原生命令（git / gh / cmake）的 stdout 是 UTF-8，而 PowerShell 5.1 默认按**控制台
+# 代码页**（本机是 GBK/936）解码子进程的输出：提交信息里的中文会变成乱码 —— 更糟的
+# 是 GBK 的双字节序列会把 "`n" 当成尾字节吃掉，把两行粘成一行（`git log` 少一条提交、
+# 发布说明的条目也跟着合并）。把控制台输出编码固定成 UTF-8，`& native` 的解码就对了。
+# 没有控制台时这个赋值会抛异常（那种场景下 stdout 本来就是字节流），忽略即可。
+try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false) } catch { }
 
 $cmake = 'C:\Qt\Tools\CMake_64\bin\cmake.exe'
 if (-not (Test-Path -LiteralPath $cmake)) {
@@ -131,6 +162,30 @@ $script:DependencyPatterns = @(
     'networkinformation/*',
     'tls/*',
     'translations/*'
+)
+
+# --- 发布说明的分类表（见文件头的「发布说明」） -----------------------------
+
+# 提交信息前缀 → 发布说明的「本次更新」里的分类标题（顺序就是正文里的先后）。
+$script:NoteCategories = [ordered]@{
+    '新增'   = '新功能'
+    '新特性' = '新功能'
+    '特性'   = '新功能'
+    '修复'   = '修复'
+    '修正'   = '修复'
+    '变更'   = '变更'
+    '配置'   = '变更'
+    '重构'   = '变更'
+    '优化'   = '变更'
+    '性能'   = '变更'
+    '移除'   = '变更'
+}
+
+# 纯文档 / 测试 / 构建类提交：正文里只计数，不逐条列出。
+$script:NoteSkippedPrefixes = @(
+    '文档', '记录', '说明', '注释', '整理',
+    '测试', '构建', '发布',
+    'docs', 'doc', 'test', 'tests', 'chore', 'ci', 'build', 'release'
 )
 
 # Assert-DistIsClean 填这两个（相对路径，正斜杠）。
@@ -629,22 +684,187 @@ function New-Packages {
     return @($fullZip, "$fullZip.sha256", $slimZip, "$slimZip.sha256")
 }
 
-# 自动生成的发布说明前面要加的一段：告诉下载的人两个包怎么选。
+# --- 发布说明的生成（见文件头的「发布说明」） -----------------------------
+
+# 上一个已发布的 Release 的 tag —— 「本次更新」那一段的起点。
 #
-# 故意写成**一行**：这段文字是当命令行参数交给 gh 的，带换行的参数在
-# Windows 上要多绕一道（引号与换行符会不会被拆开取决于对方怎么解析命令行），
-# 一行就完全不用赌。
-function Get-PackageChoiceNotes {
+# 优先问 GitHub（`gh release list` 是按发布时间从新到旧，与发布页上看到的顺序
+# 一致）；gh 不可用（`-SkipUpload`、没登录）或没网时退回本地 tag，按创建时间
+# 排序。`-ExcludeTag` 用来跳过本次要发布的那个 tag（`-Clobber` 重发同一个版本
+# 号时，起点要再往前一个）。拿不到就返回空串，调用方改成覆盖整段历史。
+function Get-PreviousReleaseTag {
+    param([string]$ExcludeTag)
+
+    $tags = @()
+    if (Get-Command gh -ErrorAction SilentlyContinue) {
+        try {
+            $tags = @(Invoke-Capture -Exe 'gh' -ArgList @('release', 'list', '--limit', '50', '--json', 'tagName', '--jq', '.[].tagName') |
+                Where-Object { "$_" -match '^\S+$' })
+        } catch {
+            Warn "could not list the GitHub releases ($($_.Exception.Message)); falling back to the local tags"
+            $tags = @()
+        }
+    }
+    if ($tags.Count -eq 0) {
+        try {
+            $tags = @(Invoke-Capture -Exe 'git' -ArgList @('tag', '--list', '--sort=-creatordate', 'v*'))
+        } catch {
+            $tags = @()
+        }
+    }
+    foreach ($item in $tags) {
+        $name = "$item".Trim()
+        if ($name -and $name -ne $ExcludeTag) { return $name }
+    }
+    return ''
+}
+
+# origin 的 owner/repo（Full Changelog 链接要用）。先自己从 URL 里抠（不联网、
+# 不需要 gh），抠不出来再问 gh。
+function Get-RepositorySlug {
+    try {
+        $url = @(Invoke-Capture -Exe 'git' -ArgList @('remote', 'get-url', 'origin'))
+        if ($url.Count -gt 0 -and "$($url[0])" -match 'github\.com[/:]([^/]+)/([^/]+?)(\.git)?$') {
+            return "$($Matches[1])/$($Matches[2])"
+        }
+    } catch {
+        Warn "could not read the origin URL ($($_.Exception.Message))"
+    }
+    if (-not (Get-Command gh -ErrorAction SilentlyContinue)) { return '' }
+    try {
+        $slug = @(Invoke-Capture -Exe 'gh' -ArgList @('repo', 'view', '--json', 'nameWithOwner', '--jq', '.nameWithOwner'))
+        if ($slug.Count -gt 0 -and "$($slug[0])" -match '^[^/\s]+/[^/\s]+$') { return "$($slug[0])" }
+    } catch {
+        Warn "could not read owner/repo from gh ($($_.Exception.Message))"
+    }
+    return ''
+}
+
+# 「本次更新」那一段：提交主题按前缀分类成几节。$Range 是 git log 的范围
+# （上一个 Release 的 tag..HEAD，或者没有上一个时就是 HEAD）。
+function Get-ChangeSummaryLines {
+    param([string]$Range, [string]$PreviousTag)
+
+    $subjects = @(Invoke-Capture -Exe 'git' -ArgList @('log', '--no-merges', '--pretty=format:%s', $Range))
+    Info "summarising $($subjects.Count) commit(s) from $Range"
+
+    $sections = [ordered]@{}
+    foreach ($name in $script:NoteCategories.Values) {
+        if (-not $sections.Contains($name)) { $sections[$name] = @() }
+    }
+    $sections['其它'] = @()
+
+    $total = 0
+    $skipped = 0
+    $overflow = 0
+    $max = 40
+    foreach ($subject in $subjects) {
+        $text = "$subject".Trim()
+        if (-not $text) { continue }
+        $total++
+        if ($total -gt $max) { $overflow++; continue }
+        $body = $text
+        $category = '其它'
+        # 前缀就是全角/半角冒号前面的那一小截（`新增：xxx` / `docs: xxx`）。
+        if ($text -match '^([^\s：:]{1,6})[：:]\s*(\S.*)$') {
+            $prefix = $Matches[1]
+            if ($script:NoteCategories.Contains($prefix)) {
+                $category = $script:NoteCategories[$prefix]
+                $body = $Matches[2].Trim()
+            } elseif ($script:NoteSkippedPrefixes -contains $prefix.ToLowerInvariant()) {
+                $skipped++
+                continue
+            }
+        }
+        $sections[$category] += $body
+    }
+
+    # 全是文档 / 测试类提交时（纯文档版本）一条都列不出来，反倒像“什么都没改”，
+    # 这时索性全部列进「其它」。
+    $listed = 0
+    foreach ($name in $sections.Keys) { $listed += $sections[$name].Count }
+    if ($listed -eq 0 -and $total -gt 0) {
+        $sections['其它'] = @($subjects | ForEach-Object { "$_".Trim() } | Where-Object { $_ })
+        $skipped = 0
+    }
+
+    $lines = @('## 本次更新', '')
+    if ($PreviousTag) {
+        $lines += "自 ``$PreviousTag`` 以来共 $total 条提交，主要改动如下："
+    } else {
+        $lines += "本次发布共 $total 条提交，主要改动如下："
+    }
+    foreach ($name in $sections.Keys) {
+        if ($sections[$name].Count -eq 0) { continue }
+        $lines += ''
+        $lines += "### $name"
+        $lines += ''
+        foreach ($item in $sections[$name]) { $lines += "- $item" }
+    }
+    if ($overflow -gt 0) {
+        $lines += ''
+        $lines += "> 还有 $overflow 条提交没有列出，完整记录见下面的 Full Changelog。"
+    }
+    if ($skipped -gt 0) {
+        $lines += ''
+        $lines += "> 另有 $skipped 条文档 / 测试 / 构建类提交，与使用方式无关。"
+    }
+    return $lines
+}
+
+# 「下载哪个包」：完整包与精简包的区别。
+function Get-DownloadLines {
     param([string]$Version)
     $full = "flowkeyd-$Version-windows-x64.zip"
     $slim = "flowkeyd-$Version-windows-x64-slim.zip"
-    return ('**下载哪个包**：第一次安装用**完整包** `' + $full + '`（flowkeyd.exe 加上 Qt/MinGW 运行时，解压出来直接双击）；' +
-        '已经装过、只是想**升级**就用**精简包** `' + $slim + '`（里面只有 flowkeyd.exe），' +
-        '解压出来的 exe 覆盖到原来的目录即可（覆盖前先让正在运行的实例退出：`flowkeyd.exe --quit`）。两个包各带一份 `.sha256`。')
+    return @(
+        '## 下载哪个包',
+        '',
+        "- **第一次安装**：完整包 ``$full`` —— flowkeyd.exe 加上 Qt / MinGW 运行时，整个目录解压出来双击即可。",
+        "- **已经装过、只想升级**：精简包 ``$slim`` —— 里面只有 flowkeyd.exe；先让正在运行的实例退出（``flowkeyd.exe --quit``），再把 exe 覆盖到原来的目录。",
+        '',
+        '两个包各带一份同名 `.sha256`。'
+    )
+}
+
+# 写出完整的发布说明：本次更新 + 下载哪个包 + Full Changelog 比较链接。
+function Write-GeneratedNotes {
+    param([string]$Path, [string]$Version, [string]$Tag, [string]$PreviousTag)
+
+    # gh 建的 tag 只在远端，本地解析不了时先补一次 fetch（只动 tag，不动工作区）。
+    if ($PreviousTag -and ((Test-Native -Exe 'git' -ArgList @('rev-parse', '--verify', '--quiet', "$PreviousTag^{commit}")) -ne 0)) {
+        Info "fetching tags ($PreviousTag is not in the local repository yet)"
+        if ((Test-Native -Exe 'git' -ArgList @('fetch', '--quiet', '--tags', 'origin')) -ne 0) {
+            Warn 'could not fetch tags from origin; the summary covers the whole history'
+        }
+    }
+    if ($PreviousTag -and ((Test-Native -Exe 'git' -ArgList @('rev-parse', '--verify', '--quiet', "$PreviousTag^{commit}")) -ne 0)) {
+        Warn "previous release tag $PreviousTag cannot be resolved locally; the summary covers the whole history"
+        $PreviousTag = ''
+    }
+
+    $range = 'HEAD'
+    if ($PreviousTag) { $range = "$PreviousTag..HEAD" }
+
+    $lines = @(Get-ChangeSummaryLines -Range $range -PreviousTag $PreviousTag)
+    $lines += ''
+    $lines += @(Get-DownloadLines -Version $Version)
+    if ($PreviousTag) {
+        $slug = Get-RepositorySlug
+        if ($slug) {
+            $lines += ''
+            $lines += "**Full Changelog**: https://github.com/$slug/compare/$PreviousTag...$Tag"
+        } else {
+            Warn 'could not work out owner/repo; the Full Changelog link is omitted'
+        }
+    }
+
+    [System.IO.File]::WriteAllText($Path, (($lines -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+    Info "release notes written to $Path"
 }
 
 function Publish-Release {
-    param([string]$Tag, [string]$Version, [string[]]$Assets)
+    param([string]$Tag, [string]$Version, [string[]]$Assets, [string]$NotePath)
     Step 'uploading to GitHub Releases'
     $gh = (Get-Command gh).Source
     $remote = @(Invoke-Capture -Exe 'git' -ArgList @('ls-remote', '--tags', 'origin', "refs/tags/$Tag"))
@@ -654,25 +874,16 @@ function Publish-Release {
         if (-not $Clobber) {
             throw "tag $Tag already exists on origin; delete that release on GitHub first, or re-run with -Clobber to replace its assets"
         }
-        Info "tag $Tag already exists; replacing its assets (-Clobber)"
+        Info "tag $Tag already exists; replacing its assets and notes (-Clobber)"
         Invoke-Live -Exe $gh -ArgList (@('release', 'upload', $Tag) + $Assets + @('--clobber'))
+        # 说明也一起刷新：重发同一个版本号时，正文往往正是要改的东西。
+        # （`gh release edit` 没有 --generate-notes，所以正文是我们自己写整份。）
+        Invoke-Live -Exe $gh -ArgList @('release', 'edit', $Tag, '--notes-file', $NotePath)
     } else {
-        $ghArgs = @('release', 'create', $Tag) + $Assets + @('--title', "flowkeyd $Version", '--target', $script:head)
-        if ($NotesFile) {
-            if (-not (Test-Path -LiteralPath $NotesFile)) {
-                throw "the notes file does not exist: $NotesFile"
-            }
-            $ghArgs += @('--notes-file', (Resolve-Path -LiteralPath $NotesFile).Path)
-        } elseif ($Notes) {
-            $notePath = Join-Path $WorkDir 'notes.md'
-            [System.IO.File]::WriteAllText($notePath, $Notes, (New-Object System.Text.UTF8Encoding($false)))
-            $ghArgs += @('--notes-file', $notePath)
-        } else {
-            # gh 会把 `--notes` 的内容**加在自动生成的说明前面**（见 `gh release create --help`），
-            # 这样一进 release 页就看到“两个包怎么选”。
-            $ghArgs += '--generate-notes'
-            $ghArgs += @('--notes', (Get-PackageChoiceNotes -Version $Version))
-        }
+        $ghArgs = @('release', 'create', $Tag) + $Assets + @(
+            '--title', "flowkeyd $Version",
+            '--target', $script:head,
+            '--notes-file', $NotePath)
         if ($Draft) { $ghArgs += '--draft' }
         if ($Prerelease) { $ghArgs += '--prerelease' }
         Invoke-Live -Exe $gh -ArgList $ghArgs
@@ -735,14 +946,31 @@ try {
         Warn "the packaged exe was built from revision $rev but HEAD is $($script:shortHead); use -SkipBuild only if that is intentional"
     }
 
+    Step 'writing the release notes'
+    $notePath = Join-Path $WorkDir 'notes.md'
+    if ($NotesFile) {
+        if (-not (Test-Path -LiteralPath $NotesFile)) {
+            throw "the notes file does not exist: $NotesFile"
+        }
+        $notePath = (Resolve-Path -LiteralPath $NotesFile).Path
+        Info "using the notes file given on the command line: $notePath"
+    } elseif ($Notes) {
+        [System.IO.File]::WriteAllText($notePath, $Notes, (New-Object System.Text.UTF8Encoding($false)))
+        Info "using -Notes (written to $notePath)"
+    } else {
+        Write-GeneratedNotes -Path $notePath -Version $script:version -Tag $script:tag `
+            -PreviousTag (Get-PreviousReleaseTag -ExcludeTag $script:tag)
+    }
+
     $assets = New-Packages -Version $script:version
 
     if ($SkipUpload) {
         Step 'upload skipped (-SkipUpload)'
+        Info "release notes: $notePath"
         foreach ($asset in $assets) { Info $asset }
         Info 'install gh (scoop install gh) and run gh auth login, then re-run without -SkipUpload'
     } else {
-        Publish-Release -Tag $script:tag -Version $script:version -Assets $assets
+        Publish-Release -Tag $script:tag -Version $script:version -Assets $assets -NotePath $notePath
         Step 'done'
     }
 } catch {
