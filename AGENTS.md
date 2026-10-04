@@ -469,10 +469,17 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
       **代价是提权实例启动的程序也是提权的**（与 `run` 同一个已知限制，已写进 README）。
     * **列表按需重扫**：缓存在动作线程上，最多 30 秒；`Runtime::start()` 还会排队扫
       一次（第一次按快捷键就不必等），所以装完程序不用重启 flowkeyd。
-    * **网格是 5 列**（`AppListModel` 的 `columns()`），默认最多 6 行、按屏幕高度自动收；
+    * **网格是 6 列 × 6 行**（`AppListModel` 的 `columns()` / `cellWidth()` / `cellHeight()`），
+      格子 126 × 88、图标 40，**卡片 800 × 622**（宽度 = 两边内边距与缩进 + 6 × 126）；
+      屏幕不够高时按高度自动收行（`setMaxRows` / `rowsForAvailableHeight`）；
       `↑`/`↓` 走一整行、`←`/`→` 走一格、`PgUp`/`PgDn` 翻页、`Home`/`End` 到头尾，
       到边界夹住不回绕。筛选是**名字的子串**（与窗口切换器的前缀匹配不同：那边切的是
       进程，这边是“记得名字里一段就行”）。
+      * 卡片尺寸是项目所有者 2026-10 定的（原来 564 宽 / 5 列）：**宽度必须从
+        “内边距 + 列数 × 格宽” 算出来**，不要只改宽度不改格子。
+      * 改这几组数字时用 `tmp/preview/` 那套（真 `PopupHost` + 真 QML + 真开始菜单扫描）
+        抓一张图看过：这次得到 1600 × 1244 设备像素 = 800 × 622 逻辑像素 @200%，
+        图标与两行名字都在格子里、没有被裁切。那条路锁屏时也能跑。
     * **筛选到只剩一个也不自动启动**（那是“切窗口”的语义；这里会真的拉起一个进程）。
       卡片开着时再按一次同一个快捷键 = 关掉它（与窗口切换器同一条规则）。
     * **不切输入法**（与窗口切换器相反）：名字可能是中文，切英文反而筛不出来。
@@ -589,7 +596,7 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
 | `dispatcher.h/.cpp` | **动作工作线程**（`QThread`）：执行动作列表、`window` 的“先启动再激活”与默认开的 `toggle`、`menu`/`help`/`windows` 的窗口请求、`window_rule`（三遍）、`startDesktopWatch()`/`pollDesktop()` |
 | `runtime.h/.cpp` | 引擎 + 钩子 + 分发 + 托盘 + 弹窗的总装；`ControlCmd`（suspend/reload/quit）通道；`--quit` 的事件句柄（`QWinEventNotifier` 在 GUI 线程上监听）；`reportDesktop()`/`desktopChanged`；`showSwitchFromAnyThread()` 等 |
 | `log_model.h/.cpp` | 日志窗口的模型：尾随日志文件、最多 1000 行、按级别配色、子串过滤 |
-| `menu_model.h/.cpp` / `help_model.h/.cpp` / `window_list_model.h/.cpp` / `app_list_model.h/.cpp` | 四个卡片的**纯逻辑**（`QAbstractListModel`，只用 QtCore）。行几何与鼠标命中**不归它们管**（`ListView`/`GridView` + `ItemDelegate`）；`help` 只管筛选/选中项/`Enter`/`Esc`/`setSelected`；`menu` 还持有悬停（`Enter` 执行光标下那一条）；`window_list` 管进程名前缀筛选、自动激活与数字选择模式；`app_list` 管 5 列网格的几何、名字子串筛选与网格方向键（§2 第 27 条） |
+| `menu_model.h/.cpp` / `help_model.h/.cpp` / `window_list_model.h/.cpp` / `app_list_model.h/.cpp` | 四个卡片的**纯逻辑**（`QAbstractListModel`，只用 QtCore）。行几何与鼠标命中**不归它们管**（`ListView`/`GridView` + `ItemDelegate`）；`help` 只管筛选/选中项/`Enter`/`Esc`/`setSelected`；`menu` 还持有悬停（`Enter` 执行光标下那一条）；`window_list` 管进程名前缀筛选、自动激活与数字选择模式；`app_list` 管 6 列网格的几何、名字子串筛选与网格方向键（§2 第 27 条） |
 | `popup_layout.h/.cpp` / `popup_host.h/.cpp` | 弹窗共用的几何类型与 `centrePopup()`（先在工作区居中、再夹进屏幕）；把模型挂到 QML 窗口上、抢前台、在 GUI 线程上创建/复用窗口、`helpRun()`（可见行下标 → 条目下标，**先藏窗口再执行**）、`preload()`、`switchUseEnglishInput()`/`restoreSwitchInputMode()` |
 | `app_icons.h/.cpp` | **程序启动器的图标**：`QQuickAsyncImageProvider` + 一条常驻 STA 线程（队列 + 按「路径@边长」缓存），把 `platform/win/apps::shellIcon()` 的 BGRA 变成 `QImage`（`Format_ARGB32`，**直通 alpha**）；表是“图标键 → 快捷方式路径”，只增不改（§2 第 27 条） |
 | `update_model.h/.cpp` / `update_archive.h/.cpp` / `updater.h/.cpp` | 更新卡片的状态机（八个阶段、版本号/发布说明/进度/按钮可见性，**不联网不解压不换文件**）；从 zip 里取出新 exe（`QZipReader` + PE 魔数检查）；联网编排（异步 `QNetworkAccessManager` + sha256 + 解压到 `<exe>.new` + mtime 对齐发布日） |
@@ -1390,7 +1397,7 @@ FreeType 字体引擎、程序启动器（`apps()` + 异步图标）。
 * **程序启动器的新行为**：分四层，改哪层就看哪层 ——
   `core/app_list.*`（“算不算程序”、去重/排序、名字子串匹配、图标键）、
   `platform/win/apps.*`（扫两个开始菜单目录 + `IShellLink` 解析 + `shellIcon`）、
-  `app/app_list_model.*`（5 列网格、可见行/卡片高度、方向键）、
+  `app/app_list_model.*`（6 列 × 6 行网格、可见行/卡片高度、方向键）、
   `app/app_icons.*`（异步图标的线程/缓存/尺寸）、卡片 `AppPopup.qml`。
   把条目喂给卡片、以及**启动那一步**都在 `Dispatcher::openAppsAction()`。
   改完要跑 `tst_app_list` / `tst_app_list_model`；能从外面观察到的行为就在

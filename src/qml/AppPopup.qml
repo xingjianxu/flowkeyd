@@ -42,7 +42,7 @@ Window {
 
     readonly property int iconSize: root.appModel ? root.appModel.iconSize : 40
     readonly property int tileTextWidth:
-        root.appModel ? root.appModel.cellWidth - 24 : 80
+        root.appModel ? root.appModel.cellWidth - 24 : 102
     /// 取图标时用的边长（设备像素）：逻辑边长 × 本窗口那块屏的缩放。
     ///
     /// 用 `Window.devicePixelRatio`（`QWindow` 的属性，从 `QtQuick` 就能拿到）
@@ -51,8 +51,9 @@ Window {
     readonly property int iconPixels:
         Math.max(8, Math.round(root.iconSize * root.devicePixelRatio))
 
-    width: root.appModel ? root.appModel.cardWidth : 564
-    height: root.appModel ? root.appModel.cardHeight : 400
+    // 卡片尺寸来自模型（6 列 × 6 行 → 800 × 622）；模型还没接上时的回退值与它一致。
+    width: root.appModel ? root.appModel.cardWidth : 800
+    height: root.appModel ? root.appModel.cardHeight : 622
 
     // 与选单 / 帮助同一个理由：刚显示出来的 300 ms 内失去焦点不算「用户点了别处」。
     property double armedAt: 0
@@ -188,7 +189,7 @@ Window {
             clip: true
             focus: false
             model: root.appModel
-            cellWidth: root.appModel ? root.appModel.cellWidth : 104
+            cellWidth: root.appModel ? root.appModel.cellWidth : 126
             cellHeight: root.appModel ? root.appModel.cellHeight : 88
             boundsBehavior: Flickable.StopAtBounds
 

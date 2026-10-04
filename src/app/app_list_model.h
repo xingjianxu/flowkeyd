@@ -5,7 +5,8 @@
 // 开始菜单的扫描在 `platform/win/apps`（Win32），图标的取像素在
 // `app::AppIconProvider`（QtGui + shell），模型只认「名字 + 图标 URL」两个字符串。
 //
-// **网格**：固定 5 列（`columns`），每一格是「上面一个图标、下面一到两行名字」。
+// **网格**：固定 6 列（`columns`，卡片 800 逻辑像素宽），每一格是「上面一个图标、
+// 下面一到两行名字」。
 // 选中项在模型里是**扁平下标**（也就是 `ListView` / `GridView` 的行号），
 // `←`/`→` 走一格、`↑`/`↓` 走一整行；到边界夹住、不回绕（网格里回绕到上一行
 // 的末尾在筛过之后很容易让人失去方向感）。
@@ -63,7 +64,7 @@ class AppListModel : public QAbstractListModel
     Q_PROPERTY(bool hasMatches READ hasMatches NOTIFY stateChanged)
     Q_PROPERTY(int totalCount READ totalCount NOTIFY itemsChanged)
     Q_PROPERTY(int visibleCount READ visibleCount NOTIFY stateChanged)
-    /// 网格一次画几列（固定 5）。
+    /// 网格一次画几列（固定 6）。
     Q_PROPERTY(int columns READ columns CONSTANT)
     Q_PROPERTY(int cellWidth READ cellWidth CONSTANT)
     Q_PROPERTY(int cellHeight READ cellHeight CONSTANT)

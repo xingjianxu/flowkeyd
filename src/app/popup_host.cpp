@@ -477,12 +477,12 @@ void PopupHost::preload()
     }
     m_switchModel->setItems(std::nullopt, std::move(switchItems));
 
-    // 启动器是多于一屏的（5 列 × 7 行 > 默认的 6 行上限），所以预热也会把
+    // 启动器是多于一屏的（6 列 × 7 行 > 默认的 6 行上限），所以预热也会把
     // 网格的 `ScrollBar` 装配一遍。图标 URL 是空串：预热不需要真去 shell 里取
     // 图标（那会白白花掉几十毫秒）。
     std::vector<AppListEntry> appItems;
-    appItems.reserve(35);
-    for (int i = 0; i < 35; ++i) {
+    appItems.reserve(42);
+    for (int i = 0; i < 42; ++i) {
         appItems.push_back(AppListEntry{QStringLiteral("preload"), QString()});
     }
     m_appModel->setItems(std::nullopt, std::move(appItems));

@@ -8,8 +8,12 @@ namespace flowkeyd::app {
 namespace {
 
 // 96 DPI 下的逻辑像素（与 `window_list_model` / `help_model` 同一套纵向度量）。
-constexpr int kColumns = 5;
-constexpr int kCellWidth = 104;
+//
+// **卡片是 800 × 622**（6 列 × 6 行）：格子 126 × 88、图标 40，一屏 36 个程序。
+// 格子宽与列数一起决定了卡片宽度（见下面的 `kCardWidth`），改任何一个都要重新
+// 核一遍「宽度 = 两边的内边距与缩进 + 列数 × 格宽」这条等式。
+constexpr int kColumns = 6;
+constexpr int kCellWidth = 126;
 constexpr int kCellHeight = 88;
 constexpr int kIconSize = 40;
 constexpr int kPad = 12;
@@ -21,7 +25,7 @@ constexpr int kFooterGap = 8;
 constexpr int kCardRadius = 12;
 constexpr int kMaxRows = 6;
 
-/// 卡片宽度：两边的内边距与缩进 + 正好五格。
+/// 卡片宽度：两边的内边距与缩进 + 正好六格（6 × 126 + 2 × 12 + 2 × 10 = 800）。
 constexpr int kInnerWidth = kColumns * kCellWidth;
 constexpr int kCardWidth = kInnerWidth + 2 * kPad + 2 * kInset;
 

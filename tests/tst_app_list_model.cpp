@@ -93,12 +93,12 @@ void TestAppListModel::itemsExposeRolesAndGeometry()
     QCOMPARE(model.rowCount(), 7);
     QCOMPARE(model.totalCount(), 7);
     QCOMPARE(model.visibleCount(), 7);
-    QCOMPARE(model.columns(), 5);
-    QCOMPARE(model.cellWidth(), 104);
+    QCOMPARE(model.columns(), 6);
+    QCOMPARE(model.cellWidth(), 126);
     QCOMPARE(model.cellHeight(), 88);
     QCOMPARE(model.iconSize(), 40);
-    // 5 列 × 104 + 两边的内边距(12) 与缩进(10)。
-    QCOMPARE(model.cardWidth(), 5 * 104 + 2 * 12 + 2 * 10);
+    // 6 列 × 126 + 两边的内边距(12) 与缩进(10) = 800。
+    QCOMPARE(model.cardWidth(), 6 * 126 + 2 * 12 + 2 * 10);
     // 标题里带着条数：外面（验收脚本）靠它读「现在列了几个」。
     QCOMPARE(model.caption(), QStringLiteral("flowkeyd 程序 — 7 个"));
     QCOMPARE(model.selected(), 0);
@@ -124,19 +124,21 @@ void TestAppListModel::gridGeometryGrowsWithTheRowCount()
     const int oneRow = model.cardHeight();
     QCOMPARE(model.visibleRows(), 1);
 
-    model.setItems(std::nullopt, sampleItems(5));
+    // 正好一格列数（6）仍然是一行。
+    model.setItems(std::nullopt, sampleItems(6));
     QCOMPARE(model.visibleRows(), 1);
     QCOMPARE(model.cardHeight(), oneRow);
 
-    // 6 个 = 两行。
-    model.setItems(std::nullopt, sampleItems(6));
+    // 7 个 = 两行。
+    model.setItems(std::nullopt, sampleItems(7));
     QCOMPARE(model.visibleRows(), 2);
     QCOMPARE(model.cardHeight(), oneRow + 88);
 
-    // 行数上限管着卡片高度（超过就靠滚动条）。
+    // 行数上限管着卡片高度（超过就靠滚动条）；一屏 6 行 × 88 + 上下留白 = 622。
     model.setItems(std::nullopt, sampleItems(40));
     QCOMPARE(model.visibleRows(), 6);
     QCOMPARE(model.cardHeight(), oneRow + 5 * 88);
+    QCOMPARE(model.cardHeight(), 622);
 
     // 网格区顶边 / 底边与卡片高度自洽。
     QCOMPARE(model.listTop(), 12 + 30 + 8);
@@ -234,20 +236,20 @@ void TestAppListModel::handleKeyNavigatesTheGrid()
     QCOMPARE(model.selected(), 1);
     model.handleKey(Qt::Key_Left);
     QCOMPARE(model.selected(), 0);
-    // 上下走一整行（5 列）。
+    // 上下走一整行（6 列）。
     model.handleKey(Qt::Key_Down);
-    QCOMPARE(model.selected(), 5);
+    QCOMPARE(model.selected(), 6);
     model.handleKey(Qt::Key_Down);
-    QCOMPARE(model.selected(), 10);
+    QCOMPARE(model.selected(), 12);
     model.handleKey(Qt::Key_Up);
-    QCOMPARE(model.selected(), 5);
+    QCOMPARE(model.selected(), 6);
 
     model.handleKey(Qt::Key_End);
     QCOMPARE(model.selected(), 19);
     model.handleKey(Qt::Key_Home);
     QCOMPARE(model.selected(), 0);
 
-    // PgUp/PgDn 按卡片当前的行数走（默认最多 6 行 → 6 × 5 = 30，被夹到末尾）。
+    // PgUp/PgDn 按卡片当前的行数走（默认最多 6 行 → 6 × 6 = 36，被夹到末尾）。
     model.handleKey(Qt::Key_PageDown);
     QCOMPARE(model.selected(), 19);
     model.handleKey(Qt::Key_PageUp);
@@ -359,6 +361,9 @@ void TestAppListModel::rowsForAvailableHeightIsClamped()
     QCOMPARE(app::AppListModel::rowsForAvailableHeight(120), 1);
     // 很高的屏幕也不会超过上限（6 行）。
     QCOMPARE(app::AppListModel::rowsForAvailableHeight(4000), 6);
+    // 6 行 × 88 + 上下留白（50 + 44）+ 屏幕边缘的 48 = 670，比 670 更矮的屏幕就收行。
+    QCOMPARE(app::AppListModel::rowsForAvailableHeight(670), 6);
+    QCOMPARE(app::AppListModel::rowsForAvailableHeight(669), 5);
 
     app::AppListModel model;
     model.setItems(std::nullopt, sampleItems(40));
