@@ -59,6 +59,12 @@
      一直卡在 `ShellExecuteW` 里）。不提权就用已经注册好的任务：
      `& build\dist-release\flowkeyd.exe --quit` 然后 `schtasks /Run /TN flowkeyd`。
      先停再拉起很重要：不先停，新实例会弹一个「已在运行」原生框卡住。
+   * **不要用 `taskkill /IM flowkeyd.exe` 停常驻**：`taskkill`（不带 `/F`）给它的
+     顶层窗口发的是 `WM_CLOSE`，而 `--quit` 事件那条路才算“干净退出”（第 5 节）。
+   * 收尾脚本里 `--quit` / `schtasks /Run` 那两行**不要紧跟在中文注释后面**：`tmp/`
+     下的一次性 `.ps1` 是无 BOM 的，PS 5.1 按 GBK 解码时中文注释会**静默吞掉下一行**
+     —— 真踩过，现象是「`--quit` 什么都不打印、常驻实例还在跑」，很容易被当成
+     `--quit` 坏了（其实那一行根本没跑）。**`tmp/` 的脚本一律纯 ASCII。**
    * 开发期起 flowkeyd 一律 `--no-elevate --allow-multi` + 一次性配置，
      并且**不要**占用用户真实配置里已有的和弦（`Win+S`、`Win+1..3`、`Win+W`、`Win+X`、
      `Win+/`、`CapsLock`、`Alt+H/J/K/L`、`Alt+Space`、`LWin+Q`、`LWin+F1..F4`、
