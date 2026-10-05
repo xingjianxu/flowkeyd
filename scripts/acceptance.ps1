@@ -1039,6 +1039,15 @@ try {
     $appsShort = [FlowInject]::WindowRect($daemon.Id, $APPS_TITLE)[3]
     Check '固定之后卡片高度不变（内容变少也不缩）' (
         $appsTall -gt 0 -and [Math]::Abs($appsShort - $appsTall) -le 2)
+    # `Alt` + 字母是**已固定程序**的固定快捷键（按固定顺序 `Alt+a`、`Alt+b`……）。
+    # 这里**只能按没分配到的字母** —— 按中了 `Alt+a` 会真的启动那个程序。固定了
+    # 1 条时 `Alt+z` 没分配，应当被吃掉：卡片还在、条数还是 1（漏进筛选框的话
+    # 筛选串会变成 `z`，标题里的条数几乎一定会跟着变）。
+    Chord @($VK_ALT) 0x5A                    # `Alt+z`
+    Pump 400
+    Check 'Alt+字母（没固定到的）被吃掉、没漏进筛选框' (
+        [FlowInject]::HasWindowTitled($daemon.Id, $APPS_TITLE) -and
+        (AppsCount) -eq 1)
     # 固定是持久的：关掉再打开，那一条还在。
     CtrlAlt $VK_F14
     [void](WaitUntil { -not [FlowInject]::HasWindowTitled($daemon.Id, $APPS_TITLE) } 3000)

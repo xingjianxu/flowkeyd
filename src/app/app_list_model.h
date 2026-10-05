@@ -40,6 +40,17 @@
 // **没有对应条目的号码会被吃掉但什么都不做**（不能漏给筛选框，否则「5」会把
 // 列表筛空）；筛选框为空时数字键照常打进筛选框（`7-Zip` 这类名字要能用数字筛）。
 //
+// **`Alt` + 字母 = 已固定程序的固定快捷键**（项目所有者 2026-10 要求）：按
+// 「已固定」里的顺序，第 1 个是 `Alt+a`、第 2 个 `Alt+b`……最多 26 个（第 27 个
+// 起没有字母、角上也不画徽标）。与数字键不同，它**不随筛选变化**：卡片开着
+// 的任何视图里都能按（筛选之后也照样能启动已固定的程序）。
+//
+// 为什么必须带 `Alt`：裸字母是筛选框的主要输入，占用它们就打不了字了
+// （`handleKey()` 里那条注释、以及 `scripts/acceptance.ps1` 的启动器分段）。
+// 徽标上写的是**完整按键**（`Alt+a`），与数字号码同一种形状 —— 看一眼就知道
+// 该按什么；**数字优先**：同一个程序既在前 10 条里又是固定的，角上显示号码
+// （号码必须与显示序号一一对应），但 `Alt` + 它的字母照样有效。
+//
 // **不自动启动**：筛选到只剩一个也**不**自动执行（窗口切换器那边会自动激活，
 // 因为那是「切」；这里是「启动一个新程序」，误启动的代价比多按一下 `Enter` 大）。
 //
@@ -130,8 +141,10 @@ public:
         /// 表头与按钮上的文字。
         RowTitleRole,
         /// 这一行里的条目（`grid` / `list`）：
-        /// `{ index, name, icon, pinned, key }` 的数组；`key` 是数字快速启动键
-        /// （`"0"`..`"9"`，不在那种模式时是空串）。
+        /// `{ index, name, icon, pinned, key }` 的数组；`key` 是画在格子角上的
+        /// 快速启动标识：筛选之后前 10 条是 `"0"`..`"9"`（裸按键），已固定的是
+        /// `"Alt+a"`..`"Alt+z"`（按「已固定」顺序），都没有时是空串。
+        /// 与 `handleKey()` 里的规则一致：数字优先。
         RowItemsRole,
         /// 这一行是不是当前选中的那一行。
         ///
@@ -217,8 +230,11 @@ public:
     Q_INVOKABLE void moveSelection(int dx, int dy);
     /// 鼠标悬停到某个条目上（悬停即高亮）。找不到就忽略。
     Q_INVOKABLE void hoverItem(int itemIndex);
-    /// 激活第 `itemIndex` 个条目（单击一格 / 双击一行）：
+    /// 激活第 `itemIndex` 个条目（单击一格 / 双击一行 / `Alt` + 字母）：
     /// `{ decision: "choose", index, handled: true }`。
+    ///
+    /// 条目**不在当前视图里**（筛选把它筛掉了）也照样返回 `choose` —— `Alt` +
+    /// 字母作用于已固定的程序，而它们不随筛选变化；只是那时不挪选中项。
     Q_INVOKABLE QVariantMap activateItem(int itemIndex);
     /// 切换某个条目的固定状态（`Space`）。
     Q_INVOKABLE void togglePinItem(int itemIndex);
@@ -230,9 +246,15 @@ public:
     /// 一次按键的处理结果：
     /// `{ decision: "none"|"choose"|"cancel", index, handled }`。
     ///
-    /// 只管方向键 / `Home` / `End` / `PgUp` / `PgDn` / `Enter` / `Space` / `Esc`；
+    /// 只管方向键 / `Home` / `End` / `PgUp` / `PgDn` / `Enter` / `Space` / `Esc`，
+    /// 外加 `Alt` + 字母（已固定程序的固定快捷键，见文件头）；
     /// **字符与退格不在这里**（它们归筛选框那个标准 `TextField`）。
-    Q_INVOKABLE QVariantMap handleKey(int key);
+    ///
+    /// `modifiers` 是 `Qt::KeyboardModifiers`（QML 传 `event.modifiers`）。
+    /// 只有**恰好按住 `Alt`** 的字母才被接走：`Ctrl`/`Shift`/`AltGr` 的组合、
+    /// 以及没固定到东西的字母键都放行给筛选框（放行 `Alt`+字母会让它变成一个
+    /// 字符，所以已固定列表非空时 `Alt`+字母一律吃掉、什么都不做）。
+    Q_INVOKABLE QVariantMap handleKey(int key, int modifiers = 0);
 
     /// 右键菜单（原生 shell 菜单，见 `platform/win/shell_menu.h`）关掉之后的决定。
     ///
@@ -326,6 +348,10 @@ private:
     /// 数字快速启动键：`m_items` 下标 → `"0"`..`"9"`（只有一个扁平网格的筛选
     /// 视图里才会非空，见文件头）。
     QHash<int, QString> m_itemKeys;
+    /// 已固定程序的固定快捷键：`m_items` 下标 → `"Alt+a"`..`"Alt+z"`（按
+    /// 「已固定」顺序，最多 26 个；见文件头）。数字键优先，两者都可能命中时
+    /// 角上显示号码 —— 但 `Alt` + 字母始终有效。
+    QHash<int, QString> m_pinKeys;
 
     /// 用户输入的筛选串（原样保留大小写）。
     QString m_filter;

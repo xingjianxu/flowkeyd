@@ -25,7 +25,10 @@ import QtQuick.Controls.FluentWinUI3
 // （「记事本」），切成英文反而筛不出东西。
 //
 // 逻辑全在 `app::AppListModel`（纯逻辑、有单测）：分段、分组、拼音筛选、键盘
-// 选中项、`Space` 固定、`Enter`/`Esc`。QML 只做两件事：
+// 选中项、`Space` 固定、`Enter`/`Esc`，以及两种快速启动标识：
+//   * **数字**（`0`–`9`）：筛选之后前 10 条，裸按键，easymotion 风格；
+//   * **`Alt` + 字母**（`a`–`z`）：已固定的程序，按固定顺序，**不随筛选变化**。
+// QML 只做两件事：
 //   * 把 `handleKey()` / `activateItem()` 给的决定执行掉；
 //   * 把模型的状态（筛选文本、选中行、卡片高度）同步给控件。
 //
@@ -145,7 +148,7 @@ Window {
             event.accepted = false
             return
         }
-        var decision = root.appModel.handleKey(event.key)
+        var decision = root.appModel.handleKey(event.key, event.modifiers)
         if (!decision.handled) {
             event.accepted = false
             return
@@ -465,16 +468,20 @@ Window {
                         asynchronous: true
                     }
 
-                    // 数字快速启动键（easymotion 风格）：筛选之后前 10 条各拿一个
-                    // 号码（第 1 个是 0），画在**图标右上角**，按一下直接启动它。
+                    // 快速启动标识：筛选之后的数字（`0`–`9`，裸按键）与已固定程序的
+                    // `Alt` + 字母（`Alt+a`–`Alt+z`，按固定顺序），都画在**图标右上角**，
+                    // 按下就直接启动它。数字优先（号码得跟显示序号对得上）。
                     Rectangle {
                         id: keyBadge
 
-                        readonly property bool shown: tile.modelData.key !== undefined
-                                                      && tile.modelData.key.length > 0
+                        readonly property string label: tile.modelData.key !== undefined
+                                                        ? tile.modelData.key : ""
+                        readonly property bool shown: keyBadge.label.length > 0
 
                         visible: keyBadge.shown
-                        width: 16
+                        // 宽度跟着文字走：`0`–`9` 还是 16 见方的小方块，`Alt+a` 就长一点
+                        // （往图标左边长，右边仍贴着图标右上角）。
+                        width: Math.max(16, keyLabel.implicitWidth + 8)
                         height: 16
                         radius: 4
                         color: root.palette.highlight
@@ -484,8 +491,10 @@ Window {
                         anchors.top: tileIcon.top
 
                         Label {
+                            id: keyLabel
+
                             anchors.centerIn: parent
-                            text: tile.modelData.key
+                            text: keyBadge.label
                             color: root.palette.highlightedText
                             font.family: root.uiFontFamily
                             font.pointSize: 8.5
@@ -559,22 +568,61 @@ Window {
                 asynchronous: true
             }
 
-            Rectangle {
-                id: rowPin
+            // 尾巴：有固定快捷键（`Alt` + 字母）就画那个徽标，否则固定住的话画一个
+            // 小圆点。两者的宽度差很多，所以用一个容器把名字的右边界稳住。
+            Item {
+                id: rowTrailing
 
-                visible: listRow.entry !== null && listRow.entry.pinned === true
-                width: 6
-                height: 6
-                radius: 3
-                color: root.palette.highlight
+                readonly property bool hasKey: listRow.entry !== null
+                                               && listRow.entry.key !== undefined
+                                               && listRow.entry.key.length > 0
+
                 anchors.right: parent.right
                 anchors.verticalCenter: parent.verticalCenter
+                width: rowTrailing.hasKey ? Math.max(16, rowKeyLabel.implicitWidth + 8) : 6
+                height: 18
+
+                Rectangle {
+                    id: rowPin
+
+                    visible: listRow.entry !== null && listRow.entry.pinned === true
+                             && !rowTrailing.hasKey
+                    width: 6
+                    height: 6
+                    radius: 3
+                    color: root.palette.highlight
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+
+                Rectangle {
+                    id: rowKey
+
+                    visible: rowTrailing.hasKey
+                    width: rowTrailing.width
+                    height: 16
+                    radius: 4
+                    color: root.palette.highlight
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+
+                    Label {
+                        id: rowKeyLabel
+
+                        anchors.centerIn: parent
+                        text: rowTrailing.hasKey ? listRow.entry.key : ""
+                        color: root.palette.highlightedText
+                        font.family: root.uiFontFamily
+                        font.pointSize: 8.5
+                        font.bold: true
+                    }
+                }
             }
 
             Label {
                 anchors.left: rowIcon.right
                 anchors.leftMargin: 10
-                anchors.right: rowPin.left
+                anchors.right: rowTrailing.left
                 anchors.rightMargin: 8
                 anchors.verticalCenter: parent.verticalCenter
                 text: listRow.entry ? listRow.entry.name : ""

@@ -4,7 +4,8 @@
 // 筛选 = 扁平网格、全部 = 按首字母分组的一行一个）、角色、拼音 / 首字母筛选、
 // 键盘选中项（方向键 / Home / End / PgUp / PgDn，跳过表头、到边界夹住）、
 // `Space` 固定、`Enter`/`Esc` 的语义、「最近使用」的记账、筛选之后的**数字快速
-// 启动键**（0 起、只给前 10 条），以及卡片高度。
+// 启动键**（0 起、只给前 10 条）、已固定程序的 **`Alt` + 字母**快捷键（a 起、
+// 不随筛选变化、最多 26 个），以及卡片高度。
 //
 // **开始菜单的扫描与图标都不在这里**：前者要真机（`platform/win/apps`，见
 // `tst_interactive`），后者是 `app::AppIconProvider` 的异步活儿（由对话框那边
@@ -168,6 +169,8 @@ private slots:
     void onlyTheFirstTenMatchesGetAKey();
     void digitKeysLaunchTheNumberedProgram();
     void digitsGoToTheFilterWhenNothingIsFiltered();
+    void pinnedProgramsGetFixedAltLetterKeys();
+    void onlyTheFirstTwentySixPinsGetALetter();
     void resetClearsFilterAndAllMode();
     void contextMenuDecidesWhetherToCloseTheCard();
     void itemIndexForVisibleWalksTheRows();
@@ -790,6 +793,81 @@ void TestAppListModel::digitsGoToTheFilterWhenNothingIsFiltered()
     QVERIFY(!handledOf(model.handleKey(Qt::Key_7)));
 }
 
+void TestAppListModel::pinnedProgramsGetFixedAltLetterKeys()
+{
+    app::AppListModel model;
+    core::LauncherState state;
+    // 固定顺序 = 字母顺序（与显示顺序无关）。
+    state.pinned = {keyFor(2), keyFor(0), keyFor(1)};
+    model.setState(state);
+    model.setItems(std::nullopt, sampleItems(8));
+
+    // 行：0 表头 / 1 网格（三个固定）/ 2 「全部程序」按钮。
+    QCOMPARE(itemKey(model, 1, 0), QStringLiteral("Alt+a"));
+    QCOMPARE(itemKey(model, 1, 1), QStringLiteral("Alt+b"));
+    QCOMPARE(itemKey(model, 1, 2), QStringLiteral("Alt+c"));
+    QVERIFY(itemIndices(model, 1) == std::vector<int>({2, 0, 1}));
+    QVERIFY(model.footerText().contains(QStringLiteral("Alt+a–z 直接启动")));
+
+    // `Alt` + 字母启动固定列表里的第几个，与它显示在哪一格无关。
+    QVariantMap chosen = model.handleKey(Qt::Key_A, Qt::AltModifier);
+    QCOMPARE(decisionOf(chosen), QStringLiteral("choose"));
+    QVERIFY(handledOf(chosen));
+    QCOMPARE(indexOf(chosen), 2);
+    QCOMPARE(indexOf(model.handleKey(Qt::Key_B, Qt::AltModifier)), 0);
+    QCOMPARE(indexOf(model.handleKey(Qt::Key_C, Qt::AltModifier)), 1);
+
+    // 没固定到东西的字母：吃掉但什么都不做（放行会变成筛选框里的一个字符）。
+    chosen = model.handleKey(Qt::Key_Z, Qt::AltModifier);
+    QCOMPARE(decisionOf(chosen), QStringLiteral("none"));
+    QVERIFY(handledOf(chosen));
+    QCOMPARE(indexOf(chosen), -1);
+
+    // 必须**恰好**按住 `Alt`：裸字母（打字）与 `Ctrl+A`（全选）都要放给筛选框，
+    // `AltGr`（= `Ctrl+Alt`）也不能当成快捷键。
+    QVERIFY(!handledOf(model.handleKey(Qt::Key_A)));
+    QVERIFY(!handledOf(model.handleKey(Qt::Key_A, Qt::ControlModifier)));
+    QVERIFY(!handledOf(model.handleKey(Qt::Key_A, Qt::AltModifier | Qt::ControlModifier)));
+    QVERIFY(!handledOf(model.handleKey(Qt::Key_A, Qt::AltModifier | Qt::ShiftModifier)));
+
+    // **不随筛选变化**：筛掉固定项之后（它们根本不在网格里）`Alt` + 字母照样有效；
+    // 而网格里显示的是数字号码（数字与显示序号一一对应，优先画）。
+    model.setFilter(QStringLiteral("app01"));
+    QCOMPARE(model.visibleCount(), 1);
+    QCOMPARE(itemKey(model, 0, 0), QStringLiteral("0"));
+    QCOMPARE(indexOf(model.handleKey(Qt::Key_A, Qt::AltModifier)), 2);
+    QCOMPARE(indexOf(model.handleKey(Qt::Key_B, Qt::AltModifier)), 0);
+    QVERIFY(model.footerText().contains(QStringLiteral("0–9 直接启动")));
+    QVERIFY(model.footerText().contains(QStringLiteral("Alt+a–z 直接启动")));
+
+    // 一个都没固定时没有这套快捷键：`Alt` + 字母原样放行。
+    app::AppListModel bare;
+    bare.setItems(std::nullopt, sampleItems(3));
+    QVERIFY(!handledOf(bare.handleKey(Qt::Key_A, Qt::AltModifier)));
+    QVERIFY(!bare.footerText().contains(QStringLiteral("Alt+a–z")));
+}
+
+void TestAppListModel::onlyTheFirstTwentySixPinsGetALetter()
+{
+    app::AppListModel model;
+    core::LauncherState state;
+    for (int i = 0; i < 28; ++i) {
+        state.pinned.append(keyFor(i));
+    }
+    model.setState(state);
+    model.setItems(std::nullopt, sampleItems(28));
+
+    // 行：0 表头 / 1..5 网格（4 行 6 个 + 4 个）/ 6 按钮。第 26 个（下标 25）
+    // 是 `Alt+z`，第 27、28 个没有字母（也不画徽标）。
+    QCOMPARE(itemKey(model, 5, 0), QStringLiteral("Alt+y"));
+    QCOMPARE(itemKey(model, 5, 1), QStringLiteral("Alt+z"));
+    QCOMPARE(itemKey(model, 5, 2), QString());
+    QCOMPARE(itemKey(model, 5, 3), QString());
+
+    QCOMPARE(indexOf(model.handleKey(Qt::Key_Z, Qt::AltModifier)), 25);
+    QCOMPARE(indexOf(model.handleKey(Qt::Key_Y, Qt::AltModifier)), 24);
+}
+
 void TestAppListModel::resetClearsFilterAndAllMode()
 {
     app::AppListModel model;
@@ -862,7 +940,7 @@ void TestAppListModel::qmlEntryPointsAreInvokable()
     // 后面的语句会被静默跳过**（AGENTS.md 第 10 节，表现得很像“处理器没跑”）。
     app::AppListModel model;
     const QMetaObject *meta = model.metaObject();
-    for (const char *signature : {"setFilter(QString)", "clearFilter()", "handleKey(int)",
+    for (const char *signature : {"setFilter(QString)", "clearFilter()", "handleKey(int,int)",
                                   "activateItem(int)", "hoverItem(int)", "moveSelection(int,int)",
                                   "togglePinItem(int)", "showAll()", "showOverview()",
                                   "afterContextMenu(bool)"}) {

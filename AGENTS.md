@@ -125,7 +125,7 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
 | 互斥体     | `Local\flowkeyd-<配置路径散列>`                                                 |
 | 开机自启   | 计划任务 `flowkeyd` 指向**当前运行 exe**（启动时自注册自检）                    |
 | 在线更新   | 托盘菜单 *检查更新* → GitHub `releases/latest` → slim 包 → sha256 → 换 exe + 重启 |
-| 自动化测试 | Qt Test 单元测试 + `scripts/acceptance.ps1`（156 → 159 项检查，需交互式桌面）         |
+| 自动化测试 | Qt Test 单元测试 + `scripts/acceptance.ps1`（156 → 160 项检查，需交互式桌面）         |
 | 依赖管理   | CMake Presets + Ninja，`vendor/lua` 静态编进二进制                             |
 
 ---
@@ -608,6 +608,23 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
       不编号，数字照常打进筛选框（`7-Zip` 这类名字要用数字筛）。号码出现时那格原来的
       「已固定」小圆点让到图标左上角（两个都锚右上角会叠住）。`tst_app_list_model` 盯
       号码与按键映射，`scripts/acceptance.ps1` 盯「没有对应条目的号码被吃掉」。
+    * **已固定程序的固定快捷键 = `Alt` + 字母**（项目所有者 2026-10 拍板；按「已固定」
+      顺序，第 1 个 `Alt+a`、第 2 个 `Alt+b`……最多 26 个）。
+      * **为什么是 `Alt`**：需求原文是「按键从 a 到 z」，但裸字母是筛选框的主要输入
+        —— 占用它们就打不了字了。问了项目所有者，选的是「卡片内 `Alt` + 字母」。
+      * 与数字键**不同**：它不随筛选变化，卡片开着的任何视图里都有效。所以筛选之后
+        它能启动一个**根本没显示出来**的固定项 —— `activateItem()` 因此不再要求条目
+        在当前视图里（只是找不到就不挪选中项），`activateItemReturnsTheItemIndex`
+        与 `pinnedProgramsGetFixedAltLetterKeys` 盯着这一点。
+      * `modifiers` 必须**恰好**等于 `Qt::AltModifier`：`Ctrl`/`Shift` 的组合、
+        `AltGr`（`Ctrl+Alt`）都放行给 `TextInput`。靠 `handleKey(int key, int modifiers)`
+        的第二个参数（QML 传 `event.modifiers`；`qmlEntryPointsAreInvokable` 里的签名
+        也要跟着写成 `handleKey(int,int)`）。已固定列表非空时，`Alt` + 没分配到的
+        字母也被吃掉（放行会变成筛选框里的一个字符）。
+      * **数字优先显示**：同一格既是固定项、又在前 10 条结果里时画号码（号码得跟显示
+        序号对得上），但 `Alt` + 它的字母照样有效。徽标上写的是完整按键（`Alt+a`），
+        所以格子里那个小方块会跟着文字变宽。
+      * 「全部程序」列表里固定在右端画的是同一个徽标（没有字母时才是小圆点）。
 
 ---
 
@@ -713,14 +730,14 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
 | `dispatcher.h/.cpp` | **动作工作线程**（`QThread`）：执行动作列表、`window` 的“先启动再激活”与默认开的 `toggle`、`menu`/`help`/`windows`/`apps` 的窗口请求、`window_rule`（三遍）、`startDesktopWatch()`/`pollDesktop()`；启动器的持久状态文件路径也是在这里算好塞进 `AppRequest` 的（`core::launcherStatePath(runtime->configPath())`） |
 | `runtime.h/.cpp` | 引擎 + 钩子 + 分发 + 托盘 + 弹窗的总装；`ControlCmd`（suspend/reload/quit）通道；`--quit` 的事件句柄（`QWinEventNotifier` 在 GUI 线程上监听）；`reportDesktop()`/`desktopChanged`；`showSwitchFromAnyThread()` 等 |
 | `log_model.h/.cpp` | 日志窗口的模型：尾随日志文件、最多 1000 行、按级别配色、子串过滤 |
-| `menu_model.h/.cpp` / `help_model.h/.cpp` / `window_list_model.h/.cpp` / `app_list_model.h/.cpp` | 四个卡片的**纯逻辑**（`QAbstractListModel`，只用 QtCore）。行几何与鼠标命中**不归它们管**（`ListView`/`GridView` + `ItemDelegate`）；`help` 只管筛选/选中项/`Enter`/`Esc`/`setSelected`；`menu` 还持有悬停（`Enter` 执行光标下那一条）；`window_list` 管进程名前缀筛选、自动激活与数字选择模式；`app_list` 管**行**式的三个视图（已固定 + 最近使用 + 「全部程序」按钮 / 筛选用的扁平网格 / 按首字母分组的一行一个）、名字/拼音/首字母子串筛选（搜索串来自 `core::appSearchText()`，§2 第 29 条）、筛选之后前 10 条的**数字快速启动键**（`0` 起、图标右上角的号码）、`Space` 固定与「最近使用」的记账、以及卡片高度（§2 第 27/30 条） |
+| `menu_model.h/.cpp` / `help_model.h/.cpp` / `window_list_model.h/.cpp` / `app_list_model.h/.cpp` | 四个卡片的**纯逻辑**（`QAbstractListModel`，只用 QtCore）。行几何与鼠标命中**不归它们管**（`ListView`/`GridView` + `ItemDelegate`）；`help` 只管筛选/选中项/`Enter`/`Esc`/`setSelected`；`menu` 还持有悬停（`Enter` 执行光标下那一条）；`window_list` 管进程名前缀筛选、自动激活与数字选择模式；`app_list` 管**行**式的三个视图（已固定 + 最近使用 + 「全部程序」按钮 / 筛选用的扁平网格 / 按首字母分组的一行一个）、名字/拼音/首字母子串筛选（搜索串来自 `core::appSearchText()`，§2 第 29 条）、筛选之后前 10 条的**数字快速启动键**（`0` 起、图标右上角的号码）、已固定程序的 **`Alt` + 字母固定快捷键**（`Alt+a`–`Alt+z`，不随筛选变化）、`Space` 固定与「最近使用」的记账、以及卡片高度（§2 第 27/30 条） |
 | `popup_layout.h/.cpp` / `popup_host.h/.cpp` | 弹窗共用的几何类型与 `centrePopup()`（先在工作区居中、再夹进屏幕）；把模型挂到 QML 窗口上、抢前台、在 GUI 线程上创建/复用窗口、`helpRun()`（可见行下标 → 条目下标，**先藏窗口再执行**）、`preload()`、`switchUseEnglishInput()`/`restoreSwitchInputMode()` |
 | `app_icons.h/.cpp` | **程序启动器的图标**：`QQuickAsyncImageProvider` + 一条常驻 STA 线程（队列 + 按「启动名@边长」缓存），把 `platform/win/apps::shellIcon()` 的 BGRA 变成 `QImage`（`Format_ARGB32`，**直通 alpha**）；表是“图标键 → 启动名”，只增不改（§2 第 27 条） |
 | `update_model.h/.cpp` / `update_archive.h/.cpp` / `updater.h/.cpp` | 更新卡片的状态机（八个阶段、版本号/发布说明/进度/按钮可见性，**不联网不解压不换文件**）；从 zip 里取出新 exe（`QZipReader` + PE 魔数检查）；联网编排（异步 `QNetworkAccessManager` + sha256 + 解压到 `<exe>.new` + mtime 对齐发布日） |
 | `app_icon.h/.cpp` | 把 qrc 里的 9 张 PNG 帧拼成多尺寸 `QIcon`（`applicationIcon()`）；`desktopIcon(number)` 现画桌面号徽标 |
 | `src/qml/` | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`、`SwitchPopup.qml`、`AppPopup.qml`、`UpdatePopup.qml`。都写 `pragma ComponentBehavior: Bound`；**五个弹窗的 `flags` 都带 `Qt.Tool`**；配色一律用 `palette`（没有单独的 `Style.qml`）；中文一律 `font.family: "Microsoft YaHei"`；列表/网格全部是标准 `ListView`/`GridView` + `ItemDelegate`（+ `ScrollBar`） |
 | `tests/` | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_remote_desktop`、`tst_log_tail`、`tst_audio`、`tst_autostart`、`tst_menu_model`、`tst_help_model`、`tst_window_list_model`、`tst_app_list`、`tst_app_list_model`、`tst_launcher_state`、`tst_power_table`、`tst_desktop_table`、`tst_placement`、`tst_layout`、`tst_version`、`tst_desktop_badge`、`tst_update`、`tst_update_model`、`tst_update_install`、`tst_command_line`、`tst_instance`、`tst_input`，以及需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1` 的 `tst_interactive`（真机：剪贴板/音量/窗口/虚拟桌面/钉住/置顶/输入法/覆盖层/更新下载；联网那条还要 `FLOWKEYD_ALLOW_NETWORK_TESTS=1`） |
-| `scripts/acceptance.ps1` | 桌面行为验收（注入按键 + 焦点捕捉窗口的外部观察，155 → 159 项检查），需交互式桌面，**不属于 `ctest`** |
+| `scripts/acceptance.ps1` | 桌面行为验收（注入按键 + 焦点捕捉窗口的外部观察，155 → 160 项检查），需交互式桌面，**不属于 `ctest`** |
 | `scripts/release.ps1` | 构建 release + 打包（完整包 + 精简升级包，各附 `.sha256`）+ 用 `gh` 上传 GitHub Release。tag 取刚构建的 exe 的 `--version`。**发布说明由脚本自己写**（上一个 Release 的 tag → HEAD 的提交主题，按提交信息前缀分类成新功能/修复/变更/其它，纯文档/测试类只计数；`-Notes`/`-NotesFile` 可以整份替换），不用 `gh --generate-notes`。工作区脏或 HEAD 没推到 origin 会直接拒绝（要 `-AllowDirty`/`-Push`）。**唯一的新前置依赖是 `gh`**。开关：`-SkipBuild`/`-SkipResident`/`-SkipUpload`/`-Clobber` |
 
 > `scripts/install.ps1` / `uninstall.ps1` **已删除**：自启的注册、刷新与删除现在全在
@@ -813,7 +830,7 @@ dir build\dist-release               # 发布包（release 构建自动产出，
 ### 桌面行为怎么验证
 
 ```powershell
-# 155 → 159 项检查，约三分钟，会持续注入按键/抢焦点；按工作约定第 6 条先提醒用户
+# 155 → 160 项检查，约三分钟，会持续注入按键/抢焦点；按工作约定第 6 条先提醒用户
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance.ps1
 powershell.exe ... -Phase config      # 只看配置，不注入按键
 ```
@@ -1093,7 +1110,7 @@ debug 构建 + 31 个测试全绿、release 零警告。**这次按项目所有�
 | 6 弹窗 `menu` / `help` | **已完成** | `flowkeyd_models` + 两张 QML 卡片；`tst_menu_model`/`tst_help_model` 全绿 |
 | 7 虚拟桌面 + 电源 | **已完成** | `desktop`/`power` + dispatcher 接线；`tst_desktop_table`/`tst_power_table` 全绿 |
 | 8 示例配置 + README | **已完成** | 覆盖全特性的 `flowkeyd.lua.example`（`--check` 零警告）；README 已写全 |
-| 9 验收（无 e2e 的替代） | **已完成** | `scripts/acceptance.ps1`（现在 159 项）+ `FLOWKEYD_ACCEPT_INJECTED` 测试后门 |
+| 9 验收（无 e2e 的替代） | **已完成** | `scripts/acceptance.ps1`（现在 160 项）+ `FLOWKEYD_ACCEPT_INJECTED` 测试后门 |
 | 10 接管 | **已完成** | 真实配置迁到 `.config\flowkeyd\config.lua`；常驻由计划任务 `flowkeyd` 指向当前运行的 exe |
 
 第 10 阶段之后新增的能力（都在本文件对应章节有记录）：
@@ -1733,7 +1750,8 @@ FreeType 字体引擎、程序启动器（`apps()` + 异步图标）、启动器
   排序键与分组表头）、
   `core/launcher_state.*`（固定 / 最近使用的顺序、截断与 JSON 解析序列化）、
   `platform/win/apps.*`（枚举 `shell:AppsFolder` + 属性读取 + `shellIcon` + `launchApp`）、
-  `app/app_list_model.*`（**行**式的三个视图与选中项/卡片高度）、
+  `app/app_list_model.*`（**行**式的三个视图与选中项/卡片高度、两种快速启动标识：
+  筛选之后的 `0`–`9` 与已固定程序的 `Alt` + 字母）、
   `app/app_icons.*`（异步图标的线程/缓存/尺寸）、卡片 `AppPopup.qml`。
   把条目喂给卡片、**启动那一步**（`apps::launchApp()`）、以及状态文件路径都在
   `Dispatcher::openAppsAction()`；
@@ -1746,6 +1764,9 @@ FreeType 字体引擎、程序启动器（`apps()` + 异步图标）、启动器
   滚动这类“列表内容动没动”的检查有两层：`tmp/preview/` 里直接断言
   `ListView.contentY`（真 QML + 真模型，锁屏也能跑）；从外面看只有像素，所以
   `scripts/acceptance.ps1` 用 `RegionHash` 抓一条竖带前后比对。
+  **快速启动键**（数字与 `Alt` + 字母）只在模型里算：加一种就动 `rebuildRows()` 里的
+  `m_itemKeys` / `m_pinKeys`、`itemModels()` 的优先级、`handleKey()` 的一条分支，以及
+  `footerText()` 的一句提示 —— 别把它做成 QML 里的按键表。
   **新的一行形状**：模型加一个 `Row::Kind`、`data()` 的 `RowKindRole` 多一个字符串、
   `AppPopup.qml` 多一个内联组件（并加进 `preload()` 的假数据好让它被预热）。
 * **程序启动器的过滤与身份**：凡是「某个东西算不算程序」「某个程序算不算卸载程序」的

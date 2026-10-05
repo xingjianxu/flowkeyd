@@ -36,6 +36,8 @@ constexpr int kButtonHeight = 40;
 constexpr int kListRowHeight = 44;
 /// 数字快速启动键一共发多少个：`0`..`9`（第 1 个拿 `0`、第 10 个拿 `9`）。
 constexpr int kNumberedKeys = 10;
+/// 已固定程序的 `Alt` + 字母快捷键一共发多少个：`a`..`z`。
+constexpr int kPinnedKeys = 26;
 
 /// 卡片宽度：两边的内边距与缩进 + 正好六格（6 × 126 + 2 × 12 + 2 × 10 = 800）。
 constexpr int kInnerWidth = kColumns * kCellWidth;
@@ -65,6 +67,19 @@ QString digitLabelForLine(int line)
         return QString();
     }
     return QString::number(line);
+}
+
+/// 第 `line` 个**已固定**程序的固定快捷键的徽标文字（`Alt+a`..`Alt+z`）。
+///
+/// 字母一律小写（AGENTS.md 第 2 节第 17 条），而 `Alt` 前缀是写在徽标上的：
+/// 裸字母的徽标会被当成「按一下 a」——那正好是筛选框的打字。
+QString pinKeyLabelForLine(int line)
+{
+    if (line < 0 || line >= kPinnedKeys) {
+        return QString();
+    }
+    const char letter = static_cast<char>('a' + line);
+    return QStringLiteral("Alt+") + QLatin1Char(letter);
 }
 
 } // namespace
@@ -191,17 +206,29 @@ QString AppListModel::emptyMessage() const
 
 QString AppListModel::footerText() const
 {
+    // 底部提示就是「现在这一屏能干哪些事」的清单：卡片只有 776 宽，拼得太多会
+    // 被省略号截掉，所以每一段都尽量短。
+    QStringList parts;
+    parts << tr("%1 个程序").arg(visibleCount());
     if (m_numbered) {
         // 筛选之后的扁平网格：数字键是最省事的第二段输入（easymotion 风格）。
-        // 不写 `Space 固定` —— 筛选框里有字的时候 `Space` 是打空格。
-        return tr("%1 个程序    0–9 直接启动    ↑↓←→ 选择    Enter 启动    右键菜单    Esc 关闭")
-            .arg(visibleCount());
+        parts << tr("0–9 直接启动");
+    }
+    if (!m_pinKeys.isEmpty()) {
+        parts << tr("Alt+a–z 直接启动");
     }
     if (m_allMode && m_filter.trimmed().isEmpty()) {
-        return tr("%1 个程序    ↑↓ 选择    Enter 启动    Esc 返回").arg(visibleCount());
+        // 「全部程序」列表：没有左右可走的格子，`Space`（固定）也就没提。
+        parts << tr("↑↓ 选择") << tr("Enter 启动") << tr("Esc 返回");
+        return parts.join(QStringLiteral("    "));
     }
-    return tr("%1 个程序    ↑↓←→ 选择    Enter 启动    Space 固定    右键菜单    Esc 关闭")
-        .arg(visibleCount());
+    parts << tr("↑↓←→ 选择") << tr("Enter 启动");
+    if (m_filter.trimmed().isEmpty()) {
+        // 筛选框里有字时 `Space` 是打空格，不能再提「固定」。
+        parts << tr("Space 固定");
+    }
+    parts << tr("右键菜单") << tr("Esc 关闭");
+    return parts.join(QStringLiteral("    "));
 }
 
 int AppListModel::columns() const
@@ -401,11 +428,12 @@ QVariantMap AppListModel::activateItem(int itemIndex)
     if (itemIndex < 0 || itemIndex >= static_cast<int>(m_items.size())) {
         return makeNoneDecision(true);
     }
+    // 选中项跟着走：这一格在当前视图里就把高亮挪过去。**找不到也照样返回
+    // `choose`** —— `Alt` + 字母（已固定程序的固定快捷键）在筛选之后可能作用在
+    // 一个没显示出来的条目上，那正是它存在的意义。
     const std::optional<std::pair<int, int>> position = positionOfItem(itemIndex);
-    if (!position.has_value()) {
-        return makeNoneDecision(true);
-    }
-    if (position->first != m_selectedRow || position->second != m_selectedColumn) {
+    if (position.has_value()
+        && (position->first != m_selectedRow || position->second != m_selectedColumn)) {
         m_selectedRow = position->first;
         m_selectedColumn = position->second;
         emit selectedChanged();
@@ -480,8 +508,23 @@ QVariantMap AppListModel::afterContextMenu(bool invoked)
     return result;
 }
 
-QVariantMap AppListModel::handleKey(int key)
+QVariantMap AppListModel::handleKey(int key, int modifiers)
 {
+    // 已固定程序的固定快捷键：`Alt` + 字母（见头文件）。
+    //
+    // 必须**恰好**按住 `Alt`：`Ctrl`/`Shift` 的组合（`Ctrl+A` 全选、输入法的
+    // 候选键）与 `AltGr`（在 Windows 上是 `Ctrl+Alt`）都要放行给筛选框。
+    if (!m_pinKeys.isEmpty() && modifiers == Qt::AltModifier && key >= Qt::Key_A
+        && key <= Qt::Key_Z) {
+        const int line = key - Qt::Key_A;
+        if (line < static_cast<int>(m_pinnedShown.size())) {
+            return activateItem(m_pinnedShown[static_cast<std::size_t>(line)]);
+        }
+        // 没固定到第 27 个以后的：吃掉这个键。放行的话它会变成筛选框里的一个
+        // 字母（用户想按 `Alt+z` 却看到筛选串多了一个 `z`），而 `Alt` + 字母
+        // 在卡片里本来也没有别的用途。
+        return makeNoneDecision(true);
+    }
     // 数字快速启动键：只有在「筛选之后」这种模式里才把数字键吃掉（否则用户要在
     // 筛选串里打数字，例如名字里带数字的 `7-Zip`）。没有对应条目的号码被吃掉但
     // 什么都不做 —— 不能漏给筛选框，否则「9」会把列表筛空。
@@ -710,6 +753,19 @@ void AppListModel::rebuildRows(int keepItem)
         m_recentShown.push_back(found.value());
     }
 
+    // 已固定程序的固定快捷键（`Alt` + 字母，与 `m_pinnedShown` 的顺序一一
+    // 对应，最多 26 个）。**不随筛选 / 视图变化**：卡片开着就一直有效。
+    //
+    // 与 `m_itemKeys` 分开存：数字键是「这次筛选里第几个」，字母是「固定列表里
+    // 第几个」，两者可能同时命中同一个条目；`itemModels()` 让数字优先显示，
+    // 但 `handleKey()` 两条路径都认。
+    m_pinKeys.clear();
+    const int pins = std::min(static_cast<int>(m_pinnedShown.size()), kPinnedKeys);
+    for (int line = 0; line < pins; ++line) {
+        m_pinKeys.insert(m_pinnedShown[static_cast<std::size_t>(line)],
+                         pinKeyLabelForLine(line));
+    }
+
     const bool filtering = !m_filter.trimmed().isEmpty();
 
     // 数字快速启动键（easymotion 风格）：**筛选之后**前 10 条各分一个数字键，
@@ -863,7 +919,11 @@ QVariantList AppListModel::itemModels(const std::vector<int> &items) const
         map.insert(QStringLiteral("icon"), entry.iconSource);
         map.insert(QStringLiteral("pinned"),
                    !entry.key.isEmpty() && m_pinned.contains(entry.key));
-        map.insert(QStringLiteral("key"), m_itemKeys.value(index));
+        // 数字优先（号码必须与显示序号一一对应）；没有号码的已固定程序显示
+        // 它的固定快捷键（`Alt` + 字母）。
+        const QString digit = m_itemKeys.value(index);
+        map.insert(QStringLiteral("key"),
+                   digit.isEmpty() ? m_pinKeys.value(index) : digit);
         list.push_back(map);
     }
     return list;
