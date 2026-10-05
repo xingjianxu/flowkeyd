@@ -19,13 +19,13 @@
 #include "platform/win/shell_menu.h"
 
 #include "platform/win/ffi.h"
+#include "platform/win/logging.h"
 
 #include <objbase.h>
 #include <shellapi.h>
 #include <shlobj.h>
 #include <shobjidl.h>
 
-#include <cstring>
 #include <utility>
 
 namespace flowkeyd::platform::win::shell_menu {
@@ -36,71 +36,6 @@ namespace {
 /// 排，返回的命令号减掉它才是「第几条」（`InvokeCommand` 要的就是这个偏移）。
 constexpr UINT kCommandFirst = 1;
 constexpr UINT kCommandLast = 0x7FFF;
-
-/// `DPI_AWARENESS_CONTEXT_UNAWARE_GDISCALED`（Win10 1809+）。MinGW 的头文件里
-/// 没有这个宏，而它只是一个约定好的负数句柄值，所以自己写一份。
-constexpr std::intptr_t kContextUnawareGdiScaled = -5;
-
-/// `SetThreadDpiAwarenessContext` 的函数指针类型（下面那个类里运行时解析它）。
-using SetDpiAwarenessContextFn = DPI_AWARENESS_CONTEXT(WINAPI *)(DPI_AWARENESS_CONTEXT);
-
-/// 菜单 DPI 的现场。本进程（Qt 6）是 **Per-Monitor V2** 感知的，而 shell 自己那套
-/// `IContextMenu` 是按「宿主线程的 DPI 上下文」决定菜单尺寸的 —— 直接弹出来在
-/// 200% 缩放下会明显偏小（而且本来就是这么设计的：菜单窗口归调用方的线程管）。
-/// 微软给 PMv2 应用的做法是把**当前线程**临时降级成 `UNAWARE_GDISCALED`（系统按
-/// 比例缩放菜单，就像 shell 自己弹菜单那样），菜单收掉之后再还原。
-///
-/// 降级期间 `GetCursorPos()` 之类的坐标也是「虚拟化的」那一套，与
-/// `TrackPopupMenuEx` 要的一样 —— 所以取光标位置的那一句必须写在作用域**里面**。
-/// 拿不到这个入口（Win10 1607 之前）时照样弹菜单，只是缩放下可能不好看，不算错误。
-class ScopedGdiScaledDpiContext
-{
-public:
-    ScopedGdiScaledDpiContext()
-    {
-        using Setter = SetDpiAwarenessContextFn;
-        static Setter setter = resolveSetter();
-        m_setter = setter;
-        if (m_setter == nullptr) {
-            return;
-        }
-        m_previous = m_setter(reinterpret_cast<DPI_AWARENESS_CONTEXT>(kContextUnawareGdiScaled));
-        m_applied = true;
-    }
-
-    ~ScopedGdiScaledDpiContext()
-    {
-        if (m_applied) {
-            m_setter(m_previous);
-        }
-    }
-
-    ScopedGdiScaledDpiContext(const ScopedGdiScaledDpiContext &) = delete;
-    ScopedGdiScaledDpiContext &operator=(const ScopedGdiScaledDpiContext &) = delete;
-
-private:
-    static SetDpiAwarenessContextFn resolveSetter()
-    {
-        HMODULE user32 = GetModuleHandleW(L"user32.dll");
-        if (user32 == nullptr) {
-            return nullptr;
-        }
-        FARPROC proc = GetProcAddress(user32, "SetThreadDpiAwarenessContext");
-        if (proc == nullptr) {
-            return nullptr;
-        }
-        // `FARPROC` → 具体函数指针直接 cast 会被 `-Wcast-function-type` 拦下
-        // （本仓库 `-Werror`），所以按 AGENTS.md 第 10 节用 `std::memcpy` 绕开。
-        SetDpiAwarenessContextFn setter = nullptr;
-        static_assert(sizeof(setter) == sizeof(proc), "function pointer sizes");
-        std::memcpy(&setter, &proc, sizeof(setter));
-        return setter;
-    }
-
-    SetDpiAwarenessContextFn m_setter = nullptr;
-    DPI_AWARENESS_CONTEXT m_previous = nullptr;
-    bool m_applied = false;
-};
 
 /// 把 shell 菜单要的那几条消息转给 `IContextMenu2/3`。
 ///
@@ -338,10 +273,15 @@ MenuResult showItemMenu(HWND owner,
     fetchMenuInterfaces(resources.menu, &resources);
 
     {
-        // 菜单从创建到执行都在降级过的 DPI 上下文里（见那个类的注释）；
-        // 取光标位置也在里面，这样两者用的是同一套坐标。
-        ScopedGdiScaledDpiContext dpi;
-
+        // **不要动 DPI 上下文。**本进程（Qt 6）是 Per-Monitor V2 感知的，而菜单
+        // 就在这条线程上弹 —— win32k 对 PMv2 线程弹的菜单按**显示器逐个**缩放，
+        // 这正是资源管理器自己那份菜单的尺寸。曾经照微软「宿主 shell 菜单」的
+        // 建议把线程临时降级成 `UNAWARE_GDISCALED`，结果菜单**高一倍**：shell 给
+        // owner-draw 条目量尺寸用的是**拥有窗口的 DPI**（启动器卡片是 PMv2、192），
+        // 而那个上下文又会把整张菜单再按 96→192 的比例缩放一遍 —— 2 倍乘 2 倍。
+        // 真机实测（Windows 11 26200，200% 缩放，`shell:AppsFolder\Chrome` 那份
+        // 8 条菜单）：PMv2 线程 386x327、每条 44 物理像素；GDISCALED 线程 + PMv2
+        // 拥有窗口 520x654、每条 88 物理像素（而且条目高度还不一致）。
         resources.hmenu = CreatePopupMenu();
         if (resources.hmenu == nullptr) {
             result.error = lastErrorMessage("CreatePopupMenu");
@@ -363,7 +303,8 @@ MenuResult showItemMenu(HWND owner,
             }
             return result;
         }
-        if (GetMenuItemCount(resources.hmenu) <= 0) {
+        const int itemCount = GetMenuItemCount(resources.hmenu);
+        if (itemCount <= 0) {
             // 理论上不该发生（开始菜单里的条目总会有点什么），但真发生了就报出来，
             // 总比弹一个空白菜单好。
             result.error = QStringLiteral("the shell returned an empty menu");
@@ -372,6 +313,10 @@ MenuResult showItemMenu(HWND owner,
             }
             return result;
         }
+        // 菜单里一共几条：debug 日志。它把菜单高度换算成「每条多少逻辑像素」，
+        // 而那是从外面（`scripts/acceptance.ps1` 只能看到菜单窗口的矩形）唯一
+        // 能看出「菜单被 DPI 放大了一倍」的量，所以这条不要删。
+        logDebug(QStringLiteral("shell menu: %1 item(s) for %2").arg(itemCount).arg(path));
 
         MenuMessageRouter router(owner, resources.menu2, resources.menu3);
         router.install();

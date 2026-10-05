@@ -1005,13 +1005,31 @@ try {
         if ($shellMenuUp) {
             $shellMenuRect = [FlowInject]::ClassRect($daemon.Id, '#32768')
             Write-Host "         shell menu rect: $($shellMenuRect -join ',')"
-            # 菜单应该出现在光标处（±一个条目高度），而且尺寸与 200% 缩放相称：
-            # 十来个条目的系统菜单至少得有一百多像素高，二十来像素高就说明
-            # DPI 上下文弄错了。
+            # 尺寸：shell 的菜单条目在 200% 下是 44 物理像素 = **22 逻辑像素**高
+            # （与资源管理器里那份一样）。2026-10 曾经为了「让 shell 菜单跟上高 DPI」
+            # 把线程临时降级成 `UNAWARE_GDISCALED`：shell 给 owner-draw 条目量尺寸
+            # 用的是**拥有窗口的 DPI**（卡片 192），而那个上下文又把整张菜单缩放
+            # 一遍 —— 2 倍乘 2 倍，条目高到 44 逻辑像素（整张菜单高一倍）。所以这
+            # 里除了「菜单出现在光标附近」，还要拿日志里的条目数除一下：**每条
+            # 多少逻辑像素**才是与条目数无关的判据。
+            $menuLogicalW = $shellMenuRect[2] / $appsScale
+            $menuLogicalH = $shellMenuRect[3] / $appsScale
+            $menuItems = 0
+            if ((DaemonText) -match 'shell menu: (\d+) item\(s\)') { $menuItems = [int]$Matches[1] }
+            $menuPerItem = if ($menuItems -gt 0) { $menuLogicalH / $menuItems } else { 0 }
+            Write-Host ("         shell menu: " + [int]$menuLogicalW + 'x' + [int]$menuLogicalH +
+                        " logical, $menuItems item(s), " + [int]$menuPerItem + ' px/item')
             Check '菜单出现在光标附近且尺寸正常' (
                 [Math]::Abs($shellMenuRect[0] - [int]($appsRect[0] + 75 * $appsScale)) -lt 120 -and
                 [Math]::Abs($shellMenuRect[1] - [int]($appsRect[1] + 94 * $appsScale)) -lt 120 -and
-                $shellMenuRect[2] -gt 80 -and $shellMenuRect[3] -gt 100)
+                $menuLogicalW -gt 60 -and $menuLogicalW -lt 400 -and
+                $menuLogicalH -gt 60 -and $menuLogicalH -lt 400)
+            if ($menuItems -gt 0) {
+                Check '菜单条目高约 22 逻辑像素（没有被 DPI 放大）' (
+                    $menuPerItem -gt 13 -and $menuPerItem -lt 32)
+            } else {
+                Diag 'no `shell menu: N item(s)` line in the daemon log; only the overall size was checked'
+            }
         }
         # 取消（Esc）：菜单关掉，卡片留着。
         TapKey $VK_ESC
