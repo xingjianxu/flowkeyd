@@ -1,11 +1,11 @@
 // 程序启动器的图标：一个**异步**的 QML 图片提供者。
 //
-// 为什么必须异步：从 shell 里取一个图标在真机上是 **3 ms 上下**（123 个开始菜单
-// 快捷方式连取一遍约 400 ms，冷启动那一次还要更久）。卡片弹出是热路径，等 400 ms
+// 为什么必须异步：从 shell 里取一个图标在真机上是 **3 ms 上下**（159 个开始菜单
+// 条目连取一遍约 400 ms，冷启动那一次还要更久）。卡片弹出是热路径，等 400 ms
 // 是不能接受的；而 QQuickImageProvider 的同步版本会在**渲染线程**上回调我们，
 // 那里既没有初始化 COM 单元，也不能让 shell 跑进去。所以：
 //
-//   * 模型给每一行一个 `image://flowkeyd-app/<core::appIconKey(lnk 路径)>`；
+//   * 模型给每一行一个 `image://flowkeyd-app/<core::appIconKey(启动名)>`；
 //   * 提供者收到请求后把活儿排进**自己那条常驻 STA 线程**的队列，立刻返回一个
 //     `QQuickImageResponse`；图标取好之后在那边填进去再 `finished()`，
 //     QML 的 `Image` 于是自己换上真正的图标（用户看到的是图标逐格“长出来”）；
@@ -48,9 +48,9 @@ public:
     AppIconProvider(const AppIconProvider &) = delete;
     AppIconProvider &operator=(const AppIconProvider &) = delete;
 
-    /// 登记一批「图标键 → 快捷方式路径」。可以从任意线程调用。
+    /// 登记一批「图标键 → 启动名」。可以从任意线程调用。
     ///
-    /// 表是**只增不改**的：同一个键永远对应同一条路径（键就是路径的哈希），
+    /// 表是**只增不改**的：同一个键永远对应同一个启动名（键就是启动名的哈希），
     /// 所以列表重扫、条目换位置都不会让已经缓存下来的 URL 指向别的程序。
     void publish(const QVector<QPair<QString, QString>> &entries);
 
@@ -67,7 +67,7 @@ private:
     class Worker;
 
     QMutex m_mutex;
-    /// 图标键 → 快捷方式路径。只增不改。
+    /// 图标键 → 启动名。只增不改。
     QHash<QString, QString> m_paths;
     Worker *m_worker = nullptr;
 };

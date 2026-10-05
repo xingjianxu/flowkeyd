@@ -7,13 +7,9 @@
 
 #include <objbase.h>
 #include <shellapi.h>
+#include <shlobj.h>
 #include <shobjidl.h>
 
-#include <QDir>
-#include <QDirIterator>
-#include <QFileInfo>
-
-#include <algorithm>
 #include <cstdint>
 #include <thread>
 #include <utility>
@@ -23,160 +19,122 @@ namespace flowkeyd::platform::win::apps {
 
 namespace {
 
-/// 一个待解析的快捷方式：完整路径 + 相对开始菜单根目录的子目录。
-struct Shortcut
-{
-    QString path;
-    QString group;
-};
-
-/// 「全局开始菜单」与「当前用户开始菜单」的 `…\Start Menu\Programs` 两个根目录。
+/// `shell:AppsFolder` 下每个条目上要读的属性。
 ///
-/// 为什么用环境变量而不是 `SHGetKnownFolderPath`：`ProgramData` / `APPDATA` 在两
-/// 个根目录上永远是设置好的，而已知文件夹 API 要把 `FOLDERID_*` 的 GUID 引进来
-/// （MinGW 的 uuid 库里不一定有，本仓库对这类符号很小心）。
-std::vector<QString> startMenuRoots()
+/// 自己写 GUID/PID 而不用 `<propkey.h>` 里的 `PKEY_*`：那些符号由 MinGW 的
+/// `libuuid` 提供，而本仓库对「多一个链接期符号」很小心（见 AGENTS.md 第 3 节）。
+/// 这三个就是文档里写的那个值，改不了。
+const PROPERTYKEY kPkeyAppUserModelId{
+    {0x9F4C2855, 0x9F79, 0x4B39, {0xA8, 0xD0, 0xE1, 0xD4, 0x2D, 0xE1, 0xD5, 0xF3}}, 5};
+const PROPERTYKEY kPkeyLinkTargetParsingPath{
+    {0xB9B4B3FC, 0x2B51, 0x4A42, {0xB5, 0xD8, 0x32, 0x41, 0x46, 0xAF, 0xCF, 0x25}}, 2};
+const PROPERTYKEY kPkeyLinkArguments{
+    {0x436F2667, 0x14E9, 0x4FEA, {0xB4, 0xF6, 0x9B, 0xC4, 0x25, 0xA9, 0xBA, 0x46}}, 100};
+
+/// 启动器的解析名前缀（`shell:AppsFolder\<AUMID>`）。
+constexpr wchar_t kAppsFolderName[] = L"shell:AppsFolder";
+
+/// 拿一个 shell 交给我们的字符串（`CoTaskMemFree` 它）。
+QString takeShellString(LPWSTR value)
 {
-    std::vector<QString> roots;
-    const auto append = [&roots](const QString &base) {
-        if (base.isEmpty()) {
-            return;
-        }
-        roots.push_back(QDir::toNativeSeparators(
-            base + QStringLiteral("\\Microsoft\\Windows\\Start Menu\\Programs")));
-    };
-    append(qEnvironmentVariable("ProgramData"));
-    append(qEnvironmentVariable("APPDATA"));
-    return roots;
+    if (value == nullptr) {
+        return QString();
+    }
+    const QString text = QString::fromWCharArray(value);
+    CoTaskMemFree(value);
+    return text;
 }
 
-/// 递归收集 `root` 下的全部 `.lnk`。目录不存在时什么也不做（不是错误）。
-void collectShortcuts(const QString &root, std::vector<Shortcut> *out)
+/// 读一个属性（没有这个属性、或者值不是字符串时返回空串）。
+QString shellString(IShellItem2 *item, const PROPERTYKEY &key)
 {
-    if (!QFileInfo(root).isDir()) {
-        return;
+    LPWSTR value = nullptr;
+    if (item == nullptr || FAILED(item->GetString(key, &value))) {
+        return QString();
     }
-    QDirIterator iterator(root, QDir::Files | QDir::Hidden | QDir::System,
-                          QDirIterator::Subdirectories);
-    while (iterator.hasNext()) {
-        const QString path = QDir::toNativeSeparators(iterator.next());
-        if (!path.endsWith(QLatin1String(".lnk"), Qt::CaseInsensitive)) {
-            continue;
-        }
-        Shortcut shortcut;
-        shortcut.path = path;
-        // `QDir::relativeFilePath` 用 `/`，而 `group` 只给别人当字符串看，
-        // 统一成 `\` 更符合 Windows 的直觉。
-        QString relative = QDir(root).relativeFilePath(path);
-        relative.replace(QLatin1Char('/'), QLatin1Char('\\'));
-        const qsizetype slash = relative.lastIndexOf(QLatin1Char('\\'));
-        if (slash > 0) {
-            shortcut.group = relative.left(slash);
-        }
-        out->push_back(std::move(shortcut));
-    }
-}
-
-/// 把 `%windir%\system32\notepad.exe` 这类写法展开成真实路径。
-///
-/// 展开只为了去重与诊断（启动走的是快捷方式本身，不需要目标路径）：同一个程序
-/// 在两条快捷方式里一条写环境变量、一条写绝对路径时，展开之后才能认出是同一个。
-QString expandEnvironment(const QString &value)
-{
-    if (!value.contains(QLatin1Char('%')) || value.isEmpty()) {
-        return value;
-    }
-    const std::wstring wide = value.toStdWString();
-    const DWORD needed = ExpandEnvironmentStringsW(wide.c_str(), nullptr, 0);
-    if (needed == 0 || needed > 32768) {
-        return value;
-    }
-    std::wstring buffer(needed, L'\0');
-    const DWORD written = ExpandEnvironmentStringsW(wide.c_str(), buffer.data(), needed);
-    if (written == 0 || written > needed) {
-        return value;
-    }
-    buffer.resize(written > 0 ? written - 1 : 0); // 去掉结尾的 NUL
-    return QString::fromStdWString(buffer);
-}
-
-/// 用 `IShellLink` 解析一个快捷方式。
-///
-/// 失败（文件被删、COM 出错、快捷方式坏掉）时返回 false —— 这类条目直接丢掉，
-/// 反正也启动不了。
-bool resolveShortcut(const QString &shortcut, QString *target, QString *arguments, bool *hasIdList)
-{
-    IShellLinkW *link = nullptr;
-    HRESULT hr = CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_IShellLinkW,
-                                  reinterpret_cast<void **>(&link));
-    if (FAILED(hr) || link == nullptr) {
-        return false;
-    }
-    IPersistFile *file = nullptr;
-    hr = link->QueryInterface(IID_IPersistFile, reinterpret_cast<void **>(&file));
-    if (FAILED(hr) || file == nullptr) {
-        link->Release();
-        return false;
-    }
-
-    const std::wstring wide = shortcut.toStdWString();
-    const bool loaded = SUCCEEDED(file->Load(wide.c_str(), STGM_READ));
-    if (loaded) {
-        // `SLGP_RAWPATH`：**不**做 shell 的“规范化”，拿到的就是快捷方式里存的
-        // 那一条（可能是 `%windir%\...`），展开环境变量是下一步的事。
-        std::vector<wchar_t> buffer(4096, L'\0');
-        if (SUCCEEDED(link->GetPath(buffer.data(), static_cast<int>(buffer.size()), nullptr,
-                                    SLGP_RAWPATH))) {
-            *target = expandEnvironment(QString::fromWCharArray(buffer.data()));
-        }
-        std::fill(buffer.begin(), buffer.end(), L'\0');
-        if (SUCCEEDED(link->GetArguments(buffer.data(), static_cast<int>(buffer.size())))) {
-            *arguments = QString::fromWCharArray(buffer.data());
-        }
-        // 商店/UWP 应用的快捷方式可能**只有 IDList**（没有目标路径）。
-        PIDLIST_ABSOLUTE idlist = nullptr;
-        if (SUCCEEDED(link->GetIDList(&idlist))) {
-            *hasIdList = idlist != nullptr;
-            CoTaskMemFree(idlist);
-        }
-    }
-
-    file->Release();
-    link->Release();
-    return loaded;
+    return takeShellString(value);
 }
 
 /// 真正干活的那一遍（必须在已经进入 STA 的线程上跑）。
 StartMenuScan scanOnCurrentThread()
 {
     StartMenuScan scan;
-    for (const QString &root : startMenuRoots()) {
-        std::vector<Shortcut> shortcuts;
-        collectShortcuts(root, &shortcuts);
-        for (const Shortcut &shortcut : shortcuts) {
-            ++scan.shortcuts;
-            QString target;
-            QString arguments;
-            bool hasIdList = false;
-            if (!resolveShortcut(shortcut.path, &target, &arguments, &hasIdList)) {
-                continue;
-            }
-            if (!core::appTargetIsProgram(target, hasIdList)) {
-                continue;
-            }
-            core::AppEntry entry;
-            // 名字就是文件名（`core::prepareAppEntries` 会把 `.lnk` 去掉）：
-            // 真机实测 `SHGFI_DISPLAYNAME` / `IShellLink::GetDescription` 都不可靠
-            // （前者有一半是空的或被截断，后者常是“Open Visual Studio …”这种
-            // 冗长的提示语）。
-            entry.name = QFileInfo(shortcut.path).fileName();
-            entry.group = shortcut.group;
-            entry.shortcut = shortcut.path;
-            entry.target = target;
-            entry.arguments = arguments;
-            scan.entries.push_back(std::move(entry));
-        }
+
+    // `shell:AppsFolder` 就是开始菜单「所有应用」那个虚拟文件夹（`FOLDERID_AppsFolder`）。
+    // 用解析名而不是 `SHGetKnownFolderIDList(FOLDERID_AppsFolder, …)`：后者要把那个
+    // GUID 符号引进来，而它在 MinGW 的 uuid 库里（同一个顾虑）。
+    PIDLIST_ABSOLUTE root = nullptr;
+    HRESULT hr = SHParseDisplayName(kAppsFolderName, nullptr, &root, 0, nullptr);
+    if (FAILED(hr) || root == nullptr) {
+        scan.error = hresultMessage(hr, "SHParseDisplayName(shell:AppsFolder)");
+        return scan;
     }
+    IShellFolder *folder = nullptr;
+    hr = SHBindToObject(nullptr, root, nullptr, IID_IShellFolder, reinterpret_cast<void **>(&folder));
+    if (FAILED(hr) || folder == nullptr) {
+        scan.error = hresultMessage(hr, "SHBindToObject(AppsFolder)");
+        CoTaskMemFree(root);
+        return scan;
+    }
+
+    IEnumIDList *enumerator = nullptr;
+    hr = folder->EnumObjects(nullptr, SHCONTF_FOLDERS | SHCONTF_NONFOLDERS, &enumerator);
+    if (FAILED(hr) || enumerator == nullptr) {
+        scan.error = hresultMessage(hr, "IShellFolder::EnumObjects(AppsFolder)");
+        folder->Release();
+        CoTaskMemFree(root);
+        return scan;
+    }
+
+    LPITEMIDLIST child = nullptr;
+    ULONG fetched = 0;
+    while (enumerator->Next(1, &child, &fetched) == S_OK) {
+        ++scan.candidates;
+
+        // 「父文件夹 + 子 PIDL」拼成绝对 PIDL，再换成 `IShellItem2`（属性都在它上面）。
+        const PIDLIST_ABSOLUTE absolute = ILCombine(root, child);
+        IShellItem2 *item = nullptr;
+        if (absolute != nullptr
+            && SUCCEEDED(SHCreateItemFromIDList(absolute, IID_PPV_ARGS(&item)))) {
+            LPWSTR display = nullptr;
+            if (SUCCEEDED(item->GetDisplayName(SIGDN_NORMALDISPLAY, &display))) {
+                const QString name = takeShellString(display);
+                const QString appId = shellString(item, kPkeyAppUserModelId);
+                const QString target = shellString(item, kPkeyLinkTargetParsingPath);
+                const QString arguments = shellString(item, kPkeyLinkArguments);
+                // 没有 AUMID 就没法启动、也没法算图标键（真机上没碰到过）：跳过。
+                if (name.isEmpty() || appId.isEmpty()) {
+                    ++scan.hiddenNotProgram;
+                } else if (!core::appTargetIsProgram(target, appId)) {
+                    ++scan.hiddenNotProgram;
+                } else if (core::appLooksLikeUninstaller(name, target)) {
+                    ++scan.hiddenUninstaller;
+                } else {
+                    core::AppEntry entry;
+                    entry.name = name;
+                    // 启动 / 图标 / 右键菜单都用它（见头文件）。AUMID 里可能有
+                    // `\`（`{已知文件夹 GUID}\相对\路径.exe`）或 `:`（目标路径），
+                    // 拼在后面照样能解析 —— 真机上 159 个条目 159 个都验过。
+                    entry.launch = QString::fromWCharArray(kAppsFolderName) + QLatin1Char('\\')
+                                   + appId;
+                    entry.target = target;
+                    entry.arguments = arguments;
+                    scan.entries.push_back(std::move(entry));
+                }
+            } else {
+                ++scan.hiddenNotProgram;
+            }
+            item->Release();
+        }
+        if (absolute != nullptr) {
+            CoTaskMemFree(absolute);
+        }
+        CoTaskMemFree(child);
+    }
+
+    enumerator->Release();
+    folder->Release();
+    CoTaskMemFree(root);
     return scan;
 }
 
@@ -209,8 +167,8 @@ StaThread::~StaThread()
 StartMenuScan listStartMenuApps()
 {
     // 自己开一条一次性的 STA 线程，而不是在当前线程上 `CoInitializeEx`：动作线程
-    // 可能已经被音频后端初始化成 MTA 了（AGENTS.md 第 7 节第 13 条），而
-    // `IShellLink` / shell 的图像工厂按 STA 用最稳。
+    // 可能已经被音频后端初始化成 MTA 了（AGENTS.md 第 7 节第 13 条），而 shell 的
+    // 文件夹对象与图像工厂按 STA 用最稳。
     StartMenuScan scan;
     std::thread worker([&scan]() {
         StaThread apartment;
@@ -222,6 +180,62 @@ StartMenuScan listStartMenuApps()
     });
     worker.join();
     return scan;
+}
+
+bool launchApp(const QString &launchName, QString *error)
+{
+    // COM 要在这条线程上初始化过（`SHParseDisplayName` / `ShellExecuteEx`）：
+    // 动作线程可能是 MTA，这里声明一次（已经是别的单元模型时它就不管了）。
+    StaThread apartment;
+    if (!apartment.ok()) {
+        if (error != nullptr) {
+            *error = apartment.error();
+        }
+        return false;
+    }
+    const std::wstring wide = launchName.toStdWString();
+
+    // 第一条路：把解析名直接当 `lpFile` 交给 shell（真机验过能拉起「运行」对话框）。
+    SHELLEXECUTEINFOW info = {};
+    info.cbSize = sizeof(info);
+    // `SEE_MASK_FLAG_NO_UI`：失败也不要弹系统对话框 —— 错误由我们写进日志。
+    info.fMask = SEE_MASK_FLAG_NO_UI;
+    info.lpVerb = L"open";
+    info.lpFile = wide.c_str();
+    info.nShow = SW_SHOWNORMAL;
+    if (ShellExecuteExW(&info) != 0) {
+        return true;
+    }
+    const DWORD firstError = GetLastError();
+
+    // 第二条路：`SHParseDisplayName` + `SEE_MASK_IDLIST`（微软给商店应用写的那条）。
+    PIDLIST_ABSOLUTE idlist = nullptr;
+    const HRESULT hr = SHParseDisplayName(wide.c_str(), nullptr, &idlist, 0, nullptr);
+    if (FAILED(hr) || idlist == nullptr) {
+        if (error != nullptr) {
+            *error = QStringLiteral("cannot launch %1: %2 (shell error %3)")
+                         .arg(launchName, hresultText(hr))
+                         .arg(firstError);
+        }
+        return false;
+    }
+    SHELLEXECUTEINFOW idlistInfo = {};
+    idlistInfo.cbSize = sizeof(idlistInfo);
+    idlistInfo.fMask = SEE_MASK_IDLIST | SEE_MASK_FLAG_NO_UI;
+    idlistInfo.lpVerb = L"open";
+    idlistInfo.lpIDList = idlist;
+    idlistInfo.nShow = SW_SHOWNORMAL;
+    const BOOL ok = ShellExecuteExW(&idlistInfo);
+    const DWORD secondError = ok != 0 ? 0 : GetLastError();
+    CoTaskMemFree(idlist);
+    if (ok != 0) {
+        return true;
+    }
+    if (error != nullptr) {
+        *error = QStringLiteral("cannot launch %1: %2")
+                     .arg(launchName, winErrorMessage(secondError));
+    }
+    return false;
 }
 
 ShellIcon shellIcon(const QString &path, int size)
@@ -239,8 +253,8 @@ ShellIcon shellIcon(const QString &path, int size)
     }
     HBITMAP bitmap = nullptr;
     const SIZE requested{size, size};
-    // `SIIGBF_ICONONLY`：只要图标，不要让 shell 去生成缩略图（快捷方式也走这条，
-    // 拿到的是它自己的图标 —— 与开始菜单显示的一致）。
+    // `SIIGBF_ICONONLY`：只要图标，不要让 shell 去生成缩略图（商店应用的条目
+    // 也走这条，拿到的是它自己的图标 —— 与开始菜单显示的一致）。
     // `SIIGBF_BIGGERSIZEOK`：允许 shell 从更大的源尺寸缩下来，比小图放大清楚。
     hr = factory->GetImage(requested, SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK, &bitmap);
     factory->Release();

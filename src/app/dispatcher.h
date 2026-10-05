@@ -92,8 +92,8 @@ private:
     /// 程序启动器的目录（`apps` 动作）：已经在动作线程上经过
     /// `core::prepareAppEntries()` 整理的条目，加上扫描时间戳。
     ///
-    /// 为什么要缓存：扫描（递归目录 + `IShellLink` 解析 123 个快捷方式）在真机
-    /// 上要 80 ms 左右 —— 每次弹出都现场扫一遍会让卡片等小半秒。**图标不在
+    /// 为什么要缓存：扫描（枚举 `shell:AppsFolder` + 读每条的属性 + 过滤 + 去重排序）
+    /// 在真机上大约 80 ms —— 每次弹出都现场扫一遍会让卡片等小半秒。**图标不在
     /// 这里**（每个约 3 ms，那是 `AppIconProvider` 的分内事）。
     std::vector<core::AppEntry> m_appCatalog;
     /// 上一次扫描的 `monotonicMs()`；`m_appScanned` 为 false 时无意义。

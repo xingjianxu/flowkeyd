@@ -1,8 +1,8 @@
-// 程序启动器的纯逻辑（`core/app_list`）：图标键、名字匹配、「算不算程序」的
-// 判据，以及扫描结果的去重 / 排序。
+// 程序启动器的纯逻辑（`core/app_list`）：图标键、名字匹配、「算不算程序 /
+// 算不算卸载程序」的判据，以及扫描结果的去重 / 排序。
 //
-// **开始菜单的扫描不在里**（那是 `platform/win/apps` 的活儿，要真机：真机上
-// 不存在某个目录、某个 `.lnk` 是坏的都正常）；登录之后真正跑一遍扫描的检查在
+// **开始菜单的扫描不在里**（那是 `platform/win/apps` 的活儿，要真机：枚举
+// `shell:AppsFolder` 得有一个真桌面）；登录之后真正跑一遍扫描的检查在
 // `tst_interactive`（`FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1` 才跑）。
 #include <QtTest>
 
@@ -19,17 +19,19 @@ using namespace flowkeyd;
 
 namespace {
 
+/// 造一条扫描结果：启动名默认按 `shell:AppsFolder\<名字>` 拼，与真机上的形状
+/// 一样（`name` 是显示名，命名随便给）。
 core::AppEntry entry(const QString &name,
                      const QString &target,
                      const QString &arguments = QString(),
-                     const QString &group = QString())
+                     const QString &appId = QString())
 {
     core::AppEntry item;
     item.name = name;
-    item.shortcut = QStringLiteral("C:\\Start Menu\\Programs\\") + name;
+    item.launch = QStringLiteral("shell:AppsFolder\\")
+                  + (appId.isEmpty() ? name : appId);
     item.target = target;
     item.arguments = arguments;
-    item.group = group;
     return item;
 }
 
@@ -61,56 +63,119 @@ class TestAppList : public QObject
 private slots:
     void iconKeyIsShortStableAndCaseInsensitive();
     void iconUrlUsesTheKey();
-    void programTargetsAreExecutablesOrIdListOnly();
+    void programTargetsAreExecutablesSystemToolsAndStoreApps();
+    void uninstallerNamesAndTargetsAreRecognized();
     void nameMatchingIsACaseInsensitiveSubstring();
     void nameMatchingAcceptsPinyinAndInitials();
     void pinyinReadingsAreToneFreeLowercaseAndCoverTheIdeographs();
     void searchTextCoversPinyinInitialsAndLatinInitials();
     void searchTextFallsBackToPrimaryReadingsWhenVariantsExplode();
-    void prepareStripsTheLnkSuffixAndSorts();
-    void prepareDropsEntriesWithoutNameOrShortcut();
-    void prepareDeduplicatesSameNameAndTarget();
+    void prepareTrimsNamesAndSorts();
+    void prepareDropsEntriesWithoutNameOrLaunch();
+    void prepareDeduplicatesSameNameAndLaunch();
     void prepareKeepsSameTargetUnderDifferentNames();
     void sortTextAndGroupLetterCoverPinyinLatinDigitsAndSymbols();
 };
 
 void TestAppList::iconKeyIsShortStableAndCaseInsensitive()
 {
-    const QString key = core::appIconKey(QStringLiteral("C:\\Start Menu\\Programs\\Notepad.lnk"));
+    const QString launch =
+        QStringLiteral("shell:AppsFolder\\Microsoft.WindowsCalculator_8wekyb3d8bbwe!App");
+    const QString key = core::appIconKey(launch);
     QCOMPARE(key.size(), 16);
     QVERIFY(key.contains(QRegularExpression(QStringLiteral("^[0-9a-f]{16}$"))));
 
-    // 同一个快捷方式永远同一个键（QML 的图片缓存靠它）。
-    QCOMPARE(core::appIconKey(QStringLiteral("C:\\Start Menu\\Programs\\Notepad.lnk")), key);
-    // 大小写无关、分隔符两种写法等价（Windows 的路径本来就不区分大小写）。
-    QCOMPARE(core::appIconKey(QStringLiteral("c:/start menu/programs/NOTEPAD.LNK")), key);
-    // 不同的快捷方式要给出不同的键。
-    QVERIFY(core::appIconKey(QStringLiteral("C:\\Start Menu\\Programs\\Calc.lnk")) != key);
+    // 同一个程序永远同一个键（QML 的图片缓存、`launcher.json` 里的固定/最近
+    // 使用的身份都是它）。
+    QCOMPARE(core::appIconKey(launch), key);
+    // 大小写无关（AUMID 与路径都不区分大小写）。
+    QCOMPARE(core::appIconKey(
+                 QStringLiteral("SHELL:APPSFOLDER\\Microsoft.WindowsCalculator_8WEKYB3D8BBWE!APP")),
+             key);
+    // 不同的程序要给出不同的键。
+    QVERIFY(core::appIconKey(QStringLiteral("shell:AppsFolder\\Microsoft.Paint_8wekyb3d8bbwe!App"))
+            != key);
 }
 
 void TestAppList::iconUrlUsesTheKey()
 {
-    const QString path = QStringLiteral("C:\\Start Menu\\Programs\\Notepad.lnk");
-    QCOMPARE(core::appIconUrl(path),
-             QStringLiteral("image://flowkeyd-app/") + core::appIconKey(path));
+    const QString launch = QStringLiteral("shell:AppsFolder\\Chrome");
+    QCOMPARE(core::appIconUrl(launch),
+             QStringLiteral("image://flowkeyd-app/") + core::appIconKey(launch));
     // id 里只有 `[0-9a-f]`：不用转义，提供者拿到的就是它本身。
-    QVERIFY(!core::appIconUrl(path).contains(QLatin1Char('\\')));
-    QVERIFY(!core::appIconUrl(path).contains(QLatin1Char(' ')));
+    QVERIFY(!core::appIconUrl(launch).contains(QLatin1Char('\\')));
+    QVERIFY(!core::appIconUrl(launch).contains(QLatin1Char(' ')));
 }
 
-void TestAppList::programTargetsAreExecutablesOrIdListOnly()
+void TestAppList::programTargetsAreExecutablesSystemToolsAndStoreApps()
 {
-    QVERIFY(core::appTargetIsProgram(QStringLiteral("C:\\Windows\\System32\\notepad.exe"), false));
-    QVERIFY(core::appTargetIsProgram(QStringLiteral("C:\\Apps\\FOO.EXE"), false));
-    QVERIFY(core::appTargetIsProgram(QStringLiteral("  C:\\Apps\\foo.exe  "), false));
-    // 商店 / UWP 应用的快捷方式可能只有 IDList（没有目标路径）。
-    QVERIFY(core::appTargetIsProgram(QString(), true));
-    QVERIFY(!core::appTargetIsProgram(QString(), false));
-    // 文件夹、文档、命令脚本、坏掉的快捷方式都不是程序。
-    QVERIFY(!core::appTargetIsProgram(QStringLiteral("C:\\Program Files"), false));
-    QVERIFY(!core::appTargetIsProgram(QStringLiteral("C:\\Docs\\readme.md"), false));
-    QVERIFY(!core::appTargetIsProgram(QStringLiteral("C:\\Tools\\foo.com"), false));
-    QVERIFY(!core::appTargetIsProgram(QStringLiteral("C:\\Tools\\foo.exe.bak"), false));
+    QVERIFY(core::appTargetIsProgram(QStringLiteral("C:\\Windows\\System32\\notepad.exe"),
+                                     QString()));
+    QVERIFY(core::appTargetIsProgram(QStringLiteral("C:\\Apps\\FOO.EXE"), QString()));
+    QVERIFY(core::appTargetIsProgram(QStringLiteral("  C:\\Apps\\foo.exe  "), QString()));
+    // 命令脚本 / 管理单元 / 控制面板项都算（开始菜单里的系统工具就是这一类）。
+    QVERIFY(core::appTargetIsProgram(QStringLiteral("C:\\Tools\\build.cmd"), QString()));
+    QVERIFY(core::appTargetIsProgram(QStringLiteral("C:\\Tools\\build.bat"), QString()));
+    QVERIFY(core::appTargetIsProgram(QStringLiteral("C:\\WINDOWS\\system32\\services.msc"),
+                                     QString()));
+    QVERIFY(core::appTargetIsProgram(QStringLiteral("C:\\WINDOWS\\system32\\main.cpl"),
+                                     QString()));
+    // 目标可能是「已知文件夹 GUID + 相对路径」的 shell 写法，看末尾扩展名就行。
+    QVERIFY(core::appTargetIsProgram(
+        QStringLiteral("{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe"),
+        QString()));
+    // shell 的虚拟项：「文件资源管理器」「控制面板」「运行」。
+    QVERIFY(core::appTargetIsProgram(QStringLiteral("::{52205FD8-5DFB-447D-801A-D0B52F2E83E1}"),
+                                     QString()));
+    // 商店/UWP 应用没有目标路径，只有 `<包家族名>!<AppId>` 形状的 AUMID。
+    QVERIFY(core::appTargetIsProgram(QString(),
+                                     QStringLiteral("Microsoft.WindowsCalculator_8wekyb3d8bbwe!App")));
+    QVERIFY(!core::appTargetIsProgram(QString(), QString()));
+    QVERIFY(!core::appTargetIsProgram(QString(), QStringLiteral("Chrome")));
+    // 文档 / 帮助 / 网址 / 文件夹 / 坏掉的条目都不是程序。
+    QVERIFY(!core::appTargetIsProgram(QStringLiteral("C:\\Program Files"), QString()));
+    QVERIFY(!core::appTargetIsProgram(QStringLiteral("C:\\Docs\\readme.md"), QString()));
+    QVERIFY(!core::appTargetIsProgram(QStringLiteral("C:\\Docs\\readme.txt"), QString()));
+    QVERIFY(!core::appTargetIsProgram(QStringLiteral("C:\\Tools\\7-zip.chm"), QString()));
+    QVERIFY(!core::appTargetIsProgram(QStringLiteral("C:\\Tools\\docs.url"), QString()));
+    QVERIFY(!core::appTargetIsProgram(QStringLiteral("C:\\Tools\\foo.com"), QString()));
+    QVERIFY(!core::appTargetIsProgram(QStringLiteral("C:\\Tools\\foo.exe.bak"), QString()));
+    QVERIFY(!core::appTargetIsProgram(QStringLiteral("https://example.com"), QString()));
+    QVERIFY(!core::appTargetIsProgram(QStringLiteral("http://support.example.com/"), QString()));
+    QVERIFY(!core::appTargetIsProgram(QStringLiteral("steam://rungameid/570"), QString()));
+}
+
+void TestAppList::uninstallerNamesAndTargetsAreRecognized()
+{
+    // 名字里有「卸载」（真机上的「卸载微信」「卸载 PixPin」）。
+    QVERIFY(core::appLooksLikeUninstaller(QStringLiteral("卸载微信"),
+                                         QStringLiteral("C:\\Weixin.exe")));
+    QVERIFY(core::appLooksLikeUninstaller(QStringLiteral("卸载小狼毫"),
+                                         QStringLiteral("C:\\WeaselSetup.exe")));
+    // 名字里有独立的 `uninstall` 词（真机上的「Uninstall Qt」）。
+    QVERIFY(core::appLooksLikeUninstaller(QStringLiteral("Uninstall Qt"),
+                                         QStringLiteral("C:\\Qt\\MaintenanceTool.exe")));
+    QVERIFY(core::appLooksLikeUninstaller(QStringLiteral("Uninstaller"), QString()));
+    QVERIFY(core::appLooksLikeUninstaller(QStringLiteral("uninstall foo"), QString()));
+    // 名字看不出，但目标是安装器生成的反向操作程序。
+    QVERIFY(core::appLooksLikeUninstaller(QStringLiteral("PixPin"),
+                                         QStringLiteral("C:\\Apps\\PixPin\\unins000.exe")));
+    QVERIFY(core::appLooksLikeUninstaller(QStringLiteral("Something"),
+                                         QStringLiteral("C:\\Apps\\uninstall.exe")));
+    QVERIFY(core::appLooksLikeUninstaller(QStringLiteral("Something"),
+                                         QStringLiteral("C:\\Apps\\unwise.exe")));
+
+    // 名字里只是恰好含有这几个字母（不是一个词）就不算。
+    QVERIFY(!core::appLooksLikeUninstaller(QStringLiteral("MyUninstallerPro"), QString()));
+    // 安装器 / 维护工具 / 配置工具都是正常入口，不能猜着丢掉。
+    QVERIFY(!core::appLooksLikeUninstaller(QStringLiteral("Visual Studio Installer"),
+                                          QStringLiteral("C:\\setup.exe")));
+    QVERIFY(!core::appLooksLikeUninstaller(QStringLiteral("Qt Maintenance Tool"),
+                                          QStringLiteral("C:\\Qt\\MaintenanceTool.exe")));
+    QVERIFY(!core::appLooksLikeUninstaller(QStringLiteral("配置工具"),
+                                          QStringLiteral("C:\\ksomisc.exe")));
+    QVERIFY(!core::appLooksLikeUninstaller(QStringLiteral("计算器"),
+                                          QStringLiteral("C:\\calc.exe")));
 }
 
 void TestAppList::nameMatchingIsACaseInsensitiveSubstring()
@@ -233,67 +298,65 @@ void TestAppList::searchTextFallsBackToPrimaryReadingsWhenVariantsExplode()
     QVERIFY(!text.contains(QStringLiteral("zxhx")));
 }
 
-void TestAppList::prepareStripsTheLnkSuffixAndSorts()
+void TestAppList::prepareTrimsNamesAndSorts()
 {
     std::vector<core::AppEntry> entries{
-        entry(QStringLiteral("zeta.lnk"), QStringLiteral("C:\\z.exe")),
-        entry(QStringLiteral("Alpha.lnk"), QStringLiteral("C:\\a.exe")),
+        entry(QStringLiteral("  zeta  "), QStringLiteral("C:\\z.exe")),
+        entry(QStringLiteral("Alpha"), QStringLiteral("C:\\a.exe")),
         entry(QStringLiteral("beta"), QStringLiteral("C:\\b.exe")),
     };
     const std::vector<core::AppEntry> kept = core::prepareAppEntries(std::move(entries));
-    // `--list` / 卡片里的名字不带 `.lnk`，而且按名字（大小写无关）排序。
+    // 名字两边的空白去掉（免得同一个程序因为看不见的字符被当成两条），
+    // 然后按名字（大小写无关）排序。
     QCOMPARE(names(kept), QStringList({QStringLiteral("Alpha"), QStringLiteral("beta"),
                                        QStringLiteral("zeta")}));
 }
 
-void TestAppList::prepareDropsEntriesWithoutNameOrShortcut()
+void TestAppList::prepareDropsEntriesWithoutNameOrLaunch()
 {
     core::AppEntry noName = entry(QString(), QStringLiteral("C:\\x.exe"));
-    core::AppEntry noShortcut = entry(QStringLiteral("no-shortcut"), QStringLiteral("C:\\y.exe"));
-    noShortcut.shortcut.clear();
+    core::AppEntry noLaunch = entry(QStringLiteral("no-launch"), QStringLiteral("C:\\y.exe"));
+    noLaunch.launch.clear();
     // 只有空白字符的名字在去掉首尾空白之后也等于没有名字。
     core::AppEntry blankName = entry(QStringLiteral("   "), QStringLiteral("C:\\z.exe"));
 
     const std::vector<core::AppEntry> kept =
-        core::prepareAppEntries({noName, noShortcut, blankName});
+        core::prepareAppEntries({noName, noLaunch, blankName});
     QVERIFY(kept.empty());
 }
 
-void TestAppList::prepareDeduplicatesSameNameAndTarget()
+void TestAppList::prepareDeduplicatesSameNameAndLaunch()
 {
-    // 同一个程序在「全局开始菜单」与「当前用户开始菜单」里各一份是常态。
+    // 同一个名字 + 同一个启动名只留一条（第二层保险，真机上 AppsFolder 本来就
+    // 不会列两遍）。
     std::vector<core::AppEntry> entries{
-        entry(QStringLiteral("Terminal.lnk"), QStringLiteral("C:\\wt.exe"),
-              QStringLiteral("--foo"), QStringLiteral("Windows Terminal")),
-        entry(QStringLiteral("Terminal.lnk"), QStringLiteral("C:\\wt.exe"),
-              QStringLiteral("--foo")),
+        entry(QStringLiteral("Terminal"), QStringLiteral("C:\\wt.exe"), QStringLiteral("--foo"),
+              QStringLiteral("Microsoft.WindowsTerminal_8wekyb3d8bbwe!App")),
+        entry(QStringLiteral("terminal"), QStringLiteral("C:\\wt.exe"), QStringLiteral("--foo"),
+              QStringLiteral("microsoft.windowsterminal_8wekyb3d8bbwe!app")),
     };
-    entries[0].shortcut = QStringLiteral("C:\\ProgramData\\Start Menu\\Programs\\Windows "
-                                         "Terminal\\Terminal.lnk");
-    entries[1].shortcut = QStringLiteral("C:\\Users\\me\\AppData\\Roaming\\Start "
-                                         "Menu\\Programs\\Terminal.lnk");
-    const QString expected = entries[1].shortcut;
     const std::vector<core::AppEntry> kept = core::prepareAppEntries(std::move(entries));
     QCOMPARE(kept.size(), std::size_t(1));
-    // 层级更浅的那一份留下（它更靠近开始菜单的顶层）。
-    QVERIFY(kept.front().group.isEmpty());
-    QCOMPARE(kept.front().shortcut, expected);
+    QCOMPARE(kept.front().name, QStringLiteral("Terminal"));
 }
 
 void TestAppList::prepareKeepsSameTargetUnderDifferentNames()
 {
     // 名字不同、却指向同一个 exe 的条目是两条独立的入口（真机例子：
     // `Developer PowerShell for VS` 与 `Debuggable Package Manager` 都是
-    // powershell.exe）。
+    // powershell.exe，只是 AUMID 不同）。
     std::vector<core::AppEntry> entries{
-        entry(QStringLiteral("Developer PowerShell for VS.lnk"),
-              QStringLiteral("C:\\powershell.exe")),
-        entry(QStringLiteral("Debuggable Package Manager.lnk"),
-              QStringLiteral("C:\\powershell.exe")),
-        // 名字一样但参数不同：也是两条（快捷方式里写死了不同的启动参数）。
-        entry(QStringLiteral("Chrome.lnk"), QStringLiteral("C:\\chrome.exe"),
-              QStringLiteral("--profile-directory=Work")),
-        entry(QStringLiteral("Chrome.lnk"), QStringLiteral("C:\\chrome.exe")),
+        entry(QStringLiteral("Developer PowerShell for VS"),
+              QStringLiteral("C:\\powershell.exe"), QString(),
+              QStringLiteral("Microsoft.AutoGenerated.{9736CA63-…}")),
+        entry(QStringLiteral("Debuggable Package Manager"),
+              QStringLiteral("C:\\powershell.exe"), QString(),
+              QStringLiteral("Microsoft.AutoGenerated.{96690F80-…}")),
+        // 名字一样、但启动名不同：也是两条。
+        entry(QStringLiteral("Chrome"), QStringLiteral("C:\\chrome.exe"), QString(),
+              QStringLiteral("Chrome")),
+        entry(QStringLiteral("Chrome"), QStringLiteral("C:\\chrome.exe"), QString(),
+              QStringLiteral("Chrome.Beta")),
     };
     const std::vector<core::AppEntry> kept = core::prepareAppEntries(std::move(entries));
     QCOMPARE(kept.size(), std::size_t(4));

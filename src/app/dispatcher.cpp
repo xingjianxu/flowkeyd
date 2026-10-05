@@ -305,11 +305,12 @@ void openWindowsAction(Runtime *runtime,
 
 /// 弹出程序启动器（`apps` 动作）。
 ///
-/// 目录已经在动作线程上扫好（`refreshAppCatalog()`），这里只把它转成窗口要显示的
-/// 数据结构；用户选中第几项之后，回调把「启动那一个快捷方式」再投回动作线程执行。
+/// 目录已经在动作线程上扫好（`refreshAppCatalog()`，枚举 `shell:AppsFolder`），
+/// 这里只把它转成窗口要显示的数据结构；用户选中第几项之后，回调把「启动那一个」
+/// 再投回动作线程执行。
 ///
-/// **启动用的是快捷方式本身**（`ShellExecuteW("open", <lnk>)`）：参数、工作
-/// 目录、`runas` 标记、商店/UWP 应用的激活全部交给 shell，与点开始菜单一致。
+/// **启动走 `apps::launchApp()`**（`shell:AppsFolder\<AUMID>`）：参数、工作目录、
+/// `runas` 标记、商店/UWP 应用的激活全部交给 shell，与点开始菜单一致。
 void openAppsAction(Runtime *runtime,
                     Dispatcher *dispatcher,
                     const std::vector<core::AppEntry> &catalog,
@@ -321,29 +322,28 @@ void openAppsAction(Runtime *runtime,
     // 固定 / 最近使用的状态文件就在配置文件旁边（`launcher.json`）：常驻实例的
     // 状态跟着用户自己的配置走，开发 / 验收实例（临时 `--config`）也各用各的。
     request.statePath = core::launcherStatePath(runtime->configPath());
-    // 启动要的是快捷方式路径，而模型要的是名字；两者一一对应，所以按下标带过去。
-    std::vector<QString> shortcuts;
-    shortcuts.reserve(catalog.size());
+    // 启动要的是解析名，而模型要的是名字；两者一一对应，所以按下标带过去。
+    std::vector<QString> launchNames;
+    launchNames.reserve(catalog.size());
     request.items.reserve(catalog.size());
     for (const core::AppEntry &entry : catalog) {
-        request.items.push_back(AppLauncherItem{entry.name, entry.shortcut});
-        shortcuts.push_back(entry.shortcut);
+        request.items.push_back(AppLauncherItem{entry.name, entry.launch});
+        launchNames.push_back(entry.launch);
     }
-    const int count = static_cast<int>(shortcuts.size());
-    request.onChoose = [dispatcher, hotkey, shortcuts = std::move(shortcuts)](int index) {
-        if (index < 0 || index >= static_cast<int>(shortcuts.size())) {
+    const int count = static_cast<int>(launchNames.size());
+    request.onChoose = [dispatcher, hotkey, launchNames = std::move(launchNames)](int index) {
+        if (index < 0 || index >= static_cast<int>(launchNames.size())) {
             return;
         }
-        const QString shortcut = shortcuts[static_cast<std::size_t>(index)];
-        dispatcher->submitCall([shortcut, hotkey]() {
+        const QString launchName = launchNames[static_cast<std::size_t>(index)];
+        dispatcher->submitCall([launchName, hotkey]() {
             QString error;
-            if (!win::openTarget(shortcut, std::nullopt, std::nullopt, core::ShowMode::Normal,
-                                 &error)) {
+            if (!win::apps::launchApp(launchName, &error)) {
                 win::logError(QStringLiteral("`%1` app launcher: %2").arg(hotkey, error));
                 return;
             }
             win::logInfo(QStringLiteral("`%1` -> launched %2 (from the app launcher)")
-                             .arg(hotkey, QDir::toNativeSeparators(shortcut)));
+                             .arg(hotkey, launchName));
         });
     };
     runtime->showAppsFromAnyThread(std::move(request));
@@ -1039,9 +1039,13 @@ void Dispatcher::refreshAppCatalog()
     m_appCatalog = core::prepareAppEntries(scan.entries);
     m_appScanned = true;
     m_appScannedAt = win::monotonicMs();
-    win::logDebug(QStringLiteral("app launcher: %1 shortcut(s) found, %2 program(s) listed")
-                      .arg(scan.shortcuts)
-                      .arg(static_cast<qulonglong>(m_appCatalog.size())));
+    win::logDebug(QStringLiteral("app launcher: %1 item(s) in shell:AppsFolder, %2 program(s) "
+                                 "listed (%3 hidden: %4 not a program, %5 uninstaller(s))")
+                      .arg(scan.candidates)
+                      .arg(static_cast<qulonglong>(m_appCatalog.size()))
+                      .arg(scan.hiddenNotProgram + scan.hiddenUninstaller)
+                      .arg(scan.hiddenNotProgram)
+                      .arg(scan.hiddenUninstaller));
 }
 
 void Dispatcher::startDesktopWatch()

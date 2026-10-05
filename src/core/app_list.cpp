@@ -3,6 +3,7 @@
 #include "core/pinyin.h"
 
 #include <QHash>
+#include <QRegularExpression>
 #include <QStringList>
 
 #include <algorithm>
@@ -12,51 +13,34 @@ namespace flowkeyd::core {
 
 namespace {
 
-/// 去重用的键：名字 + 目标 + 参数（全部小写）。
+/// 去重用的键：名字 + 启动名（全部小写）。
 ///
-/// 目标为空（只有 IDList 的商店/UWP 条目）时只比名字：同一个应用在
-/// 「全局开始菜单」与「当前用户开始菜单」里各一份是常态。
+/// `shell:AppsFolder` 本来就不会把同一个应用列两遍，这里只是第二层保险：
+/// 同一个名字 + 同一个启动名一定是同一条。
 QString dedupeKey(const AppEntry &entry)
 {
     QString key = entry.name.toLower();
     key += QChar(0x1f);
-    key += entry.target.toLower();
-    key += QChar(0x1f);
-    key += entry.arguments.toLower();
+    key += entry.launch.toLower();
     return key;
 }
 
-/// 子目录层数：根目录是 0。
-int groupDepth(const QString &group)
+/// 名字归一化：去掉首尾空白。
+///
+/// 老版本这里会把 `.lnk` 后缀去掉（当时名字是快捷方式的文件名）；现在名字是 shell
+/// 给的显示名，没有后缀这回事，但归一化这一步留着 —— 两边的空白都去掉，
+/// 去重与匹配才不会被看不见的字符绊住。
+QString normalizeName(const QString &name)
 {
-    if (group.isEmpty()) {
-        return 0;
-    }
-    int depth = 1;
-    for (const QChar ch : group) {
-        if (ch == QLatin1Char('\\')) {
-            ++depth;
-        }
-    }
-    return depth;
-}
-
-/// 文件名去掉 `.lnk`（大小写无关）。
-QString stripLnkSuffix(const QString &fileName)
-{
-    if (fileName.size() > 4
-        && fileName.endsWith(QLatin1String(".lnk"), Qt::CaseInsensitive)) {
-        return fileName.left(fileName.size() - 4);
-    }
-    return fileName;
+    return name.trimmed();
 }
 
 } // namespace
 
-QString appIconKey(const QString &shortcutPath)
+QString appIconKey(const QString &launchName)
 {
-    // 路径规范化：分隔符统一、小写（Windows 的路径不区分大小写）。
-    QString normalized = shortcutPath;
+    // 路径规范化：分隔符统一、小写（Windows 的路径与 AUMID 都不区分大小写）。
+    QString normalized = launchName;
     normalized.replace(QLatin1Char('/'), QLatin1Char('\\'));
     normalized = normalized.toLower();
 
@@ -73,9 +57,9 @@ QString appIconKey(const QString &shortcutPath)
     return QStringLiteral("%1").arg(hash, 16, 16, QLatin1Char('0'));
 }
 
-QString appIconUrl(const QString &shortcutPath)
+QString appIconUrl(const QString &launchName)
 {
-    return QStringLiteral("image://flowkeyd-app/") + appIconKey(shortcutPath);
+    return QStringLiteral("image://flowkeyd-app/") + appIconKey(launchName);
 }
 
 std::vector<AppEntry> prepareAppEntries(std::vector<AppEntry> entries)
@@ -84,10 +68,10 @@ std::vector<AppEntry> prepareAppEntries(std::vector<AppEntry> entries)
     kept.reserve(entries.size());
     QHash<QString, std::size_t> seen;
     for (AppEntry &entry : entries) {
-        entry.name = stripLnkSuffix(entry.name).trimmed();
-        if (entry.name.isEmpty() || entry.shortcut.trimmed().isEmpty()) {
-            // 没有名字就没有可显示的东西（筛选也没法按名字匹配）；没有快捷方式
-            // 路径既没法启动、也没法算图标键。
+        entry.name = normalizeName(entry.name);
+        if (entry.name.isEmpty() || entry.launch.trimmed().isEmpty()) {
+            // 没有名字就没有可显示的东西（筛选也没法按名字匹配）；没有启动名
+            // 既没法启动、也没法算图标键。
             continue;
         }
         const QString key = dedupeKey(entry);
@@ -95,13 +79,8 @@ std::vector<AppEntry> prepareAppEntries(std::vector<AppEntry> entries)
         if (found == seen.constEnd()) {
             seen.insert(key, kept.size());
             kept.push_back(std::move(entry));
-            continue;
         }
-        // 同一个程序的第二份：层级更浅的那一份更靠近开始菜单的顶层，留它。
-        AppEntry &previous = kept[found.value()];
-        if (groupDepth(entry.group) < groupDepth(previous.group)) {
-            previous = std::move(entry);
-        }
+        // 同一个（名字 + 启动名）的第二份：丢掉，保留先见到的那一条。
     }
 
     std::stable_sort(kept.begin(), kept.end(), [](const AppEntry &a, const AppEntry &b) {
@@ -114,11 +93,7 @@ std::vector<AppEntry> prepareAppEntries(std::vector<AppEntry> entries)
         if (order != 0) {
             return order < 0;
         }
-        order = QString::compare(a.group, b.group, Qt::CaseInsensitive);
-        if (order != 0) {
-            return order < 0;
-        }
-        return QString::compare(a.shortcut, b.shortcut, Qt::CaseInsensitive) < 0;
+        return QString::compare(a.launch, b.launch, Qt::CaseInsensitive) < 0;
     });
     return kept;
 }
@@ -320,13 +295,72 @@ bool appNameMatches(const QString &name, const QString &needle)
     return appSearchText(name).contains(trimmed, Qt::CaseInsensitive);
 }
 
-bool appTargetIsProgram(const QString &target, bool hasIdList)
+bool appTargetIsProgram(const QString &target, const QString &appUserModelId)
 {
     const QString trimmed = target.trimmed();
     if (trimmed.isEmpty()) {
-        return hasIdList;
+        // 商店应用没有目标路径，只有一个 `<包家族名>!<AppId>` 形状的 AUMID。
+        return appUserModelId.contains(QLatin1Char('!'));
     }
-    return trimmed.endsWith(QLatin1String(".exe"), Qt::CaseInsensitive);
+    const QString lowered = trimmed.toLower();
+    // shell 的虚拟项（「文件资源管理器」`::{52205FD8-…}`、「控制面板」、「运行」）：
+    // 它不是一个文件，但确实是开始菜单里的一条程序入口。
+    if (lowered.startsWith(QLatin1String("::"))) {
+        return true;
+    }
+    // 网址（`.url` 快捷方式、Steam 游戏、网页文档）不是程序。
+    // 先挡掉它们：`https://example.com` 的末尾也是 `.com`。
+    if (lowered.startsWith(QLatin1String("http://"))
+        || lowered.startsWith(QLatin1String("https://"))
+        || lowered.startsWith(QLatin1String("steam://"))) {
+        return false;
+    }
+    // 看**最后一段**的扩展名（目标可能是 `{已知文件夹 GUID}\相对\路径.exe`
+    // 这种 shell 写法，不能当普通路径解析）。
+    const QString file = lowered.section(QLatin1Char('\\'), -1).section(QLatin1Char('/'), -1);
+    constexpr const char *kProgramExtensions[] = {".exe", ".bat", ".cmd", ".msc", ".cpl"};
+    for (const char *extension : kProgramExtensions) {
+        if (file.endsWith(QLatin1String(extension))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+namespace {
+
+/// 目标文件名（最后一段路径，小写；目标为空时返回空串）。
+QString targetFileName(const QString &target)
+{
+    return target.trimmed().toLower().section(QLatin1Char('\\'), -1).section(QLatin1Char('/'), -1);
+}
+
+} // namespace
+
+bool appLooksLikeUninstaller(const QString &name, const QString &target)
+{
+    const QString loweredName = name.toLower();
+    if (loweredName.contains(QStringLiteral("卸载"))) {
+        return true;
+    }
+    // 名字里的 `uninstall` 必须是独立的一个词：`Uninstall Qt`、`Uninstaller`、
+    // `uninstall foo` 都算，而名字里恰好含有这几个字母的正常程序不算。
+    static const QRegularExpression kUninstallName(QStringLiteral("\\buninstall(er)?\\b"),
+                                                  QRegularExpression::CaseInsensitiveOption);
+    if (kUninstallName.match(loweredName).hasMatch()) {
+        return true;
+    }
+
+    const QString file = targetFileName(target);
+    if (file.isEmpty()) {
+        return false;
+    }
+    // 安装器生成的反向操作程序：Inno Setup 的 `unins000.exe`、MSI 风格的
+    // `uninst.exe`/`uninstall.exe`、InstallShield 的 `unwise.exe`。
+    static const QRegularExpression kUninstallFile(
+        QStringLiteral("^(unins\\d*|uninst|uninstall|unwise)\\.exe$"),
+        QRegularExpression::CaseInsensitiveOption);
+    return kUninstallFile.match(file).hasMatch();
 }
 
 } // namespace flowkeyd::core

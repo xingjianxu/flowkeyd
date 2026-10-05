@@ -81,16 +81,17 @@ struct SwitchRequest
 /// 程序启动器里的一行请求数据。
 struct AppLauncherItem
 {
-    /// 程序名。
+    /// 程序名（shell 给的显示名，开始菜单里看到的那个）。
     QString name;
-    /// 快捷方式（`.lnk`）的完整路径；空串表示这一行没有图标（预热用的假数据）。
-    QString shortcut;
+    /// 启动名（`shell:AppsFolder\<AUMID>`）；空串表示这一行没有图标
+    /// （预热用的假数据）。
+    QString launch;
 };
 
 /// 打开程序启动器需要的一切。
 ///
-/// 传给窗口的是**名字 + 快捷方式路径**（而不是现成的图标 URL）：图标键与 URL
-/// 都在宿主这边算（`core::appIconUrl`），顺便把「键 → 路径」登记给图标提供者。
+/// 传给窗口的是**名字 + 启动名**（而不是现成的图标 URL）：图标键与 URL 都在宿主
+/// 这边算（`core::appIconUrl`），顺便把「键 → 启动名」登记给图标提供者。
 struct AppRequest
 {
     std::optional<QString> title;
@@ -209,7 +210,7 @@ public:
     /// **阻塞**：里面 `TrackPopupMenuEx` 一直等到用户选完（
     /// `platform/win/shell_menu.h` 里写了为什么必须这样）；返回值就是「用户
     /// 到底选没选」。用户选中的命令由 shell 自己执行（打开 / 以管理员身份运行 /
-    /// 打开文件位置 / 属性……）。假数据（预热那一份没有快捷方式）与越界的下标
+    /// 打开文件位置 / 属性……）。假数据（预热那一份没有启动名）与越界的下标
     /// 都直接返回 false。
     Q_INVOKABLE bool appContextMenu(int line);
     /// 卡片高度变了之后把它夹回屏幕里。
@@ -303,7 +304,7 @@ private:
     AppRequest m_appRequest;
     /// 当前这一份启动器状态该写到哪（`AppRequest::statePath`）。
     QString m_appStatePath;
-    /// 图标提供者（引擎拥有它；这里只用来登记「图标键 → 快捷方式路径」）。
+    /// 图标提供者（引擎拥有它；这里只用来登记「图标键 → 启动名」）。
     AppIconProvider *m_appIcons = nullptr;
 
     // 「在线更新」卡片（第五个弹窗）。模型由 `Updater` 拥有，宿主只持有指针。

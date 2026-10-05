@@ -460,17 +460,31 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
 27. **程序启动器 `apps()`：开始菜单里的程序，摆成一张图标网格。**
     绑定写法就是普通快捷键（本机绑在 **`Win+Space`** 上，会吞掉 Windows 自己的
     输入法切换；真实配置不进仓库，见§14）。
-    * **数据源 = 扫开始菜单**（项目所有者 2026-10 拍板，另一个选项是“配置里手写
-      程序列表”）：递归扫 `%ProgramData%\…\Start Menu\Programs` 与
-      `%APPDATA%\…\Start Menu\Programs` 两个目录，用 `IShellLink` 解析每条
-      `.lnk`，**只留程序** —— 目标以 `.exe` 结尾的（绝大多数），加上只有 IDList 的
-      商店/UWP 条目；文件夹、文档、网址、坏掉的快捷方式全部丢掉（判据是
-      `core::appTargetIsProgram()`）。真机：123 个 `.lnk` → 100 个程序，解析约 80 ms。
-    * **名字取 `.lnk` 的文件名**（去后缀）：真机实测 `SHGFI_DISPLAYNAME`（一半是空的
-      或截断的）与 `IShellLink::GetDescription`（“Open Visual Studio 2026 Tools… ”
-      这种冗长提示语）都不好用；文件名与资源管理器看到的一致。
-    * **启动走快捷方式本身**（`ShellExecuteW("open", <lnk>)`）：参数、工作目录、
-      `runas` 标记、商店应用的激活全部交给 shell，与点开始菜单一致。
+    * **数据源 = `shell:AppsFolder`**（项目所有者 2026-10 拍板「扫开始菜单」，后来发现
+      两个 `Start Menu\Programs` 目录里只有 `.lnk` —— 商店应用与 `.msc` 系统工具根本
+      不在那里，于是改成这个 API）。它就是开始菜单「所有应用」列的**同一份**
+      （`Get-StartApps` 也是它）：经典程序的快捷方式、**商店/UWP 应用**（计算器、记事本、
+      终端……它们根本没有 `.lnk`）、系统工具（`服务`、`事件查看器` 这些 `.msc`）全在
+      里面。枚举 = `SHParseDisplayName("shell:AppsFolder")` +
+      `SHBindToObject(IShellFolder)` + `EnumObjects`，每条读 `PKEY_AppUserModel_ID` /
+      `PKEY_Link_TargetParsingPath` / `PKEY_Link_Arguments`（PKEY 的 GUID/PID
+      **手写在 `apps.cpp` 里**，不用 `<propkey.h>`：那些符号在 MinGW 的 `libuuid` 里）。
+      真机：159 条 → 138 个程序（21 条被过滤），枚举 + 解析约 80 ms。
+    * **过滤两道**（判据都在 `core::app_list`，纯逻辑、`tst_app_list` 盯着）：
+      `appTargetIsProgram()` 留 `.exe`/`.bat`/`.cmd`/`.msc`/`.cpl`、shell 虚拟项
+      （`::{…}`：「文件资源管理器」「控制面板」「运行」）与目标为空但有
+      `<包家族名>!<AppId>` 的商店应用，丢掉文档 / 帮助 / 网址（`.chm`/`.txt`/`.url`/
+      `http(s)://`/`steam://`）；`appLooksLikeUninstaller()` 再丢掉**卸载程序**
+      （名字含「卸载」或独立的 `uninstall`，或者目标文件名是 `unins000.exe` 这类安装器的
+      反向操作程序）。**不按名字猜“这算不算噪音”**：`Visual Studio Installer`、
+      `Qt Maintenance Tool`、「【小狼毫】输入法设定」都留着。
+    * **名字就是 shell 给的显示名**（`SIGDN_NORMALDISPLAY`）—— 与开始菜单逐字一致，
+      所以它跟系统语言走（中文系统上是「文件资源管理器」「命令提示符」；老版本用的是
+      `.lnk` 文件名，那些是英文的而且与开始菜单并不一致）。
+    * **启动走 `shell:AppsFolder\<AUMID>`**（`apps::launchApp()`）：先把解析名当
+      `lpFile` 交给 `ShellExecuteExW`，失败再走 `SHParseDisplayName` +
+      `SEE_MASK_IDLIST`（两条真机都验过）。参数、工作目录、`runas` 标记、商店应用的
+      激活全部交给 shell，与点开始菜单一致。
       **代价是提权实例启动的程序也是提权的**（与 `run` 同一个已知限制，已写进 README）。
     * **列表按需重扫**：缓存在动作线程上，最多 30 秒；`Runtime::start()` 还会排队扫
       一次（第一次按快捷键就不必等），所以装完程序不用重启 flowkeyd。
@@ -489,11 +503,11 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
       卡片开着时再按一次同一个快捷键 = 关掉它（与窗口切换器同一条规则）。
     * **不切输入法**（与窗口切换器相反）：名字可能是中文，切英文反而筛不出来。
     * **图标必须异步取**：真机实测 `IShellItemImageFactory::GetImage()` 每个图标约
-      **3 ms**（首次冷启动那一个可达 148 ms，123 个连取一遍约 400 ms）——同步做会让
+      **3 ms**（首次冷启动那一个可达 148 ms，159 个条目连取一遍约 400 ms）——同步做会让
       卡片等小半秒，而且 `QQuickImageProvider` 的同步回调跑在渲染线程上（那里没有
       COM 单元）。所以 `app::AppIconProvider` 是一条常驻 STA 线程 + `QQuickAsyncImageProvider`：
-      模型给每一行一个 `image://flowkeyd-app/<core::appIconKey(lnk)>`，图标取好就
-      `finished()`，用户看到图标一格格“长出来”。键是路径的 64 位 FNV-1a（小写十六进制），
+      模型给每一行一个 `image://flowkeyd-app/<core::appIconKey(启动名)>`，图标取好就
+      `finished()`，用户看到图标一格格“长出来”。键是启动名的 64 位 FNV-1a（小写十六进制），
       所以 URL 里没有反斜杠/空格/中文，而且同一个程序永远是同一个 URL。
     * **尺寸按屏幕缩放**：QML 的 `Image.sourceSize` 给设备像素（逻辑 40 ×
       `Window.devicePixelRatio`；用 `Window.devicePixelRatio` 而不是
@@ -538,7 +552,7 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
     * 因为模型要算这个串，**`flowkeyd_models` 现在链 `flowkeyd_core`**（两个都只依赖
       QtCore，没有新增运行时依赖）。
     * 验证：`tst_app_list`（含整张表的自检：读音形状 / 无重复 / 覆盖率）与
-      `tst_app_list_model`；`tmp/preview/` 那套在真开始菜单（100 个程序）上跑过一遍，
+      `tst_app_list_model`；`tmp/preview/` 那套在真开始菜单（138 个程序）上跑过一遍，
       挑「Directory Opus (启动)」打首字母 `doqd` 能筛到它（`tmp/apps-card.png` 里也能
       看到新的占位提示）。
     * **备选方案（没选）**：Windows 的中文排序确实把汉字按拼音排（`LCMapStringW` 的
@@ -663,7 +677,7 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
 | `src/core/template.*` | `{clipboard}`、`{selection}`、`{date}` 等占位符展开 |
 | `src/core/window_match.*` | 窗口匹配与 `window` 动作决策的纯函数 + 「什么算一个程序窗口」的纯判据（`TopLevelWindowFacts`、`isMainWindow()`、`isSwitchableWindow()`） |
 | `src/core/remote_desktop.*` | 「这个前台进程算不算远程桌面客户端」的纯逻辑：内置名单 + 子串匹配（§2 第 26 条） |
-| `src/core/app_list.*` | **程序启动器**的纯逻辑：条目类型（`AppEntry`）、「算不算程序」的判据、图标键（路径的 64 位 FNV-1a）、扫描结果的去重/排序、名字匹配（字面 + 拼音 + 首字母）、「全部程序」列表的排序键与分组表头（`appSortInfo`/`appSortText`/`appGroupLetter`，§2 第 27/29/30 条） |
+| `src/core/app_list.*` | **程序启动器**的纯逻辑：条目类型（`AppEntry`：显示名 + 启动名 + 目标 + 参数）、「算不算程序」与「算不算卸载程序」两条判据、图标键（启动名的 64 位 FNV-1a）、扫描结果的去重/排序、名字匹配（字面 + 拼音 + 首字母）、「全部程序」列表的排序键与分组表头（`appSortInfo`/`appSortText`/`appGroupLetter`，§2 第 27/29/30 条） |
 | `src/core/launcher_state.*` | 程序启动器的**持久状态**：`LauncherState`（固定 + 最近使用的**图标键**列表）、`launcherStatePath()`（配置文件旁边的 `launcher.json`）、容错的 JSON 解析 / 序列化、`touchRecent()`（最近在前 + 截到 `kRecentLimit`）/ `togglePinned()`（§2 第 30 条） |
 | `src/core/pinyin.*` / `src/core/pinyin_data.*` | 汉字 → 读音（去声调、多音字、`ü` → `v`/`u`）的查询层 + 生成的读音表（`tools/pinyin_gen.ps1` 从 mozillazg/pinyin-data 生成，见§2 第 29 条） |
 | `src/core/placement.*` | `window_rule` 的纯逻辑：显示器排序与选择、重连检测、摆放几何、规则匹配、`stepIndex()` |
@@ -679,8 +693,8 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
 | `input.h/.cpp` | 按键注入（`SendInput`/`NtUserSendInput`）、按键状态、`ModifierGuard`（含菜单遮断标记）、`FLOWKEYD_ACCEPT_INJECTED` 测试后门、`copySelection` |
 | `ime.h/.cpp` | 运行时解析的 `imm32.dll`：`readMode`/`useAlphanumericMode`/`restoreMode`。拿不到 `imm32` 或没有输入上下文时**不当错误** |
 | `hook.h/.cpp` | 钩子回调、**钩子线程自己的 Win32 消息循环**、`SetTimer`、控制消息、重载；还有 `window_rule` 的两个监听：`SetWinEventHook`（`EVENT_OBJECT_SHOW`/`DESTROY`，按 HWND 去重）与 350 ms 显示器轮询，外加 `EVENT_SYSTEM_FOREGROUND`（远程桌面放行，`noteForegroundWindow()`）。**定时器 id 必须用 `SetTimer` 的返回值**（§10） |
-| `apps.h/.cpp` | 程序启动器（`apps` 动作）的 Win32 后端：扫两个开始菜单目录 + `IShellLink` 解析 + 「只留程序」的过滤（`listStartMenuApps()`，自己开一条一次性 STA 线程）；`shellIcon(path, size)` 取某个路径的图标（`IShellItemImageFactory::GetImage` → `GetDIBits`，返回 32 位 **直通 alpha** 的 BGRA，§2 第 27 条）；`StaThread` 是给调用方（图标工作线程）用的 STA 守卫 |
-| `shell_menu.h/.cpp` | 程序启动器的**右键菜单**（§2 第 28 条）：`SHParseDisplayName` + `SHBindToParent` + `IShellFolder::GetUIObjectOf(IID_IContextMenu)` → `QueryContextMenu` → `TrackPopupMenuEx` → `InvokeCommand`。菜单开着的那一小段时间里临时换掉拥有窗口（卡片）的窗口过程，把 `WM_INITMENUPOPUP`/`WM_DRAWITEM`/`WM_MEASUREITEM`/`WM_MENUCHAR` 转给 `IContextMenu2/3`（否则子菜单是空的、图标不画）；**已公开的 COM，没有手写 vtable** |
+| `apps.h/.cpp` | 程序启动器（`apps` 动作）的 Win32 后端：枚举 `shell:AppsFolder`（`IShellFolder::EnumObjects` + `IShellItem2::GetString` 读显示名 / AUMID / 目标 / 参数）+ 交给 `core::app_list` 的两道过滤（`listStartMenuApps()`，自己开一条一次性 STA 线程）；`launchApp(解析名)` 启动（`ShellExecuteExW` 字符串 + `SEE_MASK_IDLIST` 兜底）；`shellIcon(path, size)` 取某个解析名的图标（`IShellItemImageFactory::GetImage` → `GetDIBits`，返回 32 位 **直通 alpha** 的 BGRA，§2 第 27 条）；`StaThread` 是给调用方（图标工作线程 / 启动）用的 STA 守卫 |
+| `shell_menu.h/.cpp` | 程序启动器的**右键菜单**（§2 第 28 条）：`SHParseDisplayName` + `SHBindToParent` + `IShellFolder::GetUIObjectOf(IID_IContextMenu)` → `QueryContextMenu` → `TrackPopupMenuEx` → `InvokeCommand`。传进去的是 `AppEntry::launch`（`shell:AppsFolder\<AUMID>`），真机验过商店应用 / `.msc` / `Microsoft.AutoGenerated.{…}` / `::{…}` 都有正常菜单。菜单开着的那一小段时间里临时换掉拥有窗口（卡片）的窗口过程，把 `WM_INITMENUPOPUP`/`WM_DRAWITEM`/`WM_MEASUREITEM`/`WM_MENUCHAR` 转给 `IContextMenu2/3`（否则子菜单是空的、图标不画）；**已公开的 COM，没有手写 vtable** |
 | `audio.h/.cpp` | Core Audio `IAudioEndpointVolume`，手写 COM vtable（**高风险**，MTA） |
 | `clipboard.h/.cpp` | 剪贴板读写（`CF_UNICODETEXT`，`OpenClipboard` 重试 10 次） |
 | `window.h/.cpp` | 窗口查找/激活/最小化/最大化/还原/关闭/置顶、前台锁绕行、启动回退、`TransitionGuard`（RAII）、`setTopmost`、`isMainWindow`/`isSwitchableWindow`/`listOpenWindows`。**“是否已经激活”还要看虚拟桌面**；**前台查询会跳过 `WS_EX_TOOLWINDOW` 覆盖层** |
@@ -695,7 +709,7 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
 | `log_model.h/.cpp` | 日志窗口的模型：尾随日志文件、最多 1000 行、按级别配色、子串过滤 |
 | `menu_model.h/.cpp` / `help_model.h/.cpp` / `window_list_model.h/.cpp` / `app_list_model.h/.cpp` | 四个卡片的**纯逻辑**（`QAbstractListModel`，只用 QtCore）。行几何与鼠标命中**不归它们管**（`ListView`/`GridView` + `ItemDelegate`）；`help` 只管筛选/选中项/`Enter`/`Esc`/`setSelected`；`menu` 还持有悬停（`Enter` 执行光标下那一条）；`window_list` 管进程名前缀筛选、自动激活与数字选择模式；`app_list` 管**行**式的三个视图（已固定 + 最近使用 + 「全部程序」按钮 / 筛选用的扁平网格 / 按首字母分组的一行一个）、名字/拼音/首字母子串筛选（搜索串来自 `core::appSearchText()`，§2 第 29 条）、筛选之后前 10 条的**数字快速启动键**（`0` 起、图标右上角的号码）、`Space` 固定与「最近使用」的记账、以及卡片高度（§2 第 27/30 条） |
 | `popup_layout.h/.cpp` / `popup_host.h/.cpp` | 弹窗共用的几何类型与 `centrePopup()`（先在工作区居中、再夹进屏幕）；把模型挂到 QML 窗口上、抢前台、在 GUI 线程上创建/复用窗口、`helpRun()`（可见行下标 → 条目下标，**先藏窗口再执行**）、`preload()`、`switchUseEnglishInput()`/`restoreSwitchInputMode()` |
-| `app_icons.h/.cpp` | **程序启动器的图标**：`QQuickAsyncImageProvider` + 一条常驻 STA 线程（队列 + 按「路径@边长」缓存），把 `platform/win/apps::shellIcon()` 的 BGRA 变成 `QImage`（`Format_ARGB32`，**直通 alpha**）；表是“图标键 → 快捷方式路径”，只增不改（§2 第 27 条） |
+| `app_icons.h/.cpp` | **程序启动器的图标**：`QQuickAsyncImageProvider` + 一条常驻 STA 线程（队列 + 按「启动名@边长」缓存），把 `platform/win/apps::shellIcon()` 的 BGRA 变成 `QImage`（`Format_ARGB32`，**直通 alpha**）；表是“图标键 → 启动名”，只增不改（§2 第 27 条） |
 | `update_model.h/.cpp` / `update_archive.h/.cpp` / `updater.h/.cpp` | 更新卡片的状态机（八个阶段、版本号/发布说明/进度/按钮可见性，**不联网不解压不换文件**）；从 zip 里取出新 exe（`QZipReader` + PE 魔数检查）；联网编排（异步 `QNetworkAccessManager` + sha256 + 解压到 `<exe>.new` + mtime 对齐发布日） |
 | `app_icon.h/.cpp` | 把 qrc 里的 9 张 PNG 帧拼成多尺寸 `QIcon`（`applicationIcon()`）；`desktopIcon(number)` 现画桌面号徽标 |
 | `src/qml/` | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`、`SwitchPopup.qml`、`AppPopup.qml`、`UpdatePopup.qml`。都写 `pragma ComponentBehavior: Bound`；**五个弹窗的 `flags` 都带 `Qt.Tool`**；配色一律用 `palette`（没有单独的 `Style.qml`）；中文一律 `font.family: "Microsoft YaHei"`；列表/网格全部是标准 `ListView`/`GridView` + `ItemDelegate`（+ `ScrollBar`） |
@@ -836,8 +850,23 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
 「高度不变」（见下面那条）。脚本开头会先把 `$WorkDir\launcher.json` 删掉，所以每次
 跑都从「什么都没固定」开始（固定是持久状态，不删干净的话标题里的条数与卡片几何前后
 对不上）。（同一批改动也已经在 `tmp/preview/` 那套进程内预览里过了一遍：真开始菜单
-100 个程序、`Space`/`End`/`Enter`/`Esc` 全走真按键注入，`tmp/apps-sections.png`
+138 个程序、`Space`/`End`/`Enter`/`Esc` 全走真按键注入，`tmp/apps-sections.png`
 与 `tmp/apps-all.png` 就是那两张卡片的样子。）
+
+**2026-10-05 换数据源（`shell:AppsFolder`）。** 项目所有者报「计算器、远程桌面这些
+开始菜单里有的程序在启动器里找不到」，根因是旧实现只扫两个 `Start Menu\Programs`
+目录里的 `.lnk`（真机 124 个），**商店应用与 `.msc` 系统工具根本不在那里**。改成枚举
+`shell:AppsFolder` 之后真机是 **159 条 → 138 个程序**（丢掉 19 条文档 / 帮助 / 网址 +
+2 条卸载程序），名字也跟着系统语言变成中文（`File Explorer` → `文件资源管理器`）。
+验收脚本**这次没跑**（那个会话 `GetForegroundWindow()` 返回 0、注入不落地 ——
+就是下面「桌面被锁住」那两条已知情形之一），替代覆盖是：debug 31 个测试全绿 +
+`tmp/preview/` 那套在真开始菜单上 **83 条检查 0 失败**（`tmp/apps-card.png` 是新的
+卡片截图）。**还欠三件事的验证**：启动（`shell:AppsFolder\<AUMID>`，两条路都在一次性
+探针里验过能拉起「运行」对话框）、右键菜单（`QueryContextMenu` 对 UWP / `.msc` /
+`Microsoft.AutoGenerated.{…}` / `::{…}` 都验过有正常菜单）、以及验收脚本里那个
+「单字母筛选串只命中 1..8 个程序」的前提 —— 现在这个前提更紧了（真机 26 个字母里只有
+`k` = 8 满足，每个字母的命中数见 `tmp/preview` 输出的 `single-letter counts` 那行），
+凑不到时脚本会打一条诊断并跳过那 3 条检查（是跳过，不是失败）。
 
 2026-10-05 又给「全部程序」列表加了一条**滚轮**检查（`End`+`Enter` 进列表 → 滚 3 格 →
 抓列表左侧一条竖带的像素指纹前后比对）→ **156** 项。它盯的是一个真实 bug：卡片先前挂着
@@ -1065,8 +1094,9 @@ debug 构建 + 31 个测试全绿、release 零警告。**这次按项目所有�
 `window_rule`（+`all_desktops`/`topmost`/`follow`）、`app{...}`、四个「挪窗口」op、
 字母键名小写、托盘数字徽标、窗口切换器（+数字选择模式+IME 切换）、弹窗不进任务栏 + 预热、
 发布包精简、精简升级包、`scripts/release.ps1`、在线更新、`install.ps1` 一键安装、
-FreeType 字体引擎、程序启动器（`apps()` + 异步图标）、启动器筛选认拼音与首字母
-（§2 第 29 条）、启动器的固定 / 最近使用 / 「全部程序」分组列表（§2 第 30 条）。
+FreeType 字体引擎、程序启动器（`apps()` + 异步图标）、启动器数据源换成 `shell:AppsFolder`
+（含商店应用 / 系统工具，丢掉卸载程序与文档 / 网址，§2 第 27 条）、启动器筛选认拼音与
+首字母（§2 第 29 条）、启动器的固定 / 最近使用 / 「全部程序」分组列表（§2 第 30 条）。
 
 ---
 
@@ -1323,6 +1353,39 @@ FreeType 字体引擎、程序启动器（`apps()` + 异步图标）、启动器
 
 ### Windows 领域坑
 
+* **开始菜单「所有应用」= `shell:AppsFolder`**（`Get-StartApps` 也是枚举它）。两个
+  `%ProgramData%` / `%APPDATA%` 下的 `…\Start Menu\Programs` 目录里**只有 `.lnk`**
+  （真机 124 个）：商店/UWP 应用根本没有 `.lnk`（它们注册在包清单里），`.msc` 系统工具
+  其实有 `.lnk`、但目标是 `.msc` 而不是 `.exe`。所以「目标必须是 `.exe`」那道旧过滤会
+  **静默丢掉**计算器、记事本、终端、服务、事件查看器、计算机管理…… —— 项目所有者
+  2026-10-05 就是这么发现启动器「少了程序」的。
+* **AppsFolder 条目的属性要自己读**：`SIGDN_NORMALDISPLAY`（显示名）+
+  `PKEY_AppUserModel_ID` / `PKEY_Link_TargetParsingPath` / `PKEY_Link_Arguments`。
+  AUMID 有三种形状：`<包家族名>!<AppId>`（UWP）、显式 AUMID（`Chrome`、`MSEdge`）、
+  **目标路径当 AUMID**（scoop / Qt 那些没设过 AppUserModelID 的）；`.msc` 那些是
+  `Microsoft.AutoGenerated.{GUID}`。目标可能是 `{已知文件夹 GUID}\相对\路径.exe`
+  这种 shell 写法，所以**只能看末尾扩展名**，不能拿去 `QFileInfo`。
+  **用 `propkey.h` 里的 `PKEY_*` 要引 MinGW 的 `libuuid`**，所以 GUID/PID 是手写在
+  `apps.cpp` 里的。
+* **`shell:AppsFolder\<AUMID>` 一个字符串能干三件事**（真机 159/159 都验过）：
+  启动（`ShellExecuteExW` 把解析名当 `lpFile`，或 `SHParseDisplayName` +
+  `SEE_MASK_IDLIST` —— 两条都真的拉起过「运行」对话框）、取图标
+  （`SHCreateItemFromParsingName` + `IShellItemImageFactory::GetImage`：159 个都有图标，
+  而且没有两个是同一张，即没有回退成通用图标）、当右键菜单的输入
+  （`SHParseDisplayName` + `SHBindToParent` + `GetUIObjectOf(IContextMenu)` +
+  `QueryContextMenu` 对 UWP / `.msc` / `AutoGenerated` / `::{…}` 都给出「打开 …」这类
+  正常菜单）。
+* **名字变成显示名之后就是中文了，目录顺序不再等于显示顺序。**
+  `core::prepareAppEntries()` 按名字（码点）排，中文全落在拉丁名字后面；真正给用户看的
+  顺序是模型里的 `core::appSortText()`（拼音，§2 第 29 条）—— 别依赖扫描结果的顺序。
+* **图标键（= 固定 / 最近使用的身份）从「`.lnk` 路径」换成「启动名」之后，
+  `launcher.json` 会整份失配**（只是丢掉固定 / 最近，不报错）。而且只靠目标路径当 AUMID
+  的那些程序（scoop 工具、Qt 多版本工具）在换版本 / 换路径后会变成一条新条目 ——
+  已写进 README 的已知限制。
+* **验收脚本里那个「单字母筛选串只命中 1..8 个程序」的前提现在很紧**：条目从 100 涨到
+  138 之后，真机上 26 个字母里只有 `k` 命中 8 个满足条件（`a` 命中 89）。凑不到时脚本会
+  打一条诊断并**跳过**那 3 条数字键检查（是跳过，不是失败）；要给 `tmp/preview/` 那套
+  加上 `single-letter counts` 那样的输出看一眼再下结论。
 * **`SetTimer(nullptr, id, …)` 会忽略 `id` 并返回一个新的定时器 id**，`WM_TIMER` 的
   `wParam` 就是那个新 id。这曾让 `Engine::tick()` 从未被调用（长按重复一直是坏的）→
   把返回值存进成员再比较，`KillTimer` 也用返回值。
@@ -1622,10 +1685,10 @@ FreeType 字体引擎、程序启动器（`apps()` + 异步图标）、启动器
 14. **托盘图标跟随 explorer 重启**（处理 `TaskbarCreated`）。
 15. **把发布包再缩到更小**：再往下（静态链 Qt、把 Qt 自己的 QML 模块也编进 exe、单文件
     自解压）要换一套 Qt 构建或引入新的打包机制，为了几十 MB 不划算。
-16. **程序启动器的打磨**：现在列出的就是开始菜单里的条目本身，所以「卸载微信」、
-    「【小狼毫】输入法设定」这类名字也在里面（它们确实是指向 exe 的程序，「只包含程序」
-    就是这个意思）。可做的：按名字/目录过滤掉卸载程序与工具项（需要给 `apps()` 加参数
-    与校验）、最近使用优先排序、按开始菜单子目录分组、把图标缓存到磁盘。
+16. **程序启动器的打磨**：数据源已经是 `shell:AppsFolder`（与开始菜单一致），卸载程序也
+    已经滤掉（§2 第 27 条），剩下的就是各类工具项（「【小狼毫】输入法设定」这种）。
+    可做的：按名字 / 目录过滤掉工具项（需要给 `apps()` 加参数与校验，或者加一张可配置的
+    排除表）、最近使用优先排序、按开始菜单子目录分组、把图标缓存到磁盘。
 17. **以“登录用户”（中等完整性）权限启动程序**：现在走 `ShellExecuteW(open, <lnk>)`，
     提权实例启动的子进程会继承管理员令牌（与 `run` 同一个已知限制，README 里写着）。
     真做法是从 `explorer.exe` 复制一份令牌（`DuplicateTokenEx` + `CreateProcessWithTokenW`）
@@ -1660,12 +1723,14 @@ FreeType 字体引擎、程序启动器（`apps()` + 异步图标）、启动器
   就在 `scripts/acceptance.ps1` 的「窗口切换器」那一段加一条检查：那是这条路径唯一的
   自动化覆盖。
 * **程序启动器的新行为**：分层看 ——
-  `core/app_list.*`（“算不算程序”、去重/排序、名字子串匹配、图标键、排序键与分组表头）、
+  `core/app_list.*`（“算不算程序”与“算不算卸载程序”、去重/排序、名字子串匹配、图标键、
+  排序键与分组表头）、
   `core/launcher_state.*`（固定 / 最近使用的顺序、截断与 JSON 解析序列化）、
-  `platform/win/apps.*`（扫两个开始菜单目录 + `IShellLink` 解析 + `shellIcon`）、
+  `platform/win/apps.*`（枚举 `shell:AppsFolder` + 属性读取 + `shellIcon` + `launchApp`）、
   `app/app_list_model.*`（**行**式的三个视图与选中项/卡片高度）、
   `app/app_icons.*`（异步图标的线程/缓存/尺寸）、卡片 `AppPopup.qml`。
-  把条目喂给卡片、**启动那一步**、以及状态文件路径都在 `Dispatcher::openAppsAction()`；
+  把条目喂给卡片、**启动那一步**（`apps::launchApp()`）、以及状态文件路径都在
+  `Dispatcher::openAppsAction()`；
   真正读写 `launcher.json` 的是 `PopupHost`（`loadAppState()` / `saveAppState()`，
   由模型的 `stateEdited` 信号驱动）。
   改完要跑 `tst_app_list` / `tst_app_list_model` / `tst_launcher_state`；能从外面观察到的
@@ -1677,6 +1742,11 @@ FreeType 字体引擎、程序启动器（`apps()` + 异步图标）、启动器
   `scripts/acceptance.ps1` 用 `RegionHash` 抓一条竖带前后比对。
   **新的一行形状**：模型加一个 `Row::Kind`、`data()` 的 `RowKindRole` 多一个字符串、
   `AppPopup.qml` 多一个内联组件（并加进 `preload()` 的假数据好让它被预热）。
+* **程序启动器的过滤与身份**：凡是「某个东西算不算程序」「某个程序算不算卸载程序」的
+  判据都写在 `core/app_list.*`（纯逻辑，`tst_app_list` 直接测）；**不要往平台层里堆
+  名字匹配**。「哪些条目进列表」目前只有一个开关：`platform/win/apps.cpp` 里那两次调用。
+  要做成可配置（例如给 `apps()` 加一张排除表）就得同步改 `core/config` 的校验、
+  README 的 schema 表与示例配置 —— 那是对外稳定接口，当破坏性变更对待。
 * **拼音表 / 匹配语义**：表是生成的（`tools/pinyin_gen.ps1` → `src/core/pinyin_data.*`），
   **别手改生成物**；要改覆盖范围（例如把 Ext A 也纳入）就改脚本再跑一遍，
   `pinyin_data.h` 里的区间常量要跟着改。匹配语义（三段、组合数上限、哪些字符进首字母、
@@ -1824,7 +1894,9 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、`--ch
 * `window` 的 `animate`（默认**关**）只对会改变窗口状态的 `op` 有意义。
 * `windows([title])` 是窗口切换器（§2 第 21/22/24 条）。常见绑法是 `keys = "LWin"` +
   `trigger = "release"`（「轻碰 Win」）。
-* `apps([title])` 是程序启动器（§2 第 27 条）：列表来自开始菜单扫描，只列程序；筛选是
+* `apps([title])` 是程序启动器（§2 第 27 条）：列表来自 **`shell:AppsFolder`**
+  （= 开始菜单「所有应用」：含商店 / UWP 应用与 `.msc` 系统工具；文档 / 帮助 / 网址与
+  **卸载程序**被滤掉），启动、图标与右键菜单都交给 shell；筛选是
   **名字 / 全拼 / 首字母的子串**（不是前缀，也不是模糊搜索）、筛到一个也**不**自动启动；
   **不切输入法**（与 `windows` 相反）。拼音的细节见§2 第 29 条；
   **筛选之后前 10 条各带一个 `0`–`9` 的快速启动键**（图标右上角，按一下直接启动；

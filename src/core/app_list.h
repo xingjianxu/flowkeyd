@@ -2,8 +2,8 @@
 // 名字匹配与图标键。
 //
 // 与 `core/` 里别的东西一样，这里不碰 Win32、不碰 Qt GUI：开始菜单的扫描
-// （`platform/win/apps.*`）只负责把目录里的 `.lnk` 变成 `AppEntry`，
-// 「什么该留下、按什么顺序」全在这里，`tst_app_list` 直接覆盖。
+// （`platform/win/apps.*`，枚举 `shell:AppsFolder`）只负责把 shell 的条目变成
+// `AppEntry`，「什么该留下、按什么顺序」全在这里，`tst_app_list` 直接覆盖。
 //
 // 图标**不在**这里，也不在模型层：`QImage` 属于 QtGui（`flowkeyd_models` 只
 // 链接 QtCore）。模型只给每一行一个 URL（`appIconUrl()`），真正的像素由
@@ -18,47 +18,53 @@ namespace flowkeyd::core {
 
 /// 开始菜单里的一个程序。
 ///
-/// 平台层扫出来的原始数据；「只保留程序」那条过滤已经在扫描时做完
-/// （目标是以 `.exe` 结尾的，或者只有 IDList 的商店/UWP 条目）。
+/// 平台层扫出来的原始数据；「只保留程序、丢掉卸载程序」那两条过滤已经在扫描时
+/// 做完（判据就在本文件末尾）。
 struct AppEntry
 {
-    /// 显示名：快捷方式的文件名去掉 `.lnk`（开始菜单里看到的就是它）。
+    /// 显示名（`SIGDN_NORMALDISPLAY`）—— 与开始菜单里看到的那一个一致，
+    /// 所以它跟系统语言走（`File Explorer` 在中文系统上是「文件资源管理器」）。
     QString name;
-    /// 相对 `...\Start Menu\Programs` 的子目录（根目录下的是空串）。
-    /// 只用来做去重时的偏好（浅的那一份优先）与日志，不显示。
-    QString group;
-    /// 快捷方式自己的完整路径；启动就是 `ShellExecute` 它（与开始菜单一致，
-    /// 所以参数、工作目录、`runas` 标记都照旧生效）。
-    QString shortcut;
-    /// 解析出来的目标程序；只有 IDList 的条目是空串。
+    /// 启动用的 **shell 解析名**：`shell:AppsFolder\<AppUserModelID>`。
+    ///
+    /// 启动（`platform/win/apps::launchApp()`）、取图标
+    /// （`IShellItemImageFactory`）、右键菜单（`shell_menu::showItemMenu()`）
+    /// 全都拿它当输入；`appIconKey()` 也是对**它**算的（所以同一个程序永远是
+    /// 同一个图标 URL）。老版本这里存的是快捷方式路径，那张卡片只认「一个可以
+    /// 交给 shell 的字符串」这一点没变。
+    QString launch;
+    /// 这个条目解析出来的目标（`PKEY_Link_TargetParsingPath`）。
+    ///
+    /// **只用于判据与诊断**（是不是程序 / 是不是卸载程序 / 日志）：启动走 `launch`，
+    /// 不碰目标 —— 商店应用没有目标、`.msc` 与「以管理员身份运行」这些语义也只有
+    /// shell 自己拿得住。空串是常态（商店应用、部分虚拟项）。
     QString target;
-    /// 快捷方式里写好的启动参数（**原样的一整串**，不切分）。只用于去重与诊断：
-    /// 启动走的是快捷方式本身，shell 会自己把参数交给目标。
+    /// 条目里写好的启动参数（`PKEY_Link_Arguments`，**原样的一整串**，不切分）。
+    /// 同样只用于诊断：启动由 shell 负责，参数它自己会给目标。
     QString arguments;
 };
 
 /// 图标 URL 里用的稳定短键。
 ///
-/// 为什么不用快捷方式路径本身：`Image.source` 是 URL，反斜杠 / 空格 / 中文
-/// 都得转义，而 Qt 的 `image://` 提供者拿到的是**已经解码**的 id，双方对
-/// 「编码了几次」很容易不一致。改成对路径算一个 64 位 FNV-1a（小写十六进制，
-/// 16 个字符）之后，id 只有 `[0-9a-f]`，而且**同一个程序永远是同一个 URL**：
-/// 列表重扫、条目换位置都不会让 QML 的图片缓存认错图标。
+/// 为什么不用启动名（`shell:AppsFolder\<AUMID>`）本身：`Image.source` 是 URL，
+/// 反斜杠 / 空格 / 中文都得转义，而 Qt 的 `image://` 提供者拿到的是**已经解码**
+/// 的 id，双方对「编码了几次」很容易不一致。改成对它算一个 64 位 FNV-1a
+/// （小写十六进制，16 个字符）之后，id 只有 `[0-9a-f]`，而且**同一个程序永远是
+/// 同一个 URL**：列表重扫、条目换位置都不会让 QML 的图片缓存认错图标。
 ///
 /// 大小写无关（Windows 的路径本来就不区分大小写），分隔符统一成 `\`。
-QString appIconKey(const QString &shortcutPath);
+QString appIconKey(const QString &launchName);
 
 /// QML 里 `Image.source` 用的前缀：`image://flowkeyd-app/<appIconKey()>`。
-QString appIconUrl(const QString &shortcutPath);
+QString appIconUrl(const QString &launchName);
 
-/// 整理一份扫描结果：丢掉没有名字/没有快捷方式的、按「名字 + 目标」去重、
+/// 整理一份扫描结果：丢掉没有名字/没有启动名的、按「名字 + 启动名」去重、
 /// 按名字排序。
 ///
-/// 去重只合并**同名同目标**的条目（同一个程序在「全局开始菜单」与「当前用户
-/// 开始菜单」里各一份是常态）；名字不同的绝不合并 —— 两个名字不同、却指向
+/// 去重只合并**同名同启动名**的条目（这只是第二层保险：`shell:AppsFolder`
+/// 本来就不会把同一个应用列两遍）；名字不同的绝不合并 —— 两个名字不同、却指向
 /// 同一个 exe 的条目是两条独立的入口（`Developer PowerShell for VS` 与
 /// `Debuggable Package Manager` 就是这样）。
-/// 同名同目标时保留**层级更浅**的那一份（根目录优先于子目录）。
 std::vector<AppEntry> prepareAppEntries(std::vector<AppEntry> entries);
 
 /// 拼音/首字母搜索最多展开几种读音组合：超过就退回「每个字只用主读音」。
@@ -127,14 +133,37 @@ QString appGroupLetter(const QString &name);
 /// `jsb`、`vsc` 都能命中对应的程序。
 bool appNameMatches(const QString &name, const QString &needle);
 
-/// 一个开始菜单快捷方式算不算「程序」。
+/// 一个开始菜单条目算不算「程序」。
 ///
-/// 判据是**目标**而不是名字（名字里带 “卸载”/“帮助” 的仍然是程序，反过来也有
-/// 名字看不出内容的情况）：
-///  * 目标以 `.exe` 结尾（大小写无关，允许尾随空白）—— 绝大多数快捷方式；
-///  * 目标为空但**有 IDList** —— 商店/UWP 应用用它（`explorer.exe shell:AppsFolder\…`
-///    是另一种写法，落到上一条）。
-/// 除此之外（文件夹、文档、网址、坏掉的快捷方式）都不算。
-bool appTargetIsProgram(const QString &target, bool hasIdList);
+/// 判据是**目标**（与商店应用的 AUMID）而不是名字 —— 名字里带“卸载”/“帮助”的
+/// 仍然可能是程序，反过来也有名字完全看不出内容的情况：
+///  * 目标是一个可以启动的程序 / 管理单元 / 控制面板项（`.exe`、`.bat`、`.cmd`、
+///    `.msc`、`.cpl`，大小写无关、允许尾随空白）；
+///  * 目标是 shell 的虚拟项（以 `::{` 开头的 GUID，例如「文件资源管理器」
+///    `::{52205FD8-…}`、「控制面板」、「运行」）；
+///  * 目标为空但 AUMID 是**商店应用**的（`<包家族名>!<AppId>` 这种形状）——
+///    商店/UWP 应用根本没有目标路径。
+///
+/// 其它一律不算：文档与帮助（`.chm`/`.txt`/`.url`）、网址（`http(s)://`、
+/// `steam://`）、文件夹、坏掉的条目。
+///
+/// 注意目标可能是「已知文件夹 GUID + 相对路径」这种 shell 写法
+/// （`{1AC14E77-…}\services.msc`），所以判据只能看**末尾的扩展名**，
+/// 不要拿去 `QFileInfo` 之类的地方当真路径。
+bool appTargetIsProgram(const QString &target, const QString &appUserModelId);
+
+/// 这个条目看起来是**卸载程序**吗（名字或目标）。
+///
+/// 开始菜单里混着「卸载微信」「Uninstall Qt」这类反向操作条目（它们确实是指向
+/// exe 的程序，所以「是不是程序」那条过滤放它们过去），而启动器里列出来只会
+/// 碍事、还容易误按，所以单独丢掉：
+///  * 名字里出现「卸载」，或者是一个独立的 `uninstall` 词（`Uninstall Qt`、
+///    `Uninstaller`、`uninstall foo`）；
+///  * 目标文件名是安装器生成的反向操作程序（`unins000.exe`、`uninst.exe`、
+///    `unwise.exe`、`uninstall*.exe`）。
+///
+/// 只看名字与目标文件名，**不猜**「Setup」「维护工具」这类 —— 那些常常也是正常
+/// 入口（`Visual Studio Installer`、「配置工具」）。
+bool appLooksLikeUninstaller(const QString &name, const QString &target);
 
 } // namespace flowkeyd::core

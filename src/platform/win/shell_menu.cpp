@@ -1,5 +1,5 @@
-// 见 `shell_menu.h` 的说明：弹出一个 `.lnk` 的**原生 shell 右键菜单**并执行
-// 用户选中的那一条。
+// 见 `shell_menu.h` 的说明：弹出一个 shell 条目（`shell:AppsFolder\<AUMID>` /
+// `.lnk` / 文件）的**原生 shell 右键菜单**并执行用户选中的那一条。
 //
 // 这一份是「自己弹 shell 菜单」的标准做法（Raymond Chen 的 Hosting the shell
 // context menu 那一套），三件事按顺序做：
@@ -364,7 +364,7 @@ MenuResult showItemMenu(HWND owner,
             return result;
         }
         if (GetMenuItemCount(resources.hmenu) <= 0) {
-            // 理论上不该发生（`.lnk` 总会有点什么），但真发生了就报出来，
+            // 理论上不该发生（开始菜单里的条目总会有点什么），但真发生了就报出来，
             // 总比弹一个空白菜单好。
             result.error = QStringLiteral("the shell returned an empty menu");
             if (coOwned) {

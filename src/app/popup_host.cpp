@@ -325,9 +325,9 @@ bool PopupHost::appContextMenu(int item)
     if (item < 0 || item >= static_cast<int>(m_appRequest.items.size())) {
         return false;
     }
-    const QString shortcut = m_appRequest.items[static_cast<std::size_t>(item)].shortcut;
-    if (shortcut.isEmpty()) {
-        // 预热用的假数据没有快捷方式（真实条目一定有）——那种情况下没有菜单可弹。
+    const QString launchName = m_appRequest.items[static_cast<std::size_t>(item)].launch;
+    if (launchName.isEmpty()) {
+        // 预热用的假数据没有启动名（真实条目一定有）—— 那种情况下没有菜单可弹。
         return false;
     }
 
@@ -337,20 +337,22 @@ bool PopupHost::appContextMenu(int item)
     //      连对话框一起被藏掉；
     // （3）「打开文件位置」拉起的资源管理器窗口要拿得到前台，不能跟一张置顶
     //      卡片抢。
-    // 快捷方式路径已经拷出来了，所以清掉请求（`appDismiss()`）不影响这次调用。
+    // 启动名已经拷出来了，所以清掉请求（`appDismiss()`）不影响这次调用。
     const auto beforeInvoke = [this]() { appDismiss(); };
     const HWND owner = reinterpret_cast<HWND>(m_appWindow->winId());
+    // `showItemMenu()` 收的是 shell 解析名，`shell:AppsFolder\<AUMID>` 照样能用
+    // （真机验过：商店应用、`.msc`、从路径当 AUMID 的那些条目都有正常菜单）。
     const win::shell_menu::MenuResult result =
-        win::shell_menu::showItemMenu(owner, shortcut, beforeInvoke);
+        win::shell_menu::showItemMenu(owner, launchName, beforeInvoke);
     if (!result.error.isEmpty()) {
         win::logWarn(QStringLiteral("app launcher: could not show the shell menu for %1: %2")
-                         .arg(QDir::toNativeSeparators(shortcut), result.error));
+                         .arg(launchName, result.error));
         return false;
     }
     if (result.invoked) {
         win::logInfo(QStringLiteral("app launcher: shell menu command %1 for %2")
                          .arg(result.command)
-                         .arg(QDir::toNativeSeparators(shortcut)));
+                         .arg(launchName));
         return true;
     }
     // 取消（`Esc` / 点了菜单外面）：卡片留着，用户接着选下一格。菜单的弹出
@@ -825,21 +827,21 @@ void PopupHost::showApps(AppRequest request)
     // 先把上一份持久状态（固定 / 最近使用）读进来，再换程序列表。
     loadAppState();
 
-    // 图标：把「图标键 → 快捷方式路径」登记给图片提供者，并把每一行的 URL 算好。
-    // 键是快捷方式路径的哈希（`core::appIconKey`），所以列表重扫、条目换位置都
+    // 图标：把「图标键 → 启动名」登记给图片提供者，并把每一行的 URL 算好。
+    // 键是启动名的哈希（`core::appIconKey`），所以列表重扫、条目换位置都
     // 不会让已经缓存下来的 `image://` URL 指向别的程序。
     QVector<QPair<QString, QString>> icons;
     icons.reserve(static_cast<int>(m_appRequest.items.size()));
     std::vector<AppListEntry> entries;
     entries.reserve(m_appRequest.items.size());
     for (const AppLauncherItem &item : m_appRequest.items) {
-        if (item.shortcut.isEmpty()) {
+        if (item.launch.isEmpty()) {
             entries.push_back(AppListEntry{item.name, QString(), QString()});
             continue;
         }
-        const QString key = core::appIconKey(item.shortcut);
-        entries.push_back(AppListEntry{item.name, core::appIconUrl(item.shortcut), key});
-        icons.append(qMakePair(key, item.shortcut));
+        const QString key = core::appIconKey(item.launch);
+        entries.push_back(AppListEntry{item.name, core::appIconUrl(item.launch), key});
+        icons.append(qMakePair(key, item.launch));
     }
     if (m_appIcons != nullptr) {
         m_appIcons->publish(icons);
