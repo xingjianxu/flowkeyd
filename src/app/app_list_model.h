@@ -11,8 +11,10 @@
 // `←`/`→` 走一格、`↑`/`↓` 走一整行；到边界夹住、不回绕（网格里回绕到上一行
 // 的末尾在筛过之后很容易让人失去方向感）。
 //
-// **筛选**：按程序名做大小写无关的**子串**匹配（`core::appNameMatches` 同一条
-// 判据，但这里是模型自己的实现，免得 `flowkeyd_models` 拖上 `flowkeyd_core`）。
+// **筛选**：按程序名做大小写无关的**子串**匹配，而且**包含了拼音**：输入串会
+// 去比 `core::appSearchText()` 给出的三段（名字本身 / 全拼 / 首字母缩写），
+// 所以 记事本 用 `jishiben`、`jsb`、`记事` 都能筛到，`Visual Studio Code` 用
+// `vsc` 也能（判据的细节在 `core/app_list.h`；模型只是把那个串算一次存起来）。
 // 输入一个字符列表就窄一圈，`Enter` 启动当前高亮那一条。
 //
 // **不自动启动**：筛选到只剩一条时也**不**自动执行（窗口切换器那边会自动激活，
@@ -191,8 +193,9 @@ private:
 
     std::optional<QString> m_title;
     std::vector<AppListEntry> m_items;
-    /// 与 `m_items` 一一对应的可匹配文本（小写名字，装载时算一次）。
-    std::vector<QString> m_names;
+    /// 与 `m_items` 一一对应的**搜索文本**（`core::appSearchText()` 算好的：
+    /// 小写名字 + 全拼 + 首字母缩写），装载时算一次。
+    std::vector<QString> m_search;
     /// 用户输入的筛选串（原样保留大小写）。
     QString m_filter;
     /// 当前筛选结果在 `m_items` 里的下标。

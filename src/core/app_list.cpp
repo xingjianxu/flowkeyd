@@ -1,6 +1,9 @@
 #include "core/app_list.h"
 
+#include "core/pinyin.h"
+
 #include <QHash>
+#include <QStringList>
 
 #include <algorithm>
 #include <cstdint>
@@ -120,13 +123,149 @@ std::vector<AppEntry> prepareAppEntries(std::vector<AppEntry> entries)
     return kept;
 }
 
+namespace {
+
+/// 搜索文本里三段之间的分隔符（`U+001F`，用户打不出来）。
+constexpr QChar kSearchPartSeparator(0x1f);
+
+/// 汉字（含 Ext A/B 这些**没进拼音表**的区段）：标出它们不属于「拉丁词」。
+bool isCjkIdeograph(char32_t codePoint)
+{
+    return (codePoint >= 0x3400 && codePoint <= 0x4dbf)
+        || (codePoint >= 0x4e00 && codePoint <= 0x9fff)
+        || (codePoint >= 0xf900 && codePoint <= 0xfaff)
+        || (codePoint >= 0x20000 && codePoint <= 0x2fa1f);
+}
+
+} // namespace
+
+QString appSearchText(const QString &name)
+{
+    const QString lowered = name.toLower();
+
+    // 「可读音单元 VS 字面文本」的扫描：汉字（认得出读音）是一个单元；
+    // 拉丁字母/数字连成一段；其它（空格、标点、表外的生僻字）按字面粘回全拼。
+    struct Piece
+    {
+        bool literal = false;
+        QString text;
+        std::vector<QString> fullForms;
+        std::vector<QString> initials;
+    };
+    std::vector<Piece> pieces;
+
+    int index = 0;
+    while (index < lowered.size()) {
+        const QChar first = lowered.at(index);
+        int width = 1;
+        char32_t codePoint = first.unicode();
+        if (first.isHighSurrogate() && index + 1 < lowered.size()
+            && lowered.at(index + 1).isLowSurrogate()) {
+            codePoint = QChar::surrogateToUcs4(first, lowered.at(index + 1));
+            width = 2;
+        }
+
+        const std::vector<QString> readings = pinyinReadings(codePoint);
+        if (!readings.empty()) {
+            Piece piece;
+            piece.fullForms.reserve(readings.size());
+            piece.initials.reserve(readings.size());
+            for (const QString &reading : readings) {
+                piece.initials.push_back(reading.left(1));
+                piece.fullForms.push_back(reading);
+            }
+            pieces.push_back(std::move(piece));
+            index += width;
+            continue;
+        }
+
+        if (isCjkIdeograph(codePoint) || !first.isLetterOrNumber()) {
+            // 表外的汉字与空格/标点一样：按字面粘回全拼，也不进首字母。
+            Piece piece;
+            piece.literal = true;
+            piece.text = lowered.mid(index, width);
+            pieces.push_back(std::move(piece));
+            index += width;
+            continue;
+        }
+
+        // 拉丁字母 / 数字：连成一段，整段进全拼，首字母是这一段的首字符。
+        int end = index;
+        while (end < lowered.size() && lowered.at(end).isLetterOrNumber()
+               && !isCjkIdeograph(lowered.at(end).unicode())) {
+            ++end;
+        }
+        Piece piece;
+        piece.text = lowered.mid(index, end - index);
+        piece.fullForms.push_back(piece.text);
+        piece.initials.push_back(piece.text.left(1));
+        pieces.push_back(std::move(piece));
+        index = end;
+    }
+
+    // 读音组合数：每个单元的音节数之积；太多就只用主读音。
+    std::size_t combinations = 1;
+    for (const Piece &piece : pieces) {
+        if (piece.literal || piece.fullForms.empty()) {
+            continue;
+        }
+        combinations *= piece.fullForms.size();
+        if (combinations > static_cast<std::size_t>(kMaxSearchVariants)) {
+            break;
+        }
+    }
+    const bool primaryOnly = combinations > static_cast<std::size_t>(kMaxSearchVariants);
+
+    QStringList fullForms{QString()};
+    QStringList initials{QString()};
+    for (const Piece &piece : pieces) {
+        if (piece.literal) {
+            for (QString &form : fullForms) {
+                form += piece.text;
+            }
+            continue;
+        }
+        const int options = primaryOnly ? 1 : static_cast<int>(piece.fullForms.size());
+        if (options == 1) {
+            for (QString &form : fullForms) {
+                form += piece.fullForms.front();
+            }
+            for (QString &form : initials) {
+                form += piece.initials.front();
+            }
+            continue;
+        }
+        QStringList nextFull;
+        QStringList nextInitials;
+        nextFull.reserve(fullForms.size() * options);
+        nextInitials.reserve(initials.size() * options);
+        for (int i = 0; i < fullForms.size(); ++i) {
+            for (int option = 0; option < options; ++option) {
+                const auto slot = static_cast<std::size_t>(option);
+                nextFull.push_back(fullForms.at(i) + piece.fullForms[slot]);
+                nextInitials.push_back(initials.at(i) + piece.initials[slot]);
+            }
+        }
+        fullForms = std::move(nextFull);
+        initials = std::move(nextInitials);
+    }
+
+    // 三段用 `U+001F` 隔开：用户打不出这个字符，段与段之间也就拼不出假匹配。
+    QString text = lowered;
+    text += kSearchPartSeparator;
+    text += fullForms.join(kSearchPartSeparator);
+    text += kSearchPartSeparator;
+    text += initials.join(kSearchPartSeparator);
+    return text;
+}
+
 bool appNameMatches(const QString &name, const QString &needle)
 {
     const QString trimmed = needle.trimmed();
     if (trimmed.isEmpty()) {
         return true;
     }
-    return name.contains(trimmed, Qt::CaseInsensitive);
+    return appSearchText(name).contains(trimmed, Qt::CaseInsensitive);
 }
 
 bool appTargetIsProgram(const QString &target, bool hasIdList)

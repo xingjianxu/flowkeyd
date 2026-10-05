@@ -521,6 +521,31 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
       `tst_app_list_model` 盯着），QML 只负责执行。
     * 预热用的假数据没有快捷方式，右键直接什么都不做。
 
+29. **程序启动器的筛选认汉语拼音**（§2 第 27 条的那张网格）：输入串按「名字 /
+    全拼 / 首字母」三段做**子串**匹配（三段之间用 `U+001F` 隔开，段与段拼不出假匹配）。
+    * 三段由 `core::appSearchText(name)` 一次算好（`core/app_list.*`）：`记事本` →
+      `jishiben` + `jsb`；`Visual Studio Code` → 全拼那段就是它自己 + `vsc`；
+      中文与拉丁混排的 `QQ音乐` → `qqyinyue` + `qyy`；空格与标点留进全拼、不进首字母。
+    * **多音字的每一种读音都进搜索串**（`乐` → `le`/`yue`），读音组合数是每个字读音数
+      的乘积，超过 `core::kMaxSearchVariants`（8）就退回「只用主读音」—— 长名字不该
+      为了一两个多音字炸出几百个变体。
+    * 表是**离线生成后提交进仓库**的（`src/core/pinyin_data.*`，生成器
+      `tools/pinyin_gen.ps1`）：数据来自 mozillazg/pinyin-data（MIT，读音源自 Unihan
+      的 `kMandarin` 字段），**只覆盖 U+4E00–U+9FFF**（20992 个码点里 20924 个有读音，
+      多音字 5009 个、额外读音 6499 条）。Ext A/B 等生僻字没有拼音，与标点一样只按
+      字面匹配（键盘上也打不出来）；**`ü` 记作 `v`，同时额外认写成 `u` 的那一条**
+      （女 → `nv` 与 `nu`）。
+    * 因为模型要算这个串，**`flowkeyd_models` 现在链 `flowkeyd_core`**（两个都只依赖
+      QtCore，没有新增运行时依赖）。
+    * 验证：`tst_app_list`（含整张表的自检：读音形状 / 无重复 / 覆盖率）与
+      `tst_app_list_model`；`tmp/preview/` 那套在真开始菜单（100 个程序）上跑过一遍，
+      挑「Directory Opus (启动)」打首字母 `doqd` 能筛到它（`tmp/apps-card.png` 里也能
+      看到新的占位提示）。
+    * **备选方案（没选）**：Windows 的中文排序确实把汉字按拼音排（`LCMapStringW` 的
+      sort key 主权重，实测 乐 落在 `le`、长 落在 `zhang`、行 落在 `xing`），但它只
+      给出「相对顺序」而不是音节边界 —— 要用它就得自己维护约 410 个锚字再做二分，
+      而且权重顺序没有任何文档承诺。内置一份生成的表反而更小、更确定、能单测。
+
 ---
 
 ## 3. 环境与工具链
@@ -584,6 +609,7 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
 | `README.md` | **用户文档（只写使用方法）**：安装、快速上手、命令行、配置/动作/schema 全部字段、托盘与弹窗、开机自启、在线更新、已知限制。**配置 schema 的权威定义** |
 | `install.ps1` | 对外一键安装器（**纯 ASCII、无 BOM**，见工作约定第 9 条） |
 | `logo.svg` / `assets/` / `tools/icon_gen` | 图标美术源（唯一真源）；`assets/flowkeyd.ico`（exe 资源，windres 嵌进 PE）+ `assets/icons/flowkeyd-<n>.png`（qrc 里的多尺寸 `QIcon`）；`tools/icon_gen`（`EXCLUDE_FROM_ALL` 的 `icons` 目标，把 svg 光栅化） |
+| `tools/pinyin_gen.ps1` | 生成 `src/core/pinyin_data.cpp`（程序启动器的拼音表）：离线跑一次、结果提交进仓库，构建过程不联网也不依赖任何第三方组件（§2 第 29 条） |
 | `src/main.cpp` | `AttachConsole` + `QT_QPA_PLATFORM=windows:fontengine=freetype`（**第一行**）+ CLI 分发 + 日志初始化 + 提权前的单实例预检 + 自启确认框 + 组装 Runtime + 接 `desktopChanged` 到 Tray + 排队 `PopupHost::preload()` |
 | `src/cli.h/.cpp` | 参数解析 + 中文帮助文本（手写）；`--quit` 走单独早期分支 |
 | `src/core/` | **纯逻辑层：不碰 Win32、不碰 Qt GUI**（只用 QtCore），能被 Qt Test 直接测 |
@@ -594,7 +620,8 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
 | `src/core/template.*` | `{clipboard}`、`{selection}`、`{date}` 等占位符展开 |
 | `src/core/window_match.*` | 窗口匹配与 `window` 动作决策的纯函数 + 「什么算一个程序窗口」的纯判据（`TopLevelWindowFacts`、`isMainWindow()`、`isSwitchableWindow()`） |
 | `src/core/remote_desktop.*` | 「这个前台进程算不算远程桌面客户端」的纯逻辑：内置名单 + 子串匹配（§2 第 26 条） |
-| `src/core/app_list.*` | **程序启动器**的纯逻辑：条目类型（`AppEntry`）、「算不算程序」的判据、图标键（路径的 64 位 FNV-1a）、扫描结果的去重/排序、名字子串匹配（§2 第 27 条） |
+| `src/core/app_list.*` | **程序启动器**的纯逻辑：条目类型（`AppEntry`）、「算不算程序」的判据、图标键（路径的 64 位 FNV-1a）、扫描结果的去重/排序、名字匹配（字面 + 拼音 + 首字母，§2 第 27/29 条） |
+| `src/core/pinyin.*` / `src/core/pinyin_data.*` | 汉字 → 读音（去声调、多音字、`ü` → `v`/`u`）的查询层 + 生成的读音表（`tools/pinyin_gen.ps1` 从 mozillazg/pinyin-data 生成，见§2 第 29 条） |
 | `src/core/placement.*` | `window_rule` 的纯逻辑：显示器排序与选择、重连检测、摆放几何、规则匹配、`stepIndex()` |
 | `src/core/log_tail.*` | 日志文件的增量尾随（纯逻辑）：按字节读、末尾不完整的 UTF-8 序列不消费、半行留到下一轮、一次最多 1000 行 |
 | `src/core/update_check.*` | 在线更新纯逻辑：仓库地址、`releases/latest` JSON 解析、资产挑选、版本比较、`buildVersionDate()` |
@@ -622,7 +649,7 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
 | `dispatcher.h/.cpp` | **动作工作线程**（`QThread`）：执行动作列表、`window` 的“先启动再激活”与默认开的 `toggle`、`menu`/`help`/`windows` 的窗口请求、`window_rule`（三遍）、`startDesktopWatch()`/`pollDesktop()` |
 | `runtime.h/.cpp` | 引擎 + 钩子 + 分发 + 托盘 + 弹窗的总装；`ControlCmd`（suspend/reload/quit）通道；`--quit` 的事件句柄（`QWinEventNotifier` 在 GUI 线程上监听）；`reportDesktop()`/`desktopChanged`；`showSwitchFromAnyThread()` 等 |
 | `log_model.h/.cpp` | 日志窗口的模型：尾随日志文件、最多 1000 行、按级别配色、子串过滤 |
-| `menu_model.h/.cpp` / `help_model.h/.cpp` / `window_list_model.h/.cpp` / `app_list_model.h/.cpp` | 四个卡片的**纯逻辑**（`QAbstractListModel`，只用 QtCore）。行几何与鼠标命中**不归它们管**（`ListView`/`GridView` + `ItemDelegate`）；`help` 只管筛选/选中项/`Enter`/`Esc`/`setSelected`；`menu` 还持有悬停（`Enter` 执行光标下那一条）；`window_list` 管进程名前缀筛选、自动激活与数字选择模式；`app_list` 管 6 列网格的几何、名字子串筛选与网格方向键（§2 第 27 条） |
+| `menu_model.h/.cpp` / `help_model.h/.cpp` / `window_list_model.h/.cpp` / `app_list_model.h/.cpp` | 四个卡片的**纯逻辑**（`QAbstractListModel`，只用 QtCore）。行几何与鼠标命中**不归它们管**（`ListView`/`GridView` + `ItemDelegate`）；`help` 只管筛选/选中项/`Enter`/`Esc`/`setSelected`；`menu` 还持有悬停（`Enter` 执行光标下那一条）；`window_list` 管进程名前缀筛选、自动激活与数字选择模式；`app_list` 管 6 列网格的几何、名字/拼音/首字母子串筛选（搜索串来自 `core::appSearchText()`，§2 第 29 条）与网格方向键（§2 第 27 条） |
 | `popup_layout.h/.cpp` / `popup_host.h/.cpp` | 弹窗共用的几何类型与 `centrePopup()`（先在工作区居中、再夹进屏幕）；把模型挂到 QML 窗口上、抢前台、在 GUI 线程上创建/复用窗口、`helpRun()`（可见行下标 → 条目下标，**先藏窗口再执行**）、`preload()`、`switchUseEnglishInput()`/`restoreSwitchInputMode()` |
 | `app_icons.h/.cpp` | **程序启动器的图标**：`QQuickAsyncImageProvider` + 一条常驻 STA 线程（队列 + 按「路径@边长」缓存），把 `platform/win/apps::shellIcon()` 的 BGRA 变成 `QImage`（`Format_ARGB32`，**直通 alpha**）；表是“图标键 → 快捷方式路径”，只增不改（§2 第 27 条） |
 | `update_model.h/.cpp` / `update_archive.h/.cpp` / `updater.h/.cpp` | 更新卡片的状态机（八个阶段、版本号/发布说明/进度/按钮可见性，**不联网不解压不换文件**）；从 zip 里取出新 exe（`QZipReader` + PE 魔数检查）；联网编排（异步 `QNetworkAccessManager` + sha256 + 解压到 `<exe>.new` + mtime 对齐发布日） |
@@ -641,7 +668,7 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
 | ---- | ---- | ------ |
 | `flowkeyd_core` | `src/core/*`（纯逻辑，只用 QtCore） | exe + 全部单测 |
 | `flowkeyd_lua` | `src/lua/*` + 编成 qrc 的 `lua_prelude.lua` | exe + `tst_lua` |
-| `flowkeyd_models` | `src/app/{menu,help,window_list,app_list}_model.*` + `popup_layout.*` | exe + 四个 model 测试 |
+| `flowkeyd_models` | `src/app/{menu,help,window_list,app_list}_model.*` + `popup_layout.*`（`app_list_model` 要算拼音搜索串，所以这个库链 `flowkeyd_core`） | exe + 四个 model 测试 |
 | `flowkeyd_update` | `src/app/{update_model,update_archive,updater}.*`（`Qt6::Core` + `Network` + **`CorePrivate`**） | exe + 三个 update 测试 + `tst_interactive` |
 | `flowkeyd_platform` | `src/platform/win/*`（不碰 Qt GUI 的 Win32 后端） | exe + 平台层单测 |
 | `flowkeyd` | `src/main.cpp`、`src/cli.*`、`src/app/*`、`tray.*`、QML、图标 qrc + 图标 .rc | —— |
@@ -943,7 +970,8 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
 `window_rule`（+`all_desktops`/`topmost`/`follow`）、`app{...}`、四个「挪窗口」op、
 字母键名小写、托盘数字徽标、窗口切换器（+数字选择模式+IME 切换）、弹窗不进任务栏 + 预热、
 发布包精简、精简升级包、`scripts/release.ps1`、在线更新、`install.ps1` 一键安装、
-FreeType 字体引擎、程序启动器（`apps()` + 异步图标）。
+FreeType 字体引擎、程序启动器（`apps()` + 异步图标）、启动器筛选认拼音与首字母
+（§2 第 29 条）。
 
 ---
 
@@ -1000,6 +1028,17 @@ FreeType 字体引擎、程序启动器（`apps()` + 异步图标）。
 * **`irm` 会把响应体开头的 BOM 留成真实的 `U+FEFF`** → `Invoke-Expression` 在 `param()` 上
   报 `InvalidLeftHandSide`。也**不能**用 `curl | powershell -Command -`（GBK 解码中文）。
   所以 `install.ps1` 只能二选一，本项目选「纯 ASCII + 无 BOM」。
+* **脚本里的 `$PSScriptRoot` 在 `param()` 的默认值里是空的**（PS 5.1）→ 默认值写空串，
+  进函数体再算（否则 `Split-Path -Parent ''` 直接报错）。
+* **`[ordered]@{}` 的整数键不能用 `$d[1234]` 取**：OrderedDictionary 的索引器把整数参数
+  当成**位置**，返回 `$null`（不报错）→ 用普通 `@{}`，或者把键写成字符串。
+* **`-f` 格式串里的 `{{`/`}}` 是转义大括号**：拿它拼 C++ 的 `{0x1234, 0x0023}` 会被解析
+  坏（生成出 `0xx4`，GCC 报 `unable to find numeric literal operator 'operator""xx4'`）→
+  花括号用字符串相加拼，不要靠 `-f` 的转义。
+* **提交进仓库的 `.ps1` 带中文注释时必须写 UTF-8 BOM**：没有 BOM 时 PS 5.1 按 GBK 解码，
+  中文注释里的字节会被当成引号/括号，脚本直接语法错（`UnexpectedToken`，报错行号还可能
+  落在别处）。文件工具的默认写入是无 BOM 的，写完要转一次
+  （`ReadAllText(..., UTF8Encoding($false))` + `WriteAllText(..., UTF8Encoding($true))`）。
 
 ### 配置 / Lua / 核心逻辑
 
@@ -1493,6 +1532,11 @@ FreeType 字体引擎、程序启动器（`apps()` + 异步图标）。
   改完要跑 `tst_app_list` / `tst_app_list_model`；能从外面观察到的行为就在
   `scripts/acceptance.ps1` 的「程序启动器」那一段加一条检查（**注意别按 `Enter`**，
   那会真的启动列表里第一个程序）；纯粹的渲染/图标质量用 `tmp/preview/` 那套抓图看。
+* **拼音表 / 匹配语义**：表是生成的（`tools/pinyin_gen.ps1` → `src/core/pinyin_data.*`），
+  **别手改生成物**；要改覆盖范围（例如把 Ext A 也纳入）就改脚本再跑一遍，
+  `pinyin_data.h` 里的区间常量要跟着改。匹配语义（三段、组合数上限、哪些字符进首字母、
+  拉丁词的首字母怎么算）全在 `core::appSearchText()`，单测是 `tst_app_list`（表完整性也在
+  那里：读音形状、无重复、覆盖率）；模型侧只是把那个串算一次，`tst_app_list_model` 盯筛选结果。
 * **新的 QML 弹窗**：`import QtQuick.Controls.FluentWinUI3`；颜色一律从 `palette`
   （`base`/`text`/`placeholderText`/`highlight`/`highlightedText`/`alternateBase`/`mid`）取；
   字号用现在这套 `pointSize`（12.5 标题 / 11 正文 / 10.5 帮助正文 / 9 副标题与徽标 /
@@ -1636,7 +1680,8 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、`--ch
 * `windows([title])` 是窗口切换器（§2 第 21/22/24 条）。常见绑法是 `keys = "LWin"` +
   `trigger = "release"`（「轻碰 Win」）。
 * `apps([title])` 是程序启动器（§2 第 27 条）：列表来自开始菜单扫描，只列程序；筛选是
-  **名字子串**（不是前缀）、筛到一个也**不**自动启动；**不切输入法**（与 `windows` 相反）。
+  **名字 / 全拼 / 首字母的子串**（不是前缀，也不是模糊搜索）、筛到一个也**不**自动启动；
+  **不切输入法**（与 `windows` 相反）。拼音的细节见§2 第 29 条。
 
 ### 本机真实配置不进仓库
 

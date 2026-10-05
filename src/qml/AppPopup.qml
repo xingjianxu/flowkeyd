@@ -13,8 +13,8 @@ import QtQuick.Controls.FluentWinUI3
 // **右键一格** = 那个程序的**原生 shell 菜单**（与开始菜单 / 资源管理器逐条一致，
 // 由 `platform/win/shell_menu` 弹出并执行）：选中条目就收卡片，取消就留着。
 //
-// 逻辑全在 `app::AppListModel`（纯逻辑、有单测）：筛选（名字子串）、网格几何、
-// 键盘选中项、`Enter`/`Esc`，以及「到边界夹住」。QML 只做两件事：
+// 逻辑全在 `app::AppListModel`（纯逻辑、有单测）：筛选（名字 / 拼音 / 首字母子串）、
+// 网格几何、键盘选中项、`Enter`/`Esc`，以及「到边界夹住」。QML 只做两件事：
 //   * 把 `handleKey()` / `activate()` 给的决定执行掉；
 //   * 把模型的状态（筛选文本、选中行、格宽）同步给控件。
 //

@@ -7,8 +7,11 @@
 #include <QtTest>
 
 #include <QRegularExpression>
+#include <QSet>
+#include <QStringList>
 
 #include "core/app_list.h"
+#include "core/pinyin.h"
 
 using namespace flowkeyd;
 
@@ -38,6 +41,15 @@ QStringList names(const std::vector<core::AppEntry> &entries)
     return out;
 }
 
+QStringList readings(char32_t codePoint)
+{
+    QStringList out;
+    for (const QString &reading : core::pinyinReadings(codePoint)) {
+        out.append(reading);
+    }
+    return out;
+}
+
 } // namespace
 
 class TestAppList : public QObject
@@ -49,6 +61,10 @@ private slots:
     void iconUrlUsesTheKey();
     void programTargetsAreExecutablesOrIdListOnly();
     void nameMatchingIsACaseInsensitiveSubstring();
+    void nameMatchingAcceptsPinyinAndInitials();
+    void pinyinReadingsAreToneFreeLowercaseAndCoverTheIdeographs();
+    void searchTextCoversPinyinInitialsAndLatinInitials();
+    void searchTextFallsBackToPrimaryReadingsWhenVariantsExplode();
     void prepareStripsTheLnkSuffixAndSorts();
     void prepareDropsEntriesWithoutNameOrShortcut();
     void prepareDeduplicatesSameNameAndTarget();
@@ -104,6 +120,114 @@ void TestAppList::nameMatchingIsACaseInsensitiveSubstring()
     // 中文名字照样匹配。
     QVERIFY(core::appNameMatches(QStringLiteral("记事本"), QStringLiteral("记事")));
     QVERIFY(!core::appNameMatches(QStringLiteral("Google Chrome"), QStringLiteral("firefox")));
+}
+
+void TestAppList::nameMatchingAcceptsPinyinAndInitials()
+{
+    // 全拼、首字母（大小写无关）都算命中。
+    QVERIFY(core::appNameMatches(QStringLiteral("记事本"), QStringLiteral("jishiben")));
+    QVERIFY(core::appNameMatches(QStringLiteral("记事本"), QStringLiteral("jsb")));
+    QVERIFY(core::appNameMatches(QStringLiteral("记事本"), QStringLiteral("  JIS  ")));
+    QVERIFY(core::appNameMatches(QStringLiteral("Visual Studio Code"),
+                                 QStringLiteral("vsc")));
+    QVERIFY(!core::appNameMatches(QStringLiteral("网易云音乐"),
+                                  QStringLiteral("wangyiyunyue")));
+    // 多音字的每一种读音都能用。
+    QVERIFY(core::appNameMatches(QStringLiteral("网易云音乐"),
+                                 QStringLiteral("yinyue")));
+    QVERIFY(core::appNameMatches(QStringLiteral("网易云音乐"),
+                                 QStringLiteral("yinle")));
+    // 拼音不是模糊匹配：跨音节乱拼、多打一个字母都不该命中。
+    QVERIFY(!core::appNameMatches(QStringLiteral("记事本"), QStringLiteral("jishibenx")));
+    QVERIFY(!core::appNameMatches(QStringLiteral("记事本"), QStringLiteral("jb")));
+    QVERIFY(!core::appNameMatches(QStringLiteral("记事本"), QStringLiteral("benji")));
+}
+
+void TestAppList::pinyinReadingsAreToneFreeLowercaseAndCoverTheIdeographs()
+{
+    // 单个字：去声调、小写 ASCII；`ü` 记作 `v` 之外也认写成 `u` 的那一条。
+    QCOMPARE(readings(0x8BB0), QStringList({QStringLiteral("ji")})); // 记
+    QCOMPARE(readings(0x4E50),
+             QStringList({QStringLiteral("le"), QStringLiteral("yue")})); // 乐
+    QVERIFY(readings(0x5973).contains(QStringLiteral("nv")));                  // 女
+    QVERIFY(readings(0x5973).contains(QStringLiteral("nu")));
+    QVERIFY(readings(0x884C).contains(QStringLiteral("hang")));                // 行
+    // 表外：非汉字、Ext A、以及没进表的码点都没有读音。
+    QVERIFY(readings(0x41).isEmpty());
+    QVERIFY(readings(0x3400).isEmpty());
+    QVERIFY(readings(0x2F800).isEmpty());
+
+    // 整张表跑一遍：读音必须是 `[a-z]+`、同一个字不能给重复读音、覆盖率不能塌
+    // （真机数据：U+4E00–U+9FFF 的 20992 个码点里有 20924 个有读音）。
+    const QRegularExpression shape(QStringLiteral("^[a-z]+$"));
+    int covered = 0;
+    for (char32_t codePoint = 0x4E00; codePoint <= 0x9FFFu; ++codePoint) {
+        const QStringList list = readings(codePoint);
+        if (list.isEmpty()) {
+            continue;
+        }
+        ++covered;
+        QSet<QString> unique;
+        for (const QString &reading : list) {
+            QVERIFY2(shape.match(reading).hasMatch(),
+                     qPrintable(QStringLiteral("U+%1: %2")
+                                    .arg(static_cast<uint>(codePoint), 4, 16, QLatin1Char('0'))
+                                    .arg(reading)));
+            QVERIFY(!unique.contains(reading));
+            unique.insert(reading);
+        }
+    }
+    QVERIFY(covered >= 20000);
+}
+
+void TestAppList::searchTextCoversPinyinInitialsAndLatinInitials()
+{
+    // 第 1 段还是名字本身：原来的字面匹配一个字都不变。
+    const QString jishiben = core::appSearchText(QStringLiteral("记事本"));
+    QVERIFY(jishiben.startsWith(QStringLiteral("记事本")));
+    QVERIFY(jishiben.contains(QStringLiteral("jishiben")));
+    QVERIFY(jishiben.contains(QStringLiteral("jsb")));
+
+    // 多音字：每一种读音都在搜索串里。
+    const QString music = core::appSearchText(QStringLiteral("网易云音乐"));
+    QVERIFY(music.contains(QStringLiteral("wangyiyunyinyue")));
+    QVERIFY(music.contains(QStringLiteral("wangyiyunyinle")));
+    QVERIFY(music.contains(QStringLiteral("wyyy")));
+
+    // 拉丁名字：整段保留 + 词首字母缩写。
+    const QString code = core::appSearchText(QStringLiteral("Visual Studio Code"));
+    QVERIFY(code.contains(QStringLiteral("vsc")));
+    QVERIFY(code.contains(QStringLiteral("studio")));
+
+    // 中文 + 拉丁混排：汉字进拼音，拉丁段整段保留、首字母取那一段的首字符。
+    const QString mixed = core::appSearchText(QStringLiteral("QQ音乐"));
+    QVERIFY(mixed.contains(QStringLiteral("qqyinyue")));
+    QVERIFY(mixed.contains(QStringLiteral("qyy")));
+
+    // 空格与标点：全拼里按字面留着，首字母里丢掉。
+    const QString spaced = core::appSearchText(QStringLiteral("记事 本（Pro）"));
+    QVERIFY(spaced.contains(QStringLiteral("jishi ben")));
+    QVERIFY(spaced.contains(QStringLiteral("jsbp")));
+
+    // 表外的汉字（Ext A）没有拼音：它按字面留在全拼里，不贡献首字母。
+    const QString rare = core::appSearchText(QString(QStringLiteral("记")) + QChar(0x3400)
+                                             + QStringLiteral("本"));
+    QVERIFY(rare.contains(QStringLiteral("ji\u3400ben")));
+    QVERIFY(rare.contains(QStringLiteral("jb")));
+}
+
+void TestAppList::searchTextFallsBackToPrimaryReadingsWhenVariantsExplode()
+{
+    // 长(zhang, chang) 行(xing, hang, heng)：2×3×2×3 = 36 种组合，超过上限，
+    // 于是只用主读音（长 zhang、行 xing）。
+    const QString text = core::appSearchText(QStringLiteral("长行长行"));
+    QVERIFY(text.contains(QStringLiteral("zhangxingzhangxing")));
+    QVERIFY(text.contains(QStringLiteral("zxzx")));
+    // 只有主读音那一种组合：次读音的组合一个都不该在。
+    QVERIFY(!text.contains(QStringLiteral("changxing")));
+    QVERIFY(!text.contains(QStringLiteral("zhanghang")));
+    QVERIFY(!text.contains(QStringLiteral("chchang")));
+    QVERIFY(!text.contains(QStringLiteral("zxhx")));
 }
 
 void TestAppList::prepareStripsTheLnkSuffixAndSorts()

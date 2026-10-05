@@ -564,7 +564,9 @@ hotkey{
 --     所以装完新程序按一下就会出现，不需要改配置；
 --   * 名字就是快捷方式的文件名，图标按屏幕缩放取合适尺寸；
 --   * 启动走的是那条快捷方式本身（与点开始菜单一样，参数/工作目录都照旧）；
---   * 输入就按名字的**子串**筛选（大小写无关，`code` 能找到 `Visual Studio Code`）；
+--   * 输入就按**名字 / 拼音 / 首字母的子串**筛选（大小写无关）：`code` 找到
+--     `Visual Studio Code`，`jishiben` 与 `jsb` 都能找到「记事本」（多音字的每一种
+--     读音都认，`yinle`/`yinyue` 都能搜到「网易云音乐」）；
 --   * `↑`/`↓` 走一整行、`←`/`→` 走一格、`PgUp`/`PgDn` 翻页、`Home`/`End` 到头尾；
 --   * `Enter` 或左键点一下 = 启动高亮那一个，`Esc` 关闭；
 --   * **右键点某一格** = 那个程序的 Windows 右键菜单（打开 / 以管理员身份运行 /
@@ -575,7 +577,7 @@ hotkey{
 -- 和弦（例如 `Win+a`）。标题可以换：`apps("程序")`；简写 `action = "apps"`。
 hotkey{
   name = "app-launcher",
-  comment = "Win+Space：程序启动器（开始菜单里的程序，输入筛选、Enter 启动）",
+  comment = "Win+Space：程序启动器（开始菜单里的程序，输入名字/拼音筛选、Enter 启动）",
   keys = "Win+Space",
   action = apps(),
 }

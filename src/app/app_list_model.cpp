@@ -1,5 +1,7 @@
 #include "app/app_list_model.h"
 
+#include "core/app_list.h"
+
 #include <algorithm>
 #include <utility>
 
@@ -57,10 +59,12 @@ void AppListModel::setItems(std::optional<QString> title, std::vector<AppListEnt
     beginResetModel();
     m_title = std::move(title);
     m_items = std::move(items);
-    m_names.clear();
-    m_names.reserve(m_items.size());
+    m_search.clear();
+    m_search.reserve(m_items.size());
     for (const AppListEntry &entry : m_items) {
-        m_names.push_back(entry.name.toLower());
+        // 搜索串算一次：名字 + 全拼 + 首字母（见 `core::appSearchText()`），
+        // 之后每次敲键盘只是 `contains()`。
+        m_search.push_back(core::appSearchText(entry.name));
     }
     m_filter.clear();
     refilter();
@@ -113,7 +117,7 @@ int AppListModel::cardRadius() const
 
 QString AppListModel::filterPlaceholder() const
 {
-    return tr("输入程序名筛选…");
+    return tr("输入程序名 / 拼音筛选…");
 }
 
 QString AppListModel::emptyMessage() const
@@ -357,8 +361,8 @@ void AppListModel::refilter()
 {
     const QString needle = m_filter.trimmed().toLower();
     m_visible.clear();
-    for (std::size_t index = 0; index < m_names.size(); ++index) {
-        if (needle.isEmpty() || m_names[index].contains(needle)) {
+    for (std::size_t index = 0; index < m_search.size(); ++index) {
+        if (needle.isEmpty() || m_search[index].contains(needle)) {
             m_visible.push_back(static_cast<int>(index));
         }
     }

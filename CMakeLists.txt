@@ -171,6 +171,10 @@ add_library(flowkeyd_core STATIC
     src/core/log_tail.h
     src/core/placement.cpp
     src/core/placement.h
+    src/core/pinyin.cpp
+    src/core/pinyin.h
+    src/core/pinyin_data.cpp
+    src/core/pinyin_data.h
     src/core/remote_desktop.cpp
     src/core/remote_desktop.h
     src/core/template.cpp
@@ -224,7 +228,9 @@ add_library(flowkeyd_models STATIC
     src/app/window_list_model.h
 )
 target_include_directories(flowkeyd_models PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_link_libraries(flowkeyd_models PUBLIC Qt6::Core)
+# 启动器模型用 `core::appSearchText()`（拼音 + 首字母）算每一行的搜索文本，
+# 所以这里拖上 `flowkeyd_core`（两边都只依赖 QtCore，没有额外的运行时依赖）。
+target_link_libraries(flowkeyd_models PUBLIC flowkeyd_core Qt6::Core)
 flowkeyd_strict_warnings(flowkeyd_models)
 
 # ---------------------------------------------------------------------------

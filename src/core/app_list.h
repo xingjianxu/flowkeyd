@@ -61,10 +61,35 @@ QString appIconUrl(const QString &shortcutPath);
 /// 同名同目标时保留**层级更浅**的那一份（根目录优先于子目录）。
 std::vector<AppEntry> prepareAppEntries(std::vector<AppEntry> entries);
 
-/// 程序名匹配：大小写无关的子串（首尾空白先去掉；空串匹配一切）。
+/// 拼音/首字母搜索最多展开几种读音组合：超过就退回「每个字只用主读音」。
+///
+/// 常见名字的组合数是个位数（多音字本来就少）；8 是为了挡住那种“名字里恰好
+/// 塞了好几个多音字”的极端情况，免得一次筛选要拼上百个字符串。
+inline constexpr int kMaxSearchVariants = 8;
+
+/// 程序名的**搜索文本**（小写），筛选就是「拿输入串去 `contains()` 它」。
+///
+/// 由三段拼成，中间用 `U+001F` 隔开（用户打不出这个字符，所以段与段之间
+/// 不会拼出假匹配）：
+///   1. 名字本身（与加拼音之前的行为完全一致：`code` 命中 `Visual Studio Code`）；
+///   2. **全拼**的几种写法（`记事本` → `jishiben`，`网易云音乐` → 同时给出
+///      `wangyiyunyinyue` 与 `wangyiyunyinle`）；
+///   3. **首字母缩写**（`记事本` → `jsb`，`Visual Studio Code` → `vsc`，
+///      `QQ音乐` → `qyy`；空格与标点不进这一项）。
+///
+/// 汉字读音来自 `core/pinyin.*`（去声调；多音字的每一种读音都进第 2/3 段）。
+/// 读音组合数是每个字读音数的乘积，**超过 `kMaxSearchVariants` 就只用主读音**
+/// —— 长名字不该为了一两个多音字炸出几百个变体。
+///
+/// 表外的汉字（Ext A/B 等生僻字）没有拼音，与空格、标点一样按字面进第 1/2 段。
+QString appSearchText(const QString &name);
+
+/// 程序名匹配：大小写无关的**子串**（首尾空白先去掉；空串匹配一切）。
 ///
 /// 用子串而不是前缀（窗口切换器那边用的是前缀）：启动器要的是「记得名字里的
 /// 一部分就能找到它」（`code` 命中 `Visual Studio Code`）。
+/// 判据就是 `appSearchText()` 里那三段（名字 / 全拼 / 首字母），所以 `jishiben`、
+/// `jsb`、`vsc` 都能命中对应的程序。
 bool appNameMatches(const QString &name, const QString &needle);
 
 /// 一个开始菜单快捷方式算不算「程序」。

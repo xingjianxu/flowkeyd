@@ -1,6 +1,7 @@
 // 程序启动器模型（`app::AppListModel`）的纯逻辑测试：网格几何、「图标 + 名字」
-// 角色、按名字子串筛选、键盘选中项（方向键 / Home / End / PgUp / PgDn）、
-// `Enter`/`Esc` 的语义，以及「筛选之后 `Enter` 启动的仍然是刚选中的那一个」。
+// 角色、按名字 / 拼音 / 首字母子串筛选、键盘选中项（方向键 / Home / End /
+// PgUp / PgDn）、`Enter`/`Esc` 的语义，以及「筛选之后 `Enter` 启动的仍然是刚选
+// 中的那一个」。
 //
 // **开始菜单的扫描与图标都不在这里**：前者要真机（`platform/win/apps`，见
 // `tst_interactive`），后者是 `app::AppIconProvider` 的异步活儿（由对话框那边
@@ -70,6 +71,7 @@ private slots:
     void itemsExposeRolesAndGeometry();
     void gridGeometryGrowsWithTheRowCount();
     void filterMatchesNameSubstringOnly();
+    void filterMatchesPinyinAndInitials();
     void filterResetsTheSelectionToTheFirstTile();
     void noMatchesShowsTheEmptyMessage();
     void activateReturnsTheItemIndex();
@@ -173,6 +175,43 @@ void TestAppListModel::filterMatchesNameSubstringOnly()
     // 首尾空白先去掉。
     model.setFilter(QStringLiteral("  calibre  "));
     QCOMPARE(model.visibleCount(), 1);
+}
+
+void TestAppListModel::filterMatchesPinyinAndInitials()
+{
+    app::AppListModel model;
+    model.setItems(std::nullopt,
+                   {entry(QStringLiteral("记事本")), entry(QStringLiteral("微信")),
+                    entry(QStringLiteral("Visual Studio Code"))});
+
+    // 汉字全拼。
+    model.setFilter(QStringLiteral("jishiben"));
+    QCOMPARE(model.visibleCount(), 1);
+    QCOMPARE(model.itemIndexForVisible(0).value(), 0);
+
+    // 汉字首字母。
+    model.setFilter(QStringLiteral("jsb"));
+    QCOMPARE(model.visibleCount(), 1);
+    QCOMPARE(model.itemIndexForVisible(0).value(), 0);
+
+    model.setFilter(QStringLiteral("wx"));
+    QCOMPARE(model.visibleCount(), 1);
+    QCOMPARE(model.itemIndexForVisible(0).value(), 1);
+
+    // 拉丁名字的词首字母。
+    model.setFilter(QStringLiteral("vsc"));
+    QCOMPARE(model.visibleCount(), 1);
+    QCOMPARE(model.itemIndexForVisible(0).value(), 2);
+
+    // 字面匹配不受影响。
+    model.setFilter(QStringLiteral("记事"));
+    QCOMPARE(model.visibleCount(), 1);
+    model.setFilter(QStringLiteral("studio"));
+    QCOMPARE(model.visibleCount(), 1);
+
+    // 拼音不是模糊匹配：`jb` 跨了两个音节，不是 `jsb` 的子串。
+    model.setFilter(QStringLiteral("jb"));
+    QCOMPARE(model.visibleCount(), 0);
 }
 
 void TestAppListModel::filterResetsTheSelectionToTheFirstTile()
