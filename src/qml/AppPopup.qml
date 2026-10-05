@@ -66,7 +66,8 @@ Window {
     readonly property int listIconPixels:
         Math.max(8, Math.round(root.listIconSize * root.devicePixelRatio))
 
-    // 卡片尺寸来自模型（宽度固定 800；高度随当前视图变）。
+    // 卡片尺寸来自模型：宽度恒定 800，高度也恒定（`maxRows` 行网格 + 上下占位，
+    // 本机 622）—— 三个视图（概览 / 筛选 / 「全部程序」列表）一样高。
     width: root.appModel ? root.appModel.cardWidth : 800
     height: root.appModel ? root.appModel.cardHeight : 622
 
@@ -84,9 +85,10 @@ Window {
         }
     }
 
-    // 概览（固定 + 最近使用 + 按钮，往往只有三四行高）与「全部程序」列表（一定
-    // 是一屏高）的高度差很大，而窗口是**居中**在光标那块屏上的：不重新摆一次就
-    // 会往一边“长”出屏幕。`appRelayout()` 会按新的高度重新居中。
+    // 卡片高度是恒定的，但 `m_maxRows` 会随**屏幕高度**变（弹到另一块屏上时
+    // `showApps()` 会重算）：换过高度就把它夹回屏幕里。`appRelayout()` 只夹
+    // 位置、**不重新居中** —— 卡片是“以筛选框那一行为锚”的，位置在弹出时已经
+    // 按光标那块屏算过了。
     onHeightChanged: {
         if (root.visible && root.host)
             root.host.appRelayout()

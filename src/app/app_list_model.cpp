@@ -12,8 +12,10 @@ namespace {
 // 96 DPI 下的逻辑像素（与 `window_list_model` / `help_model` 同一套纵向度量）。
 //
 // **卡片是 800 宽**（6 列 × 126 + 两边的内边距 12 与缩进 10）：格子 126 × 88、
-// 图标 40。卡片**高度**随视图变（概览里「固定 + 最近使用 + 按钮」通常比一屏矮，
-// 「全部程序」列表一定是一屏高），见 `relayout()`。
+// 图标 40。卡片**高度也是固定的** —— `maxRows` 行网格 + 上下占位（本机 6 行
+// → 622），概览 / 筛选 / 「全部程序」列表三个视图一样高，见 `relayout()`。
+// 2026-10-05 之前高度是「各行高度之和」，于是只固定了一两条时卡片会缩成
+// 248 高的窄条（概览里那点内容 + 大片空白），项目所有者判定为「过小」。
 constexpr int kColumns = 6;
 constexpr int kCellWidth = 126;
 constexpr int kCellHeight = 88;
@@ -772,21 +774,22 @@ void AppListModel::rebuildRows(int keepItem)
 
 void AppListModel::relayout()
 {
-    int content = 0;
     int items = 0;
     for (const Row &row : m_rows) {
-        content += row.height;
         if (row.kind == Row::Kind::Grid || row.kind == Row::Kind::List) {
             items += static_cast<int>(row.items.size());
         }
     }
     m_visibleItems = items;
 
-    // 网格区最多这么高（超出的靠滚动条）。至少留一格的空白，否则「一条都
-    // 没筛出来」的那句提示没有地方画。
-    const int budget = std::max(m_maxRows, 1) * kCellHeight;
-    const int clamped = std::clamp(content, kCellHeight, budget);
-    m_cardHeight = kListTop + clamped + kListBottom;
+    // 卡片高度**恒定** = 一屏网格（`m_maxRows` 行 × 格高）+ 上下占位。
+    //
+    // 不跟着内容走（项目所有者 2026-10-05 拍板）：概览里只固定了一两条时，
+    // 按内容算出来的卡片只有 248 高 —— 半屏空白的一根窄条，看着就是「过小」。
+    // 三个视图（概览 / 筛选 / 「全部程序」列表）用同一个高度，切视图也不会再
+    // 忽高忽低。`m_maxRows` 仍然按屏幕高度算（`rowsForAvailableHeight()`），
+    // 所以矮屏上卡片照样不会溢出；超出一屏的行由右侧滚动条滚。
+    m_cardHeight = kListTop + std::max(m_maxRows, 1) * kCellHeight + kListBottom;
     m_filterRect = PopupRect{kPad + kInset, kPad, kInnerWidth, kFilterHeight};
     m_footerRect = PopupRect{kPad + kInset, m_cardHeight - kPad - kFooterHeight, kInnerWidth,
                              kFooterHeight};

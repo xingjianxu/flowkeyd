@@ -366,8 +366,8 @@ void PopupHost::appRelayout()
     if (m_appWindow == nullptr || m_appModel == nullptr || !m_appWindow->isVisible()) {
         return;
     }
-    // 卡片高度会随视图变（概览几行高，「全部程序」列表一屏高），QML 那边
-    // `height` 一绑，窗口就自己长了 —— 这里只负责把它推回屏幕里。
+    // 卡片高度是恒定的（`maxRows` 行网格 + 上下占位，见 `AppListModel::relayout()`），
+    // 只有换到行数上限不同的屏幕上时才会变 —— 这里只负责把它推回屏幕里。
     //
     // **不能重新居中**：卡片是“以筛选框那一行为锚”的（弹出来时已经居中过），
     // 打字时每变一次高度就重新居中，会让输入框在屏幕上上下跳。所以只夹一下。

@@ -1026,13 +1026,19 @@ try {
     # 固定（`Space`）与「全部程序」列表。`launcher.json` 在脚本开头被删掉过，
     # 所以这里一定是「还什么都没固定」的状态：概览就是全部程序的网格、标题里的
     # 条数等于程序总数。
+    #
+    # **卡片高度是恒定的**（一屏网格 + 上下占位，`AppListModel::relayout()`）：
+    # 内容变少（只剩「已固定 + 全部程序按钮」）时高度**不能**跟着缩 ——
+    # 2026-10-05 之前高度按各行之和算，只固定一两条时卡片只有 248 逻辑像素高，
+    # 被判定为「卡片过小」。`$appsTall` 就是这条不变量：固定、打开列表、筛选
+    # 都不改它。
     $appsTall = [FlowInject]::WindowRect($daemon.Id, $APPS_TITLE)[3]
     TapKey $VK_SPACE
     Pump 700
     Check '按 Space 固定了高亮那一条（标题里的条数变成 1）' ((AppsCount) -eq 1)
     $appsShort = [FlowInject]::WindowRect($daemon.Id, $APPS_TITLE)[3]
-    Check '固定之后卡片变矮（只剩已固定 + 全部程序按钮）' (
-        $appsShort -gt 0 -and $appsShort -lt $appsTall)
+    Check '固定之后卡片高度不变（内容变少也不缩）' (
+        $appsTall -gt 0 -and [Math]::Abs($appsShort - $appsTall) -le 2)
     # 固定是持久的：关掉再打开，那一条还在。
     CtrlAlt $VK_F14
     [void](WaitUntil { -not [FlowInject]::HasWindowTitled($daemon.Id, $APPS_TITLE) } 3000)
@@ -1040,13 +1046,15 @@ try {
     Check '重新打开时固定还在（条数仍然是 1）' (
         (WaitUntil { [FlowInject]::HasWindowTitled($daemon.Id, $APPS_TITLE) } 6000) -and
         ((AppsCount) -eq 1))
-    # 末行是「全部程序（N）」按钮：`End` 走到它、`Enter` 打开分组列表（一屏高）。
+    # 末行是「全部程序（N）」按钮：`End` 走到它、`Enter` 打开分组列表。列表里
+    # 列的是全部程序（标题里的条数回到总数），而卡片高度不变。
     TapKey $VK_END
     Pump 250
     TapKey $VK_RETURN
     Pump 800
-    Check 'Enter 打开了「全部程序」列表（卡片变成一屏高）' (
-        [FlowInject]::WindowRect($daemon.Id, $APPS_TITLE)[3] -gt ($appsShort + 40))
+    Check 'Enter 打开了「全部程序」列表（条数变成总数、高度不变）' (
+        (AppsCount) -eq $appsTotal -and
+        [Math]::Abs([FlowInject]::WindowRect($daemon.Id, $APPS_TITLE)[3] - $appsTall) -le 2)
     # 这个列表里滚轮要真的滚得动。这条盯的是一个真实 bug（2026-10）：卡片先前
     # 挂着 `onContentHeightChanged: 把选中行摆进视野`，而 `ListView` 的
     # `contentHeight` 在滚动中会因为「还没创建出来的委托按估算高度算」抖几个像素，
@@ -1081,9 +1089,10 @@ try {
     # `Esc` 在列表里是「返回概览」而不是关卡片。
     TapKey $VK_ESC
     Pump 500
-    Check '列表里按 Esc 返回概览（卡片还在、也变矮了）' (
+    Check '列表里按 Esc 返回概览（卡片还在、条数回到 1、高度不变）' (
         [FlowInject]::HasWindowTitled($daemon.Id, $APPS_TITLE) -and
-        ([FlowInject]::WindowRect($daemon.Id, $APPS_TITLE)[3] -le ($appsShort + 8)))
+        (AppsCount) -eq 1 -and
+        [Math]::Abs([FlowInject]::WindowRect($daemon.Id, $APPS_TITLE)[3] - $appsTall) -le 2)
     # 取消固定：概览回到全部程序的网格，条数回到满。
     TapKey $VK_SPACE
     Pump 700

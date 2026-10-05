@@ -212,10 +212,10 @@ void TestAppListModel::rowsExposeRolesAndGeometry()
     QCOMPARE(rowSelectedColumn(model, 1), -1);
     QVERIFY(!rowItems(model, 0).at(0).toMap().value(QStringLiteral("pinned")).toBool());
 
-    // 卡片高度 = 列表顶 50 + 两行 176 + 列表底 44。
+    // 卡片高度不跟内容走：恒等于一屏（默认 6 行）+ 上下占位。
     QCOMPARE(model.listTop(), 12 + 30 + 8);
     QCOMPARE(model.listBottom(), 8 + 24 + 12);
-    QCOMPARE(model.cardHeight(), 50 + 2 * 88 + 44);
+    QCOMPARE(model.cardHeight(), 50 + 6 * 88 + 44);
 }
 
 void TestAppListModel::firstRunShowsEveryProgramAsAGrid()
@@ -232,7 +232,7 @@ void TestAppListModel::firstRunShowsEveryProgramAsAGrid()
     QCOMPARE(kinds(model), QStringList({QStringLiteral("grid"), QStringLiteral("grid"),
                                         QStringLiteral("grid")}));
     QCOMPARE(model.visibleCount(), 13);
-    QCOMPARE(model.cardHeight(), 50 + 3 * 88 + 44);
+    QCOMPARE(model.cardHeight(), 50 + 6 * 88 + 44);
 }
 
 void TestAppListModel::pinnedAndRecentBecomeSectionsWithAnAllButton()
@@ -267,8 +267,19 @@ void TestAppListModel::pinnedAndRecentBecomeSectionsWithAnAllButton()
     QCOMPARE(model.selectedColumn(), 0);
     QCOMPARE(model.selectedItem(), 0);
 
-    // 卡片高度 = 50 + (26 + 88 + 26 + 88 + 40) + 44。
-    QCOMPARE(model.cardHeight(), 50 + 268 + 44);
+    // 卡片高度**不**跟这三段的高度之和走：还是满满一屏（+ 上下占位）。
+    // 按内容算的话这里只能是 50 + (26 + 88 + 26 + 88 + 40) + 44 = 362 ——
+    // 半屏空白的一根窄条，正是 2026-10-05 修掉的那个「卡片过小」。
+    QCOMPARE(model.cardHeight(), 50 + 6 * 88 + 44);
+    // 三个视图一样高：打开「全部程序」列表、换筛选串都不改高度。
+    model.showAll();
+    QCOMPARE(model.cardHeight(), 50 + 6 * 88 + 44);
+    model.showOverview();
+    model.setFilter(QStringLiteral("app0"));
+    QCOMPARE(model.visibleCount(), 9);
+    QCOMPARE(model.cardHeight(), 50 + 6 * 88 + 44);
+    model.clearFilter();
+    QCOMPARE(model.cardHeight(), 50 + 6 * 88 + 44);
 }
 
 void TestAppListModel::recentIsCappedAndExcludesPinned()
@@ -411,8 +422,8 @@ void TestAppListModel::noMatchesShowsTheEmptyMessage()
     // 一条都没有时给的决定是「什么都不做」。
     QCOMPARE(decisionOf(model.handleKey(Qt::Key_Return)), QStringLiteral("none"));
     QCOMPARE(decisionOf(model.handleKey(Qt::Key_Down)), QStringLiteral("none"));
-    // 卡片至少留一格的空白来画那句提示。
-    QCOMPARE(model.cardHeight(), 50 + 88 + 44);
+    // 一条都没有时高度也一样（提示就画在那一屏的列表区里）。
+    QCOMPARE(model.cardHeight(), 50 + 6 * 88 + 44);
 }
 
 void TestAppListModel::activateItemReturnsTheItemIndex()
