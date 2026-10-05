@@ -813,7 +813,7 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
 * **exe 的产物目录是自包含且精简过的**：`flowkeyd` 上挂一条 `POST_BUILD` 的
   `windeployqt`（`--qmldir src/qml` 必须给，否则 QML 模块不会被拷过去），紧接着跑
   `cmake/PruneRuntime.cmake`。只对 `flowkeyd` 做，**不给测试可执行文件做**。
-  release profile 还额外把干净的发布目录写到 `build/dist-release/`：**212 个文件 / 63.0 MB**
+  release profile 还额外把干净的发布目录写到 `build/dist-release/`：**212 个文件 / 64.0 MB**
   （精简前 1378 个 / 149.8 MB），可以直接拷到别的机器上跑。
   `flowkeyd` 上还挂了 `LINK_DEPENDS`（`cmake/PruneRuntime.cmake`）：改了精简清单就会重新链接。
 * **分层铁律**：`src/core/`、`src/app/{menu,help,window_list,app_list}_model.*`、
@@ -1371,6 +1371,12 @@ FreeType 字体引擎、程序启动器（`apps()` + 异步图标）、启动器
 * **`QTEST_MAIN` 的默认输出在本机拿不到**：重定向、管道、`ctest --output-on-failure` 全是空的，
   而 `-o <file>,txt` 能拿到完整结果。→ `cmake/RunQTest.cmake` 让测试先写文件、再由脚本
   `cmake -E cat` 出来。**新增测试不用做别的**，`flowkeyd_add_test()` 已经封好了。
+* **把 `scripts\release.ps1` 的输出从 agent 的 bash 用 `>` 重定向到文件时，ninja 的中间一段
+  输出会丢**（父 PowerShell 的 host 子进程与孙子 ninja 共享同一个继承的句柄、各自独立推进
+  文件偏移）：2026-10-05 那次发版 `tmp/rel.log` 里 release 构建停在 `[7/24] Running AUTOMOC`，
+  下面直接就是 `== checking build\dist-release`。**不是脚本吞输出**（`Invoke-Live` 就是裸
+  `& $Exe @ArgList` 直通），构建是真跑完了的 —— 判据看退出码、`build/dist-release` 的文件数、
+  以及 `--version` 的哈希，别在 ninja 日志的断口上找 bug。
 * **`qt_add_executable()` 会默认给测试套上 AUTOMOC**，连 `lua_static` 也不例外 →
   `lua_static` 上显式写 `AUTOMOC OFF`/`AUTOUIC OFF`。
 * **`set_tests_properties(... ENVIRONMENT_MODIFICATION)` 的两个修改项必须写在一个 `"a;b"`
@@ -1384,7 +1390,7 @@ FreeType 字体引擎、程序启动器（`apps()` + 异步图标）、启动器
 * **`windeployqt` 只会多拷、不会删。** 它按 qmldir 里的 `optional import … auto` 把六个
   Quick Controls 样式全拷了，没有开关能只留一个 → 想变小只能“拷完再删”
   （`cmake/PruneRuntime.cmake`）。**`--style` 这个选项本机 6.11 的 windeployqt 没有。**
-* **发布包精简（1378 个文件 / 149.8 MB → 212 个 / 63.0 MB）**，四类东西（都实测过）：
+* **发布包精简（1378 个文件 / 149.8 MB → 212 个 / 64.0 MB）**，四类东西（都实测过）：
   1. 没用到的那几个 Quick Controls 样式（Imagine/Material/Universal/Windows/NativeStyle，
      连同它们的 QML 目录与 DLL）→ ~12 MB / ~500 个文件。
   2. `qmltooling/`（13 个插件）、`imageformats/{qgif,qjpeg,qsvg}` + `iconengines/qsvgicon` +
