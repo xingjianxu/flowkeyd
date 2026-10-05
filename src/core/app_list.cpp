@@ -259,6 +259,58 @@ QString appSearchText(const QString &name)
     return text;
 }
 
+namespace {
+
+/// 从 `appSearchText()` 的三段里取出**主读音的全拼**（第二段的第一项）。
+///
+/// `appSearchText()` 的形状是「名字 \x1f 全拼(可能是几个变体) \x1f 首字母」，
+/// 而变体是按主读音在前的顺序拼出来的，所以第一个变体就是「每个字只用主读音」
+/// 的那一份 —— 排序与分组要的正是它。
+///
+/// （在这里解析同一个文件里定义的那个格式，比把那段扫描逻辑抄第二遍便宜：
+/// 两者的行为天然一致，改 `appSearchText()` 的拼接方式时这里不会走偏。）
+QString primaryFullForm(const QString &searchText)
+{
+    const int first = searchText.indexOf(kSearchPartSeparator);
+    if (first < 0) {
+        return searchText;
+    }
+    const int second = searchText.indexOf(kSearchPartSeparator, first + 1);
+    const int from = first + 1;
+    const int length = (second < 0 ? searchText.size() : second) - from;
+    return searchText.mid(from, length);
+}
+
+} // namespace
+
+AppSortInfo appSortInfo(const QString &name)
+{
+    QString full = primaryFullForm(appSearchText(name));
+    // 名字带前导空白时（配置文件里手写的名字）别让它决定分组。
+    int start = 0;
+    while (start < full.size() && full.at(start).isSpace()) {
+        ++start;
+    }
+    full = full.mid(start);
+
+    AppSortInfo info;
+    const bool startsWithLetter = !full.isEmpty() && full.at(0).isLetter();
+    info.sortText = (startsWithLetter ? QStringLiteral("1") : QStringLiteral("0")) + full;
+    // 表头就是首字符（`full` 的第一个字符）大写；它不是字母时统统归到「#」。
+    info.letter = startsWithLetter ? QString(full.at(0).toUpper()) : QStringLiteral("#");
+    return info;
+}
+
+QString appSortText(const QString &name)
+{
+    return appSortInfo(name).sortText;
+}
+
+QString appGroupLetter(const QString &name)
+{
+    return appSortInfo(name).letter;
+}
+
 bool appNameMatches(const QString &name, const QString &needle)
 {
     const QString trimmed = needle.trimmed();

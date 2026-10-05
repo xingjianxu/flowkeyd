@@ -1,23 +1,38 @@
-// 程序启动器（`apps` 动作）的**纯逻辑**模型：一张「图标 + 名字」的网格。
+// 程序启动器（`apps` 动作）的**纯逻辑**模型：一张**行**式列表，行有四种形状。
 //
-// 与 `window_list_model` / `help_model` 一样只依赖 QtCore：几何、筛选、键盘
-// 选中项、`Enter`/`Esc` 的语义都在这里，`tst_app_list_model` 直接覆盖它们。
-// 开始菜单的扫描在 `platform/win/apps`（Win32），图标的取像素在
-// `app::AppIconProvider`（QtGui + shell），模型只认「名字 + 图标 URL」两个字符串。
+// 与 `window_list_model` / `help_model` / `menu_model` 一样只依赖 QtCore：几何、
+// 筛选、键盘选中项、`Enter`/`Space`/`Esc` 的语义都在这里，`tst_app_list_model`
+// 直接覆盖它们。开始菜单的扫描在 `platform/win/apps`（Win32），图标的取像素在
+// `app::AppIconProvider`（QtGui + shell），持久状态（固定 / 最近使用）的读写由
+// `app::PopupHost` 负责 —— 模型只认「名字 + 图标 URL + 稳定键」这几个字符串。
 //
-// **网格**：固定 6 列（`columns`，卡片 800 逻辑像素宽），每一格是「上面一个图标、
-// 下面一到两行名字」。
-// 选中项在模型里是**扁平下标**（也就是 `ListView` / `GridView` 的行号），
-// `←`/`→` 走一格、`↑`/`↓` 走一整行；到边界夹住、不回绕（网格里回绕到上一行
-// 的末尾在筛过之后很容易让人失去方向感）。
+// ---------------------------------------------------------------------------
+// 卡片里的三种视图（同一个模型、同一个 `ListView`，只是行不一样）
+// ---------------------------------------------------------------------------
+//   * **概览**（默认）：从上到下是「已固定」网格、「最近使用」网格（最多两行
+//     = 12 个，`core::kRecentLimit`），最后一个「全部程序（N）」按钮。
+//     还什么都没固定、也没启动过任何程序时（第一次用），概览直接就是**全部程序
+//     的网格** —— 比让用户对着一个空卡片点按钮友好。
+//   * **筛选**（输入框非空）：一行一行铺开匹配到的程序（扁平网格，不分段、
+//     没有按钮），与加分区之前的行为一致。
+//   * **全部**（点「全部程序」按钮）：一个「← 返回」按钮 + 按**名字 / 拼音首字母
+//     分组**的一行一个程序的列表，带滚动条。`Esc` 回到概览。
 //
-// **筛选**：按程序名做大小写无关的**子串**匹配，而且**包含了拼音**：输入串会
-// 去比 `core::appSearchText()` 给出的三段（名字本身 / 全拼 / 首字母缩写），
-// 所以 记事本 用 `jishiben`、`jsb`、`记事` 都能筛到，`Visual Studio Code` 用
-// `vsc` 也能（判据的细节在 `core/app_list.h`；模型只是把那个串算一次存起来）。
-// 输入一个字符列表就窄一圈，`Enter` 启动当前高亮那一条。
+// 行 = `Row`，`rowKind` 是给 QML 的分支依据：
+//   * `header` —— 分组表头（「已固定」「最近使用」、或 `A`–`Z` / `#`）；不可选中。
+//   * `grid`   —— 一行最多 6 个「图标 + 名字」格子。
+//   * `button` —— 整行一个按钮（「全部程序（N）」/「← 返回」）。
+//   * `list`   —— 「全部」列表里的一行（图标 + 名字 + 固定标记）。
 //
-// **不自动启动**：筛选到只剩一条时也**不**自动执行（窗口切换器那边会自动激活，
+// **选中项是（行, 列）**：`↑`/`↓` 上下走一行（跳过表头）、`←`/`→` 在同一行里挪
+// 一格（到边界夹住、不回绕）、`Home`/`End` 到头尾、`PgUp`/`PgDn` 翻页。
+// QML 只需要 `selectedRow` 就能把选中行带进视野。
+//
+// **`Space` 切换固定**（只有在筛选框为空时才截走它 —— 否则用户没法在筛选串里
+// 打空格，而 `Visual Studio Code` 这种名字很需要）。`Enter` 启动选中的程序，
+// 落在按钮上就是「打开全部」/「返回概览」。
+//
+// **不自动启动**：筛选到只剩一个也**不**自动执行（窗口切换器那边会自动激活，
 // 因为那是「切」；这里是「启动一个新程序」，误启动的代价比多按一下 `Enter` 大）。
 //
 // **图标**：每一行的角色是一个 `image://flowkeyd-app/<key>` URL（由 `PopupHost`
@@ -26,15 +41,19 @@
 #pragma once
 
 #include "app/popup_layout.h"
+#include "core/launcher_state.h"
 
 #include <QAbstractListModel>
 #include <QHash>
 #include <QObject>
-#include <QString>
-#include <QVariantMap>
 #include <QRect>
+#include <QString>
+#include <QStringList>
+#include <QVariantList>
+#include <QVariantMap>
 
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace flowkeyd::app {
@@ -46,9 +65,15 @@ struct AppListEntry
     QString name;
     /// 图标的 `image://` URL；空串表示这一行没有图标（画一个占位的方块）。
     QString iconSource;
+    /// **稳定身份**：`core::appIconKey()` 算出来的快捷方式键。
+    ///
+    /// 「固定」与「最近使用」都记这个键（不是下标、也不是路径原文）：
+    /// 列表重扫之后条目的下标会变、路径的大小写与分隔符会变，而同一个程序的键
+    /// 永远是同一个。**空串表示这一行不参与固定 / 最近使用**（预热用的假数据）。
+    QString key;
 };
 
-/// 程序启动器的网格模型。
+/// 程序启动器的行式模型。
 class AppListModel : public QAbstractListModel
 {
     Q_OBJECT
@@ -65,6 +90,7 @@ class AppListModel : public QAbstractListModel
     Q_PROPERTY(QString footerText READ footerText NOTIFY stateChanged)
     Q_PROPERTY(bool hasMatches READ hasMatches NOTIFY stateChanged)
     Q_PROPERTY(int totalCount READ totalCount NOTIFY itemsChanged)
+    /// 当前视图里显示出来的程序数（概览里是「固定 + 最近使用」，第一次用时是全部）。
     Q_PROPERTY(int visibleCount READ visibleCount NOTIFY stateChanged)
     /// 网格一次画几列（固定 6）。
     Q_PROPERTY(int columns READ columns CONSTANT)
@@ -72,24 +98,39 @@ class AppListModel : public QAbstractListModel
     Q_PROPERTY(int cellHeight READ cellHeight CONSTANT)
     Q_PROPERTY(int iconSize READ iconSize CONSTANT)
     Q_PROPERTY(int maxRows READ maxRows NOTIFY stateChanged)
-    /// 卡片当前要显示几行（`ceil(可见条数 / 列数)`，夹在 `1..maxRows`）。
-    Q_PROPERTY(int visibleRows READ visibleRows NOTIFY stateChanged)
-    /// 网格顶边 / 底边（与 `WindowListModel` 同一套算法）。
+    /// 网格区顶边 / 底边。
     Q_PROPERTY(int listTop READ listTop CONSTANT)
     Q_PROPERTY(int listBottom READ listBottom CONSTANT)
-    /// 键盘选中项 = 可见行的扁平下标。
-    Q_PROPERTY(int selected READ selected NOTIFY selectedChanged)
+    /// 选中的行（`ListView.positionViewAtIndex` 用的就是它）；没有可选行时是 -1。
+    Q_PROPERTY(int selectedRow READ selectedRow NOTIFY selectedChanged)
+    /// 选中行里的第几格（`button` / `list` 行只在选中时是 0）。
+    Q_PROPERTY(int selectedColumn READ selectedColumn NOTIFY selectedChanged)
+    /// 当前是不是「全部程序」列表。
+    Q_PROPERTY(bool allMode READ allMode NOTIFY stateChanged)
+    Q_PROPERTY(bool hasPinned READ hasPinned NOTIFY stateChanged)
+    Q_PROPERTY(bool hasRecent READ hasRecent NOTIFY stateChanged)
+    Q_PROPERTY(int pinnedCount READ pinnedCount NOTIFY stateChanged)
+    Q_PROPERTY(int recentCount READ recentCount NOTIFY stateChanged)
+    Q_PROPERTY(QString allButtonText READ allButtonText NOTIFY stateChanged)
 
 public:
     enum Role {
-        AppNameRole = Qt::UserRole + 1,
-        /// 图标的 `image://` URL。
-        AppIconRole,
-        /// 这一行是不是当前高亮的那一行。
+        /// `"header"` / `"grid"` / `"button"` / `"list"`。
+        RowKindRole = Qt::UserRole + 1,
+        /// 表头与按钮上的文字。
+        RowTitleRole,
+        /// 这一行里的条目（`grid` / `list`）：`{ index, name, icon, pinned }` 的数组。
+        RowItemsRole,
+        /// 这一行是不是当前选中的那一行。
         ///
-        /// **不叫 `highlighted`**：QML 里每一行是标准的 `ItemDelegate`，它自己
+        /// **不叫 `highlighted`**：QML 里那些行是标准的 `ItemDelegate`，它自己
         /// 就有这个属性；委托里的 `required property` 名字必须等于角色名。
         RowSelectedRole,
+        /// 这一行里被选中的格子下标（`grid` 是列号，`button` / `list` 选中时是 0，
+        /// 没选中是 -1）。
+        RowSelectedColumnRole,
+        /// 这一行的高度（逻辑像素）。
+        RowHeightRole,
     };
     Q_ENUM(Role)
 
@@ -97,11 +138,15 @@ public:
 
     /// 换一批程序（同一个窗口复用；`PopupHost` 再次弹出时调它）。
     void setItems(std::optional<QString> title, std::vector<AppListEntry> items);
-    /// 所在的显示器最多能显示几行（`PopupHost` 按工作区算好传进来）。
+    /// 换一份持久状态（固定 / 最近使用）。可以在 `setItems()` 之前或之后调。
+    void setState(const core::LauncherState &state);
+    /// 当前状态（`PopupHost` 拿它落盘）。
+    core::LauncherState launcherState() const;
+    /// 所在的显示器最多能显示几行网格（`PopupHost` 按工作区算好传进来）。
     void setMaxRows(int rows);
     int maxRows() const { return m_maxRows; }
 
-    /// 给定一块工作区的高度，最多能放几行（纯算术）。
+    /// 给定一块工作区的高度，最多能放几行网格（纯算术）。
     static int rowsForAvailableHeight(int availableHeight);
 
     QString caption() const;
@@ -117,24 +162,36 @@ public:
     QString filterPlaceholder() const;
     QString emptyMessage() const;
     QString footerText() const;
-    bool hasMatches() const { return !m_visible.empty(); }
+    /// 当前视图里有没有可选中的行（表头不算）。
+    bool hasMatches() const;
     int totalCount() const { return static_cast<int>(m_items.size()); }
-    int visibleCount() const { return static_cast<int>(m_visible.size()); }
+    int visibleCount() const { return m_visibleItems; }
     int columns() const;
     int cellWidth() const;
     int cellHeight() const;
     int iconSize() const;
-    int visibleRows() const { return m_rows; }
     int listTop() const;
     int listBottom() const;
-    int selected() const { return m_selected; }
 
-    /// 可见行下标对应的原始条目下标。
+    /// 第 `line` 个**显示出来**的条目（按下标从左到右、从上到下数，表头与按钮
+    /// 不占号）；越界返回 `std::nullopt`。
+    ///
+    /// 主要给测试与诊断工具用（预览工具拿它把筛选结果逐个列出来）；界面自己走
+    /// 的是 QML 那边的行委托。
     std::optional<int> itemIndexForVisible(int line) const;
 
-    /// 换筛选串（QML 的筛选框直接调它）。
-    ///
-    /// 筛选之后选中项回到第一条（否则高亮会停在一个已经不存在的行号上）。
+    bool allMode() const { return m_allMode; }
+    int selectedRow() const { return m_selectedRow; }
+    int selectedColumn() const { return m_selectedColumn; }
+    /// 选中的**条目**下标（选在按钮 / 表头上、或没有可选行时是 -1）。
+    int selectedItem() const;
+    bool hasPinned() const { return !m_pinnedShown.empty(); }
+    bool hasRecent() const { return !m_recentShown.empty(); }
+    int pinnedCount() const { return static_cast<int>(m_pinnedShown.size()); }
+    int recentCount() const { return static_cast<int>(m_recentShown.size()); }
+    QString allButtonText() const;
+
+    /// 换筛选串（QML 的筛选框直接调它）。筛选之后选中项回到第一行。
     ///
     /// 返回值与 `WindowListModel::setFilter()` 同形，但**永远是**
     /// `{ decision: "none" }`：启动器不做「筛到一个就自动启动」（那是「切窗口」
@@ -143,34 +200,39 @@ public:
     Q_INVOKABLE QVariantMap setFilter(const QString &filter);
     Q_INVOKABLE void clearFilter();
 
-    /// 上下左右移动选中项（到边界夹住，不回绕）。
-    Q_INVOKABLE void moveSelection(int delta);
-    /// 鼠标悬停到第 `line` 行（可见行下标）；越界或负数忽略。悬停即高亮。
-    Q_INVOKABLE void setHover(int line);
+    /// 上下左右移动选中项（到边界夹住，不回绕）。`dy` 走一行（跳过表头）。
+    Q_INVOKABLE void moveSelection(int dx, int dy);
+    /// 鼠标悬停到某个条目上（悬停即高亮）。找不到就忽略。
+    Q_INVOKABLE void hoverItem(int itemIndex);
+    /// 激活第 `itemIndex` 个条目（单击一格 / 双击一行）：
+    /// `{ decision: "choose", index, handled: true }`。
+    Q_INVOKABLE QVariantMap activateItem(int itemIndex);
+    /// 切换某个条目的固定状态（`Space`）。
+    Q_INVOKABLE void togglePinItem(int itemIndex);
 
-    /// 激活第 `line` 行（可见行下标）：
-    /// `{ decision: "choose", index: <条目下标>, handled: true }`。
-    Q_INVOKABLE QVariantMap activate(int line);
+    /// 打开 / 关掉「全部程序」列表（点按钮或按 `Enter` 落在按钮上）。
+    Q_INVOKABLE void showAll();
+    Q_INVOKABLE void showOverview();
+
+    /// 一次按键的处理结果：
+    /// `{ decision: "none"|"choose"|"cancel", index, handled }`。
+    ///
+    /// 只管方向键 / `Home` / `End` / `PgUp` / `PgDn` / `Enter` / `Space` / `Esc`；
+    /// **字符与退格不在这里**（它们归筛选框那个标准 `TextField`）。
+    Q_INVOKABLE QVariantMap handleKey(int key);
 
     /// 右键菜单（原生 shell 菜单，见 `platform/win/shell_menu.h`）关掉之后的决定。
     ///
     /// `invoked` = 用户在菜单里真的选了某一条。项目所有者 2026-10 拍板：
     /// **选中条目就收卡片，取消（`Esc` / 点菜单外面）就留着**——与开始菜单一致，
     /// 而且“打开文件位置”“属性”这类命令要能自己拿前台，不能跟一张置顶卡片抢。
-    /// 返回 `{ decision: "cancel"|"none", handled: true }`（形状与 `handleKey()`
-    /// 一样，QML 那边共用同一段 `applyDecision`）。
-    ///
-    /// 这条规则本身纯粹是模型的决定，所以放在这里（`tst_app_list_model` 盯着）。
+    /// 返回 `{ decision: "cancel"|"none", handled: true }`。
     Q_INVOKABLE QVariantMap afterContextMenu(bool invoked);
 
-    /// 一次按键的处理结果：
-    /// `{ decision: "none"|"choose"|"cancel", index, handled }`。
-    ///
-    /// 只管方向键 / `Home` / `End` / `PgUp` / `PgDn` / `Enter` / `Esc`；
-    /// **字符与退格不在这里**（它们归筛选框那个标准 `TextField`）。
-    Q_INVOKABLE QVariantMap handleKey(int key);
+    /// 启动某个条目之后记一笔「最近使用」（顺序 = 最近的在前）。
+    void noteLaunched(int itemIndex);
 
-    /// 再次打开时清空筛选、选中项。
+    /// 再次打开时清空筛选与「全部」模式、选中项回到第一行。
     void reset();
 
     int rowCount(const QModelIndex &parent = QModelIndex()) const override;
@@ -180,29 +242,90 @@ public:
 signals:
     void itemsChanged();
     void stateChanged();
-    /// 选中行变了（或者列表被换过 / 筛过，视图该把选中项带回视野）。
     void selectedChanged();
+    /// 固定 / 最近使用变了：`PopupHost` 接它把状态写回磁盘。
+    void stateEdited();
 
 private:
-    /// 重新算筛选结果、几何与计数（不发信号，调用方负责把 reset 包起来）。
-    void refilter();
+    /// 一行。
+    struct Row
+    {
+        enum class Kind { Header, Grid, Button, List };
+
+        Kind kind = Kind::Grid;
+        /// 表头 / 按钮上的文字。
+        QString title;
+        /// 这一行里的条目（`m_items` 下标）。
+        std::vector<int> items;
+        /// `items` 给 QML 的那一份（`{ index, name, icon, pinned }`），建行时算好，
+        /// 免得每次 `data()` 都重新分配一堆 `QVariantMap`。
+        QVariantList models;
+        int height = 0;
+        /// `Button` 行：true = 「全部程序」（打开列表），false = 「← 返回」。
+        bool opensAll = false;
+    };
+
+    /// 重算顺序、行与选中项（`beginResetModel` 由调用方包）。`keepItem` 是想保住
+    /// 选中项的条目下标（`< 0` 时选中第一行）。
+    void rebuild(int keepItem);
+    /// 重算 `m_order`（按拼音 / 字母排序的 `m_items` 下标）。
+    void rebuildOrder();
+    /// 重算 `m_rows` 与 `m_selectedRow` / `m_selectedColumn`（保留 `keepItem` 上的
+    /// 选中；`keepItem < 0` 时选中第一行）。
+    void rebuildRows(int keepItem);
+    /// 重算几何与计数（不发信号）。
     void relayout();
+    /// 把一串条目按 6 个一组铺成网格行。
+    void pushGridRows(const std::vector<int> &items);
+    /// 生成一行网格。
+    void pushGridRow(std::vector<int> items);
+    void pushHeaderRow(const QString &title);
+    void pushButtonRow(const QString &title, bool opensAll);
+    void pushListRow(int itemIndex);
+    QVariantList itemModels(const std::vector<int> &items) const;
     void notifyRows();
-    /// 当前高亮那条的可见行下标；没有可见条目时返回 -1。
-    int activeLine() const;
+    /// 把选中项挪到第一个可选行；没有可选行时 `m_selectedRow = -1`。
+    void selectFirst();
+    void selectLast();
+    bool isSelectableRow(int row) const;
+    int maxColumn(int row) const;
+    std::optional<int> itemAt(int row, int column) const;
+    std::optional<std::pair<int, int>> positionOfItem(int itemIndex) const;
 
     std::optional<QString> m_title;
     std::vector<AppListEntry> m_items;
     /// 与 `m_items` 一一对应的**搜索文本**（`core::appSearchText()` 算好的：
     /// 小写名字 + 全拼 + 首字母缩写），装载时算一次。
     std::vector<QString> m_search;
+    /// 与 `m_items` 一一对应的**排序键**（`core::appSortText()`：主读音全拼，
+    /// 数字/符号开头的前面加个 `0`），装载时算一次。
+    std::vector<QString> m_sort;
+    /// 与 `m_items` 一一对应的分组表头（`A`–`Z` / `#`）。
+    std::vector<QString> m_letter;
+    /// `key` → `m_items` 下标。
+    QHash<QString, int> m_keyToItem;
+    /// 按 `m_sort` 排好序的 `m_items` 下标（筛选、概览与「全部」列表都用它）。
+    std::vector<int> m_order;
+    /// `m_order` 里匹配当前筛选串的那些下标。
+    std::vector<int> m_visible;
+    /// 当前视图的行。
+    std::vector<Row> m_rows;
+
     /// 用户输入的筛选串（原样保留大小写）。
     QString m_filter;
-    /// 当前筛选结果在 `m_items` 里的下标。
-    std::vector<int> m_visible;
+    /// 固定的程序（图标键，固定顺序）。
+    QStringList m_pinned;
+    /// 最近使用的程序（图标键，最近的在前）。
+    QStringList m_recent;
+    /// `m_pinned` / `m_recent` 里真正在目录中、且当前显示出来的那些条目下标。
+    std::vector<int> m_pinnedShown;
+    std::vector<int> m_recentShown;
+
+    bool m_allMode = false;
     int m_maxRows = 6;
-    int m_rows = 1;
-    int m_selected = 0;
+    int m_visibleItems = 0;
+    int m_selectedRow = -1;
+    int m_selectedColumn = 0;
 
     int m_cardHeight = 0;
     PopupRect m_filterRect;

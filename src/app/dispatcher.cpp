@@ -3,6 +3,7 @@
 #include "app/popup_host.h"
 #include "app/runtime.h"
 #include "core/keys.h"
+#include "core/launcher_state.h"
 #include "core/placement.h"
 #include "core/template.h"
 #include "core/window_match.h"
@@ -317,6 +318,9 @@ void openAppsAction(Runtime *runtime,
 {
     AppRequest request;
     request.title = action.appsTitle;
+    // 固定 / 最近使用的状态文件就在配置文件旁边（`launcher.json`）：常驻实例的
+    // 状态跟着用户自己的配置走，开发 / 验收实例（临时 `--config`）也各用各的。
+    request.statePath = core::launcherStatePath(runtime->configPath());
     // 启动要的是快捷方式路径，而模型要的是名字；两者一一对应，所以按下标带过去。
     std::vector<QString> shortcuts;
     shortcuts.reserve(catalog.size());

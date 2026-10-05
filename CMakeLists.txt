@@ -167,6 +167,8 @@ add_library(flowkeyd_core STATIC
     src/core/engine.h
     src/core/keys.cpp
     src/core/keys.h
+    src/core/launcher_state.cpp
+    src/core/launcher_state.h
     src/core/log_tail.cpp
     src/core/log_tail.h
     src/core/placement.cpp
@@ -582,6 +584,7 @@ flowkeyd_add_test(tst_input LIBS flowkeyd_platform)
 flowkeyd_add_test(tst_command_line LIBS flowkeyd_platform)
 flowkeyd_add_test(tst_instance LIBS flowkeyd_platform)
 flowkeyd_add_test(tst_log_tail)
+flowkeyd_add_test(tst_launcher_state)
 flowkeyd_add_test(tst_window_match)
 flowkeyd_add_test(tst_remote_desktop)
 flowkeyd_add_test(tst_placement)

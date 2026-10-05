@@ -84,6 +84,41 @@ inline constexpr int kMaxSearchVariants = 8;
 /// 表外的汉字（Ext A/B 等生僻字）没有拼音，与空格、标点一样按字面进第 1/2 段。
 QString appSearchText(const QString &name);
 
+/// `appSortInfo()` 的结果：排序键与它对应的分组表头。
+///
+/// 两者是一次扫描出来的，模型装载一批程序时只要调一次 —— 分开调
+/// `appSortText()` + `appGroupLetter()` 会把名字扫描两遍。
+struct AppSortInfo
+{
+    /// 首字符是字母时前面加 `1`、否则加 `0`，后面接**主读音全拼**（小写）。
+    ///
+    /// 为什么排序键要带那个 `0`/`1` 前缀：分组是按首字符来的（`0` 开头的一律归
+    /// 「#」那一组），前缀保证「数字 / 符号 / 表外汉字」开头的条目**排在一起**
+    /// （`7-Zip`、`【小狼毫】…` 都在最前面那一组），而字母开头的按拼音 / 字母
+    /// 顺序排在后面。少了这个前缀，`【` 这种码点比 `z` 还大的符号会把「#」组
+    /// 撕成两段。
+    ///
+    /// 排序键本身已经包含了分组信息，所以「全部程序」列表只要按它排一遍，同一组
+    /// 的条目天然是连续的。
+    QString sortText;
+    /// 分组表头：首字母大写（`A`–`Z`），或者 `"#"`。
+    ///
+    /// 与 Windows 10 开始菜单的「所有应用」一致：中文名字用拼音首字母
+    /// （`微信` → `W`），拉丁名字用它的第一个字母（`Visual Studio Code` → `V`），
+    /// 首字符不是字母的（数字、符号、拼音表外的生僻字）都归到 `"#"`
+    /// （它们也总是排在字母组前面）。
+    QString letter;
+};
+
+/// 算一个程序名的排序键与分组表头（见 `AppSortInfo`；为了效率一次算完）。
+AppSortInfo appSortInfo(const QString &name);
+
+/// `appSortInfo(name).sortText`。
+QString appSortText(const QString &name);
+
+/// `appSortInfo(name).letter`。
+QString appGroupLetter(const QString &name);
+
 /// 程序名匹配：大小写无关的**子串**（首尾空白先去掉；空串匹配一切）。
 ///
 /// 用子串而不是前缀（窗口切换器那边用的是前缀）：启动器要的是「记得名字里的

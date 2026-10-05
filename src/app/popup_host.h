@@ -95,6 +95,9 @@ struct AppRequest
 {
     std::optional<QString> title;
     std::vector<AppLauncherItem> items;
+    /// 持久状态（固定 / 最近使用）的 JSON 文件路径：与配置文件同目录的
+    /// `launcher.json`（`core::launcherStatePath()`）。空串 = 不读也不写。
+    QString statePath;
     /// 用户选中第 `index` 个**条目**（不是筛选后的可见格）时调用。
     /// 此时窗口已经在屏幕上消失，回调在 GUI 线程上执行；实现只应该把活儿转交
     /// 给别处（`Dispatcher` 再投一次队列），不要阻塞。
@@ -200,7 +203,8 @@ public:
     // 程序启动器（GUI 线程）：同上面几个，只把活儿转交出去。
     Q_INVOKABLE void appChoose(int index);
     Q_INVOKABLE void appDismiss();
-    /// 在第 `line` 格（**可见**行下标）弹出那个程序的**原生 shell 右键菜单**。
+    /// 为第 `item` 个**条目**（QML 每一格里那个 `index`）弹出它的**原生 shell
+    /// 右键菜单**。
     ///
     /// **阻塞**：里面 `TrackPopupMenuEx` 一直等到用户选完（
     /// `platform/win/shell_menu.h` 里写了为什么必须这样）；返回值就是「用户
@@ -208,6 +212,12 @@ public:
     /// 打开文件位置 / 属性……）。假数据（预热那一份没有快捷方式）与越界的下标
     /// 都直接返回 false。
     Q_INVOKABLE bool appContextMenu(int line);
+    /// 卡片换了视图（概览 ↔ 「全部程序」列表）之后重新居中。
+    ///
+    /// 为什么需要：卡片高度跟着当前视图走（概览可能只有三四行高，列表一定
+    /// 是一屏），窗口是**居中**于光标那块屏的，不重新摆一次就会往下“长”出
+    /// 屏幕之外。
+    Q_INVOKABLE void appRelayout();
     // 「在线更新」卡片上的按钮（GUI 线程；只把活儿转交给 `Updater`）。
     Q_INVOKABLE void updateInstall();
     Q_INVOKABLE void updateDismiss();
@@ -234,6 +244,10 @@ private:
     void showHelp(HelpRequest request);
     void showSwitch(SwitchRequest request);
     void showApps(AppRequest request);
+    /// 读 `m_appStatePath`（不存在就当作空状态）填给启动器模型。
+    void loadAppState();
+    /// 把启动器模型的固定 / 最近使用写回 `m_appStatePath`。
+    void saveAppState();
     void showUpdate();
     QQuickWindow *ensureMenuWindow();
     QQuickWindow *ensureHelpWindow();
@@ -287,6 +301,8 @@ private:
     QQuickWindow *m_appWindow = nullptr;
     AppListModel *m_appModel = nullptr;
     AppRequest m_appRequest;
+    /// 当前这一份启动器状态该写到哪（`AppRequest::statePath`）。
+    QString m_appStatePath;
     /// 图标提供者（引擎拥有它；这里只用来登记「图标键 → 快捷方式路径」）。
     AppIconProvider *m_appIcons = nullptr;
 

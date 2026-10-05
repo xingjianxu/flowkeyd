@@ -10,6 +10,8 @@
 #include <QSet>
 #include <QStringList>
 
+#include <algorithm>
+
 #include "core/app_list.h"
 #include "core/pinyin.h"
 
@@ -69,6 +71,7 @@ private slots:
     void prepareDropsEntriesWithoutNameOrShortcut();
     void prepareDeduplicatesSameNameAndTarget();
     void prepareKeepsSameTargetUnderDifferentNames();
+    void sortTextAndGroupLetterCoverPinyinLatinDigitsAndSymbols();
 };
 
 void TestAppList::iconKeyIsShortStableAndCaseInsensitive()
@@ -294,6 +297,63 @@ void TestAppList::prepareKeepsSameTargetUnderDifferentNames()
     };
     const std::vector<core::AppEntry> kept = core::prepareAppEntries(std::move(entries));
     QCOMPARE(kept.size(), std::size_t(4));
+}
+
+void TestAppList::sortTextAndGroupLetterCoverPinyinLatinDigitsAndSymbols()
+{
+    // 中文名字：排序键是主读音全拼，分组表头是它的首字母（大写）。
+    const core::AppSortInfo notepad = core::appSortInfo(QStringLiteral("记事本"));
+    QCOMPARE(notepad.sortText, QStringLiteral("1jishiben"));
+    QCOMPARE(notepad.letter, QStringLiteral("J"));
+
+    // 拉丁名字：排序键就是它自己（小写），空格保留。
+    const core::AppSortInfo code = core::appSortInfo(QStringLiteral("Visual Studio Code"));
+    QCOMPARE(code.sortText, QStringLiteral("1visual studio code"));
+    QCOMPARE(code.letter, QStringLiteral("V"));
+
+    // 数字开头的：`0` 前缀（排在字母组前面），归「#」。
+    const core::AppSortInfo zip = core::appSortInfo(QStringLiteral("7-Zip"));
+    QVERIFY(zip.sortText.startsWith(QLatin1Char('0')));
+    QCOMPARE(zip.letter, QStringLiteral("#"));
+
+    // 符号开头（中文全角括号）：也归「#」，而且与数字开头一样带 `0` 前缀
+    // —— 没有这个前缀，`【` 的码点比 `z` 大，会把「#」那一组撕成两段。
+    const core::AppSortInfo bracket =
+        core::appSortInfo(QStringLiteral("【小狼毫】输入法设定"));
+    QVERIFY(bracket.sortText.startsWith(QLatin1Char('0')));
+    QCOMPARE(bracket.letter, QStringLiteral("#"));
+
+    // 前导空白不参与分组。
+    QCOMPARE(core::appGroupLetter(QStringLiteral("  zoom")), QStringLiteral("Z"));
+
+    // 空名字：没有首字母，归「#」。
+    QCOMPARE(core::appGroupLetter(QString()), QStringLiteral("#"));
+
+    // `appSortText()` / `appGroupLetter()` 就是 `appSortInfo()` 的两个字段。
+    QCOMPARE(core::appSortText(QStringLiteral("微信")), QStringLiteral("1weixin"));
+    QCOMPARE(core::appGroupLetter(QStringLiteral("微信")), QStringLiteral("W"));
+
+    // 同一组（同一个表头）的条目都排在一起：按 sortText 排一遍，表头序列里
+    // 不会出现同一个字母两次。
+    const QStringList names{QStringLiteral("微信"), QStringLiteral("Visual Studio Code"),
+                            QStringLiteral("记事本"), QStringLiteral("7-Zip"),
+                            QStringLiteral("【小狼毫】输入法设定"), QStringLiteral("Word")};
+    QStringList keys;
+    for (const QString &name : names) {
+        keys.append(core::appSortText(name));
+    }
+    std::sort(keys.begin(), keys.end());
+    QStringList letters;
+    for (const QString &key : keys) {
+        const QString letter = key.at(1).isLetter()
+            ? QString(key.at(1).toUpper())
+            : QStringLiteral("#");
+        if (letters.isEmpty() || letters.constLast() != letter) {
+            letters.append(letter);
+        }
+    }
+    QCOMPARE(letters, QStringList({QStringLiteral("#"), QStringLiteral("J"),
+                                  QStringLiteral("V"), QStringLiteral("W")}));
 }
 
 QTEST_MAIN(TestAppList)

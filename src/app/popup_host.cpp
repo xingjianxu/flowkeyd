@@ -9,6 +9,8 @@
 
 #include <QCursor>
 #include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QGuiApplication>
 #include <QQmlComponent>
 #include <QQmlEngine>
@@ -19,6 +21,7 @@
 #include <QVariant>
 #include <QVector>
 
+#include <algorithm>
 #include <memory>
 #include <utility>
 
@@ -293,6 +296,11 @@ void PopupHost::appChoose(int index)
     // 先把窗口藏起来再交出去（与 `menuChoose` / `switchChoose` 一致）：启动的
     // 程序会自己抢前台，弹窗不该还留在那里。
     m_appWindow->setProperty("visible", false);
+    // 「最近使用」就是在这里记的：用户从启动器里真的启动了一个程序。
+    // 在把请求交出去**之前**记（回调会立刻启动进程，然后 `request` 就空了）。
+    if (m_appModel != nullptr) {
+        m_appModel->noteLaunched(index);
+    }
     AppRequest request = std::move(m_appRequest);
     m_appRequest = AppRequest{};
     if (request.onChoose && index >= 0 && index < static_cast<int>(request.items.size())) {
@@ -308,17 +316,16 @@ void PopupHost::appDismiss()
     m_appRequest = AppRequest{};
 }
 
-bool PopupHost::appContextMenu(int line)
+bool PopupHost::appContextMenu(int item)
 {
     if (m_appWindow == nullptr || m_appModel == nullptr) {
         return false;
     }
-    const std::optional<int> item = m_appModel->itemIndexForVisible(line);
-    if (!item.has_value() || *item < 0
-        || *item >= static_cast<int>(m_appRequest.items.size())) {
+    // QML 那边直接传**条目下标**（每一格里带着 `index`），不是可见行号。
+    if (item < 0 || item >= static_cast<int>(m_appRequest.items.size())) {
         return false;
     }
-    const QString shortcut = m_appRequest.items[static_cast<std::size_t>(*item)].shortcut;
+    const QString shortcut = m_appRequest.items[static_cast<std::size_t>(item)].shortcut;
     if (shortcut.isEmpty()) {
         // 预热用的假数据没有快捷方式（真实条目一定有）——那种情况下没有菜单可弹。
         return false;
@@ -352,6 +359,99 @@ bool PopupHost::appContextMenu(int line)
         activateWindow(m_appWindow);
     }
     return false;
+}
+
+void PopupHost::appRelayout()
+{
+    if (m_appWindow == nullptr || m_appModel == nullptr || !m_appWindow->isVisible()) {
+        return;
+    }
+    // 卡片高度会随视图变（概览几行高，「全部程序」列表一屏高），QML 那边
+    // `height` 一绑，窗口就自己长了 —— 这里只负责把它推回屏幕里。
+    //
+    // **不能重新居中**：卡片是“以筛选框那一行为锚”的（弹出来时已经居中过），
+    // 打字时每变一次高度就重新居中，会让输入框在屏幕上上下跳。所以只夹一下。
+    // 用窗口自己所在的屏（不是光标下的那块）：鼠标挪到另一块屏上不该把卡片拽走。
+    QScreen *screen = m_appWindow->screen();
+    if (screen == nullptr) {
+        screen = QGuiApplication::primaryScreen();
+    }
+    if (screen == nullptr) {
+        return;
+    }
+    // 本机实测 `availableGeometry()` 可能比 `geometry()` 还宽 —— 取交集当作可用区。
+    const QRect work = screen->availableGeometry().intersected(screen->geometry());
+    if (!work.isValid()) {
+        return;
+    }
+    const int width = m_appModel->cardWidth();
+    const int height = m_appModel->cardHeight();
+    const int maxX = std::max(work.left(), work.right() - width + 1);
+    const int maxY = std::max(work.top(), work.bottom() - height + 1);
+    const int x = std::clamp(m_appWindow->x(), work.left(), maxX);
+    const int y = std::clamp(m_appWindow->y(), work.top(), maxY);
+    if (x != m_appWindow->x() || y != m_appWindow->y()) {
+        m_appWindow->setPosition(x, y);
+    }
+}
+
+void PopupHost::loadAppState()
+{
+    if (m_appModel == nullptr) {
+        return;
+    }
+    core::LauncherState state;
+    if (!m_appStatePath.isEmpty()) {
+        QFile file(m_appStatePath);
+        if (file.exists()) {
+            if (!file.open(QIODevice::ReadOnly)) {
+                win::logWarn(QStringLiteral("app launcher: could not read %1: %2")
+                                 .arg(QDir::toNativeSeparators(m_appStatePath),
+                                      file.errorString()));
+            } else {
+                const QByteArray bytes = file.readAll();
+                file.close();
+                QString error;
+                state = core::parseLauncherState(bytes, &error);
+                if (!error.isEmpty()) {
+                    win::logWarn(QStringLiteral("app launcher: %1: %2")
+                                     .arg(QDir::toNativeSeparators(m_appStatePath), error));
+                }
+            }
+        }
+    }
+    m_appModel->setState(state);
+}
+
+void PopupHost::saveAppState()
+{
+    if (m_appModel == nullptr || m_appStatePath.isEmpty()) {
+        return;
+    }
+    const QByteArray bytes = core::serializeLauncherState(m_appModel->launcherState());
+    const QDir dir = QFileInfo(m_appStatePath).absoluteDir();
+    if (!dir.exists() && !dir.mkpath(QStringLiteral("."))) {
+        win::logWarn(QStringLiteral("app launcher: could not create %1")
+                         .arg(QDir::toNativeSeparators(dir.absolutePath())));
+        return;
+    }
+    QFile file(m_appStatePath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        win::logWarn(QStringLiteral("app launcher: could not write %1: %2")
+                         .arg(QDir::toNativeSeparators(m_appStatePath), file.errorString()));
+        return;
+    }
+    const qint64 written = file.write(bytes);
+    file.close();
+    if (written != bytes.size()) {
+        win::logWarn(QStringLiteral("app launcher: short write to %1")
+                         .arg(QDir::toNativeSeparators(m_appStatePath)));
+        return;
+    }
+    win::logDebug(QStringLiteral("app launcher: saved pinned=%1 recent=%2 to %3")
+                      .arg(m_appModel->pinnedCount())
+                      .arg(m_appModel->recentCount())
+                      .arg(QDir::toNativeSeparators(m_appStatePath)));
 }
 
 void PopupHost::updateInstall()
@@ -530,9 +630,15 @@ void PopupHost::preload()
     // 图标（那会白白花掉几十毫秒）。
     std::vector<AppListEntry> appItems;
     appItems.reserve(42);
+    core::LauncherState fakeState;
     for (int i = 0; i < 42; ++i) {
-        appItems.push_back(AppListEntry{QStringLiteral("preload"), QString()});
+        const QString key = QStringLiteral("preload%1").arg(i, 2, 10, QLatin1Char('0'));
+        appItems.push_back(AppListEntry{QStringLiteral("preload"), QString(), key});
+        // 全部当成「已固定」：于是概览是「表头 + 7 行网格 + 全部程序按钮」、
+        // 比一屏（6 行）高，网格的 `ScrollBar`、表头与按钮的委托也一起装配掉。
+        fakeState.pinned.push_back(key);
     }
+    m_appModel->setState(fakeState);
     m_appModel->setItems(std::nullopt, std::move(appItems));
 
     // 屏幕之外 + 全透明。它们都是 `WindowStaysOnTopHint` 的卡片，留在屏幕里
@@ -715,6 +821,9 @@ void PopupHost::showApps(AppRequest request)
     }
     m_frameTimer.start();
     m_appRequest = std::move(request);
+    m_appStatePath = m_appRequest.statePath;
+    // 先把上一份持久状态（固定 / 最近使用）读进来，再换程序列表。
+    loadAppState();
 
     // 图标：把「图标键 → 快捷方式路径」登记给图片提供者，并把每一行的 URL 算好。
     // 键是快捷方式路径的哈希（`core::appIconKey`），所以列表重扫、条目换位置都
@@ -725,11 +834,12 @@ void PopupHost::showApps(AppRequest request)
     entries.reserve(m_appRequest.items.size());
     for (const AppLauncherItem &item : m_appRequest.items) {
         if (item.shortcut.isEmpty()) {
-            entries.push_back(AppListEntry{item.name, QString()});
+            entries.push_back(AppListEntry{item.name, QString(), QString()});
             continue;
         }
-        entries.push_back(AppListEntry{item.name, core::appIconUrl(item.shortcut)});
-        icons.append(qMakePair(core::appIconKey(item.shortcut), item.shortcut));
+        const QString key = core::appIconKey(item.shortcut);
+        entries.push_back(AppListEntry{item.name, core::appIconUrl(item.shortcut), key});
+        icons.append(qMakePair(key, item.shortcut));
     }
     if (m_appIcons != nullptr) {
         m_appIcons->publish(icons);
@@ -773,6 +883,8 @@ QQuickWindow *PopupHost::ensureAppWindow()
         return nullptr;
     }
     m_appModel = new AppListModel(this);
+    // 固定 / 最近使用一改就落盘（`Space`、或者从启动器里启动了一个程序）。
+    QObject::connect(m_appModel, &AppListModel::stateEdited, this, &PopupHost::saveAppState);
     m_appWindow->setProperty("appModel",
                              QVariant::fromValue(static_cast<QObject *>(m_appModel)));
     m_appWindow->setProperty("host", QVariant::fromValue(static_cast<QObject *>(this)));

@@ -136,8 +136,14 @@ $VK_OEM_MINUS = 0xBD
 $VK_OEM_PLUS = 0xBB
 $VK_NUMPAD_SUB = 0x6D
 $VK_NUMPAD_ADD = 0x6B
+$VK_SPACE = 0x20
+$VK_END = 0x23
 
 New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
+# 程序启动器的持久状态（固定 / 最近使用）就在配置文件旁边（`launcher.json`）。
+# 每次都从「什么都没固定」开始，否则上一次跑出来的固定项会让标题里的条数与
+# 卡片的几何前后不一致。
+Remove-Item (Join-Path $WorkDir 'launcher.json') -ErrorAction SilentlyContinue
 $config = Join-Path $WorkDir 'accept.lua'
 $daemonLog = Join-Path $WorkDir 'daemon.log'
 $daemonOut = Join-Path $WorkDir 'daemon.out'
@@ -948,6 +954,41 @@ try {
             [FlowInject]::HasWindowTitled($daemon.Id, $APPS_TITLE) -and
             ([FlowInject]::ForegroundTitle() -like "$APPS_TITLE*"))
     }
+
+    # 固定（`Space`）与「全部程序」列表。`launcher.json` 在脚本开头被删掉过，
+    # 所以这里一定是「还什么都没固定」的状态：概览就是全部程序的网格、标题里的
+    # 条数等于程序总数。
+    $appsTall = [FlowInject]::WindowRect($daemon.Id, $APPS_TITLE)[3]
+    TapKey $VK_SPACE
+    Pump 700
+    Check '按 Space 固定了高亮那一条（标题里的条数变成 1）' ((AppsCount) -eq 1)
+    $appsShort = [FlowInject]::WindowRect($daemon.Id, $APPS_TITLE)[3]
+    Check '固定之后卡片变矮（只剩已固定 + 全部程序按钮）' (
+        $appsShort -gt 0 -and $appsShort -lt $appsTall)
+    # 固定是持久的：关掉再打开，那一条还在。
+    CtrlAlt $VK_F14
+    [void](WaitUntil { -not [FlowInject]::HasWindowTitled($daemon.Id, $APPS_TITLE) } 3000)
+    CtrlAlt $VK_F14
+    Check '重新打开时固定还在（条数仍然是 1）' (
+        (WaitUntil { [FlowInject]::HasWindowTitled($daemon.Id, $APPS_TITLE) } 6000) -and
+        ((AppsCount) -eq 1))
+    # 末行是「全部程序（N）」按钮：`End` 走到它、`Enter` 打开分组列表（一屏高）。
+    TapKey $VK_END
+    Pump 250
+    TapKey $VK_RETURN
+    Pump 800
+    Check 'Enter 打开了「全部程序」列表（卡片变成一屏高）' (
+        [FlowInject]::WindowRect($daemon.Id, $APPS_TITLE)[3] -gt ($appsShort + 40))
+    # `Esc` 在列表里是「返回概览」而不是关卡片。
+    TapKey $VK_ESC
+    Pump 500
+    Check '列表里按 Esc 返回概览（卡片还在、也变矮了）' (
+        [FlowInject]::HasWindowTitled($daemon.Id, $APPS_TITLE) -and
+        ([FlowInject]::WindowRect($daemon.Id, $APPS_TITLE)[3] -le ($appsShort + 8)))
+    # 取消固定：概览回到全部程序的网格，条数回到满。
+    TapKey $VK_SPACE
+    Pump 700
+    Check '再按一次 Space 取消固定（条数回到满）' ((AppsCount) -eq $appsTotal)
 
     TapKey $VK_ESC
     Check 'Esc 关掉了启动器' (

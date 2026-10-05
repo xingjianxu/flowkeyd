@@ -119,7 +119,7 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
 | 互斥体     | `Local\flowkeyd-<配置路径散列>`                                                 |
 | 开机自启   | 计划任务 `flowkeyd` 指向**当前运行 exe**（启动时自注册自检）                    |
 | 在线更新   | 托盘菜单 *检查更新* → GitHub `releases/latest` → slim 包 → sha256 → 换 exe + 重启 |
-| 自动化测试 | Qt Test 单元测试 + `scripts/acceptance.ps1`（134 → 149 项检查，需交互式桌面）         |
+| 自动化测试 | Qt Test 单元测试 + `scripts/acceptance.ps1`（149 → 155 项检查，需交互式桌面）         |
 | 依赖管理   | CMake Presets + Ninja，`vendor/lua` 静态编进二进制                             |
 
 ---
@@ -546,6 +546,34 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
       给出「相对顺序」而不是音节边界 —— 要用它就得自己维护约 410 个锚字再做二分，
       而且权重顺序没有任何文档承诺。内置一份生成的表反而更小、更确定、能单测。
 
+30. **程序启动器分三段：已固定 / 最近使用 / 全部程序**（项目所有者 2026-10 拍板）。
+    * **概览**：从上到下是「已固定」网格、「最近使用」网格（最多两行 = 12 个，
+      `core::kRecentLimit`）、最后一个「全部程序（N）」按钮。**还什么都没固定、也没启动
+      过任何程序时**（第一次用）概览直接就是全部程序的网格 —— 比让用户对着空卡片去点
+      按钮友好。
+    * **`Space` 固定 / 取消固定**当前高亮的条目（固定住的图标右上角一个小圆点）。
+      **筛选框非空时 `Space` 放行**给标准 `TextInput`：否则用户打不出 `visual studio`
+      这种带空格的名字。
+    * **「全部程序」是同一张卡片里的另一种视图**（换的是 `ListView` 的行，不是第二个
+      窗口）：一行一个程序、按**名字 / 拼音首字母分组**（`A`–`Z`；数字、符号、拼音表外的
+      生僻字开头的一律 `#`）、带滚动条；`Esc`（或最上面那个「← 返回」按钮）回概览。
+      分组键由 `core::appSortInfo()` 给出（`sortText` 带 `0`/`1` 前缀，保证「#」那一组是
+      **连续**的 —— 少了前缀，`【` 的码点比 `z` 大，会把「#」撕成两段）。
+    * **持久状态在配置文件旁边的 `launcher.json`**（`core/launcher_state`，手写 JSON、
+      容错解析、坏文件当空的）。条目的身份是**图标键**（`core::appIconKey`，与
+      `image://flowkeyd-app/` 同一个键）：目录重扫、改名字、路径大小写差别都认得出来。
+      读写（`QFile`）在 `app::PopupHost` 里 —— **模型层不碰磁盘**，所以
+      `tst_app_list_model` 是纯逻辑。启动一个程序时记一笔「最近使用」：
+      `PopupHost::appChoose()` 在把 `onChoose` 交出去**之前**记（那时 `m_appRequest`
+      还没被清空，`AppRequest::statePath` 也还在）。
+    * **模型是「行」式的**（`rowKind` ∈ `header`/`grid`/`button`/`list`），不是「格」式的：
+      分段、分组、按钮在一张 `ListView` 里天然共存；键盘选中项只是（行, 列），
+      `↑`/`↓` 自动**跳过表头**，`positionViewAtIndex(selectedRow)` 就是「把选中项带进
+      视野」。卡片高度 = 各行高度之和（夹在一格与 `maxRows × cellHeight` 之间），
+      所以概览可能只有三四行高、一开「全部程序」就变成一屏。
+    * 对外的接口没变：还是 `apps([title])`，固定与最近使用是**运行时状态**，
+      配置 schema 里没有对应的字段。
+
 ---
 
 ## 3. 环境与工具链
@@ -620,7 +648,8 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
 | `src/core/template.*` | `{clipboard}`、`{selection}`、`{date}` 等占位符展开 |
 | `src/core/window_match.*` | 窗口匹配与 `window` 动作决策的纯函数 + 「什么算一个程序窗口」的纯判据（`TopLevelWindowFacts`、`isMainWindow()`、`isSwitchableWindow()`） |
 | `src/core/remote_desktop.*` | 「这个前台进程算不算远程桌面客户端」的纯逻辑：内置名单 + 子串匹配（§2 第 26 条） |
-| `src/core/app_list.*` | **程序启动器**的纯逻辑：条目类型（`AppEntry`）、「算不算程序」的判据、图标键（路径的 64 位 FNV-1a）、扫描结果的去重/排序、名字匹配（字面 + 拼音 + 首字母，§2 第 27/29 条） |
+| `src/core/app_list.*` | **程序启动器**的纯逻辑：条目类型（`AppEntry`）、「算不算程序」的判据、图标键（路径的 64 位 FNV-1a）、扫描结果的去重/排序、名字匹配（字面 + 拼音 + 首字母）、「全部程序」列表的排序键与分组表头（`appSortInfo`/`appSortText`/`appGroupLetter`，§2 第 27/29/30 条） |
+| `src/core/launcher_state.*` | 程序启动器的**持久状态**：`LauncherState`（固定 + 最近使用的**图标键**列表）、`launcherStatePath()`（配置文件旁边的 `launcher.json`）、容错的 JSON 解析 / 序列化、`touchRecent()`（最近在前 + 截到 `kRecentLimit`）/ `togglePinned()`（§2 第 30 条） |
 | `src/core/pinyin.*` / `src/core/pinyin_data.*` | 汉字 → 读音（去声调、多音字、`ü` → `v`/`u`）的查询层 + 生成的读音表（`tools/pinyin_gen.ps1` 从 mozillazg/pinyin-data 生成，见§2 第 29 条） |
 | `src/core/placement.*` | `window_rule` 的纯逻辑：显示器排序与选择、重连检测、摆放几何、规则匹配、`stepIndex()` |
 | `src/core/log_tail.*` | 日志文件的增量尾随（纯逻辑）：按字节读、末尾不完整的 UTF-8 序列不消费、半行留到下一轮、一次最多 1000 行 |
@@ -646,16 +675,16 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
 | `logging.h/.cpp` / `single_instance.h/.cpp` | 英文、分级别、可选 ANSI 颜色的日志器；按配置路径散列命名的互斥体 + `--quit` 的命名事件通道 |
 | `elevate.h/.cpp` / `autostart.h/.cpp` / `update.h/.cpp` | `ShellExecuteW("runas")` 自提权 + 降级；计划任务（纯函数 `buildTaskXml`/`taskXmlCommand`/`sameExecutablePath` + `ensureAutostart(spec, confirm)`）；换 exe 的最后一步（改名 → 就位 → 启动 → 2.5 秒确认 → 失败回滚） |
 | `src/app/` | 组装层：把 core/lua/platform 串起来，并拥有 Qt 对象 |
-| `dispatcher.h/.cpp` | **动作工作线程**（`QThread`）：执行动作列表、`window` 的“先启动再激活”与默认开的 `toggle`、`menu`/`help`/`windows` 的窗口请求、`window_rule`（三遍）、`startDesktopWatch()`/`pollDesktop()` |
+| `dispatcher.h/.cpp` | **动作工作线程**（`QThread`）：执行动作列表、`window` 的“先启动再激活”与默认开的 `toggle`、`menu`/`help`/`windows`/`apps` 的窗口请求、`window_rule`（三遍）、`startDesktopWatch()`/`pollDesktop()`；启动器的持久状态文件路径也是在这里算好塞进 `AppRequest` 的（`core::launcherStatePath(runtime->configPath())`） |
 | `runtime.h/.cpp` | 引擎 + 钩子 + 分发 + 托盘 + 弹窗的总装；`ControlCmd`（suspend/reload/quit）通道；`--quit` 的事件句柄（`QWinEventNotifier` 在 GUI 线程上监听）；`reportDesktop()`/`desktopChanged`；`showSwitchFromAnyThread()` 等 |
 | `log_model.h/.cpp` | 日志窗口的模型：尾随日志文件、最多 1000 行、按级别配色、子串过滤 |
-| `menu_model.h/.cpp` / `help_model.h/.cpp` / `window_list_model.h/.cpp` / `app_list_model.h/.cpp` | 四个卡片的**纯逻辑**（`QAbstractListModel`，只用 QtCore）。行几何与鼠标命中**不归它们管**（`ListView`/`GridView` + `ItemDelegate`）；`help` 只管筛选/选中项/`Enter`/`Esc`/`setSelected`；`menu` 还持有悬停（`Enter` 执行光标下那一条）；`window_list` 管进程名前缀筛选、自动激活与数字选择模式；`app_list` 管 6 列网格的几何、名字/拼音/首字母子串筛选（搜索串来自 `core::appSearchText()`，§2 第 29 条）与网格方向键（§2 第 27 条） |
+| `menu_model.h/.cpp` / `help_model.h/.cpp` / `window_list_model.h/.cpp` / `app_list_model.h/.cpp` | 四个卡片的**纯逻辑**（`QAbstractListModel`，只用 QtCore）。行几何与鼠标命中**不归它们管**（`ListView`/`GridView` + `ItemDelegate`）；`help` 只管筛选/选中项/`Enter`/`Esc`/`setSelected`；`menu` 还持有悬停（`Enter` 执行光标下那一条）；`window_list` 管进程名前缀筛选、自动激活与数字选择模式；`app_list` 管**行**式的三个视图（已固定 + 最近使用 + 「全部程序」按钮 / 筛选用的扁平网格 / 按首字母分组的一行一个）、名字/拼音/首字母子串筛选（搜索串来自 `core::appSearchText()`，§2 第 29 条）、`Space` 固定与「最近使用」的记账、以及卡片高度（§2 第 27/30 条） |
 | `popup_layout.h/.cpp` / `popup_host.h/.cpp` | 弹窗共用的几何类型与 `centrePopup()`（先在工作区居中、再夹进屏幕）；把模型挂到 QML 窗口上、抢前台、在 GUI 线程上创建/复用窗口、`helpRun()`（可见行下标 → 条目下标，**先藏窗口再执行**）、`preload()`、`switchUseEnglishInput()`/`restoreSwitchInputMode()` |
 | `app_icons.h/.cpp` | **程序启动器的图标**：`QQuickAsyncImageProvider` + 一条常驻 STA 线程（队列 + 按「路径@边长」缓存），把 `platform/win/apps::shellIcon()` 的 BGRA 变成 `QImage`（`Format_ARGB32`，**直通 alpha**）；表是“图标键 → 快捷方式路径”，只增不改（§2 第 27 条） |
 | `update_model.h/.cpp` / `update_archive.h/.cpp` / `updater.h/.cpp` | 更新卡片的状态机（八个阶段、版本号/发布说明/进度/按钮可见性，**不联网不解压不换文件**）；从 zip 里取出新 exe（`QZipReader` + PE 魔数检查）；联网编排（异步 `QNetworkAccessManager` + sha256 + 解压到 `<exe>.new` + mtime 对齐发布日） |
 | `app_icon.h/.cpp` | 把 qrc 里的 9 张 PNG 帧拼成多尺寸 `QIcon`（`applicationIcon()`）；`desktopIcon(number)` 现画桌面号徽标 |
 | `src/qml/` | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`、`SwitchPopup.qml`、`AppPopup.qml`、`UpdatePopup.qml`。都写 `pragma ComponentBehavior: Bound`；**五个弹窗的 `flags` 都带 `Qt.Tool`**；配色一律用 `palette`（没有单独的 `Style.qml`）；中文一律 `font.family: "Microsoft YaHei"`；列表/网格全部是标准 `ListView`/`GridView` + `ItemDelegate`（+ `ScrollBar`） |
-| `tests/` | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_remote_desktop`、`tst_log_tail`、`tst_audio`、`tst_autostart`、`tst_menu_model`、`tst_help_model`、`tst_window_list_model`、`tst_app_list`、`tst_app_list_model`、`tst_power_table`、`tst_desktop_table`、`tst_placement`、`tst_layout`、`tst_version`、`tst_desktop_badge`、`tst_update`、`tst_update_model`、`tst_update_install`、`tst_command_line`、`tst_instance`、`tst_input`，以及需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1` 的 `tst_interactive`（真机：剪贴板/音量/窗口/虚拟桌面/钉住/置顶/输入法/覆盖层/更新下载；联网那条还要 `FLOWKEYD_ALLOW_NETWORK_TESTS=1`） |
+| `tests/` | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_remote_desktop`、`tst_log_tail`、`tst_audio`、`tst_autostart`、`tst_menu_model`、`tst_help_model`、`tst_window_list_model`、`tst_app_list`、`tst_app_list_model`、`tst_launcher_state`、`tst_power_table`、`tst_desktop_table`、`tst_placement`、`tst_layout`、`tst_version`、`tst_desktop_badge`、`tst_update`、`tst_update_model`、`tst_update_install`、`tst_command_line`、`tst_instance`、`tst_input`，以及需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1` 的 `tst_interactive`（真机：剪贴板/音量/窗口/虚拟桌面/钉住/置顶/输入法/覆盖层/更新下载；联网那条还要 `FLOWKEYD_ALLOW_NETWORK_TESTS=1`） |
 | `scripts/acceptance.ps1` | 桌面行为验收（注入按键 + 焦点捕捉窗口的外部观察，134 → 149 项检查），需交互式桌面，**不属于 `ctest`** |
 | `scripts/release.ps1` | 构建 release + 打包（完整包 + 精简升级包，各附 `.sha256`）+ 用 `gh` 上传 GitHub Release。tag 取刚构建的 exe 的 `--version`。**发布说明由脚本自己写**（上一个 Release 的 tag → HEAD 的提交主题，按提交信息前缀分类成新功能/修复/变更/其它，纯文档/测试类只计数；`-Notes`/`-NotesFile` 可以整份替换），不用 `gh --generate-notes`。工作区脏或 HEAD 没推到 origin 会直接拒绝（要 `-AllowDirty`/`-Push`）。**唯一的新前置依赖是 `gh`**。开关：`-SkipBuild`/`-SkipResident`/`-SkipUpload`/`-Clobber` |
 
@@ -749,7 +778,7 @@ dir build\dist-release               # 发布包（release 构建自动产出，
 ### 桌面行为怎么验证
 
 ```powershell
-# 134 → 149 项检查，约三分钟，会持续注入按键/抢焦点；按工作约定第 6 条先提醒用户
+# 149 → 155 项检查，约三分钟，会持续注入按键/抢焦点；按工作约定第 6 条先提醒用户
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance.ps1
 powershell.exe ... -Phase config      # 只看配置，不注入按键
 ```
@@ -789,6 +818,18 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
 同样地，**右键菜单长什么样**（菜单是否开在光标处、条目字号在 200% 缩放下对不对）
 也没用眼过；补跑时用 `tmp/menu-shot.ps1`（一次性脚本：弹出启动器 → 右键第 1 格 →
 抓 `tmp/menu-open.png` → `Esc` → 抓 `tmp/menu-closed.png`）看一眼即可。
+
+2026-10 给启动器加上「已固定 / 最近使用 / 全部程序」之后又加了 6 条检查（`Space` 固定
+之后标题里的条数变成 1、卡片变矮、关掉再打开固定还在、`End`+`Enter` 打开「全部程序」
+列表（卡片变成一屏高）、列表里 `Esc` 是返回概览而不是关窗、再按一次 `Space` 取消固定
+条数回到满）→ 总共 **155** 项。脚本开头会先把 `$WorkDir\launcher.json` 删掉，所以每次
+跑都从「什么都没固定」开始（固定是持久状态，不删干净的话标题里的条数与卡片几何前后
+对不上）。**这 6 条也还没跑过**：写它们的这次会话里 `GetForegroundWindow()` 是 0、注入
+1 px 的相对鼠标移动光标也不动（RDP 会话没真正接收输入，见下面那段），按「会话没接收
+输入时别跑」的规矩跳过了。解锁 / 重新连上远程会话之后补跑，把 `checks:` 与 `failures:`
+写实、并删掉这段话。（同一批改动已经在 `tmp/preview/` 那套进程内预览里过了一遍：真开始
+菜单 100 个程序、`Space`/`End`/`Enter`/`Esc` 全走真按键注入，`tmp/apps-sections.png`
+与 `tmp/apps-all.png` 就是那两张卡片的样子。）
 
 **桌面被锁住时（`LogonUI` 在跑）脚本必然挂**：`GetForegroundWindow()` 返回 0，
 `SendInput` 报 `5`（ACCESS_DENIED）。这不是产品 bug，先去解锁再跑。
@@ -971,7 +1012,7 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
 字母键名小写、托盘数字徽标、窗口切换器（+数字选择模式+IME 切换）、弹窗不进任务栏 + 预热、
 发布包精简、精简升级包、`scripts/release.ps1`、在线更新、`install.ps1` 一键安装、
 FreeType 字体引擎、程序启动器（`apps()` + 异步图标）、启动器筛选认拼音与首字母
-（§2 第 29 条）。
+（§2 第 29 条）、启动器的固定 / 最近使用 / 「全部程序」分组列表（§2 第 30 条）。
 
 ---
 
@@ -1197,6 +1238,25 @@ FreeType 字体引擎、程序启动器（`apps()` + 异步图标）、启动器
 * **进程内预览里 `console.log` 不一定看得见** → 用“写一个能从 C++ 读回来的属性”调试。
 * **`GetWindowRect` + `SetCursorPos` 必须同一种像素**（脚本开头先 `SetProcessDPIAware()`）。
   弹窗几何靠**宽度反推缩放**（menu 卡片 300、help 卡片 500 逻辑像素）比猜 DPI 稳。
+* **「同一行有多种形状」的列表**（启动器的 分段表头 / 网格行 / 整行按钮 / 分组列表行）：
+  在**一个** `ListView` 的委托里按 `rowKind` 把几个**内联组件**（`component HeaderRow:
+  Label { … }`、`component GridRow: Row { … }`、`component ButtonRow: ItemDelegate { … }`、
+  `component ListRow: ItemDelegate { … }`）都实例化出来、用 `visible:` 开关。**不用
+  `Loader`**：`pragma ComponentBehavior: Bound` 下，`Loader` 装出来的 item 拿不到委托
+  自己的属性（它只能看文件作用域的 id），而“把每个角色 `Binding` 到 `loader.item`”既啰嗦
+  又容易漏一两个。四种形状都建出来也不贵 —— `ListView` 只给看得见的十来行建委托。
+  **内联组件可以直接用文件根对象的 id**（`root.appModel` / `root.cellWidth` 这类），
+  `qmllint` 与运行时都验过。
+* **内联组件的属性名不能撞基类自己的**：`component HeaderRow: Label` 里想接文字就得叫
+  `label`（`text` 是 `Label` 自己的）、`component ButtonRow: ItemDelegate` 同理；
+  同理，模型的角色名也不能叫 `highlighted` / `text`（见上面那条）。
+* **`Space` 会和标准 `TextField` 抢**：`Keys.onPressed` 是 `Keys.BeforeItem`，所以
+  “按 `Space` 固定”会把筛选框里的空格一起吃掉。**只在筛选串为空时截走它**
+  （`handleKey()` 返回 `handled: false` 放行），否则用户打不出 `visual studio` 这种名字。
+* **`ListView` 的行高可以和总高对不上**：卡片高度必须是**各行高度之和**（再夹进
+  “至少一格 / 最多 `maxRows × cellHeight`”），不能只按行数 × 格高算 —— 表头（26）
+  与整行按钮（40）比格子矮，分组列表的一行（44）也不等于格子高。
+  对了人和机器各验一次：模型侧断言 `cardHeight()`，外面用 `WindowRect` 看真实高度。
 
 ### Windows 领域坑
 
@@ -1383,6 +1443,14 @@ FreeType 字体引擎、程序启动器（`apps()` + 异步图标）、启动器
   而且锁屏时也能跑。（`tmp/` 在 `.gitignore` 里，重做一次大概十分钟。）
   注意预览工具自己会报一堆 `ItemDelegate.qml` 的 `TypeError`（用官方 Qt 跑也一样），
   那是**预览工具的环境问题**，产品日志里是 0 条。
+* **这套预览工具是验“分段 + 多种行形状”界面的主力**：它里面的 `checkApps()` 会真的扫
+  开始菜单（真机 100 个程序）、真的让异步图标回来、用 `QTest::keyClick(window, …)`
+  走 `Space` / `End` / `Enter` / `Esc`，而且**断言的是模型状态与窗口几何**
+  （`pinnedCount()` / `allMode()` / `cardHeight()` / 标题里的个数），截图只是给人眼看的
+  那一眼。它需要的方法变了就直接改它（它是 `tmp/` 里的一次性工具）；改不动就照它的形状
+  重做一份，比“跑不了验收脚本就交”稳。
+  **它跑在进程内**，锁屏 / RDP 不接收输入时照样能跑（产品弹窗的抓图靠
+  `QQuickWindow::grabWindow()`，不碰屏幕）。
 * **“一闪而过”的 bug 怎么查**：用 `Graphics.CopyFromScreen` 抓弹窗那块的屏幕区域
   （`QQuickWindow::grabWindow()` 看不到合成器的中间帧），每帧算一个 FNV 指纹，~120 fps，
   打印“与上一帧不同”的帧号；把抓到的帧存成 PNG 用 `imgdiff` 打印“不同像素数 + 包围盒”。
@@ -1523,15 +1591,21 @@ FreeType 字体引擎、程序启动器（`apps()` + 异步图标）、启动器
   按键的哪一半」——「轻碰 Win」是**松开**时触发的）。每加一条可从外面观察到的行为，
   就在 `scripts/acceptance.ps1` 的「窗口切换器」那一段加一条检查：那是这条路径唯一的
   自动化覆盖。
-* **程序启动器的新行为**：分四层，改哪层就看哪层 ——
-  `core/app_list.*`（“算不算程序”、去重/排序、名字子串匹配、图标键）、
+* **程序启动器的新行为**：分层看 ——
+  `core/app_list.*`（“算不算程序”、去重/排序、名字子串匹配、图标键、排序键与分组表头）、
+  `core/launcher_state.*`（固定 / 最近使用的顺序、截断与 JSON 解析序列化）、
   `platform/win/apps.*`（扫两个开始菜单目录 + `IShellLink` 解析 + `shellIcon`）、
-  `app/app_list_model.*`（6 列 × 6 行网格、可见行/卡片高度、方向键）、
+  `app/app_list_model.*`（**行**式的三个视图与选中项/卡片高度）、
   `app/app_icons.*`（异步图标的线程/缓存/尺寸）、卡片 `AppPopup.qml`。
-  把条目喂给卡片、以及**启动那一步**都在 `Dispatcher::openAppsAction()`。
-  改完要跑 `tst_app_list` / `tst_app_list_model`；能从外面观察到的行为就在
-  `scripts/acceptance.ps1` 的「程序启动器」那一段加一条检查（**注意别按 `Enter`**，
-  那会真的启动列表里第一个程序）；纯粹的渲染/图标质量用 `tmp/preview/` 那套抓图看。
+  把条目喂给卡片、**启动那一步**、以及状态文件路径都在 `Dispatcher::openAppsAction()`；
+  真正读写 `launcher.json` 的是 `PopupHost`（`loadAppState()` / `saveAppState()`，
+  由模型的 `stateEdited` 信号驱动）。
+  改完要跑 `tst_app_list` / `tst_app_list_model` / `tst_launcher_state`；能从外面观察到的
+  行为就在 `scripts/acceptance.ps1` 的「程序启动器」那一段加一条检查（**注意别在网格里按
+  `Enter`**，那会真的启动一个程序；`End` + `Enter` 落在「全部程序」按钮上是安全的）；
+  纯粹的行几何 / 卡片外观用 `tmp/preview/` 那套抓图看。
+  **新的一行形状**：模型加一个 `Row::Kind`、`data()` 的 `RowKindRole` 多一个字符串、
+  `AppPopup.qml` 多一个内联组件（并加进 `preload()` 的假数据好让它被预热）。
 * **拼音表 / 匹配语义**：表是生成的（`tools/pinyin_gen.ps1` → `src/core/pinyin_data.*`），
   **别手改生成物**；要改覆盖范围（例如把 Ext A 也纳入）就改脚本再跑一遍，
   `pinyin_data.h` 里的区间常量要跟着改。匹配语义（三段、组合数上限、哪些字符进首字母、
