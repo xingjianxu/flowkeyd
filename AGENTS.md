@@ -119,7 +119,7 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
 | 互斥体     | `Local\flowkeyd-<配置路径散列>`                                                 |
 | 开机自启   | 计划任务 `flowkeyd` 指向**当前运行 exe**（启动时自注册自检）                    |
 | 在线更新   | 托盘菜单 *检查更新* → GitHub `releases/latest` → slim 包 → sha256 → 换 exe + 重启 |
-| 自动化测试 | Qt Test 单元测试 + `scripts/acceptance.ps1`（134 → 144 项检查，需交互式桌面）         |
+| 自动化测试 | Qt Test 单元测试 + `scripts/acceptance.ps1`（134 → 149 项检查，需交互式桌面）         |
 | 依赖管理   | CMake Presets + Ninja，`vendor/lua` 静态编进二进制                             |
 
 ---
@@ -624,7 +624,7 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
 | `app_icon.h/.cpp` | 把 qrc 里的 9 张 PNG 帧拼成多尺寸 `QIcon`（`applicationIcon()`）；`desktopIcon(number)` 现画桌面号徽标 |
 | `src/qml/` | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`、`SwitchPopup.qml`、`AppPopup.qml`、`UpdatePopup.qml`。都写 `pragma ComponentBehavior: Bound`；**五个弹窗的 `flags` 都带 `Qt.Tool`**；配色一律用 `palette`（没有单独的 `Style.qml`）；中文一律 `font.family: "Microsoft YaHei"`；列表/网格全部是标准 `ListView`/`GridView` + `ItemDelegate`（+ `ScrollBar`） |
 | `tests/` | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_remote_desktop`、`tst_log_tail`、`tst_audio`、`tst_autostart`、`tst_menu_model`、`tst_help_model`、`tst_window_list_model`、`tst_app_list`、`tst_app_list_model`、`tst_power_table`、`tst_desktop_table`、`tst_placement`、`tst_layout`、`tst_version`、`tst_desktop_badge`、`tst_update`、`tst_update_model`、`tst_update_install`、`tst_command_line`、`tst_instance`、`tst_input`，以及需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1` 的 `tst_interactive`（真机：剪贴板/音量/窗口/虚拟桌面/钉住/置顶/输入法/覆盖层/更新下载；联网那条还要 `FLOWKEYD_ALLOW_NETWORK_TESTS=1`） |
-| `scripts/acceptance.ps1` | 桌面行为验收（注入按键 + 焦点捕捉窗口的外部观察，134 → 144 项检查），需交互式桌面，**不属于 `ctest`** |
+| `scripts/acceptance.ps1` | 桌面行为验收（注入按键 + 焦点捕捉窗口的外部观察，134 → 149 项检查），需交互式桌面，**不属于 `ctest`** |
 | `scripts/release.ps1` | 构建 release + 打包（完整包 + 精简升级包，各附 `.sha256`）+ 用 `gh` 上传 GitHub Release。tag 取刚构建的 exe 的 `--version`。**发布说明由脚本自己写**（上一个 Release 的 tag → HEAD 的提交主题，按提交信息前缀分类成新功能/修复/变更/其它，纯文档/测试类只计数；`-Notes`/`-NotesFile` 可以整份替换），不用 `gh --generate-notes`。工作区脏或 HEAD 没推到 origin 会直接拒绝（要 `-AllowDirty`/`-Push`）。**唯一的新前置依赖是 `gh`**。开关：`-SkipBuild`/`-SkipResident`/`-SkipUpload`/`-Clobber` |
 
 > `scripts/install.ps1` / `uninstall.ps1` **已删除**：自启的注册、刷新与删除现在全在
@@ -717,7 +717,7 @@ dir build\dist-release               # 发布包（release 构建自动产出，
 ### 桌面行为怎么验证
 
 ```powershell
-# 134 → 144 项检查，约三分钟，会持续注入按键/抢焦点；按工作约定第 6 条先提醒用户
+# 134 → 149 项检查，约三分钟，会持续注入按键/抢焦点；按工作约定第 6 条先提醒用户
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance.ps1
 powershell.exe ... -Phase config      # 只看配置，不注入按键
 ```
@@ -748,10 +748,25 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
 `GetForegroundWindow()` 返回 0），按下面那条“锁屏时脚本必然挂”的规矩，那不是产品问题。
 **解锁后要补跑一次，并把 `checks:` 计数更新到上面。**
 
+2026-10-05 又给「程序启动器」那一段加了 5 条**右键菜单**检查（能拿到卡片矩形、
+右键一格之后本进程多出一个 `#32768` 系统菜单窗口、菜单开在光标附近而且尺寸与 200%
+缩放相称、`Esc` 关掉菜单、取消之后卡片还在）。**这 5 条与整脚本都还没在本机跑过**：
+写它们的那次会话正好在「锁屏」与「没真正接收输入」两种状态之间反复横跳（用户解了锁，
+但 `SendInput` 依旧报 5、`GetForegroundWindow()` 依旧是 0），项目所有者当时决定先交，
+所以 DoD 第 3 条这一半是欠着的。**权限后补跑一次，把 `checks:` 写实并删掉这句话。**
+同样地，**右键菜单长什么样**（菜单是否开在光标处、条目字号在 200% 缩放下对不对）
+也没用眼过；补跑时用 `tmp/menu-shot.ps1`（一次性脚本：弹出启动器 → 右键第 1 格 →
+抓 `tmp/menu-open.png` → `Esc` → 抓 `tmp/menu-closed.png`）看一眼即可。
+
 **桌面被锁住时（`LogonUI` 在跑）脚本必然挂**：`GetForegroundWindow()` 返回 0，
 `SendInput` 报 `5`（ACCESS_DENIED）。这不是产品 bug，先去解锁再跑。
 还有另一种“判据全对、注入就是不落地”的状态（RDP 会话没真正接收输入）：
 先看 `GetForegroundWindow()` 是不是 0，是的话就别在产品代码里找原因。
+
+**RDP 会话里注入的「相对鼠标移动」不会动光标**（2026-10-05 实测：同一个会话里
+`SetCursorPos(300,300)` 成功、`GetCursorPos` 也读得到，可是一条
+`MOUSEEVENTF_MOVE` 的 `SendInput` 返回 1 而光标纹丝不动）。所以脚本里要用绝对定位
+（`SetCursorPos`，也就是 `[FlowInject]::Cursor()`）走路，别指望“相对移动多少像素”。
 
 ### 手工冒烟清单（脚本覆盖不到的部分）
 
@@ -916,7 +931,7 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
 | 6 弹窗 `menu` / `help` | **已完成** | `flowkeyd_models` + 两张 QML 卡片；`tst_menu_model`/`tst_help_model` 全绿 |
 | 7 虚拟桌面 + 电源 | **已完成** | `desktop`/`power` + dispatcher 接线；`tst_desktop_table`/`tst_power_table` 全绿 |
 | 8 示例配置 + README | **已完成** | 覆盖全特性的 `flowkeyd.lua.example`（`--check` 零警告）；README 已写全 |
-| 9 验收（无 e2e 的替代） | **已完成** | `scripts/acceptance.ps1`（当时 119 项，现在 144 项）+ `FLOWKEYD_ACCEPT_INJECTED` 测试后门 |
+| 9 验收（无 e2e 的替代） | **已完成** | `scripts/acceptance.ps1`（当时 119 项，现在 149 项）+ `FLOWKEYD_ACCEPT_INJECTED` 测试后门 |
 | 10 接管 | **已完成** | 真实配置迁到 `.config\flowkeyd\config.lua`；常驻由计划任务 `flowkeyd` 指向当前运行的 exe |
 
 第 10 阶段之后新增的能力（都在本文件对应章节有记录）：
@@ -1285,6 +1300,7 @@ FreeType 字体引擎、程序启动器（`apps()` + 异步图标）。
   做法是把当前线程临时降级成 `DPI_AWARENESS_CONTEXT_UNAWARE_GDISCALED`（Win10 1809+，
   `SetThreadDpiAwarenessContext` 运行时解析）再弹，收掉后还原。降级期间 `GetCursorPos`
   返回的也是同一套“虚拟化”坐标，所以取光标那一步必须写在作用域**里面**。
+  （2026-10-05 这次没机会用眼确认菜单外观，见第 5 节里那道欠账。）
 * **“属性”这类命令开出来的对话框以 `hwndOwner`（我们的卡片）为属主** → 收卡片必须
   发生在 `InvokeCommand` **之前**（本项目就是用 `showItemMenu()` 的 `beforeInvoke`
   回调做的），否则 `setProperty("visible", false)` 会把对话框一起藏掉。

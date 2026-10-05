@@ -82,6 +82,7 @@ private slots:
     void emptyListIsHandled();
     void setFilterNeverAutoLaunches();
     void contextMenuDecidesWhetherToCloseTheCard();
+    void qmlEntryPointsAreInvokable();
     void resetClearsTheFilter();
     void rowsForAvailableHeightIsClamped();
 };
@@ -359,6 +360,21 @@ void TestAppListModel::contextMenuDecidesWhetherToCloseTheCard()
     QCOMPARE(decisionOf(closed), QStringLiteral("cancel"));
     QVERIFY(handledOf(closed));
     QCOMPARE(indexOf(closed), -1);
+}
+
+void TestAppListModel::qmlEntryPointsAreInvokable()
+{
+    // QML 只认 `Q_INVOKABLE`（或者 slot）：漏了会抛 `TypeError`，而且**处理器里
+    // 后面的语句会被静默跳过**（AGENTS.md 第 10 节，表现得很像“处理器没跑”）。
+    // 右键菜单那条新路就是靠 `afterContextMenu()` 接的，所以这里把它连同相邻的
+    // 几个入口一起断言一下形状。
+    app::AppListModel model;
+    const QMetaObject *meta = model.metaObject();
+    for (const char *signature : {"setFilter(QString)", "activate(int)", "handleKey(int)",
+                                  "setHover(int)", "moveSelection(int)",
+                                  "afterContextMenu(bool)"}) {
+        QVERIFY2(meta->indexOfMethod(signature) >= 0, signature);
+    }
 }
 
 void TestAppListModel::resetClearsTheFilter()
