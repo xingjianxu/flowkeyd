@@ -57,13 +57,17 @@ void activateWindow(QQuickWindow *window)
     }
 }
 
+/// 弹窗该出现在哪块屏上：鼠标所在的那块（拿不到就是主屏）。
+QScreen *cursorScreen()
+{
+    QScreen *screen = QGuiApplication::screenAt(QCursor::pos());
+    return screen != nullptr ? screen : QGuiApplication::primaryScreen();
+}
+
 /// 把窗口居中放到鼠标所在的那块显示器上（拿不到就是主显示器）。
 void centreOnCursorScreen(QQuickWindow *window, int width, int height)
 {
-    QScreen *screen = QGuiApplication::screenAt(QCursor::pos());
-    if (screen == nullptr) {
-        screen = QGuiApplication::primaryScreen();
-    }
+    QScreen *screen = cursorScreen();
     if (screen == nullptr) {
         return;
     }
@@ -76,11 +80,48 @@ void centreOnCursorScreen(QQuickWindow *window, int width, int height)
     window->setPosition(point.x, point.y);
 }
 
+/// 窗口现在**真的**有多大（物理像素）。用 Win32 直接问，**绕开 Qt 的缩放记账** ——
+/// 要检查的正是「Qt 记的缩放和窗口实际的样子对不对得上」
+/// （见 `app::popupPixelSizeIsStale()`）。问不到时返回空尺寸，调用方按「没问题」处理。
+QSize windowPixelSize(QQuickWindow *window)
+{
+    if (window == nullptr) {
+        return {};
+    }
+    const HWND hwnd = reinterpret_cast<HWND>(window->winId());
+    RECT rect{};
+    if (hwnd == nullptr || GetWindowRect(hwnd, &rect) == 0) {
+        return {};
+    }
+    return QSize(rect.right - rect.left, rect.bottom - rect.top);
+}
+
 } // namespace
 
 PopupHost::PopupHost(QQmlEngine *engine, QObject *parent)
     : QObject(parent), m_engine(engine)
 {
+    // 显示器配置一变就把弹窗窗口重建（见头文件里那段「显示器缩放 / 几何变化」）。
+    // 一次切换（插上显示器 / 改缩放）会连着发好几个信号，所以用一条 500 ms 的
+    // 单次定时器去抖：每建一整套卡片要花掉几百毫秒，不能每个信号都来一遍。
+    m_screenChangeTimer.setSingleShot(true);
+    m_screenChangeTimer.setInterval(500);
+    QObject::connect(&m_screenChangeTimer, &QTimer::timeout, this,
+                     &PopupHost::discardPopupWindowsAndPreload);
+
+    if (auto *application = qobject_cast<QGuiApplication *>(QCoreApplication::instance())) {
+        QObject::connect(application, &QGuiApplication::screenAdded, this, [this](QScreen *screen) {
+            watchScreen(screen);
+            onScreenConfigurationChanged();
+        });
+        QObject::connect(application, &QGuiApplication::screenRemoved, this, [this](QScreen *screen) {
+            m_watchedScreens.remove(screen);
+            onScreenConfigurationChanged();
+        });
+    }
+    for (QScreen *screen : QGuiApplication::screens()) {
+        watchScreen(screen);
+    }
 }
 
 void PopupHost::requestMenu(MenuRequest request)
@@ -576,6 +617,81 @@ void PopupHost::noteFirstFrame()
     m_frameName.clear();
 }
 
+void PopupHost::watchScreen(QScreen *screen)
+{
+    if (screen == nullptr || m_watchedScreens.contains(screen)) {
+        return;
+    }
+    m_watchedScreens.insert(screen);
+    const auto note = [this](auto) { onScreenConfigurationChanged(); };
+    QObject::connect(screen, &QScreen::geometryChanged, this, note);
+    QObject::connect(screen, &QScreen::availableGeometryChanged, this, note);
+    QObject::connect(screen, &QScreen::logicalDotsPerInchChanged, this, note);
+    QObject::connect(screen, &QScreen::physicalDotsPerInchChanged, this, note);
+}
+
+void PopupHost::onScreenConfigurationChanged()
+{
+    m_screenChangeTimer.start();
+}
+
+void PopupHost::discardPopupWindowsAndPreload()
+{
+    discardPopupWindows();
+    // 重新预热：不然用户下一次按快捷键要多等一次 QML 组件加载（几十到两百毫秒，
+    // 见 `preload()` 的注释）。`preload()` 自己会重新填一份假数据。
+    m_preloaded = false;
+    preload();
+}
+
+void PopupHost::discardPopupWindows()
+{
+    // 窗口切换器可能把输入法切成了英文（`switchUseEnglishInput()`）：删窗口之前
+    // 先还回去，否则那份快照就白白丢了（`restoreSwitchInputMode()` 看不到窗口
+    // 就直接放弃）。
+    restoreSwitchInputMode();
+    // 五个窗口都是 `QQmlComponent::create()` 出来的（没有 parent），得自己删。
+    //
+    // **模型一律留着**：启动器的「固定 / 最近使用」就存在 `AppListModel` 里，
+    // 重建窗口不能把它弄丢（每个 `ensureXxxWindow()` 里都有「模型只建一次」
+    // 的判断）。删窗口时那些 `frameSwapped` 连接跟着窗口一起消失，而预热用的
+    // 2 秒兜底回调只会看到 `m_warming` 里没有它、直接 return。
+    m_warming.clear();
+    for (QQuickWindow *window : {m_menuWindow, m_helpWindow, m_switchWindow, m_appWindow, m_updateWindow}) {
+        delete window;
+    }
+    m_menuWindow = nullptr;
+    m_helpWindow = nullptr;
+    m_switchWindow = nullptr;
+    m_appWindow = nullptr;
+    m_updateWindow = nullptr;
+}
+
+bool PopupHost::rebuildPopupIfScaleIsStale(QQuickWindow *window, int logicalWidth, int logicalHeight,
+                                          QScreen *screen, const QString &name)
+{
+    if (window == nullptr || screen == nullptr) {
+        return false;
+    }
+    const QSize physical = windowPixelSize(window);
+    if (!popupPixelSizeIsStale(physical, logicalWidth, logicalHeight, screen->devicePixelRatio())) {
+        return false;
+    }
+    // 命中就说明这张卡片的缩放已经过期（启动之后显示器缩放变过）：它现在是
+    // 「逻辑数字当作物理像素」的尺寸，只有正确大小的一半。全部丢掉重建
+    // （它们五个是一起预热的，缩放也一样过期）。
+    win::logWarn(QStringLiteral("popup `%1` kept a stale scale (%2x%3 px for %4x%5 logical at %6x): "
+                                "rebuilding the popup windows")
+                     .arg(name)
+                     .arg(physical.width())
+                     .arg(physical.height())
+                     .arg(logicalWidth)
+                     .arg(logicalHeight)
+                     .arg(screen->devicePixelRatio()));
+    discardPopupWindows();
+    return true;
+}
+
 void PopupHost::preload()
 {
     if (m_preloaded) {
@@ -710,7 +826,15 @@ void PopupHost::finishWarmUp(QQuickWindow *window, const QString &name)
     }
     window->setProperty("visible", false);
     window->setOpacity(1.0);
-    win::logDebug(QStringLiteral("popup `%1` preloaded in %2 ms").arg(name).arg(m_warmTimer.elapsed()));
+    // 日志里带上**逻辑尺寸与缩放**：显示器缩放变过之后，这两项与
+    // `GetWindowRect` 量出来的物理尺寸对不对得上，是判断「弹窗是不是只有一半大」
+    // 的唯一现场（见 `popupPixelSizeIsStale()`）。
+    win::logDebug(QStringLiteral("popup `%1` preloaded in %2 ms (logical %3x%4 dpr %5)")
+                      .arg(name)
+                      .arg(m_warmTimer.elapsed())
+                      .arg(window->width())
+                      .arg(window->height())
+                      .arg(window->devicePixelRatio()));
     if (m_warming.isEmpty()) {
         win::logDebug(QStringLiteral("popup preload done in %1 ms").arg(m_warmTimer.elapsed()));
     }
@@ -718,11 +842,21 @@ void PopupHost::finishWarmUp(QQuickWindow *window, const QString &name)
 
 void PopupHost::showMenu(MenuRequest request)
 {
-    const bool created = m_menuWindow == nullptr;
+    bool created = m_menuWindow == nullptr;
     m_frameTimer.start();
     QQuickWindow *window = ensureMenuWindow();
     if (window == nullptr) {
         return;
+    }
+    // 启动之后显示器缩放变过的话，预热好的窗口会停在旧缩放上（只有一半大）：
+    // 丢掉重建（见 `popupPixelSizeIsStale()`）。
+    if (rebuildPopupIfScaleIsStale(window, m_menuModel->cardWidth(), m_menuModel->cardHeight(),
+                                   cursorScreen(), QStringLiteral("menu"))) {
+        created = true;
+        window = ensureMenuWindow();
+        if (window == nullptr) {
+            return;
+        }
     }
     // 预热还没收尾时用户就按了快捷键：取消预热，把这次当成**第一次**弹出
     // （窗口现在在屏幕外、全透明，位置与透明度都要重新弄）。
@@ -741,20 +875,25 @@ void PopupHost::showMenu(MenuRequest request)
 
 void PopupHost::showHelp(HelpRequest request)
 {
-    const bool created = m_helpWindow == nullptr;
+    bool created = m_helpWindow == nullptr;
     m_frameTimer.start();
     QQuickWindow *window = ensureHelpWindow();
     if (window == nullptr) {
         return;
     }
+    if (rebuildPopupIfScaleIsStale(window, m_helpModel->cardWidth(), m_helpModel->cardHeight(),
+                                   cursorScreen(), QStringLiteral("help"))) {
+        created = true;
+        window = ensureHelpWindow();
+        if (window == nullptr) {
+            return;
+        }
+    }
     const bool warming = cancelPreload(window);
     const bool wasVisible = window->isVisible() && !warming;
     m_helpRequest = std::move(request);
     m_helpModel->setItems(m_helpRequest.title, m_helpRequest.items);
-    QScreen *screen = QGuiApplication::screenAt(QCursor::pos());
-    if (screen == nullptr) {
-        screen = QGuiApplication::primaryScreen();
-    }
+    QScreen *screen = cursorScreen();
     m_helpModel->setMaxRows(screen != nullptr
                                 ? HelpModel::rowsForAvailableHeight(screen->availableGeometry().height())
                                 : 12);
@@ -768,10 +907,18 @@ void PopupHost::showHelp(HelpRequest request)
 
 void PopupHost::showSwitch(SwitchRequest request)
 {
-    const bool created = m_switchWindow == nullptr;
+    bool created = m_switchWindow == nullptr;
     QQuickWindow *window = ensureSwitchWindow();
     if (window == nullptr) {
         return;
+    }
+    if (rebuildPopupIfScaleIsStale(window, m_switchModel->cardWidth(), m_switchModel->cardHeight(),
+                                   cursorScreen(), QStringLiteral("switch"))) {
+        created = true;
+        window = ensureSwitchWindow();
+        if (window == nullptr) {
+            return;
+        }
     }
     // 预热还没收尾时用户就按了快捷键：取消预热，把这次当成**第一次**弹出。
     const bool warming = cancelPreload(window);
@@ -788,10 +935,7 @@ void PopupHost::showSwitch(SwitchRequest request)
     m_frameTimer.start();
     m_switchRequest = std::move(request);
     m_switchModel->setItems(m_switchRequest.title, m_switchRequest.items);
-    QScreen *screen = QGuiApplication::screenAt(QCursor::pos());
-    if (screen == nullptr) {
-        screen = QGuiApplication::primaryScreen();
-    }
+    QScreen *screen = cursorScreen();
     m_switchModel->setMaxRows(screen != nullptr
                                   ? WindowListModel::rowsForAvailableHeight(
                                         screen->availableGeometry().height())
@@ -808,10 +952,20 @@ void PopupHost::showSwitch(SwitchRequest request)
 
 void PopupHost::showApps(AppRequest request)
 {
-    const bool created = m_appWindow == nullptr;
+    bool created = m_appWindow == nullptr;
     QQuickWindow *window = ensureAppWindow();
     if (window == nullptr) {
         return;
+    }
+    // 缩放过期就重建（见 `popupPixelSizeIsStale()`）。判断要拿**现在的**卡片尺寸：
+    // 下面的 `setMaxRows()` 只会在扫了屏幕高度之后改它，那张卡片本身是恒定的。
+    if (rebuildPopupIfScaleIsStale(window, m_appModel->cardWidth(), m_appModel->cardHeight(),
+                                   cursorScreen(), QStringLiteral("apps"))) {
+        created = true;
+        window = ensureAppWindow();
+        if (window == nullptr) {
+            return;
+        }
     }
     // 预热还没收尾时用户就按了快捷键：取消预热，把这次当成**第一次**弹出。
     const bool warming = cancelPreload(window);
@@ -850,10 +1004,7 @@ void PopupHost::showApps(AppRequest request)
     }
     m_appModel->setItems(m_appRequest.title, std::move(entries));
 
-    QScreen *screen = QGuiApplication::screenAt(QCursor::pos());
-    if (screen == nullptr) {
-        screen = QGuiApplication::primaryScreen();
-    }
+    QScreen *screen = cursorScreen();
     m_appModel->setMaxRows(screen != nullptr
                                ? AppListModel::rowsForAvailableHeight(
                                      screen->availableGeometry().height())
@@ -872,6 +1023,11 @@ QQuickWindow *PopupHost::ensureAppWindow()
     if (m_appWindow != nullptr) {
         return m_appWindow;
     }
+    if (m_appModel == nullptr) {
+        m_appModel = new AppListModel(this);
+        // 固定 / 最近使用一改就落盘（`Space`、或者从启动器里启动了一个程序）。
+        QObject::connect(m_appModel, &AppListModel::stateEdited, this, &PopupHost::saveAppState);
+    }
     QQmlComponent component(m_engine);
     component.loadFromModule(QStringLiteral("Flowkeyd"), QStringLiteral("AppPopup"));
     if (component.isError()) {
@@ -886,9 +1042,6 @@ QQuickWindow *PopupHost::ensureAppWindow()
         win::logError(QStringLiteral("AppPopup.qml did not create a window"));
         return nullptr;
     }
-    m_appModel = new AppListModel(this);
-    // 固定 / 最近使用一改就落盘（`Space`、或者从启动器里启动了一个程序）。
-    QObject::connect(m_appModel, &AppListModel::stateEdited, this, &PopupHost::saveAppState);
     m_appWindow->setProperty("appModel",
                              QVariant::fromValue(static_cast<QObject *>(m_appModel)));
     m_appWindow->setProperty("host", QVariant::fromValue(static_cast<QObject *>(this)));
@@ -900,6 +1053,12 @@ QQuickWindow *PopupHost::ensureMenuWindow()
 {
     if (m_menuWindow != nullptr) {
         return m_menuWindow;
+    }
+    // 模型只建一次：显示器缩放变化时窗口会被丢掉重建（`discardPopupWindows()`），
+    // 不能再顺手把模型也换一份 —— 那会把模型里已经装好的数据（启动器的固定 /
+    // 最近使用）弄丢。
+    if (m_menuModel == nullptr) {
+        m_menuModel = new MenuModel(this);
     }
     QQmlComponent component(m_engine);
     component.loadFromModule(QStringLiteral("Flowkeyd"), QStringLiteral("MenuPopup"));
@@ -914,7 +1073,6 @@ QQuickWindow *PopupHost::ensureMenuWindow()
         win::logError(QStringLiteral("MenuPopup.qml did not create a window"));
         return nullptr;
     }
-    m_menuModel = new MenuModel(this);
     m_menuWindow->setProperty("menuModel", QVariant::fromValue(static_cast<QObject *>(m_menuModel)));
     m_menuWindow->setProperty("host", QVariant::fromValue(static_cast<QObject *>(this)));
     QObject::connect(m_menuWindow, &QQuickWindow::frameSwapped, this, &PopupHost::noteFirstFrame);
@@ -925,6 +1083,9 @@ QQuickWindow *PopupHost::ensureHelpWindow()
 {
     if (m_helpWindow != nullptr) {
         return m_helpWindow;
+    }
+    if (m_helpModel == nullptr) {
+        m_helpModel = new HelpModel(this);
     }
     QQmlComponent component(m_engine);
     component.loadFromModule(QStringLiteral("Flowkeyd"), QStringLiteral("HelpPopup"));
@@ -939,7 +1100,6 @@ QQuickWindow *PopupHost::ensureHelpWindow()
         win::logError(QStringLiteral("HelpPopup.qml did not create a window"));
         return nullptr;
     }
-    m_helpModel = new HelpModel(this);
     m_helpWindow->setProperty("helpModel", QVariant::fromValue(static_cast<QObject *>(m_helpModel)));
     m_helpWindow->setProperty("host", QVariant::fromValue(static_cast<QObject *>(this)));
     QObject::connect(m_helpWindow, &QQuickWindow::frameSwapped, this, &PopupHost::noteFirstFrame);
@@ -950,6 +1110,9 @@ QQuickWindow *PopupHost::ensureSwitchWindow()
 {
     if (m_switchWindow != nullptr) {
         return m_switchWindow;
+    }
+    if (m_switchModel == nullptr) {
+        m_switchModel = new WindowListModel(this);
     }
     QQmlComponent component(m_engine);
     component.loadFromModule(QStringLiteral("Flowkeyd"), QStringLiteral("SwitchPopup"));
@@ -965,7 +1128,6 @@ QQuickWindow *PopupHost::ensureSwitchWindow()
         win::logError(QStringLiteral("SwitchPopup.qml did not create a window"));
         return nullptr;
     }
-    m_switchModel = new WindowListModel(this);
     m_switchWindow->setProperty("switchModel",
                                 QVariant::fromValue(static_cast<QObject *>(m_switchModel)));
     m_switchWindow->setProperty("host", QVariant::fromValue(static_cast<QObject *>(this)));
@@ -979,11 +1141,19 @@ void PopupHost::showUpdate()
         win::logError(QStringLiteral("the update window has no model; nothing to show"));
         return;
     }
-    const bool created = m_updateWindow == nullptr;
+    bool created = m_updateWindow == nullptr;
     m_frameTimer.start();
     QQuickWindow *window = ensureUpdateWindow();
     if (window == nullptr) {
         return;
+    }
+    if (rebuildPopupIfScaleIsStale(window, m_updateModel->cardWidth(), m_updateModel->cardHeight(),
+                                   cursorScreen(), QStringLiteral("update"))) {
+        created = true;
+        window = ensureUpdateWindow();
+        if (window == nullptr) {
+            return;
+        }
     }
     const bool warming = cancelPreload(window);
     const bool wasVisible = window->isVisible() && !warming;

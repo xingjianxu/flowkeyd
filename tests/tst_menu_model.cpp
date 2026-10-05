@@ -87,6 +87,7 @@ private slots:
     void hoverOverridesTheKeyboardHighlight();
     void resetClearsTheHighlight();
     void popupPlacementStaysOnScreen();
+    void stalePopupScaleIsDetected();
     void rolesExposeWhatTheDelegateNeeds();
 };
 
@@ -311,6 +312,36 @@ void TestMenuModel::popupPlacementStaysOnScreen()
         app::centrePopup(app::PopupRect{-1920, 0, 1920, 1040}, app::PopupRect{-1920, 0, 1920, 1080}, 300, 274);
     QCOMPARE(left.x, -1110);
     QCOMPARE(left.y, 383);
+}
+
+// 弹窗卡片只有一半大的那个回归（2026-10 真机实测）。
+//
+// 预热好的弹窗窗口是隐藏 + 摆在屏幕之外的，显示器缩放变过之后它们收不到
+// `WM_DPICHANGED`，Qt 不会刷新缩放，于是停在「把逻辑数字当作物理像素」的尺寸上。
+// 弹出前拿 `GetWindowRect` 量出来的真实尺寸对一遍，不一致就把窗口丢掉重建。
+void TestMenuModel::stalePopupScaleIsDetected()
+{
+    // 正常：800×622 逻辑 @200% = 1600×1244 物理。
+    QVERIFY(!app::popupPixelSizeIsStale(QSize(1600, 1244), 800, 622, 2.0));
+    // 100% 缩放下也是正常的。
+    QVERIFY(!app::popupPixelSizeIsStale(QSize(800, 622), 800, 622, 1.0));
+    // 无边框窗口的边框 / DWM 阴影允许几像素差别。
+    QVERIFY(!app::popupPixelSizeIsStale(QSize(1604, 1250), 800, 622, 2.0));
+
+    // 缩放过期：窗口还停在 1:1 的尺寸上（真机上 `apps` 卡片就是这个样子）。
+    QVERIFY(app::popupPixelSizeIsStale(QSize(800, 1244), 800, 622, 2.0));
+    QVERIFY(app::popupPixelSizeIsStale(QSize(800, 622), 800, 622, 2.0));
+    QVERIFY(app::popupPixelSizeIsStale(QSize(300, 394), 300, 394, 2.0));
+    // 反过来也一样：缩放降下来之后窗口还停在高分屏的尺寸上。
+    QVERIFY(app::popupPixelSizeIsStale(QSize(1600, 1244), 800, 622, 1.0));
+
+    // 拿不到物理尺寸（窗口还没建出来 / `GetWindowRect` 失败）时不重建。
+    QVERIFY(!app::popupPixelSizeIsStale(QSize(), 800, 622, 2.0));
+    // 逻辑尺寸非法时也不重建（免得因为数字不对把好窗口丢掉）。
+    QVERIFY(!app::popupPixelSizeIsStale(QSize(800, 622), 0, 0, 2.0));
+    // 屏幕报 0 缩放时按 1:1 算：这时「1:1 的窗口」是正常的，而高分屏尺寸的那个才是错的。
+    QVERIFY(!app::popupPixelSizeIsStale(QSize(800, 622), 800, 622, 0.0));
+    QVERIFY(app::popupPixelSizeIsStale(QSize(1600, 1244), 800, 622, 0.0));
 }
 
 void TestMenuModel::rolesExposeWhatTheDelegateNeeds()

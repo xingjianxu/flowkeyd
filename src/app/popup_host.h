@@ -21,6 +21,7 @@
 #include <QPoint>
 #include <QSet>
 #include <QString>
+#include <QTimer>
 
 #include <cstdint>
 #include <functional>
@@ -29,6 +30,7 @@
 
 class QQmlEngine;
 class QQuickWindow;
+class QScreen;
 
 namespace flowkeyd::app {
 
@@ -258,6 +260,27 @@ private:
     void placePopup(QQuickWindow *window, int width, int height);
     void activate(QQuickWindow *window);
 
+    // ---- 显示器缩放 / 几何变化 ----
+    //
+    // 弹窗窗口启动时预热一次就一直留着，而且平时是隐藏 + 屏幕之外的；显示器缩放变了
+    // 之后它们收不到 `WM_DPICHANGED`，Qt 不会刷新它们的缩放，于是弹出时只有正确的
+    // 一半大（2026-10 真机实测，见 `popupPixelSizeIsStale()`）。所以屏幕配置一变就
+    // 把窗口缓存丢掉、重新预热。
+
+    /// 把 `screen` 的几何 / 缩放信号接上（同一个屏幕只接一次）。
+    void watchScreen(QScreen *screen);
+    /// 屏幕配置变了（**去抖**）：一次显示器切换会连着发好几个信号。
+    void onScreenConfigurationChanged();
+    /// 丢掉五个弹窗窗口（**模型留着**：启动器的固定 / 最近使用不会丢），然后重新
+    /// 预热。
+    void discardPopupWindowsAndPreload();
+    /// 单单丢掉五个弹窗窗口，它们下次要用时重建。
+    void discardPopupWindows();
+    /// 弹出前检查：窗口的物理尺寸如果还停在旧的缩放上就丢掉重建。返回「重建过了」。
+    /// 调用方在返回 true 之后要重新 `ensureXxxWindow()`。
+    bool rebuildPopupIfScaleIsStale(QQuickWindow *window, int logicalWidth, int logicalHeight,
+                                    QScreen *screen, const QString &name);
+
     /// 记一次「弹窗已经显示出来」的 debug 日志（耗时 + 这次是否新建了窗口）。
     /// 同时把「还要等首帧」的标记立起来，`noteFirstFrame()` 收到首帧时再补一条。
     /// 这两条日志是排查「弹出很慢」的唯一现场（第一次弹出要现场加载 QML 组件、
@@ -335,6 +358,11 @@ private:
     QSet<QQuickWindow *> m_warming;
     bool m_preloaded = false;
     QElapsedTimer m_warmTimer;
+
+    // 已经接过信号的屏幕（`watchScreen()` 的去重表），以及一次显示器切换里
+    // 好几个信号共用的去抖定时器。
+    QSet<QScreen *> m_watchedScreens;
+    QTimer m_screenChangeTimer;
 };
 
 } // namespace flowkeyd::app

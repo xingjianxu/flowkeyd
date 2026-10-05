@@ -458,6 +458,53 @@ public static class FlowInject {
         return new int[] { r.left, r.top, r.right - r.left, r.bottom - r.top };
     }
 
+    // 属于 `pid` 的、标题以 `prefix` 开头的第一个顶层窗口 —— **不管是可见的**
+    // （`WindowRect` 只找可见窗口，而这里要动的是还没弹出来的、预热好的窗口）。
+    public static IntPtr WindowOfTitle(int pid, string prefix) {
+        IntPtr found = IntPtr.Zero;
+        EnumWindows(delegate(IntPtr h, IntPtr l) {
+            uint wpid;
+            GetWindowThreadProcessId(h, out wpid);
+            if (wpid != (uint)pid) { return true; }
+            int n = GetWindowTextLengthW(h);
+            if (n <= 0) { return true; }
+            StringBuilder sb = new StringBuilder(n + 2);
+            GetWindowTextW(h, sb, sb.Capacity);
+            if (sb.ToString().StartsWith(prefix)) { found = h; return false; }
+            return true;
+        }, IntPtr.Zero);
+        return found;
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
+    [DllImport("user32.dll")] private static extern uint GetDpiForWindow(IntPtr h);
+
+    // 把窗口强行改成给定的**物理**尺寸。
+    //
+    // 用来模拟「显示器缩放变过之后，预热好的窗口停在旧缩放上」：那种窗口的物理
+    // 尺寸就等于逻辑尺寸（只有正确大小的一半，见 AGENTS.md 第 10 节的
+    // 「弹窗缩放过期」）。
+    public static bool ResizeWindowPhysical(int pid, string prefix, int width, int height) {
+        IntPtr h = WindowOfTitle(pid, prefix);
+        if (h == IntPtr.Zero) { return false; }
+        const uint SWP_NOMOVE = 0x0002;
+        const uint SWP_NOZORDER = 0x0004;
+        const uint SWP_NOACTIVATE = 0x0010;
+        return SetWindowPos(h, IntPtr.Zero, 0, 0, width, height, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+
+    // 那个窗口所在显示器的 DPI（`GetDpiForWindow`；96 = 100%，192 = 200%）。
+    //
+    // 它是「卡片应该有多宽」的**独立**参照：卡片宽度恒为 800 逻辑像素，所以物理
+    // 宽度必须跟着这块屏的 DPI 走 —— 拿卡片自己反推缩放的话，一个「只有一半大」的
+    // 窗口会把自己的缩放也算成一半，反而看不出问题。
+    public static uint WindowDpi(int pid, string prefix) {
+        IntPtr h = WindowOfTitle(pid, prefix);
+        if (h == IntPtr.Zero) { return 0; }
+        return GetDpiForWindow(h);
+    }
+
     // 屏幕上一块区域的指纹（FNV-1a 32 位）：抓图之后把所有像素扫一遍。
     // 滚动没有别的可观察量（标题里的条数、窗口矩形都不随滚动变），只能看像素。
     // 锁屏 / 会话没接收到输入时 `CopyFromScreen` 会抛（AGENTS.md 第 10 节），
@@ -925,6 +972,14 @@ try {
     }
     Dismiss-ShellUi
     NeedFocus '程序启动器'
+    # 回归守卫：显示器缩放变过之后，预热好的弹窗窗口会停在旧缩放上（物理尺寸只剩
+    # 正确大小的一半，2026-10 修过：守护进程在 100% 缩放下启动、系统缩放改成 200%
+    # 之后启动器只有一半大）。这里先把**还没弹出来的**启动器窗口强行缩成 800x622
+    # 物理像素 —— 那正是旧窗口的样子 —— 再按快捷键，产品必须在弹出前发现并重建。
+    $appsDpi = [FlowInject]::WindowDpi($daemon.Id, $APPS_TITLE)
+    $appsStale = [FlowInject]::ResizeWindowPhysical($daemon.Id, $APPS_TITLE, 800, 622)
+    if (-not $appsStale) { Diag 'could not shrink the preloaded launcher window; the stale-scale check cannot run' }
+    if ($appsDpi -eq 0) { Diag 'could not read the launcher window DPI' }
     CtrlAlt $VK_F14
     $appsUp = WaitUntil { [FlowInject]::HasWindowTitled($daemon.Id, $APPS_TITLE) } 6000
     Check 'Ctrl+Alt+F14 弹出程序启动器' $appsUp
@@ -932,6 +987,14 @@ try {
         -not [FlowInject]::IsTaskbarWindow($daemon.Id, $APPS_TITLE))
     Check '启动器卡片拿到了键盘焦点' (
         WaitUntil { [FlowInject]::ForegroundTitle() -like "$APPS_TITLE*" } 4000)
+    $appsRect = [FlowInject]::WindowRect($daemon.Id, $APPS_TITLE)
+    $appsExpectedW = [int](800 * $appsDpi / 96)
+    $appsExpectedH = [int](622 * $appsDpi / 96)
+    Write-Host "         apps rect: $($appsRect[2])x$($appsRect[3]) px, expected $appsExpectedW x $appsExpectedH at $appsDpi dpi"
+    Check '启动器卡片发现旧缩放并重建（不会只有一半大）' (
+        $appsStale -and $appsDpi -gt 0 -and
+        [Math]::Abs($appsRect[2] - $appsExpectedW) -le 4 -and
+        [Math]::Abs($appsRect[3] - $appsExpectedH) -le 4)
     $appsTotal = AppsCount
     Write-Host "         apps caption: $appsTotal"
     Check '标题里读得出程序条数（至少 1 个）' ($appsTotal -ge 1)

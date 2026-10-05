@@ -125,7 +125,7 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
 | 互斥体     | `Local\flowkeyd-<配置路径散列>`                                                 |
 | 开机自启   | 计划任务 `flowkeyd` 指向**当前运行 exe**（启动时自注册自检）                    |
 | 在线更新   | 托盘菜单 *检查更新* → GitHub `releases/latest` → slim 包 → sha256 → 换 exe + 重启 |
-| 自动化测试 | Qt Test 单元测试 + `scripts/acceptance.ps1`（161 → 164 项检查，需交互式桌面）         |
+| 自动化测试 | Qt Test 单元测试 + `scripts/acceptance.ps1`（161 → 165 项检查，需交互式桌面）         |
 | 依赖管理   | CMake Presets + Ninja，`vendor/lua` 静态编进二进制                             |
 
 ---
@@ -391,6 +391,11 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
     * 真实弹出要先 `cancelPreload()`（用户可能在启动后的那 300 ms 里就按了快捷键）；
       用 `QSet<QQuickWindow*> m_warming` 判断，**不要用全局“代”号**
       （会把另外几个还在预热的窗口的首帧回调一起废掉）。
+    * **显示器配置 / 缩放一变就把窗口缓存丢掉重建**（`discardPopupWindows()` +
+      重新 `preload()`，模型留着）：隐藏 + 摆在屏幕外的窗口收不到 `WM_DPICHANGED`，
+      缩放变过之后它们会停在旧缩放上，弹出时只有正确大小的一半 —— 项目所有者
+      2026-10 报的「启动器尺寸又变小了」就是它（细节、实测数据与两层修法见
+      §10 的「弹窗缩放过期」）。
 24. **窗口切换器卡片的几处调整。**
     * **没有标题行**：卡片里只剩筛选框、列表与底部提示；筛选框就是第一行，
       `listTop` = **50**（`kPad 12 + 筛选框 30 + 间隙 8`），卡片高度 238（3 行时）。
@@ -776,13 +781,13 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
 | `runtime.h/.cpp` | 引擎 + 钩子 + 分发 + 托盘 + 弹窗的总装；`ControlCmd`（suspend/reload/quit）通道；`--quit` 的事件句柄（`QWinEventNotifier` 在 GUI 线程上监听）；`reportDesktop()`/`desktopChanged`；`showSwitchFromAnyThread()` 等 |
 | `log_model.h/.cpp` | 日志窗口的模型：尾随日志文件、最多 1000 行、按级别配色、子串过滤 |
 | `menu_model.h/.cpp` / `help_model.h/.cpp` / `window_list_model.h/.cpp` / `app_list_model.h/.cpp` | 四个卡片的**纯逻辑**（`QAbstractListModel`，只用 QtCore）。行几何与鼠标命中**不归它们管**（`ListView`/`GridView` + `ItemDelegate`）；`help` 只管筛选/选中项/`Enter`/`Esc`/`setSelected`；`menu` 还持有悬停（`Enter` 执行光标下那一条）；`window_list` 管进程名前缀筛选、自动激活与数字选择模式；`app_list` 管**行**式的三个视图（已固定 + 最近使用 + 「全部程序」按钮 / 筛选用的扁平网格 / 按首字母分组的一行一个）、名字/拼音/首字母子串筛选（搜索串来自 `core::appSearchText()`，§2 第 29 条）、筛选之后前 10 条的**数字快速启动键**（`0` 起、图标右上角的号码）、已固定程序的 **`Alt` + 字母固定快捷键**（`Alt+a`–`Alt+z`，不随筛选变化）、`Space` 固定与「最近使用」的记账、以及卡片高度（§2 第 27/30 条） |
-| `popup_layout.h/.cpp` / `popup_host.h/.cpp` | 弹窗共用的几何类型与 `centrePopup()`（先在工作区居中、再夹进屏幕）；把模型挂到 QML 窗口上、抢前台、在 GUI 线程上创建/复用窗口、`helpRun()`（可见行下标 → 条目下标，**先藏窗口再执行**）、`preload()`、`switchUseEnglishInput()`/`restoreSwitchInputMode()` |
+| `popup_layout.h/.cpp` / `popup_host.h/.cpp` | 弹窗共用的几何类型与 `centrePopup()`（先在工作区居中、再夹进屏幕）、`popupPixelSizeIsStale()`（窗口的物理尺寸是不是停在了旧缩放上）；把模型挂到 QML 窗口上、抢前台、在 GUI 线程上创建/复用窗口、`helpRun()`（可见行下标 → 条目下标，**先藏窗口再执行**）、`preload()`、**屏幕缩放 / 几何变时丢掉窗口缓存重建**（`discardPopupWindows()`）、`switchUseEnglishInput()`/`restoreSwitchInputMode()` |
 | `app_icons.h/.cpp` | **程序启动器的图标**：`QQuickAsyncImageProvider` + 一条常驻 STA 线程（队列 + 按「启动名@边长」缓存），把 `platform/win/apps::shellIcon()` 的 BGRA 变成 `QImage`（`Format_ARGB32`，**直通 alpha**）；表是“图标键 → 启动名”，只增不改（§2 第 27 条） |
 | `update_model.h/.cpp` / `update_archive.h/.cpp` / `updater.h/.cpp` | 更新卡片的状态机（八个阶段、版本号/发布说明/进度/按钮可见性，**不联网不解压不换文件**）；从 zip 里取出新 exe（`QZipReader` + PE 魔数检查）；联网编排（异步 `QNetworkAccessManager` + sha256 + 解压到 `<exe>.new` + mtime 对齐发布日） |
 | `app_icon.h/.cpp` | 把 qrc 里的 9 张 PNG 帧拼成多尺寸 `QIcon`（`applicationIcon()`）；`desktopIcon(number)` 现画桌面号徽标 |
 | `src/qml/` | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`、`SwitchPopup.qml`、`AppPopup.qml`、`UpdatePopup.qml`。都写 `pragma ComponentBehavior: Bound`；**五个弹窗的 `flags` 都带 `Qt.Tool`**；配色一律用 `palette`（没有单独的 `Style.qml`）；中文一律 `font.family: "Microsoft YaHei"`；列表/网格全部是标准 `ListView`/`GridView` + `ItemDelegate`（+ `ScrollBar`） |
 | `tests/` | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_remote_desktop`、`tst_log_tail`、`tst_audio`、`tst_autostart`、`tst_menu_model`、`tst_help_model`、`tst_window_list_model`、`tst_app_list`、`tst_app_list_model`、`tst_launcher_state`、`tst_power_table`、`tst_desktop_table`、`tst_placement`、`tst_layout`、`tst_version`、`tst_desktop_badge`、`tst_update`、`tst_update_model`、`tst_update_install`、`tst_command_line`、`tst_instance`、`tst_input`，以及需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1` 的 `tst_interactive`（真机：剪贴板/音量/窗口/虚拟桌面/钉住/置顶/输入法/覆盖层/更新下载；联网那条还要 `FLOWKEYD_ALLOW_NETWORK_TESTS=1`） |
-| `scripts/acceptance.ps1` | 桌面行为验收（注入按键 + 焦点捕捉窗口的外部观察，161 → 164 项检查），需交互式桌面，**不属于 `ctest`** |
+| `scripts/acceptance.ps1` | 桌面行为验收（注入按键 + 焦点捕捉窗口的外部观察，161 → 165 项检查），需交互式桌面，**不属于 `ctest`** |
 | `scripts/release.ps1` | 构建 release + 打包（完整包 + 精简升级包，各附 `.sha256`）+ 用 `gh` 上传 GitHub Release。tag 取刚构建的 exe 的 `--version`。**发布说明由脚本自己写**（上一个 Release 的 tag → HEAD 的提交主题，按提交信息前缀分类成新功能/修复/变更/其它，纯文档/测试类只计数；`-Notes`/`-NotesFile` 可以整份替换），不用 `gh --generate-notes`。工作区脏或 HEAD 没推到 origin 会直接拒绝（要 `-AllowDirty`/`-Push`）。**唯一的新前置依赖是 `gh`**。开关：`-SkipBuild`/`-SkipResident`/`-SkipUpload`/`-Clobber` |
 
 > `scripts/install.ps1` / `uninstall.ps1` **已删除**：自启的注册、刷新与删除现在全在
@@ -875,7 +880,7 @@ dir build\dist-release               # 发布包（release 构建自动产出，
 ### 桌面行为怎么验证
 
 ```powershell
-# 161 → 164 项检查，约三分钟，会持续注入按键/抢焦点；按工作约定第 6 条先提醒用户
+# 161 → 165 项检查，约三分钟，会持续注入按键/抢焦点；按工作约定第 6 条先提醒用户
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance.ps1
 powershell.exe ... -Phase config      # 只看配置，不注入按键
 ```
@@ -887,6 +892,12 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
 
 脚本**不做**的：动画的屏幕采样、托盘菜单点击、自提权的 UAC 流程、“托盘图标真的消失了”
 的直接观察，以及**一切电源动作**。这几项仍然只能靠人的手。
+
+启动器那一段还有一条**弹窗缩放过期**的回归守卫：先把预热好的启动器窗口
+`SetWindowPos` 成 800×622 **物理**像素（就是缩放变过之后它真实的样子），再按快捷键
+弹出 —— 断言卡片真的被重建了，而且宽度等于 `800 × GetDpiForWindow()/96`（现取窗口
+所在屏的 DPI 当**独立**参照：拿卡片自己的宽度反推缩放的话，一个「一半大」的窗口会把
+自己的缩放也算成一半，反而看不出问题）。细节见 §10 的「弹窗缩放过期」。
 
 「轻碰 Win」（`keys = "LWin"` + `trigger = "release"`）这条路径由脚本里
 「窗口切换器」那一段兜住：一次轻碰弹卡片、**再轻碰一次关掉**（与 `Esc` 同义）、
@@ -1030,6 +1041,26 @@ debug 构建 + 31 个测试全绿、release 零警告。**这次按项目所有�
 `control panel: 36 item(s), 1 hidden`，每个控制面板条目的解析名都过 `SHParseDisplayName`、
 都有图标。**还欠一次真机手跑**：真的按下 `Enter` 启动一个控制面板项与一个 `ms-settings:`
 页面（见手工冒烟清单第 12 条）。
+
+**2026-10（收尾）：修「弹窗在显示器缩放变过之后只剩一半大」（现在 165 项检查）。**
+项目所有者报「launcher 弹出界面尺寸又变小了」。根因不是卡片几何（那个 2026-10-05 已经
+修过），而是**预热好的窗口停在了旧缩放上**：那五个隐藏 + 屏幕外的窗口收不到
+`WM_DPICHANGED`，于是窗口的物理尺寸停在「逻辑数字」上（本机那一轮：常驻进程
+20:14 启动，20:16 出现 `monitor connected: DISPLAY1601`（也就是显示器 / 缩放变过），
+之后量到的物理尺寸就是 300×394 / 500×708 / 560×670 / 800×1244 / 520×360；
+重启进程后是 600×788 / 1000×1416 / 1120×1340 / 1600×1244 / 1040×720）。修法两层（屏幕
+配置一变就丢窗口重建 + 每次弹出前量真实物理尺寸），见 §10 的「弹窗缩放过期」。
+`scripts/acceptance.ps1` 的启动器那一段加了一条回归守卫：先 `SetWindowPos` 把预热好的
+启动器窗口缩成 800×622 **物理**像素（旧缩放的样子），再按快捷键弹出 —— 断言卡片真的
+被重建、而且宽度等于 `800 × GetDpiForWindow()/96`（现取窗口所在屏的 DPI 当独立参照）。
+
+验证：debug 31 个测试全绿（`tst_menu_model` 新增 `stalePopupScaleIsDetected`）、
+两条 profile 零警告、`--check flowkeyd.lua.example` 零警告（47 hotkey / 3 remap /
+7 window rule）、`tmp/preview/` 全绿（0 失败，包括新增的 `checkStalePopupScale()`：
+把窗口缩成 800×622 物理像素之后弹出 —— 窗口确实被重建、重建后的物理尺寸 1600×1244），
+重启常驻实例之后从外面量到的五张卡片物理尺寸也全部正确。**`scripts/acceptance.ps1`
+这一轮没能跑**：会话里 `GetForegroundWindow()` 返回 0、`SendInput` 报 5 —— 就是下面
+那条「先去解锁」的情形（不是产品 bug），新加的那条检查算欠账。
 
 **锁屏时 `tmp/preview/` 的 `checkAppsMenu()` 会挂**（2026-10 实测两次）：那张原生菜单是
 `TrackPopupMenuEx` 的模态循环，`GetForegroundWindow() == 0` 时往 `#32768` 投 `Esc`
@@ -1215,7 +1246,7 @@ debug 构建 + 31 个测试全绿、release 零警告。**这次按项目所有�
 | 6 弹窗 `menu` / `help` | **已完成** | `flowkeyd_models` + 两张 QML 卡片；`tst_menu_model`/`tst_help_model` 全绿 |
 | 7 虚拟桌面 + 电源 | **已完成** | `desktop`/`power` + dispatcher 接线；`tst_desktop_table`/`tst_power_table` 全绿 |
 | 8 示例配置 + README | **已完成** | 覆盖全特性的 `flowkeyd.lua.example`（`--check` 零警告）；README 已写全 |
-| 9 验收（无 e2e 的替代） | **已完成** | `scripts/acceptance.ps1`（现在 164 项）+ `FLOWKEYD_ACCEPT_INJECTED` 测试后门 |
+| 9 验收（无 e2e 的替代） | **已完成** | `scripts/acceptance.ps1`（现在 165 项）+ `FLOWKEYD_ACCEPT_INJECTED` 测试后门 |
 | 10 接管 | **已完成** | 真实配置迁到 `.config\flowkeyd\config.lua`；常驻由计划任务 `flowkeyd` 指向当前运行的 exe |
 
 第 10 阶段之后新增的能力（都在本文件对应章节有记录）：
@@ -1224,7 +1255,8 @@ debug 构建 + 31 个测试全绿、release 零警告。**这次按项目所有�
 发布包精简、精简升级包、`scripts/release.ps1`、在线更新、`install.ps1` 一键安装、
 FreeType 字体引擎、程序启动器（`apps()` + 异步图标）、启动器数据源换成 `shell:AppsFolder`
 （含商店应用 / 系统工具，丢掉卸载程序与文档 / 网址，§2 第 27 条）、启动器筛选认拼音与
-首字母（§2 第 29 条）、启动器的固定 / 最近使用 / 「全部程序」分组列表（§2 第 30 条）。
+首字母（§2 第 29 条）、启动器的固定 / 最近使用 / 「全部程序」分组列表（§2 第 30 条）、
+弹窗缩放过期自愈（显示器缩放变过之后丢掉窗口缓存重建，§2 第 23 条 / §10）。
 
 ---
 
@@ -1426,6 +1458,40 @@ FreeType 字体引擎、程序启动器（`apps()` + 异步图标）、启动器
 * **用 DPI 不感知的 PowerShell 进程 `GetWindowRect` + `PrintWindow` 会拿到错的结果**
   （坐标被虚拟化成逻辑像素）→ 让 Qt 自己抓（`QScreen::grabWindow(window->winId())`），
   或先 `SetProcessDPIAware()`。
+* **弹窗缩放过期：预热好的卡片在显示器缩放变过之后只剩一半大。** 项目所有者 2026-10 报
+  「启动器弹出界面尺寸又变小了」（之前那次「过小」是卡片高度按内容收缩，已修，见
+  §2 第 30 条 —— 这是另一回事）。根因：五个弹窗窗口在启动时预热一次就一直留着复用，
+  而它们平时是**隐藏 + 摆在屏幕之外的**；用户后来把系统缩放从 100% 改成 200% 时，
+  这种窗口收不到 `WM_DPICHANGED`（它们不属于任何显示器），Qt 也就不刷新它们的
+  `devicePixelRatio` —— 于是窗口的**物理**尺寸停在「逻辑数字」上。真机实测
+  （从外面用 `GetWindowRect` 量，先 `SetProcessDpiAwarenessContext(PMv2)`，不然拿到的是
+  虚拟化坐标）：
+
+  | 状态 | menu | help | switch | apps | update |
+  | ---- | ---- | ---- | ------ | ---- | ------ |
+  | 缩放变过（坏） | 300×394 | 500×708 | 560×670 | 800×1244 | 520×360 |
+  | 重启进程（好） | 600×788 | 1000×1416 | 1120×1340 | 1600×1244 | 1040×720 |
+
+  `apps` 那行最能看出问题：宽度 800 物理 = 400 逻辑，6 列网格（756 逻辑像素）被切掉
+  一半。**注意 `GetDpiForWindow` 照样报 192**，所以「窗口 DPI 对不对」是看不出来的，
+  只有真实物理尺寸能看出来。修法两层，都在 `PopupHost`：
+
+  1. **屏幕配置一变就丢掉窗口缓存重建**（`discardPopupWindows()` + 重新 `preload()`）：
+     接 `QGuiApplication::screenAdded`/`screenRemoved` 与每个 `QScreen` 的
+     `geometryChanged`/`availableGeometryChanged`/`logicalDotsPerInchChanged`/
+     `physicalDotsPerInchChanged`，500 ms 去抖（一次显示器切换会连着发好几个信号，
+     而建一整套五个卡片要几百毫秒）。
+  2. **每次弹出前量一遍真实尺寸**：`GetWindowRect` 与「逻辑尺寸 × 这块屏的缩放」不符
+     就丢掉重建。判断是纯函数 `app::popupPixelSizeIsStale()`（`tst_menu_model` 盯着），
+     容差几像素是为了无边框窗口的边框 / DWM 阴影；拿不到尺寸（窗口还没建出来）时不重建。
+
+  重建时**模型必须留着**：启动器的固定 / 最近使用就存在 `AppListModel` 里，
+  `ensureXxxWindow()` 里那几个「模型只建一次」的判断就是为它加的；
+  `discardPopupWindows()` 里也要先 `restoreSwitchInputMode()`（否则输入法那份快照
+  白丢了）。回归守卫两处：`tmp/preview/` 的 `checkStalePopupScale()`（把（隐藏的）
+  窗口强行缩成 800×622 物理像素再弹出 —— 用旧窗口上的一个 `setProperty` 标记断言
+  「真的换了一个窗口」，锁屏也能跑）与 `scripts/acceptance.ps1` 里那一条（同样
+  `SetWindowPos`，再用 `GetDpiForWindow()/96` 当**独立**参照）。
 * **`ItemDelegate` 的内边距覆盖不掉**（FluentWinUI3 的 `ItemDelegate.qml` 用绑定给每个实例
   定内边距，实测左右 12 / 上下 8）→ **不要和样式的内边距较劲**：内容区里的东西全部锚在
   `contentItem` 上，让它自适应。
@@ -1719,6 +1785,13 @@ FreeType 字体引擎、程序启动器（`apps()` + 异步图标）、启动器
 * **“物理按键”可以自动化，但必须先加一个测试后门**：钩子照规矩丢弃一切带 `LLKHF_INJECTED`
   的事件，于是 `SendInput` 伪造不了用户按键 → `FLOWKEYD_ACCEPT_INJECTED=1` 抬升那道过滤，
   而且**只改钩子给 `event.injected` 赋值的那一步**。启用时打一条警告。
+* **“只有显示器配置变了才会出现”的弹窗问题可以在进程内复现**：把那个（隐藏的）弹窗
+  窗口 `SetWindowPos` 成「逻辑尺寸当作物理像素」的大小（就它停在旧缩放上的样子），
+  再正常弹出一次 —— 产品会发现尺寸不对、丢掉重建。`tmp/preview/` 的
+  `checkStalePopupScale()` 就是这么做的（锁屏也能跑）。断言时**给旧窗口打个
+  `setProperty` 标记**：标记不在了才能证明窗口真的换了一个，否则分不清是重建了还是
+  Qt 自己把尺寸改了回来。真机上这套只在“桌面能接收输入”时才能跑（注入不行时
+  验收脚本会挂在第一段，见上一条），所以两边各留一条。
 * **`$form.Activate()` 会静默失败**：Windows 的前台锁只允许“当前就在前台的那个进程”抢焦点。
   验收脚本要照抄守护进程自己的 `raiseWindow`（`AttachThreadInput` 到当前前台线程 →
   `SetForegroundWindow` → 解挂），而且真抢不到焦点时要**明确报一条失败**。
