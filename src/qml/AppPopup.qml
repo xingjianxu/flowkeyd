@@ -260,9 +260,20 @@ Window {
                 policy: ScrollBar.AsNeeded
             }
 
-            // 列表刚长出来时 Qt 会把 `contentY` 摆到「保持滚动比例」的位置，
-            // 内容 / 几何稳下来之后再摆一次选中行（幂等，不干扰用户自己滚）。
-            onContentHeightChanged: root.followSelection(root.appModel ? root.appModel.selectedRow : -1)
+            // 列表的位置只需要在两件事上动：视图整个换掉时（Qt 会把 `contentY`
+            // 留在旧位置，模型 reset / 高度变化之后由 `onHeightChanged` 与
+            // `onSelectedChanged` 把它摆回选中行 = 顶部），以及键盘选中项变化时
+            // 把它带进视野。
+            //
+            // **不要挂 `onContentHeightChanged`**：`ListView` 对**还没创建出来的**
+            // 委托是用「已见过的高度的平均值」估高的，滚动时创建的委托一直在换，
+            // 这个估算就会抖几个像素（实测 123 行时 8597 → 8602 → 8406 → …），
+            // 于是 `contentHeightChanged` 在滚动中不停发；跟着它
+            // `positionViewAtIndex(选中行, Contain)` 就会把滚轮 / 拖滑块刚滚出来的
+            // 位置立刻拽回选中行 —— 现象是「有滚动条，但滚不动」（2026-10-05 修）。
+            // 行高全都一样时不会抖（帮助窗口就是），所以这个坑只在“一行一种高度”
+            // 的列表里出现；`tmp/preview/` 与 `scripts/acceptance.ps1` 各有一条检查
+            // 盯着它。
             onHeightChanged: root.followSelection(root.appModel ? root.appModel.selectedRow : -1)
 
             delegate: Item {

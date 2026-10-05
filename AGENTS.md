@@ -119,7 +119,7 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
 | 互斥体     | `Local\flowkeyd-<配置路径散列>`                                                 |
 | 开机自启   | 计划任务 `flowkeyd` 指向**当前运行 exe**（启动时自注册自检）                    |
 | 在线更新   | 托盘菜单 *检查更新* → GitHub `releases/latest` → slim 包 → sha256 → 换 exe + 重启 |
-| 自动化测试 | Qt Test 单元测试 + `scripts/acceptance.ps1`（149 → 155 项检查，需交互式桌面）         |
+| 自动化测试 | Qt Test 单元测试 + `scripts/acceptance.ps1`（156 项检查，需交互式桌面）         |
 | 依赖管理   | CMake Presets + Ninja，`vendor/lua` 静态编进二进制                             |
 
 ---
@@ -573,6 +573,11 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
       所以概览可能只有三四行高、一开「全部程序」就变成一屏。
     * 对外的接口没变：还是 `apps([title])`，固定与最近使用是**运行时状态**，
       配置 schema 里没有对应的字段。
+    * **滚动位置只在「换视图」时回到顶部**，不跟 `ListView.contentHeight` 走：那个属性
+      在滚动中会因为「还没创建出来的委托按估算高度算」而抖几像素，跟着它把选中行摆进
+      视野，就会把滚轮 / 拖滑块刚滚出来的位置立刻拽回第 0 行（现象是「有滚动条，但滚
+      不动」，2026-10-05 修）。`scripts/acceptance.ps1` 与 `tmp/preview/` 各有一条检查
+      盯着这一点。
 
 ---
 
@@ -685,7 +690,7 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
 | `app_icon.h/.cpp` | 把 qrc 里的 9 张 PNG 帧拼成多尺寸 `QIcon`（`applicationIcon()`）；`desktopIcon(number)` 现画桌面号徽标 |
 | `src/qml/` | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`、`SwitchPopup.qml`、`AppPopup.qml`、`UpdatePopup.qml`。都写 `pragma ComponentBehavior: Bound`；**五个弹窗的 `flags` 都带 `Qt.Tool`**；配色一律用 `palette`（没有单独的 `Style.qml`）；中文一律 `font.family: "Microsoft YaHei"`；列表/网格全部是标准 `ListView`/`GridView` + `ItemDelegate`（+ `ScrollBar`） |
 | `tests/` | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_remote_desktop`、`tst_log_tail`、`tst_audio`、`tst_autostart`、`tst_menu_model`、`tst_help_model`、`tst_window_list_model`、`tst_app_list`、`tst_app_list_model`、`tst_launcher_state`、`tst_power_table`、`tst_desktop_table`、`tst_placement`、`tst_layout`、`tst_version`、`tst_desktop_badge`、`tst_update`、`tst_update_model`、`tst_update_install`、`tst_command_line`、`tst_instance`、`tst_input`，以及需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1` 的 `tst_interactive`（真机：剪贴板/音量/窗口/虚拟桌面/钉住/置顶/输入法/覆盖层/更新下载；联网那条还要 `FLOWKEYD_ALLOW_NETWORK_TESTS=1`） |
-| `scripts/acceptance.ps1` | 桌面行为验收（注入按键 + 焦点捕捉窗口的外部观察，134 → 149 项检查），需交互式桌面，**不属于 `ctest`** |
+| `scripts/acceptance.ps1` | 桌面行为验收（注入按键 + 焦点捕捉窗口的外部观察，155 → 156 项检查），需交互式桌面，**不属于 `ctest`** |
 | `scripts/release.ps1` | 构建 release + 打包（完整包 + 精简升级包，各附 `.sha256`）+ 用 `gh` 上传 GitHub Release。tag 取刚构建的 exe 的 `--version`。**发布说明由脚本自己写**（上一个 Release 的 tag → HEAD 的提交主题，按提交信息前缀分类成新功能/修复/变更/其它，纯文档/测试类只计数；`-Notes`/`-NotesFile` 可以整份替换），不用 `gh --generate-notes`。工作区脏或 HEAD 没推到 origin 会直接拒绝（要 `-AllowDirty`/`-Push`）。**唯一的新前置依赖是 `gh`**。开关：`-SkipBuild`/`-SkipResident`/`-SkipUpload`/`-Clobber` |
 
 > `scripts/install.ps1` / `uninstall.ps1` **已删除**：自启的注册、刷新与删除现在全在
@@ -778,7 +783,7 @@ dir build\dist-release               # 发布包（release 构建自动产出，
 ### 桌面行为怎么验证
 
 ```powershell
-# 149 → 155 项检查，约三分钟，会持续注入按键/抢焦点；按工作约定第 6 条先提醒用户
+# 155 → 156 项检查，约三分钟，会持续注入按键/抢焦点；按工作约定第 6 条先提醒用户
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance.ps1
 powershell.exe ... -Phase config      # 只看配置，不注入按键
 ```
@@ -804,32 +809,45 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
 拿到键盘焦点、标题里读得出条数、**在卡片里打字真的筛掉条目**、再按一次快捷键关掉它、
 重新打开时筛选已复位、`Esc` 关掉、关掉之后前台回到捕捉窗口）。
 **卡片里绝不能按 `Enter`** —— 那会真的启动列表里第一个程序。
-`-Phase config` 那条路（`--check` 17 个快捷键 / `--list`）已验证通过；
-**完整的 `-Phase all` 那一次写这几条时还没跑**：当时桌面正锁着（`LogonUI` 在跑，
-`GetForegroundWindow()` 返回 0），按下面那条“锁屏时脚本必然挂”的规矩，那不是产品问题。
-**解锁后要补跑一次，并把 `checks:` 计数更新到上面。**
+`-Phase config` 那条路（`--check` 17 个快捷键 / `--list`）已验证通过；完整的
+`-Phase all` 已于 2026-10-05 补跑（见下面的「补跑记录」）。
 
 2026-10-05 又给「程序启动器」那一段加了 5 条**右键菜单**检查（能拿到卡片矩形、
 右键一格之后本进程多出一个 `#32768` 系统菜单窗口、菜单开在光标附近而且尺寸与 200%
-缩放相称、`Esc` 关掉菜单、取消之后卡片还在）。**这 5 条与整脚本都还没在本机跑过**：
-写它们的那次会话正好在「锁屏」与「没真正接收输入」两种状态之间反复横跳（用户解了锁，
-但 `SendInput` 依旧报 5、`GetForegroundWindow()` 依旧是 0），项目所有者当时决定先交，
-所以 DoD 第 3 条这一半是欠着的。**权限后补跑一次，把 `checks:` 写实并删掉这句话。**
-同样地，**右键菜单长什么样**（菜单是否开在光标处、条目字号在 200% 缩放下对不对）
-也没用眼过；补跑时用 `tmp/menu-shot.ps1`（一次性脚本：弹出启动器 → 右键第 1 格 →
-抓 `tmp/menu-open.png` → `Esc` → 抓 `tmp/menu-closed.png`）看一眼即可。
+缩放相称、`Esc` 关掉菜单、取消之后卡片还在）。这 5 条连同前面欠着的那些检查都已经在
+2026-10-05 补跑过（见下面的「补跑记录」），其中**位置那一条目前是失败的** —— 菜单太
+高时系统自己会把它翻到屏幕上方去，不一定是产品的问题。
 
 2026-10 给启动器加上「已固定 / 最近使用 / 全部程序」之后又加了 6 条检查（`Space` 固定
 之后标题里的条数变成 1、卡片变矮、关掉再打开固定还在、`End`+`Enter` 打开「全部程序」
 列表（卡片变成一屏高）、列表里 `Esc` 是返回概览而不是关窗、再按一次 `Space` 取消固定
 条数回到满）→ 总共 **155** 项。脚本开头会先把 `$WorkDir\launcher.json` 删掉，所以每次
 跑都从「什么都没固定」开始（固定是持久状态，不删干净的话标题里的条数与卡片几何前后
-对不上）。**这 6 条也还没跑过**：写它们的这次会话里 `GetForegroundWindow()` 是 0、注入
-1 px 的相对鼠标移动光标也不动（RDP 会话没真正接收输入，见下面那段），按「会话没接收
-输入时别跑」的规矩跳过了。解锁 / 重新连上远程会话之后补跑，把 `checks:` 与 `failures:`
-写实、并删掉这段话。（同一批改动已经在 `tmp/preview/` 那套进程内预览里过了一遍：真开始
-菜单 100 个程序、`Space`/`End`/`Enter`/`Esc` 全走真按键注入，`tmp/apps-sections.png`
+对不上）。（同一批改动也已经在 `tmp/preview/` 那套进程内预览里过了一遍：真开始菜单
+100 个程序、`Space`/`End`/`Enter`/`Esc` 全走真按键注入，`tmp/apps-sections.png`
 与 `tmp/apps-all.png` 就是那两张卡片的样子。）
+
+2026-10-05 又给「全部程序」列表加了一条**滚轮**检查（`End`+`Enter` 进列表 → 滚 3 格 →
+抓列表左侧一条竖带的像素指纹前后比对）→ **156** 项。它盯的是一个真实 bug：卡片先前挂着
+`onContentHeightChanged: 把选中行摆进视野`，而 `ListView.contentHeight` 在滚动中会因为
+「还没创建的委托按估算高度算」抖几像素，于是每滚一点都被拽回第 0 行（现象就是
+「有滚动条，但滚不动」，2026-10-05 修）。
+
+**补跑记录（2026-10-05，`checks: 156, failures: 1`）。** 这次会话能接收输入
+（`GetForegroundWindow()` 非 0、`SetCursorPos` 生效、`CopyFromScreen` 拿得到图；相对
+鼠标移动依旧不动光标 —— 那是 RDP 的已知现象，见下面那段）。`-Phase config` 全绿；
+`-Phase all` 跑了两次，两次都是 `checks: 156, failures: 1`，唯一没过的是右键菜单那 5 条
+里的第 3 条：
+
+* `菜单出现在光标附近且尺寸正常`。实测（两次一模一样）：卡片 `880,338,1600,1244`
+  （缩放 2）、右键落在 `1030,526`、菜单 `1030,50,630,1870`。x 与光标完全一致，但菜单
+  **高 1870 物理像素**（≈935 逻辑像素、20 来个条目 ≈ 每条 93 物理 / 46 逻辑），下面放
+  不下就被系统整个挪到屏幕上方（底边 1920），于是 y 差 476。`tmp/menu-open.png` 是那
+  一下的截图（`tmp/menu-shot.ps1` 现在跑得通了：它的 `Add-Type` 少了
+  `-UsingNamespace System.Text`）。**还没有结论**：每条 46 逻辑像素比教科书上的 32 高，
+  可能是 GDISCALED 上下文把菜单按 200% 排完又被系统缩了一遍，也可能只是本机「文本
+  大小」设置偏大 —— 要人眼跟资源管理器里同一个 `.lnk` 的菜单比一比再定。在那之前
+  **不要**按「菜单必须贴光标」去改检查（菜单太高时系统自己会翻到上面）。
 
 **桌面被锁住时（`LogonUI` 在跑）脚本必然挂**：`GetForegroundWindow()` 返回 0，
 `SendInput` 报 `5`（ACCESS_DENIED）。这不是产品 bug，先去解锁再跑。
@@ -1004,7 +1022,7 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
 | 6 弹窗 `menu` / `help` | **已完成** | `flowkeyd_models` + 两张 QML 卡片；`tst_menu_model`/`tst_help_model` 全绿 |
 | 7 虚拟桌面 + 电源 | **已完成** | `desktop`/`power` + dispatcher 接线；`tst_desktop_table`/`tst_power_table` 全绿 |
 | 8 示例配置 + README | **已完成** | 覆盖全特性的 `flowkeyd.lua.example`（`--check` 零警告）；README 已写全 |
-| 9 验收（无 e2e 的替代） | **已完成** | `scripts/acceptance.ps1`（当时 119 项，现在 149 项）+ `FLOWKEYD_ACCEPT_INJECTED` 测试后门 |
+| 9 验收（无 e2e 的替代） | **已完成** | `scripts/acceptance.ps1`（现在 156 项）+ `FLOWKEYD_ACCEPT_INJECTED` 测试后门 |
 | 10 接管 | **已完成** | 真实配置迁到 `.config\flowkeyd\config.lua`；常驻由计划任务 `flowkeyd` 指向当前运行的 exe |
 
 第 10 阶段之后新增的能力（都在本文件对应章节有记录）：
@@ -1228,9 +1246,17 @@ FreeType 字体引擎、程序启动器（`apps()` + 异步图标）、启动器
   → 自己算 `HelpModel::scrollTargetY(...)`（纯算术、有单测），QML 只把结果写回
   `listView.contentY`。
 * **列表刚建好时 `contentY` 会被摆到一个“保持滚动比例”的位置**（实测 30 条时是
-  `contentY = 90` 而不是顶部的 `-88`），而且发生在收到 `selectedChanged` **之后** →
-  除了模型信号，还要在 `onContentHeightChanged`/`onHeightChanged` 里调一次同一个幂等的
-  `followSelection()`。
+  `contentY = 90` 而不是顶部的 `-88`），而且发生在收到 `selectedChanged` **之后**。
+  **但这一次不要挂在 `onContentHeightChanged` 上**（见下一条）：换视图时靠
+  `onSelectedChanged` / `onHeightChanged` / 模型 reset 就够了 —— 2026-10-05 把那条
+  去掉之后，`tmp/preview` 里「筛选之后仍在顶部」「`Esc` 回概览仍在顶部」都还是对的。
+* **`ListView.contentHeight` 在滚动中是“估算值”，会抖。** 还没创建出来的委托用
+  「已见过的高度的平均值」估高，而滚动时创建的委托一直在换，于是 `contentHeight` 每
+  滚一点就变几像素（实测 123 行、混合 26/44 高的行：8597 → 8602 → 8406 → …）。所以
+  **`onContentHeightChanged` 里不要摆选中行**：`positionViewAtIndex(选中行, Contain)`
+  会把滚轮 / 拖滑块刚滚出来的位置拽回选中行（第 0 行 = 顶部），现象就是「有滚动条但
+  滚不动」。行高全都一样时（帮助窗口就是）它不抖，所以这个坑只在“一行一种高度”的
+  列表里出现（启动器的分组列表：表头 26 / 按钮 40 / 一行 44）。
 * **两个弹窗都是 `WindowStaysOnTopHint`，会互相遮住**；`grabWindow` 抓的是屏幕那块区域。
 * **`QWindow::setProperty("visible", …)` 是隐藏/显示一个 QML `Window` 的最省事办法**
   （窗口不会被销毁，可以复用）。
@@ -1456,6 +1482,11 @@ FreeType 字体引擎、程序启动器（`apps()` + 异步图标）、启动器
   打印“与上一帧不同”的帧号；把抓到的帧存成 PNG 用 `imgdiff` 打印“不同像素数 + 包围盒”。
   注入 `MOUSEEVENTF_WHEEL` 之后**再注入 1 px 的 `MOUSEEVENTF_MOVE`**（真鼠标滚轮几乎总会带
   一点位移）；而且**弹窗必须是前台窗口**（背景窗口收不到 `WM_MOUSEWHEEL`）。
+* **「滚轮真的滚了没有」从外面只有一个可观察量：像素。** 验收脚本里
+  `[FlowInject]::RegionHash(x, y, w, h)`（FNV-1a 扫一块屏幕区域）只抓列表左侧一条竖带、
+  前后比对：避开右边的滚动条（它的淡入淡出自己会变）与光标那一列（`ItemDelegate` 的
+  悬停高亮跟着光标走）。锁屏时 `CopyFromScreen` 会抛，`RegionHash` 吃掉异常返回 0
+  （前后必然相等 → 检查报失败，那种会话本来就不该跑验收）。
 * **锁屏时“看渲染”只剩一条路**：`QScreen::grabWindow()` / `CopyFromScreen` 会报“句柄无效”
   （拿到的是黑图），但 **`QQuickWindow::grabWindow()`（进程内渲染）照常能用**，
   `QTest::keyClick(window, …)` 的进程内注入也照常能用 —— `tmp/preview/` 那套就靠这两条
@@ -1604,6 +1635,9 @@ FreeType 字体引擎、程序启动器（`apps()` + 异步图标）、启动器
   行为就在 `scripts/acceptance.ps1` 的「程序启动器」那一段加一条检查（**注意别在网格里按
   `Enter`**，那会真的启动一个程序；`End` + `Enter` 落在「全部程序」按钮上是安全的）；
   纯粹的行几何 / 卡片外观用 `tmp/preview/` 那套抓图看。
+  滚动这类“列表内容动没动”的检查有两层：`tmp/preview/` 里直接断言
+  `ListView.contentY`（真 QML + 真模型，锁屏也能跑）；从外面看只有像素，所以
+  `scripts/acceptance.ps1` 用 `RegionHash` 抓一条竖带前后比对。
   **新的一行形状**：模型加一个 `Row::Kind`、`data()` 的 `RowKindRole` 多一个字符串、
   `AppPopup.qml` 多一个内联组件（并加进 `preload()` 的假数据好让它被预热）。
 * **拼音表 / 匹配语义**：表是生成的（`tools/pinyin_gen.ps1` → `src/core/pinyin_data.*`），

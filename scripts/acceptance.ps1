@@ -452,6 +452,36 @@ public static class FlowInject {
         return new int[] { r.left, r.top, r.right - r.left, r.bottom - r.top };
     }
 
+    // 屏幕上一块区域的指纹（FNV-1a 32 位）：抓图之后把所有像素扫一遍。
+    // 滚动没有别的可观察量（标题里的条数、窗口矩形都不随滚动变），只能看像素。
+    // 锁屏 / 会话没接收到输入时 `CopyFromScreen` 会抛（AGENTS.md 第 10 节），
+    // 所以这里吃掉异常、返回 0 —— 那样前后两张一定相等，检查会报失败：
+    // 那种会话本来就不该跑验收。
+    public static uint RegionHash(int x, int y, int w, int h) {
+        try {
+            using (System.Drawing.Bitmap bmp = new System.Drawing.Bitmap(w, h))
+            using (System.Drawing.Graphics g = System.Drawing.Graphics.FromImage(bmp)) {
+                g.CopyFromScreen(x, y, 0, 0, new System.Drawing.Size(w, h));
+                System.Drawing.Imaging.BitmapData data = bmp.LockBits(
+                    new System.Drawing.Rectangle(0, 0, w, h),
+                    System.Drawing.Imaging.ImageLockMode.ReadOnly,
+                    System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+                uint hash = 2166136261u;
+                try {
+                    int bytes = Math.Abs(data.Stride) * h;
+                    byte[] buffer = new byte[bytes];
+                    Marshal.Copy(data.Scan0, buffer, 0, bytes);
+                    for (int i = 0; i < bytes; i++) { hash = (hash ^ buffer[i]) * 16777619u; }
+                } finally {
+                    bmp.UnlockBits(data);
+                }
+                return hash;
+            }
+        } catch (Exception) {
+            return 0;
+        }
+    }
+
     // 前台锁会拒绝“不在前台的那个进程”调用 SetForegroundWindow（这正是守护
     // 进程自己要有 raiseWindow 的原因）。这里用同样的办法：先 AttachThreadInput
     // 到当前前台线程再 SetForegroundWindow。没有它的话，用户在我们跑测试时点了
@@ -979,6 +1009,37 @@ try {
     Pump 800
     Check 'Enter 打开了「全部程序」列表（卡片变成一屏高）' (
         [FlowInject]::WindowRect($daemon.Id, $APPS_TITLE)[3] -gt ($appsShort + 40))
+    # 这个列表里滚轮要真的滚得动。这条盯的是一个真实 bug（2026-10）：卡片先前
+    # 挂着 `onContentHeightChanged: 把选中行摆进视野`，而 `ListView` 的
+    # `contentHeight` 在滚动中会因为「还没创建出来的委托按估算高度算」抖几个像素，
+    # 于是每滚一点都被 `positionViewAtIndex(…, Contain)` 拽回选中行（第 0 行 =
+    # 顶部）—— 现象就是「有滚动条，但滚不动」。
+    #
+    # 从外面看得见的只有像素：标题里的条数与窗口矩形都不随滚动变。所以抓列表左侧
+    # 的一条竖带比对指纹，并且**避开右边的滚动条**（它的淡入淡出自己会变）与光标
+    # 所在的那一列（`ItemDelegate` 的悬停高亮会跟着光标走）。
+    $appsRect = [FlowInject]::WindowRect($daemon.Id, $APPS_TITLE)
+    if ($appsRect[2] -gt 0) {
+        $gs = $appsRect[2] / 800.0
+        $gx = $appsRect[0] + [int](40 * $gs)
+        $gy = $appsRect[1] + [int](70 * $gs)
+        $gw = [int](300 * $gs)
+        $gh = [int](400 * $gs)
+        # 光标压到列表中间（滚轮事件按光标位置派发），然后等悬停高亮稳定。
+        [FlowInject]::Cursor($appsRect[0] + [int](400 * $gs),
+                             $appsRect[1] + [int](300 * $gs))
+        Pump 900
+        $before = [FlowInject]::RegionHash($gx, $gy, $gw, $gh)
+        for ($i = 0; $i -lt 3; $i++) { [FlowInject]::Wheel(-120); Pump 120 }
+        Pump 600
+        $after = [FlowInject]::RegionHash($gx, $gy, $gw, $gh)
+        Write-Host "         all list strip: $before -> $after"
+        if ($before -eq $after) { Diag "the all list did not move after three wheel notches: $(FgInfo)" }
+        Check '「全部程序」列表里滚轮真的能往下滚（像素变了）' ($before -ne $after)
+        # 滚回顶部，后面的检查从同一个状态开始。
+        for ($i = 0; $i -lt 12; $i++) { [FlowInject]::Wheel(120) }
+        Pump 400
+    }
     # `Esc` 在列表里是「返回概览」而不是关卡片。
     TapKey $VK_ESC
     Pump 500
