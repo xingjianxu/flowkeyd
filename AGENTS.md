@@ -942,6 +942,19 @@ debug 构建 + 31 个测试全绿、release 零警告。**这次按项目所有�
 还有另一种“判据全对、注入就是不落地”的状态（RDP 会话没真正接收输入）：
 先看 `GetForegroundWindow()` 是不是 0，是的话就别在产品代码里找原因。
 
+**2026-10-05：启动器加了「已固定程序的 `Alt` + 字母」（现在 160 项）。**
+新加的那一条检查只能按**没分配到的**字母（固定了 1 条时按 `Alt+z`）——
+按 `Alt+a` 会真的启动一个程序。`-Phase config` 与单实例 / QML 装载哨兵那一共 11 条
+在**新 release（`26-10-05-f2a94e0`）**上全绿（包含「守护进程日志里没有加载 QML 的
+报错」，所以改过的 `AppPopup.qml` 真的被预热过），但同一个会话里 `-Phase all` 挂在
+第一段：`LogonUI` 在跑、`GetForegroundWindow()` 返回 0、`SendInput` 报 `5` ——
+就是上面那条「先去解锁」的情形（**不是产品 bug**）。所以启动器那一段的交互检查
+**欠着**，解锁之后补跑。这一版的替代覆盖：debug 31 个测试全绿
+（`tst_app_list_model` 新增映射 / 放行规则 / 26 个上限 / 「筛选之后照样生效」四组断言）、
+`qmllint` 零警告、`--check flowkeyd.lua.example` 零警告、两条 profile 零警告；
+**人眼还要看一次**角上那个 `Alt+a` 徽标（宽度与旁边「已固定」小圆点的位置），
+见手工冒烟清单第 11 条。
+
 **RDP 会话里注入的「相对鼠标移动」不会动光标**（2026-10-05 实测：同一个会话里
 `SetCursorPos(300,300)` 成功、`GetCursorPos` 也读得到，可是一条
 `MOUSEEVENTF_MOVE` 的 `SendInput` 返回 1 而光标纹丝不动）。所以脚本里要用绝对定位
@@ -970,6 +983,11 @@ debug 构建 + 31 个测试全绿、release 零警告。**这次按项目所有�
    不一样）；挑一条无害的（「属性」或者「打开文件位置」）真按一次，确认卡片在命令跑之前
    就收了、shell 开出来的窗口在前台；再右键一次按 `Esc`，卡片应当还留在那里。
 10. 按顺序做完以上之后，**检查没有任何按键卡在按下状态**。
+11. **程序启动器的 `Alt` + 字母**（验收脚本只能按没分配到的字母）：固定两三条之后
+    打开卡片 —— 角上应当是 `Alt+a` / `Alt+b` … 这样的徽标（宽度跟着文字走），
+    右边那个「已固定」小圆点让到图标左上角；按 `Alt+a` 启动第 1 个固定项、
+    `Alt+b` 启动第 2 个；**筛选一个筛不到那条固定项的串之后再按 `Alt+a`，照样应该
+    启动它**；`Ctrl+A`（全选）与裸字母照旧进筛选框。
 
 ---
 
@@ -1327,6 +1345,13 @@ FreeType 字体引擎、程序启动器（`apps()` + 异步图标）、启动器
 * **`QQuickTextInput` 故意忽略 `↑`/`↓`**，所以它们会冒到父项的 `Keys`；而 `Keys` 的默认
   优先级 `Keys.BeforeItem` 意味着挂在 `TextField` 上的 `Keys.onPressed` 在 `TextInput` 自己
   的键盘处理之前跑 —— 这就是“一个输入框 + 一个列表”的键盘分工。
+* **`Keys.onPressed` 的 `event.key` 与 `event.modifiers` 都是 `int`**
+  （`QQuickKeyEvent` 里两个 `Q_PROPERTY(int …)`，在
+  `QtQuick/private/qquickevents_p_p.h`；`modifiers` 就是 `Qt::KeyboardModifiers` 的位）。
+  所以 C++ 侧接 `handleKey(int key, int modifiers)`、QML 里写
+  `model.handleKey(event.key, event.modifiers)` 不会有类型转换问题 —— 改
+  `Q_INVOKABLE` 的签名时要同步改 `tst_app_list_model` 里
+  `indexOfMethod("handleKey(int,int)")` 那一串（旧签名会直接变成 -1）。
 * **筛选回写用 `onTextChanged` + 等值判断，不要 `onTextEdited`**（后者在输入法提交/粘贴/
   拖选时不一定发）。`if (field.text !== model.filter)` 保证不会来回振荡。
 * **`ListView.positionViewAtIndex(..., Contain)` 不能用来“把选中行带进视野”**：它只保证行
