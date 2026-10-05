@@ -3,7 +3,8 @@
 // 覆盖：行式视图的三个形态（概览 = 已固定 + 最近使用 + 「全部程序」按钮、
 // 筛选 = 扁平网格、全部 = 按首字母分组的一行一个）、角色、拼音 / 首字母筛选、
 // 键盘选中项（方向键 / Home / End / PgUp / PgDn，跳过表头、到边界夹住）、
-// `Space` 固定、`Enter`/`Esc` 的语义、「最近使用」的记账，以及卡片高度。
+// `Space` 固定、`Enter`/`Esc` 的语义、「最近使用」的记账、筛选之后的**数字快速
+// 启动键**（0 起、只给前 10 条），以及卡片高度。
 //
 // **开始菜单的扫描与图标都不在这里**：前者要真机（`platform/win/apps`，见
 // `tst_interactive`），后者是 `app::AppIconProvider` 的异步活儿（由对话框那边
@@ -103,6 +104,16 @@ std::vector<int> itemIndices(const app::AppListModel &model, int row)
     return indices;
 }
 
+/// 某一格（行, 列）的数字快速启动键（不在那种模式时是空串）。
+QString itemKey(const app::AppListModel &model, int row, int column)
+{
+    const QVariantList items = rowItems(model, row);
+    if (column < 0 || column >= items.size()) {
+        return QString();
+    }
+    return items.at(column).toMap().value(QStringLiteral("key")).toString();
+}
+
 QString decisionOf(const QVariantMap &map)
 {
     return map.value(QStringLiteral("decision")).toString();
@@ -153,6 +164,10 @@ private slots:
     void hoverMovesTheHighlight();
     void handleKeyChoosesAndCancels();
     void unhandledKeysArePassedThrough();
+    void numberedKeysFollowTheFilteredGrid();
+    void onlyTheFirstTenMatchesGetAKey();
+    void digitKeysLaunchTheNumberedProgram();
+    void digitsGoToTheFilterWhenNothingIsFiltered();
     void resetClearsFilterAndAllMode();
     void contextMenuDecidesWhetherToCloseTheCard();
     void itemIndexForVisibleWalksTheRows();
@@ -671,6 +686,97 @@ void TestAppListModel::unhandledKeysArePassedThrough()
         QCOMPARE(decisionOf(decision), QStringLiteral("none"));
     }
     QCOMPARE(model.selectedItem(), 0);
+}
+
+void TestAppListModel::numberedKeysFollowTheFilteredGrid()
+{
+    app::AppListModel model;
+    model.setItems(std::nullopt, sampleItems(12));
+
+    // 概览（没有筛选）：不编号，每一格都没有号码。
+    QVERIFY(!model.numberedMode());
+    QCOMPARE(itemKey(model, 0, 0), QString());
+    QVERIFY(!model.footerText().contains(QStringLiteral("直接启动")));
+
+    // `app0` 命中 app01..app09 九条：第 1 条 `0`、第 2 条 `1`……第 9 条 `8`。
+    model.setFilter(QStringLiteral("app0"));
+    QVERIFY(model.numberedMode());
+    QCOMPARE(model.visibleCount(), 9);
+    QCOMPARE(itemKey(model, 0, 0), QStringLiteral("0"));
+    QCOMPARE(itemKey(model, 0, 1), QStringLiteral("1"));
+    QCOMPARE(itemKey(model, 1, 0), QStringLiteral("6"));
+    QCOMPARE(itemKey(model, 1, 2), QStringLiteral("8"));
+    QVERIFY(model.footerText().contains(QStringLiteral("直接启动")));
+
+    // 清掉筛选：号码消失、底部提示回到普通那一句。
+    model.clearFilter();
+    QVERIFY(!model.numberedMode());
+    QCOMPARE(itemKey(model, 0, 0), QString());
+    QVERIFY(!model.footerText().contains(QStringLiteral("直接启动")));
+}
+
+void TestAppListModel::onlyTheFirstTenMatchesGetAKey()
+{
+    app::AppListModel model;
+    model.setItems(std::nullopt, sampleItems(12));
+
+    model.setFilter(QStringLiteral("app")); // 12 条全中
+    QVERIFY(model.numberedMode());
+    QCOMPARE(model.visibleCount(), 12);
+    QCOMPARE(itemKey(model, 0, 0), QStringLiteral("0"));
+    QCOMPARE(itemKey(model, 0, 5), QStringLiteral("5"));
+    QCOMPARE(itemKey(model, 1, 0), QStringLiteral("6"));
+    QCOMPARE(itemKey(model, 1, 3), QStringLiteral("9"));
+    // 第 11、12 条（app11、app12）不分配号码。
+    QCOMPARE(itemKey(model, 1, 4), QString());
+    QCOMPARE(itemKey(model, 1, 5), QString());
+}
+
+void TestAppListModel::digitKeysLaunchTheNumberedProgram()
+{
+    app::AppListModel model;
+    model.setItems(std::nullopt, sampleItems(12));
+    model.setFilter(QStringLiteral("app")); // 前 10 条依次是 app01..app10
+
+    // `0` = 第 1 个（条目 0），`3` = 第 4 个（条目 3）。
+    QVariantMap chosen = model.handleKey(Qt::Key_0);
+    QCOMPARE(decisionOf(chosen), QStringLiteral("choose"));
+    QVERIFY(handledOf(chosen));
+    QCOMPARE(indexOf(chosen), 0);
+
+    chosen = model.handleKey(Qt::Key_3);
+    QCOMPARE(decisionOf(chosen), QStringLiteral("choose"));
+    QCOMPARE(indexOf(chosen), 3);
+
+    // `9` = 第 10 个（条目 9）。
+    chosen = model.handleKey(Qt::Key_9);
+    QCOMPARE(decisionOf(chosen), QStringLiteral("choose"));
+    QCOMPARE(indexOf(chosen), 9);
+
+    // 没有对应条目的号码被吃掉但什么都不做（不能漏给筛选框，否则会把列表筛空）。
+    model.setFilter(QStringLiteral("app1")); // app10..app12 三条
+    QCOMPARE(model.visibleCount(), 3);
+    const QVariantMap extra = model.handleKey(Qt::Key_5);
+    QCOMPARE(decisionOf(extra), QStringLiteral("none"));
+    QVERIFY(handledOf(extra));
+    QCOMPARE(model.visibleCount(), 3);
+}
+
+void TestAppListModel::digitsGoToTheFilterWhenNothingIsFiltered()
+{
+    app::AppListModel model;
+    model.setItems(std::nullopt, sampleItems(5));
+
+    // 没有匹配（筛空）时当然不编号，数字键要放行给筛选框；筛选框为空时同理
+    // （`7-Zip` 这类名字得能用数字筛）。
+    model.setFilter(QStringLiteral("zzq"));
+    QCOMPARE(model.visibleCount(), 0);
+    QVERIFY(!model.numberedMode());
+    QVERIFY(!handledOf(model.handleKey(Qt::Key_7)));
+
+    model.clearFilter();
+    QVERIFY(!model.numberedMode());
+    QVERIFY(!handledOf(model.handleKey(Qt::Key_7)));
 }
 
 void TestAppListModel::resetClearsFilterAndAllMode()

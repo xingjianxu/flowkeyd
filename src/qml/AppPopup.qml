@@ -463,15 +463,46 @@ Window {
                         asynchronous: true
                     }
 
-                    // 已经固定住的：图标右上角一个小圆点。
+                    // 数字快速启动键（easymotion 风格）：筛选之后前 10 条各拿一个
+                    // 号码（第 1 个是 0），画在**图标右上角**，按一下直接启动它。
+                    Rectangle {
+                        id: keyBadge
+
+                        readonly property bool shown: tile.modelData.key !== undefined
+                                                      && tile.modelData.key.length > 0
+
+                        visible: keyBadge.shown
+                        width: 16
+                        height: 16
+                        radius: 4
+                        color: root.palette.highlight
+                        border.width: 1
+                        border.color: root.palette.base
+                        anchors.right: tileIcon.right
+                        anchors.top: tileIcon.top
+
+                        Label {
+                            anchors.centerIn: parent
+                            text: tile.modelData.key
+                            color: root.palette.highlightedText
+                            font.family: root.uiFontFamily
+                            font.pointSize: 8.5
+                            font.bold: true
+                        }
+                    }
+
+                    // 已经固定住的：图标角上一个小圆点。有快速启动号码时让到
+                    // **左上角**去（两个都锚在右上角会叠在一起）。用 x/y 而不是
+                    // 条件锚点：后者的 `anchors.left/right` 互相切换很容易写错。
                     Rectangle {
                         visible: tile.modelData.pinned === true
                         width: 6
                         height: 6
                         radius: 3
                         color: root.palette.highlight
-                        anchors.right: tileIcon.right
-                        anchors.top: tileIcon.top
+                        x: keyBadge.shown ? tileIcon.x
+                                          : tileIcon.x + tileIcon.width - width
+                        y: tileIcon.y
                     }
 
                     Label {

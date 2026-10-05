@@ -20,7 +20,8 @@
 #   * 窗口切换器（`windows()`）：「轻碰 Win」弹出卡片、再轻碰一次关掉它
 #     （与 `Esc` 同义）、卡片不在任务栏里、遮断标记保住了前台
 #   * 程序启动器（`apps()`）：弹出现象、不在任务栏里、拿到键盘焦点、标题里的条数
-#     读得出来、在卡片里打字会真的筛掉条目、再按一次快捷键关掉它、筛选不复位，
+#     读得出来、在卡片里打字会真的筛掉条目、数字快速启动键只吃号码（不启动
+#     程序）、再按一次快捷键关掉它、筛选不复位，
 #     以及**右键一格弹出系统菜单**（新增的 `#32768` 菜单窗口，取消后卡片还在）
 #   * 按住不放只派发一次
 #   * 重映射的 hold / tap / CapsLock -> Esc
@@ -112,6 +113,7 @@ $VK_ALT = 0x12
 $VK_LWIN = 0x5B
 $VK_S = 0x53
 $VK_ESC = 0x1B
+$VK_BACK = 0x08
 $VK_RETURN = 0x0D
 $VK_F6 = 0x75
 $VK_F7 = 0x76
@@ -946,6 +948,42 @@ try {
     Check '重新打开启动器' (WaitUntil { [FlowInject]::HasWindowTitled($daemon.Id, $APPS_TITLE) } 6000)
     Pump 300
     Check '重新打开时筛选已清空（计数回到满）' ((AppsCount) -eq $appsTotal)
+
+    # 数字快速启动键（easymotion 风格）：筛选之后前 10 条各分一个数字（第 1 个是
+    # `0`），按一下就启动它。这里**不能按已分配的数字**（会真的启动一个程序），
+    # 只能验证「没有对应条目的号码被吃掉、没漏进筛选框」：找一个只匹配 1..8 个
+    # 程序的单字母筛选串，再按 `9` —— 编号从 `0` 起，8 条只用到 `0`..`7`，
+    # `9` 必定没有对应条目；卡片还在、条数不变就说明它真的被卡住了。
+    $appsDigitReady = $false
+    $appsDigitCount = 0
+    for ($i = 0; $i -lt 26; $i++) {
+        TapKey (0x41 + $i)
+        Pump 350
+        $candidate = AppsCount
+        if ($candidate -ge 1 -and $candidate -le 8) {
+            $appsDigitReady = $true
+            $appsDigitCount = $candidate
+            break
+        }
+        # 没找到合适的筛选串：退掉刚打的那个字母，试下一个。
+        TapKey $VK_BACK
+        Pump 250
+    }
+    if (-not $appsDigitReady) {
+        Diag 'no single-letter filter matched 1..8 programs; skipping the numbered-key check'
+    } else {
+        Write-Host "         numbered filter matched $appsDigitCount program(s)"
+        TapKey 0x39                       # `9`：第 10 个号码，这次没有对应条目
+        Pump 400
+        Check '筛选后的数字快速启动只吃号码（没有对应条目的数字被吃掉）' (
+            (AppsCount) -eq $appsDigitCount)
+        Check '被吃掉的数字没有漏进筛选框（卡片还开着）' (
+            [FlowInject]::HasWindowTitled($daemon.Id, $APPS_TITLE))
+        # 把筛选清掉：后面的右键与固定检查要的是概览。
+        TapKey $VK_BACK
+        Pump 400
+        Check '清掉筛选之后条数回到满' ((AppsCount) -eq $appsTotal)
+    }
 
     # 右键点一格 = 那个程序的**原生 shell 菜单**（与开始菜单 / 资源管理器逐条一致）。
     # 这里只能断言从外面看得见的东西：本进程多了一个**系统菜单窗口**（类名

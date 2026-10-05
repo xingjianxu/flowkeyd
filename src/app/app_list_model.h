@@ -32,6 +32,14 @@
 // 打空格，而 `Visual Studio Code` 这种名字很需要）。`Enter` 启动选中的程序，
 // 落在按钮上就是「打开全部」/「返回概览」。
 //
+// **数字快速启动键**（项目所有者 2026-10 要求，easymotion 风格）：**筛选之后**
+// 前 10 条各分到一个数字键，号码就是它的**显示序号**（第 1 个 `0`、第 2 个 `1`、
+// … 第 10 个 `9`；与窗口切换器的 `1`..`9`、`0` 不同），画在那一格图标的右上角，
+// 按一下直接启动它。只在筛选那一种扁平网格里生效（概览 / 「全部程序」列表不编号，
+// 因为那时按键列表并不稳定）；号码只给前 10 条，超出的没有号。
+// **没有对应条目的号码会被吃掉但什么都不做**（不能漏给筛选框，否则「5」会把
+// 列表筛空）；筛选框为空时数字键照常打进筛选框（`7-Zip` 这类名字要能用数字筛）。
+//
 // **不自动启动**：筛选到只剩一个也**不**自动执行（窗口切换器那边会自动激活，
 // 因为那是「切」；这里是「启动一个新程序」，误启动的代价比多按一下 `Enter` 大）。
 //
@@ -112,6 +120,8 @@ class AppListModel : public QAbstractListModel
     Q_PROPERTY(int pinnedCount READ pinnedCount NOTIFY stateChanged)
     Q_PROPERTY(int recentCount READ recentCount NOTIFY stateChanged)
     Q_PROPERTY(QString allButtonText READ allButtonText NOTIFY stateChanged)
+    /// 当前是不是「数字快速启动」模式（筛选串非空且至少有一条匹配，见文件头）。
+    Q_PROPERTY(bool numberedMode READ numberedMode NOTIFY stateChanged)
 
 public:
     enum Role {
@@ -119,7 +129,9 @@ public:
         RowKindRole = Qt::UserRole + 1,
         /// 表头与按钮上的文字。
         RowTitleRole,
-        /// 这一行里的条目（`grid` / `list`）：`{ index, name, icon, pinned }` 的数组。
+        /// 这一行里的条目（`grid` / `list`）：
+        /// `{ index, name, icon, pinned, key }` 的数组；`key` 是数字快速启动键
+        /// （`"0"`..`"9"`，不在那种模式时是空串）。
         RowItemsRole,
         /// 这一行是不是当前选中的那一行。
         ///
@@ -190,6 +202,7 @@ public:
     int pinnedCount() const { return static_cast<int>(m_pinnedShown.size()); }
     int recentCount() const { return static_cast<int>(m_recentShown.size()); }
     QString allButtonText() const;
+    bool numberedMode() const { return m_numbered; }
 
     /// 换筛选串（QML 的筛选框直接调它）。筛选之后选中项回到第一行。
     ///
@@ -310,6 +323,9 @@ private:
     std::vector<int> m_visible;
     /// 当前视图的行。
     std::vector<Row> m_rows;
+    /// 数字快速启动键：`m_items` 下标 → `"0"`..`"9"`（只有一个扁平网格的筛选
+    /// 视图里才会非空，见文件头）。
+    QHash<int, QString> m_itemKeys;
 
     /// 用户输入的筛选串（原样保留大小写）。
     QString m_filter;
@@ -322,6 +338,8 @@ private:
     std::vector<int> m_recentShown;
 
     bool m_allMode = false;
+    /// 是不是「数字快速启动」模式（见文件头）。
+    bool m_numbered = false;
     int m_maxRows = 6;
     int m_visibleItems = 0;
     int m_selectedRow = -1;

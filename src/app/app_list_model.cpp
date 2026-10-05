@@ -32,6 +32,8 @@ constexpr int kHeaderHeight = 26;
 constexpr int kButtonHeight = 40;
 /// 「全部程序」列表里的一行。
 constexpr int kListRowHeight = 44;
+/// 数字快速启动键一共发多少个：`0`..`9`（第 1 个拿 `0`、第 10 个拿 `9`）。
+constexpr int kNumberedKeys = 10;
 
 /// 卡片宽度：两边的内边距与缩进 + 正好六格（6 × 126 + 2 × 12 + 2 × 10 = 800）。
 constexpr int kInnerWidth = kColumns * kCellWidth;
@@ -49,6 +51,18 @@ QVariantMap makeNoneDecision(bool handled)
     result.insert(QStringLiteral("index"), -1);
     result.insert(QStringLiteral("handled"), handled);
     return result;
+}
+
+/// 第 `line` 行的数字快速启动键（`0`..`9`）；超过前 10 行时是空串。
+///
+/// **号码就是显示序号**（第一个程序是 `0`）：与窗口切换器的 `1`..`9`、`0`
+/// 不同，于是 `handleKey()` 里数字 → 行号是一次减法。
+QString digitLabelForLine(int line)
+{
+    if (line < 0 || line >= kNumberedKeys) {
+        return QString();
+    }
+    return QString::number(line);
 }
 
 } // namespace
@@ -175,6 +189,12 @@ QString AppListModel::emptyMessage() const
 
 QString AppListModel::footerText() const
 {
+    if (m_numbered) {
+        // 筛选之后的扁平网格：数字键是最省事的第二段输入（easymotion 风格）。
+        // 不写 `Space 固定` —— 筛选框里有字的时候 `Space` 是打空格。
+        return tr("%1 个程序    0–9 直接启动    ↑↓←→ 选择    Enter 启动    右键菜单    Esc 关闭")
+            .arg(visibleCount());
+    }
     if (m_allMode && m_filter.trimmed().isEmpty()) {
         return tr("%1 个程序    ↑↓ 选择    Enter 启动    Esc 返回").arg(visibleCount());
     }
@@ -460,6 +480,16 @@ QVariantMap AppListModel::afterContextMenu(bool invoked)
 
 QVariantMap AppListModel::handleKey(int key)
 {
+    // 数字快速启动键：只有在「筛选之后」这种模式里才把数字键吃掉（否则用户要在
+    // 筛选串里打数字，例如名字里带数字的 `7-Zip`）。没有对应条目的号码被吃掉但
+    // 什么都不做 —— 不能漏给筛选框，否则「9」会把列表筛空。
+    if (m_numbered && key >= Qt::Key_0 && key <= Qt::Key_9) {
+        const int line = key - Qt::Key_0;
+        if (line < visibleCount()) {
+            return activateItem(m_visible[static_cast<std::size_t>(line)]);
+        }
+        return makeNoneDecision(true);
+    }
     switch (key) {
     case Qt::Key_Escape:
         if (m_allMode && m_filter.trimmed().isEmpty()) {
@@ -679,6 +709,21 @@ void AppListModel::rebuildRows(int keepItem)
     }
 
     const bool filtering = !m_filter.trimmed().isEmpty();
+
+    // 数字快速启动键（easymotion 风格）：**筛选之后**前 10 条各分一个数字键，
+    // 号码就是显示序号（第一个程序拿 `0`）。行是按 `m_visible` 铺的，所以
+    // 号码也只在这一种视图里存在（见头文件）。
+    m_numbered = false;
+    m_itemKeys.clear();
+    if (filtering && !m_visible.empty()) {
+        m_numbered = true;
+        const int keys = std::min(static_cast<int>(m_visible.size()), kNumberedKeys);
+        for (int line = 0; line < keys; ++line) {
+            m_itemKeys.insert(m_visible[static_cast<std::size_t>(line)],
+                              digitLabelForLine(line));
+        }
+    }
+
     if (filtering) {
         // 筛选：扁平网格（不分区、没有按钮）—— 与加分区之前完全一致。
         pushGridRows(m_visible);
@@ -815,6 +860,7 @@ QVariantList AppListModel::itemModels(const std::vector<int> &items) const
         map.insert(QStringLiteral("icon"), entry.iconSource);
         map.insert(QStringLiteral("pinned"),
                    !entry.key.isEmpty() && m_pinned.contains(entry.key));
+        map.insert(QStringLiteral("key"), m_itemKeys.value(index));
         list.push_back(map);
     }
     return list;
