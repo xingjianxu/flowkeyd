@@ -924,20 +924,20 @@ try {
         # 第 1 格（下标 0）的中心：内边距 12 + 半格 63；列表顶 50 + 半格 44。
         [FlowInject]::RightClick($appsRect[0] + [int](75 * $appsScale),
                                  $appsRect[1] + [int](94 * $appsScale))
-        $menuUp = WaitUntil {
+        $shellMenuUp = WaitUntil {
             [FlowInject]::HasWindowOfClass($daemon.Id, '#32768') } 3000
-        if (-not $menuUp) { Diag "no shell menu window after the right click: $(FgInfo)" }
-        Check '右键一格弹出系统菜单（#32768 窗口）' $menuUp
-        if ($menuUp) {
-            $menuRect = [FlowInject]::ClassRect($daemon.Id, '#32768')
-            Write-Host "         shell menu rect: $($menuRect -join ',')"
+        if (-not $shellMenuUp) { Diag "no shell menu window after the right click: $(FgInfo)" }
+        Check '右键一格弹出系统菜单（#32768 窗口）' $shellMenuUp
+        if ($shellMenuUp) {
+            $shellMenuRect = [FlowInject]::ClassRect($daemon.Id, '#32768')
+            Write-Host "         shell menu rect: $($shellMenuRect -join ',')"
             # 菜单应该出现在光标处（±一个条目高度），而且尺寸与 200% 缩放相称：
             # 十来个条目的系统菜单至少得有一百多像素高，二十来像素高就说明
             # DPI 上下文弄错了。
             Check '菜单出现在光标附近且尺寸正常' (
-                [Math]::Abs($menuRect[0] - [int]($appsRect[0] + 75 * $appsScale)) -lt 120 -and
-                [Math]::Abs($menuRect[1] - [int]($appsRect[1] + 94 * $appsScale)) -lt 120 -and
-                $menuRect[2] -gt 80 -and $menuRect[3] -gt 100)
+                [Math]::Abs($shellMenuRect[0] - [int]($appsRect[0] + 75 * $appsScale)) -lt 120 -and
+                [Math]::Abs($shellMenuRect[1] - [int]($appsRect[1] + 94 * $appsScale)) -lt 120 -and
+                $shellMenuRect[2] -gt 80 -and $shellMenuRect[3] -gt 100)
         }
         # 取消（Esc）：菜单关掉，卡片留着。
         TapKey $VK_ESC

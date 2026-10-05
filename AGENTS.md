@@ -209,6 +209,11 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
       `--version` 第一行、`--help` 表头。取不到 exe 时日期段是 `unknown`；
       不在 git 仓库里时修订段是 `unknown`。
     * **工作流是「先提交再构建」**：哈希就是构建时的 HEAD（工作区脏时显示最近一次提交）。
+      提交之后**懒一下也没关系**：2026-10-05 碰到过一次「刚提交完，直接
+      `cmake --build --preset release` 是 `no work to do`，生成的
+      `flowkeyd_revision.h` 还是上一个提交」——为了不把旧哈希的包当成新的发布，
+      **收尾时显式 `cmake --preset windows-release` 一次（或者看一眼
+      `--version` 的哈希）再构建**是最稳的。
 13. **窗口摆放规则 `window_rule{...}`**：控制“某个程序启动时出现在哪个 workspace 和
     monitor”，且**显示器重新接入时按配置重新归位**。字段：`process`/`title`（至少一个）、
     `desktop`、`all_desktops`、`topmost`、`monitor`、`maximize`、`x`/`y`、`width`/`height`、
