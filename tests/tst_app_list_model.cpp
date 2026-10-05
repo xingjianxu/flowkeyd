@@ -81,6 +81,7 @@ private slots:
     void hoverMovesTheHighlight();
     void emptyListIsHandled();
     void setFilterNeverAutoLaunches();
+    void contextMenuDecidesWhetherToCloseTheCard();
     void resetClearsTheFilter();
     void rowsForAvailableHeightIsClamped();
 };
@@ -339,6 +340,25 @@ void TestAppListModel::setFilterNeverAutoLaunches()
     QCOMPARE(model.visibleCount(), 1);
     QCOMPARE(decisionOf(decision), QStringLiteral("none"));
     QCOMPARE(indexOf(decision), -1);
+}
+
+void TestAppListModel::contextMenuDecidesWhetherToCloseTheCard()
+{
+    app::AppListModel model;
+    model.setItems(std::nullopt, sampleItems(3));
+
+    // 取消（`Esc` / 点了菜单外面）：卡片留着，用户接着选下一格。
+    const QVariantMap kept = model.afterContextMenu(false);
+    QCOMPARE(decisionOf(kept), QStringLiteral("none"));
+    QVERIFY(handledOf(kept));
+    QCOMPARE(indexOf(kept), -1);
+
+    // 真的选了某条命令：收卡片（`cancel` 在 QML 里就是 `host.appDismiss()`）。
+    // 命令本身由 shell 执行，模型不需要知道是哪一条。
+    const QVariantMap closed = model.afterContextMenu(true);
+    QCOMPARE(decisionOf(closed), QStringLiteral("cancel"));
+    QVERIFY(handledOf(closed));
+    QCOMPARE(indexOf(closed), -1);
 }
 
 void TestAppListModel::resetClearsTheFilter()

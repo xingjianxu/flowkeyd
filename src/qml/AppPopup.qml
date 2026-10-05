@@ -10,6 +10,9 @@ import QtQuick.Controls.FluentWinUI3
 // 窗口总得有一块底）之外全是标准控件 —— 筛选框是真正的 `TextField`，网格是
 // 标准 `GridView` + 标准 `ItemDelegate`，滚动由 Qt 自带的 `ScrollBar` 负责。
 //
+// **右键一格** = 那个程序的**原生 shell 菜单**（与开始菜单 / 资源管理器逐条一致，
+// 由 `platform/win/shell_menu` 弹出并执行）：选中条目就收卡片，取消就留着。
+//
 // 逻辑全在 `app::AppListModel`（纯逻辑、有单测）：筛选（名字子串）、网格几何、
 // 键盘选中项、`Enter`/`Esc`，以及「到边界夹住」。QML 只做两件事：
 //   * 把 `handleKey()` / `activate()` 给的决定执行掉；
@@ -100,6 +103,18 @@ Window {
         if (!root.appModel)
             return
         root.applyDecision(root.appModel.activate(line))
+    }
+
+    /// 右键一格：弹那个程序的**原生 shell 菜单**（与开始菜单 / 资源管理器一致，
+    /// 见 `platform/win/shell_menu.h`）。
+    ///
+    /// `host.appContextMenu()` 是**阻塞**的（里面 `TrackPopupMenuEx` 一直等到用户
+    /// 选完），返回「用户到底选没选」。规则交给模型：选了就收卡片，取消则留着。
+    function contextMenuTile(line) {
+        if (!root.appModel || !root.host)
+            return
+        var invoked = root.host.appContextMenu(line)
+        root.applyDecision(root.appModel.afterContextMenu(invoked))
     }
 
     /// 按键决定由模型给，这里只执行。
@@ -225,6 +240,16 @@ Window {
 
                 // 左键点一格 = 启动它。
                 onClicked: root.activateTile(tile.index)
+
+                // 右键点一格 = 那个程序的原生 shell 菜单（打开 / 以管理员身份运行 /
+                // 打开文件位置 / 属性……）。用 `TapHandler` 而不是再盖一个 `MouseArea`：
+                // 只吃右键（左边的单击仍然是 `ItemDelegate` 自己的），
+                // 而且不会把悬停高亮挡掉。`tapped` 在**松开**时发，所以弹菜单之前
+                // 那次右键的 key-up 已经走完了。
+                TapHandler {
+                    acceptedButtons: Qt.RightButton
+                    onTapped: root.contextMenuTile(tile.index)
+                }
 
                 contentItem: Item {
                     Image {

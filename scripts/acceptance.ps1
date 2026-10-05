@@ -20,7 +20,8 @@
 #   * 窗口切换器（`windows()`）：「轻碰 Win」弹出卡片、再轻碰一次关掉它
 #     （与 `Esc` 同义）、卡片不在任务栏里、遮断标记保住了前台
 #   * 程序启动器（`apps()`）：弹出现象、不在任务栏里、拿到键盘焦点、标题里的条数
-#     读得出来、在卡片里打字会真的筛掉条目、再按一次快捷键关掉它、筛选不复位
+#     读得出来、在卡片里打字会真的筛掉条目、再按一次快捷键关掉它、筛选不复位，
+#     以及**右键一格弹出系统菜单**（新增的 `#32768` 菜单窗口，取消后卡片还在）
 #   * 按住不放只派发一次
 #   * 重映射的 hold / tap / CapsLock -> Esc
 #   * `send` 会先松开用户按住的修饰键（前台看到的是 Ctrl+C 而不是 Ctrl+Alt+C）
@@ -252,6 +253,39 @@ public static class FlowInject {
         return false;
     }
 
+    // 属于 `pid` 的、类名等于 `className` 的第一个可见顶层窗口（顺序无所谓）。
+    //
+    // 启动器的右键菜单用它：系统的菜单窗口类名就是 `#32768`（没标题，所以
+    // `TitlesOfPid` / `HasWindowTitled` 都看不到它），而从我们的进程里弹出来的
+    // 菜单窗口属于**守护进程**（`TrackPopupMenuEx` 在它那条线程上跑）。
+    public static IntPtr WindowOfClass(int pid, string className) {
+        IntPtr found = IntPtr.Zero;
+        EnumWindows(delegate(IntPtr h, IntPtr l) {
+            uint wpid;
+            GetWindowThreadProcessId(h, out wpid);
+            if (wpid != (uint)pid) { return true; }
+            if (!IsWindowVisible(h)) { return true; }
+            StringBuilder sb = new StringBuilder(64);
+            GetClassNameW(h, sb, sb.Capacity);
+            if (sb.ToString() == className) { found = h; return false; }
+            return true;
+        }, IntPtr.Zero);
+        return found;
+    }
+
+    public static bool HasWindowOfClass(int pid, string className) {
+        return WindowOfClass(pid, className) != IntPtr.Zero;
+    }
+
+    // 那个类名窗口的物理矩形（拿不到就是全 0）。
+    public static int[] ClassRect(int pid, string className) {
+        IntPtr h = WindowOfClass(pid, className);
+        if (h == IntPtr.Zero) { return new int[] { 0, 0, 0, 0 }; }
+        RECT r;
+        if (!GetWindowRect(h, out r)) { return new int[] { 0, 0, 0, 0 }; }
+        return new int[] { r.left, r.top, r.right - r.left, r.bottom - r.top };
+    }
+
     [DllImport("user32.dll")] private static extern IntPtr GetWindow(IntPtr h, uint cmd);
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] private static extern IntPtr GetWindowLongPtr(IntPtr h, int index);
 
@@ -315,6 +349,8 @@ public static class FlowInject {
     private const uint MOUSEEVENTF_WHEEL = 0x0800;
     private const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
     private const uint MOUSEEVENTF_LEFTUP = 0x0004;
+    private const uint MOUSEEVENTF_RIGHTDOWN = 0x0008;
+    private const uint MOUSEEVENTF_RIGHTUP = 0x0010;
 
     // 脚本自己 DPI 感知：不然 GetWindowRect 返回的是虚拟化过的逻辑像素，
     // 与 SetCursorPos 要的物理像素混在一起就会把光标放到别的地方
@@ -369,6 +405,15 @@ public static class FlowInject {
         SendMouse(MOUSEEVENTF_LEFTDOWN);
         System.Threading.Thread.Sleep(60);
         SendMouse(MOUSEEVENTF_LEFTUP);
+    }
+
+    // 在 (x,y) 右键单击一次（启动器里点一格 = 弹那个程序的原生 shell 菜单）。
+    public static void RightClick(int x, int y) {
+        Cursor(x, y);
+        System.Threading.Thread.Sleep(150);
+        SendMouse(MOUSEEVENTF_RIGHTDOWN);
+        System.Threading.Thread.Sleep(60);
+        SendMouse(MOUSEEVENTF_RIGHTUP);
     }
 
     // 在 (x,y) 左键双击（帮助窗口里双击一行 = 执行它的动作）。
@@ -865,6 +910,45 @@ try {
     Check '重新打开启动器' (WaitUntil { [FlowInject]::HasWindowTitled($daemon.Id, $APPS_TITLE) } 6000)
     Pump 300
     Check '重新打开时筛选已清空（计数回到满）' ((AppsCount) -eq $appsTotal)
+
+    # 右键点一格 = 那个程序的**原生 shell 菜单**（与开始菜单 / 资源管理器逐条一致）。
+    # 这里只能断言从外面看得见的东西：本进程多了一个**系统菜单窗口**（类名
+    # `#32768`，`TrackPopupMenuEx` 就在守护进程那条线程上跑），而且取消之后卡片
+    # 还留着（“选中条目就关，取消则留”）。菜单里到底有哪些条目由 shell 决定，
+    # 也**绝不能**在里面按 Enter —— 那一格完全可能是「卸载」或「以管理员身份运行」。
+    $appsRect = [FlowInject]::WindowRect($daemon.Id, $APPS_TITLE)
+    Check '能拿到启动器卡片的矩形（右键用）' ($appsRect[2] -gt 0)
+    if ($appsRect[2] -gt 0) {
+        # 卡片 800 逻辑像素宽，尺寸反推缩放（与选单 / 帮助那两段同一套算法）。
+        $appsScale = $appsRect[2] / 800.0
+        # 第 1 格（下标 0）的中心：内边距 12 + 半格 63；列表顶 50 + 半格 44。
+        [FlowInject]::RightClick($appsRect[0] + [int](75 * $appsScale),
+                                 $appsRect[1] + [int](94 * $appsScale))
+        $menuUp = WaitUntil {
+            [FlowInject]::HasWindowOfClass($daemon.Id, '#32768') } 3000
+        if (-not $menuUp) { Diag "no shell menu window after the right click: $(FgInfo)" }
+        Check '右键一格弹出系统菜单（#32768 窗口）' $menuUp
+        if ($menuUp) {
+            $menuRect = [FlowInject]::ClassRect($daemon.Id, '#32768')
+            Write-Host "         shell menu rect: $($menuRect -join ',')"
+            # 菜单应该出现在光标处（±一个条目高度），而且尺寸与 200% 缩放相称：
+            # 十来个条目的系统菜单至少得有一百多像素高，二十来像素高就说明
+            # DPI 上下文弄错了。
+            Check '菜单出现在光标附近且尺寸正常' (
+                [Math]::Abs($menuRect[0] - [int]($appsRect[0] + 75 * $appsScale)) -lt 120 -and
+                [Math]::Abs($menuRect[1] - [int]($appsRect[1] + 94 * $appsScale)) -lt 120 -and
+                $menuRect[2] -gt 80 -and $menuRect[3] -gt 100)
+        }
+        # 取消（Esc）：菜单关掉，卡片留着。
+        TapKey $VK_ESC
+        Check 'Esc 关掉了右键菜单' (
+            WaitUntil { -not [FlowInject]::HasWindowOfClass($daemon.Id, '#32768') } 3000)
+        Pump 500
+        Check '取消之后卡片还在（未执行的菜单不关卡片）' (
+            [FlowInject]::HasWindowTitled($daemon.Id, $APPS_TITLE) -and
+            ([FlowInject]::ForegroundTitle() -like "$APPS_TITLE*"))
+    }
+
     TapKey $VK_ESC
     Check 'Esc 关掉了启动器' (
         WaitUntil { -not [FlowInject]::HasWindowTitled($daemon.Id, $APPS_TITLE) } 3000)

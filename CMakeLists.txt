@@ -266,6 +266,8 @@ add_library(flowkeyd_platform STATIC
     src/platform/win/process.h
     src/platform/win/power.cpp
     src/platform/win/power.h
+    src/platform/win/shell_menu.cpp
+    src/platform/win/shell_menu.h
     src/platform/win/single_instance.cpp
     src/platform/win/single_instance.h
     src/platform/win/update.cpp

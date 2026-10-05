@@ -123,7 +123,7 @@ QString AppListModel::emptyMessage() const
 
 QString AppListModel::footerText() const
 {
-    return tr("%1 个程序    ↑↓←→ 选择    Enter 启动    Esc 关闭").arg(visibleCount());
+    return tr("%1 个程序    ↑↓←→ 选择    Enter 启动    右键菜单    Esc 关闭").arg(visibleCount());
 }
 
 int AppListModel::columns() const
@@ -244,6 +244,21 @@ QVariantMap AppListModel::activate(int line)
     QVariantMap result;
     result.insert(QStringLiteral("decision"), QStringLiteral("choose"));
     result.insert(QStringLiteral("index"), m_visible[static_cast<std::size_t>(next)]);
+    result.insert(QStringLiteral("handled"), true);
+    return result;
+}
+
+QVariantMap AppListModel::afterContextMenu(bool invoked)
+{
+    if (!invoked) {
+        return noneDecision();
+    }
+    // 真的执行了某条命令：把卡片收掉（`cancel` 在 QML 那边就是 `appDismiss()`）。
+    // 卡片其实已经被 `PopupHost` 在执行命令**之前**收起来了——返回值只是让
+    // 「选中条目就关」这条规则有一个可单测的家，不至于变成 QML 里的一个分叉。
+    QVariantMap result;
+    result.insert(QStringLiteral("decision"), QStringLiteral("cancel"));
+    result.insert(QStringLiteral("index"), -1);
     result.insert(QStringLiteral("handled"), true);
     return result;
 }

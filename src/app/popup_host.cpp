@@ -4,9 +4,11 @@
 #include "core/app_list.h"
 #include "platform/win/ime.h"
 #include "platform/win/logging.h"
+#include "platform/win/shell_menu.h"
 #include "platform/win/window.h"
 
 #include <QCursor>
+#include <QDir>
 #include <QGuiApplication>
 #include <QQmlComponent>
 #include <QQmlEngine>
@@ -304,6 +306,52 @@ void PopupHost::appDismiss()
         m_appWindow->setProperty("visible", false);
     }
     m_appRequest = AppRequest{};
+}
+
+bool PopupHost::appContextMenu(int line)
+{
+    if (m_appWindow == nullptr || m_appModel == nullptr) {
+        return false;
+    }
+    const std::optional<int> item = m_appModel->itemIndexForVisible(line);
+    if (!item.has_value() || *item < 0
+        || *item >= static_cast<int>(m_appRequest.items.size())) {
+        return false;
+    }
+    const QString shortcut = m_appRequest.items[static_cast<std::size_t>(*item)].shortcut;
+    if (shortcut.isEmpty()) {
+        // 预热用的假数据没有快捷方式（真实条目一定有）——那种情况下没有菜单可弹。
+        return false;
+    }
+
+    // 用户在菜单里选中了某一条时，**先**把卡片收起来再让 shell 执行：
+    // （1）这是产品语义（「选中条目就关」）；
+    // （2）「属性」这类命令开出来的对话框以这张卡片为属主，卡片不先藏起来就会
+    //      连对话框一起被藏掉；
+    // （3）「打开文件位置」拉起的资源管理器窗口要拿得到前台，不能跟一张置顶
+    //      卡片抢。
+    // 快捷方式路径已经拷出来了，所以清掉请求（`appDismiss()`）不影响这次调用。
+    const auto beforeInvoke = [this]() { appDismiss(); };
+    const HWND owner = reinterpret_cast<HWND>(m_appWindow->winId());
+    const win::shell_menu::MenuResult result =
+        win::shell_menu::showItemMenu(owner, shortcut, beforeInvoke);
+    if (!result.error.isEmpty()) {
+        win::logWarn(QStringLiteral("app launcher: could not show the shell menu for %1: %2")
+                         .arg(QDir::toNativeSeparators(shortcut), result.error));
+        return false;
+    }
+    if (result.invoked) {
+        win::logInfo(QStringLiteral("app launcher: shell menu command %1 for %2")
+                         .arg(result.command)
+                         .arg(QDir::toNativeSeparators(shortcut)));
+        return true;
+    }
+    // 取消（`Esc` / 点了菜单外面）：卡片留着，用户接着选下一格。菜单的弹出
+    // 窗口可能把前台拿走了，所以再抬一次（拿不到的话卡片也还在那儿，能点）。
+    if (m_appWindow->isVisible()) {
+        activateWindow(m_appWindow);
+    }
+    return false;
 }
 
 void PopupHost::updateInstall()

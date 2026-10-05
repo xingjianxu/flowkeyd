@@ -139,8 +139,7 @@ public:
     void requestSwitch(SwitchRequest request);
     /// 弹出程序启动器；**已经开着时按同一个快捷键就是关掉它**（与 `Esc` 同义，
     /// 与窗口切换器同一条规则）。
-    void requestApps(AppRequest request);
-    /// 显示「在线更新」卡片（托盘菜单「检查更新」）。窗口已经开着时只前置，
+    void requestApps(AppRequest request);    /// 显示「在线更新」卡片（托盘菜单「检查更新」）。窗口已经开着时只前置，
     /// 不重置里面的状态（状态是 `UpdateModel` 的事，`Updater` 已经改好了）。
     void requestUpdate(UpdateRequest request);
 
@@ -201,6 +200,14 @@ public:
     // 程序启动器（GUI 线程）：同上面几个，只把活儿转交出去。
     Q_INVOKABLE void appChoose(int index);
     Q_INVOKABLE void appDismiss();
+    /// 在第 `line` 格（**可见**行下标）弹出那个程序的**原生 shell 右键菜单**。
+    ///
+    /// **阻塞**：里面 `TrackPopupMenuEx` 一直等到用户选完（
+    /// `platform/win/shell_menu.h` 里写了为什么必须这样）；返回值就是「用户
+    /// 到底选没选」。用户选中的命令由 shell 自己执行（打开 / 以管理员身份运行 /
+    /// 打开文件位置 / 属性……）。假数据（预热那一份没有快捷方式）与越界的下标
+    /// 都直接返回 false。
+    Q_INVOKABLE bool appContextMenu(int line);
     // 「在线更新」卡片上的按钮（GUI 线程；只把活儿转交给 `Updater`）。
     Q_INVOKABLE void updateInstall();
     Q_INVOKABLE void updateDismiss();

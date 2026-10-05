@@ -495,6 +495,26 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
       `Screen.devicePixelRatio`，后者要额外 `import QtQuick.Window`，发布包会多一个 QML 模块）。
     * 与 `app{...}` 区分：那个是**花括号**的注册构造器（窗口规则 + 快捷键），这个是
       **圆括号**的动作；简写 `apps`（别名 `launcher`/`programs`）。
+28. **程序启动器的右键菜单就是 Windows 自己的那一份。** 右键点一格 = 弹那个 `.lnk` 的
+    **原生 shell 菜单**（已公开的 `IContextMenu`/`IContextMenu2`/`IContextMenu3`，
+    实现在 `src/platform/win/shell_menu.*`）：条目与资源管理器、开始菜单逐条一致
+    （打开 / 以管理员身份运行 / 打开文件位置 / 固定到“开始”屏幕 / 属性 / 卸载……），
+    而且**动作也由 shell 自己执行**——我们不猜有哪些条目、也不去实现它们。
+    * `QueryContextMenu` 用 `CMF_NORMAL | CMF_EXTENDEDVERBS`：带上“扩展动词”，
+      所以「以管理员身份运行」直接就有（资源管理器里那是 Shift+右键才多出来的那批）。
+    * 菜单出在**光标处**（`GetCursorPos`），不从 QML 传坐标：Qt 的全局坐标是设备无关
+      的**逻辑**像素，而 `TrackPopupMenuEx` 要的是**物理**像素；右键那一刻光标就压在
+      那一格上，直接问系统又准又天然跨 DPI。
+    * 每一格的委托里挂一个 `TapHandler { acceptedButtons: Qt.RightButton }`（只吃右键，
+      左键仍然是 `ItemDelegate` 自己的 `clicked`，悬停高亮也不受影响），并且是在
+      **松开**时（`onTapped`）弹菜单——按下就弹的话，那次右键的 key-up 会把它自己关掉。
+    * 项目所有者 2026-10 拍板：**选中条目就把卡片收掉，取消（`Esc` / 点菜单外面）则留着**
+      （接着选下一格）。收卡片发生在执行命令**之前**（平台层 `showItemMenu()` 的
+      `beforeInvoke` 回调）——除了产品语义，还有一个实打实的理由：「属性」开出来的
+      对话框以卡片为属主，卡片后收就会连对话框一起被藏掉。
+    * 这条规则本身在 `AppListModel::afterContextMenu(invoked)` 里（纯逻辑、
+      `tst_app_list_model` 盯着），QML 只负责执行。
+    * 预热用的假数据没有快捷方式，右键直接什么都不做。
 
 ---
 
@@ -584,6 +604,7 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
 | `ime.h/.cpp` | 运行时解析的 `imm32.dll`：`readMode`/`useAlphanumericMode`/`restoreMode`。拿不到 `imm32` 或没有输入上下文时**不当错误** |
 | `hook.h/.cpp` | 钩子回调、**钩子线程自己的 Win32 消息循环**、`SetTimer`、控制消息、重载；还有 `window_rule` 的两个监听：`SetWinEventHook`（`EVENT_OBJECT_SHOW`/`DESTROY`，按 HWND 去重）与 350 ms 显示器轮询，外加 `EVENT_SYSTEM_FOREGROUND`（远程桌面放行，`noteForegroundWindow()`）。**定时器 id 必须用 `SetTimer` 的返回值**（§10） |
 | `apps.h/.cpp` | 程序启动器（`apps` 动作）的 Win32 后端：扫两个开始菜单目录 + `IShellLink` 解析 + 「只留程序」的过滤（`listStartMenuApps()`，自己开一条一次性 STA 线程）；`shellIcon(path, size)` 取某个路径的图标（`IShellItemImageFactory::GetImage` → `GetDIBits`，返回 32 位 **直通 alpha** 的 BGRA，§2 第 27 条）；`StaThread` 是给调用方（图标工作线程）用的 STA 守卫 |
+| `shell_menu.h/.cpp` | 程序启动器的**右键菜单**（§2 第 28 条）：`SHParseDisplayName` + `SHBindToParent` + `IShellFolder::GetUIObjectOf(IID_IContextMenu)` → `QueryContextMenu` → `TrackPopupMenuEx` → `InvokeCommand`。菜单开着的那一小段时间里临时换掉拥有窗口（卡片）的窗口过程，把 `WM_INITMENUPOPUP`/`WM_DRAWITEM`/`WM_MEASUREITEM`/`WM_MENUCHAR` 转给 `IContextMenu2/3`（否则子菜单是空的、图标不画）；**已公开的 COM，没有手写 vtable** |
 | `audio.h/.cpp` | Core Audio `IAudioEndpointVolume`，手写 COM vtable（**高风险**，MTA） |
 | `clipboard.h/.cpp` | 剪贴板读写（`CF_UNICODETEXT`，`OpenClipboard` 重试 10 次） |
 | `window.h/.cpp` | 窗口查找/激活/最小化/最大化/还原/关闭/置顶、前台锁绕行、启动回退、`TransitionGuard`（RAII）、`setTopmost`、`isMainWindow`/`isSwitchableWindow`/`listOpenWindows`。**“是否已经激活”还要看虚拟桌面**；**前台查询会跳过 `WS_EX_TOOLWINDOW` 覆盖层** |
@@ -749,7 +770,12 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
    `remote desktop detected (mstsc.exe)`。把焦点切回本机窗口，日志出现
    `left the remote desktop (…)`，和弦又回到本机行为；示例配置里 `remote_desktop = true`
    的 `Ctrl+Alt+m`（静音）在远程桌面里仍然生效。
-9. 按顺序做完以上之后，**检查没有任何按键卡在按下状态**。
+9. **程序启动器的右键菜单**（验收脚本只能断言“系统菜单窗口出现了”，条目与外观得人眼
+   过一遍）：弹出启动器，右键一格 —— 菜单应该长在光标处、条目的字号与系统其它菜单一致
+   （200% 缩放下不能是明显偏小的那种），换一台程序的格子内容会变（`.lnk` / UWP / 文件夹
+   不一样）；挑一条无害的（「属性」或者「打开文件位置」）真按一次，确认卡片在命令跑之前
+   就收了、shell 开出来的窗口在前台；再右键一次按 `Esc`，卡片应当还留在那里。
+10. 按顺序做完以上之后，**检查没有任何按键卡在按下状态**。
 
 ---
 
@@ -1231,6 +1257,49 @@ FreeType 字体引擎、程序启动器（`apps()` + 异步图标）。
   是失效的**（`exeDir` 是空串，直接跳过）。这是个已知小缺陷，**没改**；要改就得给 core 一个
   不依赖 Qt 实例的 exe 目录来源（例如 `core::setExeDirectory()`，由 main 从平台层传进去）。
 
+### 原生 shell 右键菜单（`platform/win/shell_menu`）
+
+* **`TrackPopupMenuEx` 弹的是 shell 生成的菜单，所以菜单消息必须转给 `IContextMenu2/3`。**
+  `QueryContextMenu` 做出来的 `HMENU` 里可能有子菜单与自绘条目，系统会把
+  `WM_INITMENUPOPUP` / `WM_DRAWITEM` / `WM_MEASUREITEM` / `WM_MENUCHAR` 发给**菜单
+  拥有窗口**（我们的启动器卡片，一个 **Qt 的**窗口）。不转发的话：子菜单展开是空的、
+  图标不画、字母加速键不生效。做法是菜单开着的那一小段时间用
+  `SetWindowLongPtrW(GWLP_WNDPROC)` 临时换掉它的窗口过程，其余消息原样
+  `CallWindowProc` 回去。**别拿 `GWLP_USERDATA` 存自己那份 router**：那是 Qt 的窗口，
+  不该动它留给自己的字段；弹菜单这个调用本身是阻塞的，一条线程同时只有一份，
+  一份 `thread_local` 就够。
+* **命令号是「偏移」，不是绝对 id。** `QueryContextMenu(hmenu, 0, idCmdFirst=1,
+  idCmdLast=0x7FFF, …)` 之后，`TrackPopupMenuEx(… TPM_RETURNCMD | TPM_NONOTIFY)` 返回
+  的号减掉 `idCmdFirst` 才是 `CMINVOKECOMMANDINFOEX::lpVerb`（用 `MAKEINTRESOURCEA
+  (offset)`、配 `CMIC_MASK_UNICODE` 再填一份 `lpVerbW`）。返回 0 = 用户取消。
+* **想要「以管理员身份运行」就得加 `CMF_EXTENDEDVERBS`。** 那是资源管理器里按住
+  Shift 右键才多出来的那一批「扩展动词」；只写 `CMF_NORMAL` 的话菜单里没有它。
+* **坐标必须是物理像素。** QML 那边（`Item.mapToGlobal`）给的是设备无关的**逻辑**
+  像素，直接丢给 `TrackPopupMenuEx` 会偏。本项目干脆不传坐标：右键那一刻光标就压在
+  那一格上，平台层用 `GetCursorPos` 自己取（也顺便解决了多屏 / 混合缩放的换算）。
+* **菜单的拥有窗口必须是前台窗口**（否则“点菜单外面就关掉”失效）：调用前
+  `SetForegroundWindow(owner)`，回来之后补一条 `PostMessageW(owner, WM_NULL, 0, 0)`
+  （MSDN 那套收尾，不然菜单可能还挂在屏幕上）。
+* **菜单要自己收进 DPI 上下文里**：本进程（Qt 6）是 Per-Monitor V2 感知的，而 shell
+  那套 `IContextMenu` 按“宿主**线程**的 DPI 上下文”决定菜单尺寸 —— 微软给 PMv2 应用的
+  做法是把当前线程临时降级成 `DPI_AWARENESS_CONTEXT_UNAWARE_GDISCALED`（Win10 1809+，
+  `SetThreadDpiAwarenessContext` 运行时解析）再弹，收掉后还原。降级期间 `GetCursorPos`
+  返回的也是同一套“虚拟化”坐标，所以取光标那一步必须写在作用域**里面**。
+* **“属性”这类命令开出来的对话框以 `hwndOwner`（我们的卡片）为属主** → 收卡片必须
+  发生在 `InvokeCommand` **之前**（本项目就是用 `showItemMenu()` 的 `beforeInvoke`
+  回调做的），否则 `setProperty("visible", false)` 会把对话框一起藏掉。
+* `IContextMenu::InvokeCommand` 里的“属性”/“打开方式”是**在调用方线程上跑模态循环**
+  的（`PropertySheet`），所以这个调用可能阻塞 GUI 线程到用户关掉那个对话框为止；
+  弹菜单本身也是阻塞的（`TrackPopupMenuEx` 的模态循环）。这期间 Qt 的事件队列不跑
+  （Win32 消息照样派发），所以别指望那时还有定时器 / 队列回调生效。
+* **锁屏 / 会话没真正接收输入时，注入测试全是假的**：`SendInput` 会**返回成功**
+  （`GetLastError` 也是陈旧的），但鼠标不会动、窗口拿不到前台、`CopyFromScreen` 报
+  “句柄无效”。判别方法（不需要人看屏幕）：
+  `GetForegroundWindow() == 0`，或者注入一次 1 px 的 `MOUSEEVENTF_MOVE` 再
+  `GetCursorPos` 看它有没有真的动。2026-10 遇到过一次“会话是 `WTSActive`、
+  `SM_REMOTESESSION=1`、`SendInput` 也说成功，但输入不落地”的 RDP 会话 —— 那时
+  不要在生产代码里找原因，先让用户把远程会话重新连上 / 解锁。
+
 ### 测试 / 验证手法
 
 * **“物理按键”可以自动化，但必须先加一个测试后门**：钩子照规矩丢弃一切带 `LLKHF_INJECTED`
@@ -1435,6 +1504,12 @@ FreeType 字体引擎、程序启动器（`apps()` + 异步图标）。
   （像 `launch`），照 `LaunchFields` 的做法把“写了哪些键”记下来。
 * **新的窗口条件**：`core/window_match`（纯逻辑）+ `platform/win/window` 的枚举适配 +
   `launchThenActivate` 回退 + 手工冒烟清单里加一条用例。
+* **启动器右键菜单的新行为**：平台层在 `platform/win/shell_menu.*`（要换条目只改
+  `QueryContextMenu` 的 flags；某一条该不该出现 / 变灰是 `IContextMenu` 自己的事），
+  「执行之前先干点什么」走 `showItemMenu()` 的 `beforeInvoke` 回调，而「选完关不关
+  卡片」这条规则在 `AppListModel::afterContextMenu()`（`tst_app_list_model` 盯着）。
+  能从外面观察到的行为就在 `scripts/acceptance.ps1` 的「程序启动器」那一段加一条
+  检查（**注意别在菜单里按 `Enter`**：那一格可能是「卸载」或「以管理员身份运行」）。
 * **新按键或别名**：扩展 `core/keys` 的键表并加一个往返用例（要有一个测试遍历表里的每个名字）。
   如果那个键要靠扩展标志才能与别的键区分（像小键盘的 Enter），还要在
   `key_from_hook`/`native_key` 里加一条翻译。

@@ -150,6 +150,17 @@ public:
     /// `{ decision: "choose", index: <条目下标>, handled: true }`。
     Q_INVOKABLE QVariantMap activate(int line);
 
+    /// 右键菜单（原生 shell 菜单，见 `platform/win/shell_menu.h`）关掉之后的决定。
+    ///
+    /// `invoked` = 用户在菜单里真的选了某一条。项目所有者 2026-10 拍板：
+    /// **选中条目就收卡片，取消（`Esc` / 点菜单外面）就留着**——与开始菜单一致，
+    /// 而且“打开文件位置”“属性”这类命令要能自己拿前台，不能跟一张置顶卡片抢。
+    /// 返回 `{ decision: "cancel"|"none", handled: true }`（形状与 `handleKey()`
+    /// 一样，QML 那边共用同一段 `applyDecision`）。
+    ///
+    /// 这条规则本身纯粹是模型的决定，所以放在这里（`tst_app_list_model` 盯着）。
+    Q_INVOKABLE QVariantMap afterContextMenu(bool invoked);
+
     /// 一次按键的处理结果：
     /// `{ decision: "none"|"choose"|"cancel", index, handled }`。
     ///
