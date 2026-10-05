@@ -830,6 +830,8 @@ void PopupHost::showApps(AppRequest request)
     // 图标：把「图标键 → 启动名」登记给图片提供者，并把每一行的 URL 算好。
     // 键是启动名的哈希（`core::appIconKey`），所以列表重扫、条目换位置都
     // 不会让已经缓存下来的 `image://` URL 指向别的程序。
+    // **登记给提供者的取图名字**过一道 `core::appIconLaunchName()`：内置的
+    // `ms-settings:` 页面在 shell 里取不到图标，借「设置」应用那一张。
     QVector<QPair<QString, QString>> icons;
     icons.reserve(static_cast<int>(m_appRequest.items.size()));
     std::vector<AppListEntry> entries;
@@ -841,7 +843,7 @@ void PopupHost::showApps(AppRequest request)
         }
         const QString key = core::appIconKey(item.launch);
         entries.push_back(AppListEntry{item.name, core::appIconUrl(item.launch), key});
-        icons.append(qMakePair(key, item.launch));
+        icons.append(qMakePair(key, core::appIconLaunchName(item.launch)));
     }
     if (m_appIcons != nullptr) {
         m_appIcons->publish(icons);

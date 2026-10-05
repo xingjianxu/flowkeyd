@@ -75,6 +75,10 @@ private slots:
     void prepareDeduplicatesSameNameAndLaunch();
     void prepareKeepsSameTargetUnderDifferentNames();
     void sortTextAndGroupLetterCoverPinyinLatinDigitsAndSymbols();
+    void builtinSettingPagesAreUniqueAndWellFormed();
+    void builtinSettingPagesFollowTheUiLanguage();
+    void settingPagesBorrowTheSettingsAppIcon();
+    void appendingLauncherEntriesSkipsDuplicateNames();
 };
 
 void TestAppList::iconKeyIsShortStableAndCaseInsensitive()
@@ -417,6 +421,124 @@ void TestAppList::sortTextAndGroupLetterCoverPinyinLatinDigitsAndSymbols()
     }
     QCOMPARE(letters, QStringList({QStringLiteral("#"), QStringLiteral("J"),
                                   QStringLiteral("V"), QStringLiteral("W")}));
+}
+
+void TestAppList::builtinSettingPagesAreUniqueAndWellFormed()
+{
+    const std::vector<core::SettingsPage> &pages = core::windowsSettingsPages();
+    QVERIFY(pages.size() >= 20);
+
+    QSet<QString> uris;
+    QSet<QString> namesZh;
+    QSet<QString> namesEn;
+    for (const core::SettingsPage &page : pages) {
+        // 每一条都必须是 `ms-settings:` URI（启动就是把它交给 shell），而且唯一。
+        const QString uri = QString::fromLatin1(page.uri);
+        QVERIFY2(uri.startsWith(QLatin1String("ms-settings:")) && uri.size() > 13, qPrintable(uri));
+        QVERIFY2(!uris.contains(uri), qPrintable(uri));
+        uris.insert(uri);
+
+        // 中英名字都要有，而且各自不能重复（重复的话列表里会出现两行同名）。
+        const QString zh = QString::fromUtf8(page.nameZh);
+        const QString en = QString::fromUtf8(page.nameEn);
+        QVERIFY(!zh.trimmed().isEmpty());
+        QVERIFY(!en.trimmed().isEmpty());
+        QVERIFY2(!namesZh.contains(zh), qPrintable(zh));
+        QVERIFY2(!namesEn.contains(en), qPrintable(en));
+        namesZh.insert(zh);
+        namesEn.insert(en);
+    }
+
+    // 几个最常用的页在不在（README、示例与验收脚本都拿它们说事）。
+    for (const char *wanted : {"ms-settings:display", "ms-settings:sound",
+                               "ms-settings:network", "ms-settings:powersleep",
+                               "ms-settings:windowsupdate"}) {
+        QVERIFY2(uris.contains(QString::fromLatin1(wanted)), wanted);
+    }
+}
+
+void TestAppList::builtinSettingPagesFollowTheUiLanguage()
+{
+    const std::vector<core::AppEntry> zh = core::builtinSettingsEntries({QStringLiteral("zh-CN")});
+    QCOMPARE(zh.size(), core::windowsSettingsPages().size());
+    QCOMPARE(zh.front().name, QString::fromUtf8("设置：显示"));
+    QCOMPARE(zh.front().launch, QStringLiteral("ms-settings:display"));
+    QVERIFY(zh.front().name.startsWith(QString::fromUtf8(core::kSettingsNamePrefixZh)));
+
+    // `uiLanguages()` 给的是 `zh-Hans-CN` 这种带书写系统的标签，也要认。
+    QCOMPARE(core::builtinSettingsEntries({QStringLiteral("zh-Hans-CN")}).front().name,
+             zh.front().name);
+
+    const std::vector<core::AppEntry> en = core::builtinSettingsEntries({QStringLiteral("en-US")});
+    QCOMPARE(en.size(), zh.size());
+    QCOMPARE(en.front().name, QString::fromUtf8("Settings: Display"));
+    QVERIFY(en.front().name.startsWith(QString::fromUtf8(core::kSettingsNamePrefixEn)));
+
+    // 别的语言（包括空列表）一律走英文名 —— 名字是内置的，不可能每种语言一份。
+    QCOMPARE(core::builtinSettingsEntries({QStringLiteral("de-DE")}).front().name, en.front().name);
+    QCOMPARE(core::builtinSettingsEntries({}).front().name, en.front().name);
+    QVERIFY(!core::settingsNamesAreChinese({}));
+    QVERIFY(core::settingsNamesAreChinese({QStringLiteral("zh-CN")}));
+    QVERIFY(!core::settingsNamesAreChinese({QStringLiteral("en-US")}));
+
+    // 名字带前缀 ⇒ 在「全部程序」列表里聚在 `S` 那一组，而且「设置」一筛就全出来。
+    QCOMPARE(core::appGroupLetter(zh.front().name), QStringLiteral("S"));
+    QVERIFY(core::appNameMatches(zh.front().name, QStringLiteral("xianshi")));
+    QVERIFY(core::appNameMatches(en.front().name, QStringLiteral("display")));
+}
+
+void TestAppList::settingPagesBorrowTheSettingsAppIcon()
+{
+    // 设置页在 shell 里取不到图标，所以**取图的名字**换成「设置」应用自己的启动名；
+    // **键（身份、图片 URL）仍然是 URI 本身** —— 否则固定 / 最近使用会串。
+    const QString settingsIcon = core::appIconLaunchName(QStringLiteral("ms-settings:display"));
+    QVERIFY(settingsIcon.contains(QLatin1String("immersivecontrolpanel")));
+    QCOMPARE(core::appIconLaunchName(QStringLiteral("MS-SETTINGS:DISPLAY")), settingsIcon);
+    // 别的条目原样返回（开始菜单、控制面板项都是直接问 shell 要图标）。
+    QCOMPARE(core::appIconLaunchName(QStringLiteral("shell:AppsFolder\\Chrome")),
+             QStringLiteral("shell:AppsFolder\\Chrome"));
+    QCOMPARE(core::appIconLaunchName(QStringLiteral("::{26EE0668-…}\\0\\::{…}")),
+             QStringLiteral("::{26EE0668-…}\\0\\::{…}"));
+    // 两个设置页的身份（图标键）不一样，尽管图标是同一张。
+    QVERIFY(core::appIconKey(QStringLiteral("ms-settings:display"))
+            != core::appIconKey(QStringLiteral("ms-settings:sound")));
+    QVERIFY(core::appIconKey(QStringLiteral("ms-settings:display")) != core::appIconKey(settingsIcon));
+}
+
+void TestAppList::appendingLauncherEntriesSkipsDuplicateNames()
+{
+    std::vector<core::AppEntry> base{
+        entry(QStringLiteral("Windows 工具"), QStringLiteral("C:\\Windows\\explorer.exe")),
+        entry(QStringLiteral("Terminal"), QStringLiteral("C:\\wt.exe")),
+    };
+    std::vector<core::AppEntry> extra{
+        // 大小写与首尾空白都不影响「同名」的判据。
+        entry(QStringLiteral("  windows 工具 "), QStringLiteral("::{D20EA4E1-…}")),
+        // 没有名字的条目直接丢掉（`prepareAppEntries()` 也会丢，这里提前一步）。
+        entry(QString(), QStringLiteral("::{98F2AB62-…}")),
+    };
+    // `entry()` 造的是开始菜单那一路的条目（启动名按 AUMID 拼）；控制面板项的
+    // 启动名是一个 shell 解析名，自己造一条。
+    core::AppEntry power;
+    power.name = QStringLiteral("电源选项");
+    power.launch = QStringLiteral("::{26EE0668-…}\\0\\::{025A5937-…}");
+    extra.push_back(power);
+    const std::vector<core::AppEntry> merged = core::appendLauncherEntries(std::move(base), extra);
+
+    // 开始菜单那一份在前 ⇒ 同名时保留它（启动名还是开始菜单那一条）。
+    QCOMPARE(names(merged), QStringList({QStringLiteral("Windows 工具"),
+                                         QStringLiteral("Terminal"),
+                                         QStringLiteral("电源选项")}));
+    QCOMPARE(merged.at(0).launch, QStringLiteral("shell:AppsFolder\\Windows 工具"));
+    // 一份来源内部的顺序不变（控制面板 / 内置设置页的口味是“按表里的顺序”）。
+    QCOMPARE(merged.at(2).launch, QStringLiteral("::{26EE0668-…}\\0\\::{025A5937-…}"));
+
+    // 空 base（控制面板读不出来时就是这样）：extra 原样接上。
+    const std::vector<core::AppEntry> onlyExtra = core::appendLauncherEntries({}, extra);
+    QCOMPARE(names(onlyExtra), QStringList({QStringLiteral("  windows 工具 "),
+                                            QStringLiteral("电源选项")}));
+    // 空 extra：base 原样返回。
+    QCOMPARE(names(core::appendLauncherEntries(merged, {})), names(merged));
 }
 
 QTEST_MAIN(TestAppList)

@@ -11,6 +11,7 @@
 #include <shobjidl.h>
 
 #include <cstdint>
+#include <optional>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -34,6 +35,23 @@ const PROPERTYKEY kPkeyLinkArguments{
 /// 启动器的解析名前缀（`shell:AppsFolder\<AUMID>`）。
 constexpr wchar_t kAppsFolderName[] = L"shell:AppsFolder";
 
+/// 「所有控制面板项」这个 known folder（`FOLDERID_ControlPanelFolder`）。
+///
+/// 自己写 GUID，理由同上（`FOLDERID_*` 那些符号在 MinGW 的 uuid 库里）。真机验过：
+/// 它解析出来就是 `::{26EE0668-A00A-44D7-9371-BEB064C98683}\0`，也就是
+/// `Shell.Application.Namespace(3)` 看到的那个文件夹（Win11 26200 上 36 条）。
+/// **不要**换成 `{26EE0668-…}` 本身：那是分类视图（8 个分类），不是条目。
+const GUID kControlPanelFolder{
+    0x82A74AEB, 0xAEB4, 0x465C, {0xA0, 0x14, 0xD0, 0x97, 0xEE, 0x34, 0x6D, 0x63}};
+
+/// 控制面板里没有、但用户经常要的 shell 条目（直接用解析名给）。
+///
+/// 目前只有「网络连接」（`{7007ACC7-…}`，启/禁网卡、改适配器属性那一页）：它是
+/// 一个 delegate folder，不在「所有控制面板项」的枚举结果里。
+constexpr const wchar_t *kExtraControlPanelItems[] = {
+    L"::{7007ACC7-3202-11D1-AAD2-00805FC1270E}",
+};
+
 /// 拿一个 shell 交给我们的字符串（`CoTaskMemFree` 它）。
 QString takeShellString(LPWSTR value)
 {
@@ -53,6 +71,71 @@ QString shellString(IShellItem2 *item, const PROPERTYKEY &key)
         return QString();
     }
     return takeShellString(value);
+}
+
+/// 定下一条控制面板条目的**启动名**；拿不到能启动的名字就返回空串。
+///
+/// 优先**桌面绝对解析名**（`::{26EE0668-…}\0\::{025A5937-…}`）——shell
+/// 虚拟项（大多数控制面板项）只有这一种形式；它解不回去时退回**文件系统路径**。
+/// 真机上只有「字体」一条是这种情况：它的解析名里带的是**本地化显示名**
+/// （`::{26EE0668-…}\0\字体`），`SHParseDisplayName` 解析不了，而
+/// `C:\Windows\Fonts` 能正常打开（Explorer 打开的也是同一个文件夹）。
+///
+/// **只有能解析回 PIDL 的名字才会被采用**：一条按下去什么都不发生的条目比
+/// 少一条更糟。
+QString launchNameForPidl(PCIDLIST_ABSOLUTE idlist)
+{
+    constexpr SIGDN kForms[] = {SIGDN_DESKTOPABSOLUTEPARSING, SIGDN_FILESYSPATH};
+    for (const SIGDN form : kForms) {
+        LPWSTR value = nullptr;
+        if (FAILED(SHGetNameFromIDList(idlist, form, &value))) {
+            continue;
+        }
+        const QString name = takeShellString(value);
+        if (name.isEmpty()) {
+            continue;
+        }
+        const std::wstring wide = name.toStdWString();
+        PIDLIST_ABSOLUTE roundTrip = nullptr;
+        if (SUCCEEDED(SHParseDisplayName(wide.c_str(), nullptr, &roundTrip, 0, nullptr))) {
+            if (roundTrip != nullptr) {
+                CoTaskMemFree(roundTrip);
+            }
+            return name;
+        }
+    }
+    return QString();
+}
+
+/// 把一个**绝对 PIDL** 变成启动器条目（控制面板那一路用）。
+///
+/// 显示名问 shell（`SIGDN_NORMALDISPLAY`，所以跟系统语言走）；启动名交给
+/// `launchNameForPidl()`（拿不到就直接丢掉这条）。
+std::optional<core::AppEntry> entryFromAbsolutePidl(PCIDLIST_ABSOLUTE idlist)
+{
+    if (idlist == nullptr) {
+        return std::nullopt;
+    }
+    core::AppEntry entry;
+    entry.launch = launchNameForPidl(idlist);
+    IShellItem2 *item = nullptr;
+    if (SUCCEEDED(SHCreateItemFromIDList(idlist, IID_PPV_ARGS(&item)))) {
+        LPWSTR display = nullptr;
+        if (SUCCEEDED(item->GetDisplayName(SIGDN_NORMALDISPLAY, &display))) {
+            entry.name = takeShellString(display);
+        }
+        item->Release();
+    }
+    if (entry.name.isEmpty() || entry.launch.isEmpty()) {
+        return std::nullopt;
+    }
+    // 真机上有一条没有显示名的（`{98F2AB62-…}`）：shell 把**解析名**当显示名给了
+    // 回来（`::{26EE0668-…}\0\::{98F2AB62-…}`）。这种条目在列表里就是一行乱码，
+    // 直接丢掉（与“没名字”一起数进 `hiddenNotProgram`）。
+    if (entry.name.startsWith(QLatin1String("::"))) {
+        return std::nullopt;
+    }
+    return entry;
 }
 
 /// 真正干活的那一遍（必须在已经进入 STA 的线程上跑）。
@@ -138,6 +221,77 @@ StartMenuScan scanOnCurrentThread()
     return scan;
 }
 
+/// 枚举控制面板的那一遍（必须在已经进入 STA 的线程上跑）。
+StartMenuScan scanControlPanelOnCurrentThread()
+{
+    StartMenuScan scan;
+
+    // `FOLDERID_ControlPanelFolder` = 「所有控制面板项」。用已知文件夹而不是
+    // 硬写解析名，是为了不依赖 `…\0` 那个下标在别的 Windows 版本上还是同一个。
+    PIDLIST_ABSOLUTE root = nullptr;
+    HRESULT hr = SHGetKnownFolderIDList(kControlPanelFolder, 0, nullptr, &root);
+    if (FAILED(hr) || root == nullptr) {
+        scan.error = hresultMessage(hr, "SHGetKnownFolderIDList(ControlPanel)");
+        return scan;
+    }
+    IShellFolder *folder = nullptr;
+    hr = SHBindToObject(nullptr, root, nullptr, IID_IShellFolder, reinterpret_cast<void **>(&folder));
+    if (FAILED(hr) || folder == nullptr) {
+        scan.error = hresultMessage(hr, "SHBindToObject(ControlPanel)");
+        CoTaskMemFree(root);
+        return scan;
+    }
+    IEnumIDList *enumerator = nullptr;
+    hr = folder->EnumObjects(nullptr, SHCONTF_FOLDERS | SHCONTF_NONFOLDERS, &enumerator);
+    if (FAILED(hr) || enumerator == nullptr) {
+        scan.error = hresultMessage(hr, "IShellFolder::EnumObjects(ControlPanel)");
+        folder->Release();
+        CoTaskMemFree(root);
+        return scan;
+    }
+
+    LPITEMIDLIST child = nullptr;
+    ULONG fetched = 0;
+    while (enumerator->Next(1, &child, &fetched) == S_OK) {
+        ++scan.candidates;
+        const PIDLIST_ABSOLUTE absolute = ILCombine(root, child);
+        const std::optional<core::AppEntry> entry = entryFromAbsolutePidl(absolute);
+        if (entry.has_value()) {
+            scan.entries.push_back(*entry);
+        } else {
+            // 真机上确实有无名条目（`{98F2AB62-…}`）与解不出解析名的：它们
+            // 既显示不了也启动不了，只能丢掉。
+            ++scan.hiddenNotProgram;
+        }
+        if (absolute != nullptr) {
+            CoTaskMemFree(absolute);
+        }
+        CoTaskMemFree(child);
+    }
+
+    enumerator->Release();
+    folder->Release();
+    CoTaskMemFree(root);
+
+    // 「所有控制面板项」里没有、但用户经常要的那几个。
+    for (const wchar_t *name : kExtraControlPanelItems) {
+        ++scan.candidates;
+        PIDLIST_ABSOLUTE idlist = nullptr;
+        if (SUCCEEDED(SHParseDisplayName(name, nullptr, &idlist, 0, nullptr))) {
+            const std::optional<core::AppEntry> entry = entryFromAbsolutePidl(idlist);
+            if (entry.has_value()) {
+                scan.entries.push_back(*entry);
+            } else {
+                ++scan.hiddenNotProgram;
+            }
+            CoTaskMemFree(idlist);
+        } else {
+            ++scan.hiddenNotProgram;
+        }
+    }
+    return scan;
+}
+
 } // namespace
 
 StaThread::StaThread()
@@ -177,6 +331,22 @@ StartMenuScan listStartMenuApps()
             return;
         }
         scan = scanOnCurrentThread();
+    });
+    worker.join();
+    return scan;
+}
+
+StartMenuScan listControlPanelItems()
+{
+    // 与 `listStartMenuApps()` 同一套：自己开一条一次性的 STA 线程。
+    StartMenuScan scan;
+    std::thread worker([&scan]() {
+        StaThread apartment;
+        if (!apartment.ok()) {
+            scan.error = apartment.error();
+            return;
+        }
+        scan = scanControlPanelOnCurrentThread();
     });
     worker.join();
     return scan;

@@ -3,11 +3,14 @@
 #include "core/pinyin.h"
 
 #include <QHash>
+#include <QLocale>
 #include <QRegularExpression>
+#include <QSet>
 #include <QStringList>
 
 #include <algorithm>
 #include <cstdint>
+#include <iterator>
 
 namespace flowkeyd::core {
 
@@ -62,6 +65,32 @@ QString appIconUrl(const QString &launchName)
     return QStringLiteral("image://flowkeyd-app/") + appIconKey(launchName);
 }
 
+namespace {
+
+/// 「设置」应用的启动名（`shell:AppsFolder\<AUMID>`）。
+///
+/// `ms-settings:` 页面在 shell 里取不到图标，所以借「设置」自己的那一张。这个
+/// AppUserModelID（包家族名 `windows.immersivecontrolpanel_cw5n1h2txyewy` +
+/// AppId `microsoft.windows.immersivecontrolpanel`）自 Windows 8 起就没变过，
+/// 而且它一定在 `shell:AppsFolder` 里（真机上就有一条「设置」）；万一哪天变了，
+/// 设置页的格子会退回占位方块 —— 只影响图标，不影响启动。
+constexpr const char *kSettingsAppLaunch =
+    "shell:AppsFolder\\windows.immersivecontrolpanel_cw5n1h2txyewy"
+    "!microsoft.windows.immersivecontrolpanel";
+
+/// 前缀（`ms-settings:`，大小写无关）。
+constexpr char kSettingsUriPrefix[] = "ms-settings:";
+
+} // namespace
+
+QString appIconLaunchName(const QString &launchName)
+{
+    if (launchName.startsWith(QLatin1String(kSettingsUriPrefix), Qt::CaseInsensitive)) {
+        return QString::fromLatin1(kSettingsAppLaunch);
+    }
+    return launchName;
+}
+
 std::vector<AppEntry> prepareAppEntries(std::vector<AppEntry> entries)
 {
     std::vector<AppEntry> kept;
@@ -96,6 +125,28 @@ std::vector<AppEntry> prepareAppEntries(std::vector<AppEntry> entries)
         return QString::compare(a.launch, b.launch, Qt::CaseInsensitive) < 0;
     });
     return kept;
+}
+
+std::vector<AppEntry> appendLauncherEntries(std::vector<AppEntry> base,
+                                            const std::vector<AppEntry> &extra)
+{
+    QSet<QString> names;
+    names.reserve(static_cast<int>(base.size() + extra.size()));
+    for (const AppEntry &entry : base) {
+        names.insert(entry.name.trimmed().toLower());
+    }
+    for (const AppEntry &entry : extra) {
+        const QString name = entry.name.trimmed();
+        if (name.isEmpty()) {
+            continue;
+        }
+        if (names.contains(name.toLower())) {
+            continue;
+        }
+        names.insert(name.toLower());
+        base.push_back(entry);
+    }
+    return base;
 }
 
 namespace {
@@ -361,6 +412,90 @@ bool appLooksLikeUninstaller(const QString &name, const QString &target)
         QStringLiteral("^(unins\\d*|uninst|uninstall|unwise)\\.exe$"),
         QRegularExpression::CaseInsensitiveOption);
     return kUninstallFile.match(file).hasMatch();
+}
+
+// ---------------------------------------------------------------------------
+// 内置的「Windows 设置」页面
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// 常用设置页。URI 取自微软文档里列的那一份（`Launch Windows Settings` / 社区
+/// 维护的 `ms-settings:` 列表），中文名就是中文系统上「设置」应用里那一页的标题。
+///
+/// 只收**常用**的（显示 / 声音 / 网络 / 电源 / 应用 / 时间语言 / 隐私安全 ……）；
+/// 具体到某一页的开关仍然要进设置里点，这里给的是入口。
+const SettingsPage kSettingsPages[] = {
+    {"ms-settings:display", "显示", "Display"},
+    {"ms-settings:sound", "声音", "Sound"},
+    {"ms-settings:notifications", "通知", "Notifications"},
+    {"ms-settings:powersleep", "电源和睡眠", "Power & sleep"},
+    {"ms-settings:storagesense", "存储", "Storage"},
+    {"ms-settings:bluetooth", "蓝牙和其他设备", "Bluetooth & devices"},
+    {"ms-settings:network", "网络和 Internet", "Network & internet"},
+    {"ms-settings:network-wifi", "Wi-Fi", "Wi-Fi"},
+    {"ms-settings:network-ethernet", "以太网", "Ethernet"},
+    {"ms-settings:network-vpn", "VPN", "VPN"},
+    {"ms-settings:network-proxy", "代理", "Proxy"},
+    {"ms-settings:printers", "打印机和扫描仪", "Printers & scanners"},
+    {"ms-settings:personalization", "个性化", "Personalization"},
+    {"ms-settings:appsfeatures", "应用和功能", "Apps & features"},
+    {"ms-settings:defaultapps", "默认应用", "Default apps"},
+    {"ms-settings:dateandtime", "日期和时间", "Date & time"},
+    {"ms-settings:regionlanguage", "语言和区域", "Language & region"},
+    {"ms-settings:clipboard", "剪贴板", "Clipboard"},
+    {"ms-settings:multitasking", "多任务", "Multitasking"},
+    {"ms-settings:easeofaccess", "辅助功能", "Accessibility"},
+    {"ms-settings:privacy", "隐私和安全性", "Privacy & security"},
+    {"ms-settings:windowsupdate", "Windows 更新", "Windows Update"},
+    {"ms-settings:remotedesktop", "远程桌面", "Remote Desktop"},
+    {"ms-settings:developers", "开发者选项", "For developers"},
+    {"ms-settings:windowsinsider", "Windows 预览体验计划", "Windows Insider Program"},
+    {"ms-settings:about", "关于", "About"},
+};
+
+} // namespace
+
+const std::vector<SettingsPage> &windowsSettingsPages()
+{
+    static const std::vector<SettingsPage> pages(std::begin(kSettingsPages),
+                                                 std::end(kSettingsPages));
+    return pages;
+}
+
+bool settingsNamesAreChinese(const QStringList &uiLanguages)
+{
+    if (uiLanguages.isEmpty()) {
+        return false;
+    }
+    // 只看第一项：`uiLanguages()` 本来就是“优先级从高到低”，第一项就是它当时
+    // 真会用的那一种。别的语言（日语、德语……）一律走英文名 —— 名字是内置的，
+    // 不可能给每种语言都准备一份。
+    return QLocale(uiLanguages.first()).language() == QLocale::Chinese;
+}
+
+std::vector<AppEntry> builtinSettingsEntries(const QStringList &uiLanguages)
+{
+    const bool chinese = settingsNamesAreChinese(uiLanguages);
+    const QString prefix = chinese ? QString::fromUtf8(kSettingsNamePrefixZh)
+                                   : QString::fromUtf8(kSettingsNamePrefixEn);
+    const std::vector<SettingsPage> &pages = windowsSettingsPages();
+    std::vector<AppEntry> entries;
+    entries.reserve(pages.size());
+    for (const SettingsPage &page : pages) {
+        AppEntry entry;
+        entry.name = prefix + QString::fromUtf8(chinese ? page.nameZh : page.nameEn);
+        entry.launch = QString::fromLatin1(page.uri);
+        // `target` / `arguments` 留空：这一条不是一个文件，启动走 `ms-settings:`
+        // 协议（shell 自己把它交给「设置」应用）。
+        entries.push_back(std::move(entry));
+    }
+    return entries;
+}
+
+std::vector<AppEntry> builtinSettingsEntries()
+{
+    return builtinSettingsEntries(QLocale::system().uiLanguages());
 }
 
 } // namespace flowkeyd::core

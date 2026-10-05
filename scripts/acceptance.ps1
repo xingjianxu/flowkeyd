@@ -20,8 +20,9 @@
 #   * 窗口切换器（`windows()`）：「轻碰 Win」弹出卡片、再轻碰一次关掉它
 #     （与 `Esc` 同义）、卡片不在任务栏里、遮断标记保住了前台
 #   * 程序启动器（`apps()`）：弹出现象、不在任务栏里、拿到键盘焦点、标题里的条数
-#     读得出来、在卡片里打字会真的筛掉条目、数字快速启动键只吃号码（不启动
-#     程序）、再按一次快捷键关掉它、筛选不复位，
+#     读得出来、在卡片里打字会真的筛掉条目、**目录里带上了控制面板项与内置的
+#     「Windows 设置」页**（用拼音首字母 `dyxx` / `sz` 筛出来）、数字快速启动键
+#     只吃号码（不启动程序）、再按一次快捷键关掉它、筛选不复位，
 #     以及**右键一格弹出系统菜单**（新增的 `#32768` 菜单窗口，取消后卡片还在）
 #   * 按住不放只派发一次
 #   * 重映射的 hold / tap / CapsLock -> Esc
@@ -127,6 +128,9 @@ $VK_F14 = 0x7D
 $VK_F15 = 0x7E
 $VK_Q = 0x51
 $VK_Z = 0x5A
+$VK_D = 0x44
+$VK_X = 0x58
+$VK_Y = 0x59
 $VK_F17 = 0x80
 $VK_F18 = 0x81
 $VK_F19 = 0x82
@@ -948,6 +952,29 @@ try {
     Check '重新打开启动器' (WaitUntil { [FlowInject]::HasWindowTitled($daemon.Id, $APPS_TITLE) } 6000)
     Pump 300
     Check '重新打开时筛选已清空（计数回到满）' ((AppsCount) -eq $appsTotal)
+
+    # 目录的第二、三份来源：控制面板项与内置的「Windows 设置」页（「网络连接」
+    # 「电源选项」这些单项在开始菜单里没有，只有两个总入口）。用**拼音首字母**
+    # 筛一下 —— 关键词全是 ASCII，注入得了：`dyxx` 是「电源选项」的首字母，
+    # `sz` 是「设置：…」那一批页（以及「设置」应用自己）的开头。两条都应当
+    # 命中一小揪：命中数 ≥ 1 而明显小于总数，就说明它们真的在目录里、也真的走筛选。
+    foreach ($ch in @($VK_D, $VK_Y, $VK_X, $VK_X)) { TapKey $ch }    # d y x x
+    Pump 500
+    $appsControlPanel = AppsCount
+    Write-Host "         apps caption after typing dyxx: $appsControlPanel"
+    Check '控制面板项进了启动器（拼音首字母 `dyxx` 筛到「电源选项」）' (
+        $appsControlPanel -ge 1 -and $appsControlPanel -le 8)
+    for ($i = 0; $i -lt 4; $i++) { TapKey $VK_BACK }
+    Pump 400
+    foreach ($ch in @($VK_S, $VK_Z)) { TapKey $ch }                  # s z
+    Pump 500
+    $appsSettings = AppsCount
+    Write-Host "         apps caption after typing sz: $appsSettings"
+    Check '内置的系统设置页进了启动器（拼音首字母 `sz` 命中 20 个以上）' (
+        $appsSettings -ge 20 -and $appsSettings -lt $appsTotal)
+    for ($i = 0; $i -lt 2; $i++) { TapKey $VK_BACK }
+    Pump 400
+    Check '清掉设置页的筛选之后条数回到满' ((AppsCount) -eq $appsTotal)
 
     # 数字快速启动键（easymotion 风格）：筛选之后前 10 条各分一个数字（第 1 个是
     # `0`），按一下就启动它。这里**不能按已分配的数字**（会真的启动一个程序），

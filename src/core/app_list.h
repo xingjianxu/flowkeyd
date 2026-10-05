@@ -11,6 +11,7 @@
 #pragma once
 
 #include <QString>
+#include <QStringList>
 
 #include <vector>
 
@@ -58,6 +59,17 @@ QString appIconKey(const QString &launchName);
 /// QML 里 `Image.source` 用的前缀：`image://flowkeyd-app/<appIconKey()>`。
 QString appIconUrl(const QString &launchName);
 
+/// 这一条**取图标**时该用哪个名字（默认就是启动名本身）。
+///
+/// 唯一的例外是内置的「Windows 设置」页面（`ms-settings:…`）：那些 URI 在 shell
+/// 里既没有本地化名字、也取不到图标（`SIGDN_NORMALDISPLAY` 给回来的就是 URI
+/// 本身），所以图标借「设置」应用自己的那一个 —— 一排齿轮总比一格空白强。
+///
+/// 注意它与 `appIconKey()` 的分工：**键（身份、图片缓存的 URL id）永远来自启动名
+/// 本身**（每个设置页各一个键，固定 / 最近使用互不干扰），这里只决定「上哪儿去
+/// 取像素」。
+QString appIconLaunchName(const QString &launchName);
+
 /// 整理一份扫描结果：丢掉没有名字/没有启动名的、按「名字 + 启动名」去重、
 /// 按名字排序。
 ///
@@ -66,6 +78,20 @@ QString appIconUrl(const QString &launchName);
 /// 同一个 exe 的条目是两条独立的入口（`Developer PowerShell for VS` 与
 /// `Debuggable Package Manager` 就是这样）。
 std::vector<AppEntry> prepareAppEntries(std::vector<AppEntry> entries);
+
+/// 把 `extra` 里的条目接到 `base` 后面，**丢掉名字与 `base`（或前面已经接上的
+/// 条目）重复的那些**。
+///
+/// 为什么需要它：启动器的目录来自好几个地方（`shell:AppsFolder` 的开始菜单、
+/// 控制面板的「所有控制面板项」、内置的设置页），来源之间会有重名的入口
+/// （真机上「Windows 工具」在开始菜单与控制面板里各有一条），两个一模一样的名字
+/// 会让人以为列表坏了。开始菜单那一份接在**前面**，所以保留它。
+///
+/// 判据只有名字（大小写无关、去掉首尾空白）；**不碰 `prepareAppEntries()` 那条
+/// 「名字 + 启动名」的去重规则** —— 那条是整理一份扫描结果用的，名字不同就是两条
+/// 独立的入口，这里要的是「两个来源之间不要出现同名」。
+std::vector<AppEntry> appendLauncherEntries(std::vector<AppEntry> base,
+                                            const std::vector<AppEntry> &extra);
 
 /// 拼音/首字母搜索最多展开几种读音组合：超过就退回「每个字只用主读音」。
 ///
@@ -165,5 +191,47 @@ bool appTargetIsProgram(const QString &target, const QString &appUserModelId);
 /// 只看名字与目标文件名，**不猜**「Setup」「维护工具」这类 —— 那些常常也是正常
 /// 入口（`Visual Studio Installer`、「配置工具」）。
 bool appLooksLikeUninstaller(const QString &name, const QString &target);
+
+// ---------------------------------------------------------------------------
+// 内置的「Windows 设置」页面（`ms-settings:`）
+// ---------------------------------------------------------------------------
+//
+// 控制面板里的条目（「网络连接」「电源选项」「程序和功能」……）**不在**这里：
+// 那一份由 `platform/win/apps.cpp` 枚举「所有控制面板项」得到，名字、图标、启动
+// 全都能交给 shell（因此自动跟着系统语言走）。
+//
+// 现代「设置」应用的那些页面（`ms-settings:`）在 shell 里**没有名字也没有图标**
+// ——`SHCreateItemFromParsingName("ms-settings:display")` 能建出条目，但
+// `SIGDN_NORMALDISPLAY` 返回的就是 URI 本身 —— 所以只能自己带一份中英对照。
+
+/// 内置的一条「Windows 设置」页面。
+struct SettingsPage
+{
+    /// `ms-settings:` URI：既是启动名，也是这一条的**稳定身份**（图标键）。
+    const char *uri;
+    /// 中文名（**不带**前缀，前缀由 `builtinSettingsEntries()` 加）。
+    const char *nameZh;
+    /// 英文名（同上，不带前缀）。
+    const char *nameEn;
+};
+
+/// 内置设置页名字的前缀（中文 / 英文）。
+///
+/// 有前缀这些条目在「全部程序」列表里会**聚在同一组**（`设置…` 的拼音首字母都是
+/// `S`），而且输入「设置」/`settings` 就能把它们一次全筛出来。
+inline constexpr char kSettingsNamePrefixZh[] = "设置：";
+inline constexpr char kSettingsNamePrefixEn[] = "Settings: ";
+
+/// 内置的常用设置页表（顺序 = 显示时的顺序）。
+const std::vector<SettingsPage> &windowsSettingsPages();
+
+/// 界面语言列表（`QLocale::system().uiLanguages()` 的形状）里的**第一项**是不是
+/// 中文。空列表按「不是中文」算（英文名是兜底）。
+bool settingsNamesAreChinese(const QStringList &uiLanguages);
+
+/// 把内置设置页编译成启动器条目：名字 = 前缀 + 按语言选的名字，启动名 = URI。
+std::vector<AppEntry> builtinSettingsEntries(const QStringList &uiLanguages);
+/// 同上，但用系统界面语言（`QLocale::system().uiLanguages()`）。
+std::vector<AppEntry> builtinSettingsEntries();
 
 } // namespace flowkeyd::core

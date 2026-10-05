@@ -1036,12 +1036,32 @@ void Dispatcher::refreshAppCatalog()
             return;
         }
     }
-    m_appCatalog = core::prepareAppEntries(scan.entries);
+
+    // 目录是三份来源接起来的：开始菜单（`shell:AppsFolder`）→ 控制面板
+    // （「所有控制面板项」+「网络连接」）→ 内置的常用「Windows 设置」页面。
+    // 后两份**与开始菜单同名的条目会被丢掉**（真机上只有「Windows 工具」一条），
+    // 见 `core::appendLauncherEntries()`。
+    const win::apps::StartMenuScan panel = win::apps::listControlPanelItems();
+    if (!panel.error.isEmpty()) {
+        // 控制面板读不出来只是少了一批条目：不能因此挡住开始菜单那一份。
+        win::logWarn(QStringLiteral("app launcher (control panel): %1").arg(panel.error));
+    }
+    const int settingPages = static_cast<int>(core::windowsSettingsPages().size());
+    std::vector<core::AppEntry> entries
+        = core::appendLauncherEntries(scan.entries, panel.entries);
+    entries = core::appendLauncherEntries(std::move(entries), core::builtinSettingsEntries());
+
+    m_appCatalog = core::prepareAppEntries(std::move(entries));
     m_appScanned = true;
     m_appScannedAt = win::monotonicMs();
-    win::logDebug(QStringLiteral("app launcher: %1 item(s) in shell:AppsFolder, %2 program(s) "
-                                 "listed (%3 hidden: %4 not a program, %5 uninstaller(s))")
+    win::logDebug(QStringLiteral("app launcher: %1 item(s) in shell:AppsFolder (%2 program(s)), "
+                                 "%3 control panel item(s), %4 built-in setting page(s) -> "
+                                 "%5 entry/entries listed (%6 hidden: %7 not a program, "
+                                 "%8 uninstaller(s))")
                       .arg(scan.candidates)
+                      .arg(static_cast<qulonglong>(scan.entries.size()))
+                      .arg(panel.candidates)
+                      .arg(settingPages)
                       .arg(static_cast<qulonglong>(m_appCatalog.size()))
                       .arg(scan.hiddenNotProgram + scan.hiddenUninstaller)
                       .arg(scan.hiddenNotProgram)

@@ -1,9 +1,13 @@
-// 开始菜单扫描（程序启动器 `apps` 动作的数据源）、shell 图标提取与启动。
+// 开始菜单 / 控制面板扫描（程序启动器 `apps` 动作的两份数据源）、shell 图标提取与启动。
 //
-// **数据源是 `shell:AppsFolder`**，不是那两个 `…\Start Menu\Programs` 目录
+// **第一份数据源是 `shell:AppsFolder`**，不是那两个 `…\Start Menu\Programs` 目录
 // （2026-10 改的，见 AGENTS.md 第 2 节第 27 条）：那就是开始菜单「所有应用」
 // 列的那一份 —— 经典程序的快捷方式、**商店/UWP 应用**（它们根本没有 `.lnk`）、
 // 系统工具（`.msc`）全在里面，名字也是 shell 给的显示名（跟系统语言走）。
+//
+// **第二份是控制面板**（`listControlPanelItems()`，2026-10 加，见 AGENTS.md 第 2 节
+// 第 31 条）：开始菜单里只有「设置」与「控制面板」两个总入口，「网络连接」
+// 「电源选项」「程序和功能」「设备管理器」「声音」这些单项都在控制面板命名空间里。
 // 这一层只做平台上那几件事：
 //   * 枚举 `shell:AppsFolder`，每个条目读 显示名 / AppUserModelID /
 //     目标解析名 / 参数（`IShellItem2::GetString` + 几个 PKEY）；
@@ -39,6 +43,9 @@
 namespace flowkeyd::platform::win::apps {
 
 /// 一次开始菜单扫描的结果。
+///
+/// `listStartMenuApps()` 与 `listControlPanelItems()` 共用它（两者的错误处理与
+/// 计数器形状一模一样，只是来源不同）。
 struct StartMenuScan
 {
     /// 扫到并**通过两道过滤**的条目（原始顺序，没有去重、没有排序 ——
@@ -57,6 +64,27 @@ struct StartMenuScan
 
 /// 枚举 `shell:AppsFolder`。可以在这条线程上任意调用（内部自己开一次性 STA 线程）。
 StartMenuScan listStartMenuApps();
+
+/// 枚举**控制面板**里的条目（启动器目录的第二份来源）。
+///
+/// 开始菜单（`shell:AppsFolder`）里有「设置」与「控制面板」两个**总入口**，却
+/// 没有「网络连接」「电源选项」「程序和功能」「设备管理器」「声音」「鼠标」这些
+/// 单独的项 —— 它们在控制面板命名空间里。真机（Win11 26200）上「所有控制面板项」
+/// 是 36 条；另外补上几个不在那里的（目前只有「网络连接」，它是个 delegate
+/// folder）。
+///
+/// 走的还是 shell 那一套：显示名 = `SIGDN_NORMALDISPLAY`，启动名 = 那个条目的
+/// **桌面绝对解析名**（`SIGDN_DESKTOPABSOLUTEPARSING`，形如
+/// `::{26EE0668-…}\0\::{025A5937-…}`）—— 它是由 shell 自己给的 PIDL 往返得来
+/// 的，所以 `SHParseDisplayName` 能再解回去（`launchApp()` 的第二条路就是它），
+/// 图标也能用同一个字符串取（`shellIcon()`）。名字与图标因此与系统语言一致。
+/// 解析名解不回去的那几个（真机上只有「字体」，它的解析名里带的是本地化显示名）
+/// 退回 `SIGDN_FILESYSPATH`（`C:\Windows\Fonts`）；连它也没有就丢掉这条
+/// （宁可少一条也不给一个按下去没反应的格子）。
+///
+/// `hiddenUninstaller` 恒为 0：这些条目不做「卸载程序」那道过滤（控制面板本来
+/// 就不会把卸载程序摆在这里）。
+StartMenuScan listControlPanelItems();
 
 /// 启动一个 `AppEntry::launch`（`shell:AppsFolder\<AUMID>`）。
 ///
