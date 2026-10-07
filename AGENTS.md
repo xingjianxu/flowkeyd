@@ -621,28 +621,35 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
       不编号，数字照常打进筛选框（`7-Zip` 这类名字要用数字筛）。号码出现时那格原来的
       「已固定」小圆点让到图标左上角（两个都锚右上角会叠住）。`tst_app_list_model` 盯
       号码与按键映射，`scripts/acceptance.ps1` 盯「没有对应条目的号码被吃掉」。
-    * **已固定程序的固定快捷键 = `Alt` + 字母**（项目所有者 2026-10 拍板；按「已固定」
-      顺序，第 1 个 `Alt+a`、第 2 个 `Alt+b`……最多 26 个）。
-      * **为什么是 `Alt`**：需求原文是「按键从 a 到 z」，但裸字母是筛选框的主要输入
-        —— 占用它们就打不了字了。问了项目所有者，选的是「卡片内 `Alt` + 字母」。
-      * 与数字键**不同**：它不随筛选变化，卡片开着的任何视图里都有效。所以筛选之后
-        它能启动一个**根本没显示出来**的固定项 —— `activateItem()` 因此不再要求条目
-        在当前视图里（只是找不到就不挪选中项），`activateItemReturnsTheItemIndex`
-        与 `pinnedProgramsGetFixedAltLetterKeys` 盯着这一点。
+    * **最近使用程序的跳转键 = `Alt` + 数字**（项目所有者 2026-10 拍板；按「最近使用」
+      顺序，第 1 个 `Alt+1`……第 9 个 `Alt+9`、第 10 个 `Alt+0`，最多 10 个）。
+    * **已固定程序的固定快捷键 = `Alt` + 功能键**（项目所有者 2026-10 拍板；按「已固定」
+      顺序，第 1 个 `Alt+F1`、第 2 个 `Alt+F2`……最多 12 个，第 13 个起没有）。
+      * **为什么是 `Alt`**：裸字母 / 数字是筛选框的主要输入 —— 占用它们就打不了字了；
+        功能键本身单独按还有别的含义（`F1` 是帮助、`Alt+F4` 是关窗），所以都带上 `Alt`
+        并只在自己的低层钩子之外、**卡片开着时**才有效。
+      * 模型侧：`m_recentKeys`（`m_recentShown` 顺序）与 `m_pinKeys`（`m_pinnedShown`
+        顺序），都在 `rebuildRows()` 里重算；徽标文字由 `recentKeyLabelForLine()` /
+        `pinKeyLabelForLine()` 给出（`Alt+数字` / `Alt+F数字`）。
+      * 与筛选号码**不同**：它们不随筛选变化，卡片开着的任何视图里都有效。所以筛选
+        之后它们能启动一个**根本没显示出来**的固定 / 最近项 —— `activateItem()` 因此
+        不再要求条目在当前视图里（只是找不到就不挪选中项），`activateItemReturnsTheItemIndex`
+        与 `pinnedProgramsGetFixedAltFunctionKeys` / `recentProgramsGetAltDigitKeys`
+        盯着这一点。
       * `modifiers` 必须**恰好**等于 `Qt::AltModifier`：`Ctrl`/`Shift` 的组合、
         `AltGr`（`Ctrl+Alt`）都放行给 `TextInput`。靠 `handleKey(int key, int modifiers)`
         的第二个参数（QML 传 `event.modifiers`；`qmlEntryPointsAreInvokable` 里的签名
         也要跟着写成 `handleKey(int,int)`）。已固定列表非空时，`Alt` + 没分配到的
-        字母也被吃掉（放行会变成筛选框里的一个字符）。
-      * **数字优先显示**：同一格既是固定项、又在前 10 条结果里时画号码（号码得跟显示
-        序号对得上），但 `Alt` + 它的字母照样有效。徽标上写的是完整按键（`Alt+a`），
-        所以格子里那个小方块会跟着文字变宽。
-      * 「全部程序」列表里固定在右端画的是同一个徽标（没有字母时才是小圆点）。
+        功能键也被吃掉（放行会变成别处的按键）；最近列表非空时同理吃掉没分配到的数字。
+      * **筛选号码优先显示**：同一格既是固定 / 最近项、又在前 10 条结果里时画号码
+        （号码得跟显示序号对得上），但 `Alt` + 它的数字 / 功能键照样有效。徽标上写的是
+        完整按键（`Alt+3` / `Alt+F1`），所以格子里那个小方块会跟着文字变宽。
+      * 「全部程序」列表里固定在右端画的是同一个徽标（没有键时才是小圆点）。
 
 31. **启动器的目录是三份来源拼的：开始菜单 + 控制面板 + 内置的系统设置页**
     （项目所有者 2026-10 提的需求：把常用的 Windows 设置与控制面板里的网络 / 电源这类
     条目也放进启动器）。三份都喂给同一个模型，**筛选 / 固定 / 最近使用 / 数字快速启动键 /
-    `Alt` + 字母 / 右键菜单一视同仁**（固定与最近使用的身份就是各自的启动名哈希）。
+    `Alt` + 数字 / 功能键 / 右键菜单一视同仁**（固定与最近使用的身份就是各自的启动名哈希）。
     * **第一份还是 `shell:AppsFolder`**（第 27 条），一个字没改。
     * **第二份：控制面板的「所有控制面板项」**（`platform/win/apps.cpp` 的
       `listControlPanelItems()`）。真机 37 个候选 → 35 条：名字（`SIGDN_NORMALDISPLAY`）、
@@ -780,7 +787,7 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
 | `dispatcher.h/.cpp` | **动作工作线程**（`QThread`）：执行动作列表、`window` 的“先启动再激活”与默认开的 `toggle`、`menu`/`help`/`windows`/`apps` 的窗口请求、`window_rule`（三遍）、`startDesktopWatch()`/`pollDesktop()`；启动器的持久状态文件路径也是在这里算好塞进 `AppRequest` 的（`core::launcherStatePath(runtime->configPath())`） |
 | `runtime.h/.cpp` | 引擎 + 钩子 + 分发 + 托盘 + 弹窗的总装；`ControlCmd`（suspend/reload/quit）通道；`--quit` 的事件句柄（`QWinEventNotifier` 在 GUI 线程上监听）；`reportDesktop()`/`desktopChanged`；`showSwitchFromAnyThread()` 等 |
 | `log_model.h/.cpp` | 日志窗口的模型：尾随日志文件、最多 1000 行、按级别配色、子串过滤 |
-| `menu_model.h/.cpp` / `help_model.h/.cpp` / `window_list_model.h/.cpp` / `app_list_model.h/.cpp` | 四个卡片的**纯逻辑**（`QAbstractListModel`，只用 QtCore）。行几何与鼠标命中**不归它们管**（`ListView`/`GridView` + `ItemDelegate`）；`help` 只管筛选/选中项/`Enter`/`Esc`/`setSelected`；`menu` 还持有悬停（`Enter` 执行光标下那一条）；`window_list` 管进程名前缀筛选、自动激活与数字选择模式；`app_list` 管**行**式的三个视图（已固定 + 最近使用 + 「全部程序」按钮 / 筛选用的扁平网格 / 按首字母分组的一行一个）、名字/拼音/首字母子串筛选（搜索串来自 `core::appSearchText()`，§2 第 29 条）、筛选之后前 10 条的**数字快速启动键**（`0` 起、图标右上角的号码）、已固定程序的 **`Alt` + 字母固定快捷键**（`Alt+a`–`Alt+z`，不随筛选变化）、`Space` 固定与「最近使用」的记账、以及卡片高度（§2 第 27/30 条） |
+| `menu_model.h/.cpp` / `help_model.h/.cpp` / `window_list_model.h/.cpp` / `app_list_model.h/.cpp` | 四个卡片的**纯逻辑**（`QAbstractListModel`，只用 QtCore）。行几何与鼠标命中**不归它们管**（`ListView`/`GridView` + `ItemDelegate`）；`help` 只管筛选/选中项/`Enter`/`Esc`/`setSelected`；`menu` 还持有悬停（`Enter` 执行光标下那一条）；`window_list` 管进程名前缀筛选、自动激活与数字选择模式；`app_list` 管**行**式的三个视图（已固定 + 最近使用 + 「全部程序」按钮 / 筛选用的扁平网格 / 按首字母分组的一行一个）、名字/拼音/首字母子串筛选（搜索串来自 `core::appSearchText()`，§2 第 29 条）、筛选之后前 10 条的**数字快速启动键**（`0` 起、图标右上角的号码）、最近使用程序的 **`Alt` + 数字跳转键**（`Alt+1`–`Alt+9`/`Alt+0`）与已固定程序的 **`Alt` + 功能键固定快捷键**（`Alt+F1`–`Alt+F12`，均不随筛选变化）、`Space` 固定与「最近使用」的记账、以及卡片高度（§2 第 27/30 条） |
 | `popup_layout.h/.cpp` / `popup_host.h/.cpp` | 弹窗共用的几何类型与 `centrePopup()`（先在工作区居中、再夹进屏幕）、`popupPixelSizeIsStale()`（窗口的物理尺寸是不是停在了旧缩放上）；把模型挂到 QML 窗口上、抢前台、在 GUI 线程上创建/复用窗口、`helpRun()`（可见行下标 → 条目下标，**先藏窗口再执行**）、`preload()`、**屏幕缩放 / 几何变时丢掉窗口缓存重建**（`discardPopupWindows()`）、`switchUseEnglishInput()`/`restoreSwitchInputMode()` |
 | `app_icons.h/.cpp` | **程序启动器的图标**：`QQuickAsyncImageProvider` + 一条常驻 STA 线程（队列 + 按「启动名@边长」缓存），把 `platform/win/apps::shellIcon()` 的 BGRA 变成 `QImage`（`Format_ARGB32`，**直通 alpha**）；表是“图标键 → 启动名”，只增不改（§2 第 27 条） |
 | `update_model.h/.cpp` / `update_archive.h/.cpp` / `updater.h/.cpp` | 更新卡片的状态机（八个阶段、版本号/发布说明/进度/按钮可见性，**不联网不解压不换文件**）；从 zip 里取出新 exe（`QZipReader` + PE 魔数检查）；联网编排（异步 `QNetworkAccessManager` + sha256 + 解压到 `<exe>.new` + mtime 对齐发布日） |
@@ -1062,6 +1069,20 @@ debug 构建 + 31 个测试全绿、release 零警告。**这次按项目所有�
 这一轮没能跑**：会话里 `GetForegroundWindow()` 返回 0、`SendInput` 报 5 —— 就是下面
 那条「先去解锁」的情形（不是产品 bug），新加的那条检查算欠账。
 
+**2026-10：启动器的快速启动键改成「最近使用 `Alt` + 数字、已固定 `Alt` + 功能键」**
+（项目所有者要求：最近使用从 `Alt+1` 排到 `Alt+9` `Alt+0`；已固定从 `Alt` + 字母改成
+`Alt+F1`–`Alt+F12`；都只在启动器卡片里生效）。模型侧是 `m_recentKeys` +
+`kRecentKeys = 10`、`m_pinKeys` + `kPinnedKeys = 12`，`handleKey()` 两条分支（都要求
+修饰键**恰好**是 `Alt`），徽标显示优先级 = 筛选号码 > 最近 > 固定。
+`tst_app_list_model` 的两个固定快捷键用例改写成功能键版
+（`pinnedProgramsGetFixedAltFunctionKeys` / `onlyTheFirstTwelvePinsGetAFunctionKey`）
+并新增 `recentProgramsGetAltDigitKeys`；`scripts/acceptance.ps1` 里那条「按没分配到的
+`Alt+z`」改成 `Alt+F2`（**不要**用 `Alt+F4`：那是关窗）。验证：debug 31 个测试全绿、
+两条 profile 零警告、`--check flowkeyd.lua.example` 零警告。
+**注意 `Alt+F4` / `Alt+F5`…`Alt+F10` 在拥有系统菜单的窗口上是 Windows 自己的命令
+（关窗 / 还原 / 移动 / 大小 / 最小化 / 最大化）**，卡片开着时按下去可能先被 win32k 处理；
+这是项目所有者点名的按键方案，先按它实现，真机手感见手工冒烟清单第 11 条。
+
 **锁屏时 `tmp/preview/` 的 `checkAppsMenu()` 会挂**（2026-10 实测两次）：那张原生菜单是
 `TrackPopupMenuEx` 的模态循环，`GetForegroundWindow() == 0` 时往 `#32768` 投 `Esc`
 也收不掉，一直阻塞到进程被杀。现在那一项在 `GetForegroundWindow() == 0` 时直接跳过
@@ -1096,11 +1117,13 @@ debug 构建 + 31 个测试全绿、release 零警告。**这次按项目所有�
    不一样）；挑一条无害的（「属性」或者「打开文件位置」）真按一次，确认卡片在命令跑之前
    就收了、shell 开出来的窗口在前台；再右键一次按 `Esc`，卡片应当还留在那里。
 10. 按顺序做完以上之后，**检查没有任何按键卡在按下状态**。
-11. **程序启动器的 `Alt` + 字母**（验收脚本只能按没分配到的字母）：固定两三条之后
-    打开卡片 —— 角上应当是 `Alt+a` / `Alt+b` … 这样的徽标（宽度跟着文字走），
-    右边那个「已固定」小圆点让到图标左上角；按 `Alt+a` 启动第 1 个固定项、
-    `Alt+b` 启动第 2 个；**筛选一个筛不到那条固定项的串之后再按 `Alt+a`，照样应该
-    启动它**；`Ctrl+A`（全选）与裸字母照旧进筛选框。
+11. **程序启动器的 `Alt` + 数字 / 功能键**（验收脚本只能按没分配到的键）：固定两三条、
+    再启动两三条（进「最近使用」）之后打开卡片 —— 角上应当是 `Alt+F1` / `Alt+F2`
+    与 `Alt+1` / `Alt+2` 这样的徽标（宽度跟着文字走），固定项右边那个「已固定」小圆点
+    让到图标左上角；按 `Alt+F1` 启动第 1 个固定项、`Alt+1` 启动第 1 个最近项；
+    **筛选一个筛不到那条固定项的串之后再按 `Alt+F1`，照样应该启动它**；
+    `Ctrl+数字`（如全选）与裸字母 / 数字照旧进筛选框。同时确认 `Esc` 关窗、
+    卡片关着时这些组合在本机**不再有任何效果**（它们只在启动器里生效）。
 12. **启动器里的控制面板项与设置页真的能启动**（验收脚本只验到「筛选能筛到它们」，
     按 `Enter` 会真的开东西，所以自动化不碰）：开一个控制面板项（例如筛 `dyxx` -> 「电源
     选项」-> `Enter`，应当弹出电源选项）与一个设置页（筛 `sz` -> 「设置：显示」-> `Enter`，
@@ -1978,8 +2001,8 @@ FreeType 字体引擎、程序启动器（`apps()` + 异步图标）、启动器
   函数与 `core::app_list` 里的过滤/合并，**别把名字匹配往平台层堆**）、
   `core/launcher_state.*`（固定 / 最近使用的顺序、截断与 JSON 解析序列化）、
   `platform/win/apps.*`（枚举 `shell:AppsFolder` + 属性读取 + `shellIcon` + `launchApp`）、
-  `app/app_list_model.*`（**行**式的三个视图与选中项/卡片高度、两种快速启动标识：
-  筛选之后的 `0`–`9` 与已固定程序的 `Alt` + 字母）、
+  `app/app_list_model.*`（**行**式的三个视图与选中项/卡片高度、三种快速启动标识：
+  筛选之后的 `0`–`9`、最近使用程序的 `Alt` + 数字、已固定程序的 `Alt` + 功能键）、
   `app/app_icons.*`（异步图标的线程/缓存/尺寸）、卡片 `AppPopup.qml`。
   把条目喂给卡片、**启动那一步**（`apps::launchApp()`）、以及状态文件路径都在
   `Dispatcher::openAppsAction()`；
@@ -1992,9 +2015,11 @@ FreeType 字体引擎、程序启动器（`apps()` + 异步图标）、启动器
   滚动这类“列表内容动没动”的检查有两层：`tmp/preview/` 里直接断言
   `ListView.contentY`（真 QML + 真模型，锁屏也能跑）；从外面看只有像素，所以
   `scripts/acceptance.ps1` 用 `RegionHash` 抓一条竖带前后比对。
-  **快速启动键**（数字与 `Alt` + 字母）只在模型里算：加一种就动 `rebuildRows()` 里的
-  `m_itemKeys` / `m_pinKeys`、`itemModels()` 的优先级、`handleKey()` 的一条分支，以及
-  `footerText()` 的一句提示 —— 别把它做成 QML 里的按键表。
+  **快速启动键**（筛选号码、`Alt` + 数字、`Alt` + 功能键）只在模型里算：加一种就动
+  `rebuildRows()` 里的 `m_itemKeys` / `m_recentKeys` / `m_pinKeys`、标签函数
+  （`digitLabelForLine()` / `recentKeyLabelForLine()` / `pinKeyLabelForLine()`）、
+  `itemModels()` 的优先级、`handleKey()` 的一条分支，以及 `footerText()` 的一句提示
+  —— 别把它做成 QML 里的按键表。
   **新的一行形状**：模型加一个 `Row::Kind`、`data()` 的 `RowKindRole` 多一个字符串、
   `AppPopup.qml` 多一个内联组件（并加进 `preload()` 的假数据好让它被预热）。
 * **程序启动器的过滤与身份**：凡是「某个东西算不算程序」「某个程序算不算卸载程序」的
@@ -2160,7 +2185,9 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、`--ch
   **名字 / 全拼 / 首字母的子串**（不是前缀，也不是模糊搜索）、筛到一个也**不**自动启动；
   **不切输入法**（与 `windows` 相反）。拼音的细节见§2 第 29 条；
   **筛选之后前 10 条各带一个 `0`–`9` 的快速启动键**（图标右上角，按一下直接启动；
-  没有对应条目的号码被吃掉、不漏进筛选框）见§2 第 30 条。
+  没有对应条目的号码被吃掉、不漏进筛选框），**最近使用程序另有 `Alt` + 数字
+  （`Alt+1`–`Alt+9`、`Alt+0`）、已固定程序另有 `Alt` + 功能键（`Alt+F1`–`Alt+F12`）
+  的跳转键**（只在卡片里生效、不随筛选变化）见§2 第 30 条。
 
 ### 本机真实配置不进仓库
 

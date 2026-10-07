@@ -36,8 +36,10 @@ constexpr int kButtonHeight = 40;
 constexpr int kListRowHeight = 44;
 /// 数字快速启动键一共发多少个：`0`..`9`（第 1 个拿 `0`、第 10 个拿 `9`）。
 constexpr int kNumberedKeys = 10;
-/// 已固定程序的 `Alt` + 字母快捷键一共发多少个：`a`..`z`。
-constexpr int kPinnedKeys = 26;
+/// 最近使用程序的 `Alt` + 数字快捷键一共发多少个：`1`..`9`、`0`。
+constexpr int kRecentKeys = 10;
+/// 已固定程序的 `Alt` + 功能键快捷键一共发多少个：`F1`..`F12`。
+constexpr int kPinnedKeys = 12;
 
 /// 卡片宽度：两边的内边距与缩进 + 正好六格（6 × 126 + 2 × 12 + 2 × 10 = 800）。
 constexpr int kInnerWidth = kColumns * kCellWidth;
@@ -69,17 +71,30 @@ QString digitLabelForLine(int line)
     return QString::number(line);
 }
 
-/// 第 `line` 个**已固定**程序的固定快捷键的徽标文字（`Alt+a`..`Alt+z`）。
+/// 第 `line` 个**最近使用**程序的跳转键徽标文字（`Alt+1`..`Alt+9`、`Alt+0`）。
 ///
-/// 字母一律小写（AGENTS.md 第 2 节第 17 条），而 `Alt` 前缀是写在徽标上的：
-/// 裸字母的徽标会被当成「按一下 a」——那正好是筛选框的打字。
+/// `Alt` 前缀是写在徽标上的：裸数字的徽标会被当成「按一下 1」——那正好是筛选
+/// 号码或筛选框的打字。号码就是排序：「从 `alt 1` 排到 `alt+9` `alt+0`」。
+QString recentKeyLabelForLine(int line)
+{
+    if (line < 0 || line >= kRecentKeys) {
+        return QString();
+    }
+    // 第 1 个拿 `1`、……第 9 个拿 `9`、第 10 个拿 `0`。
+    const int digit = (line + 1) % 10;
+    return QStringLiteral("Alt+") + QString::number(digit);
+}
+
+/// 第 `line` 个**已固定**程序的固定快捷键的徽标文字（`Alt+F1`..`Alt+F12`）。
+///
+/// `Alt` 前缀是写在徽标上的：裸功能键的徽标会被当成「按一下 F1」——那会弹出
+/// 帮助。
 QString pinKeyLabelForLine(int line)
 {
     if (line < 0 || line >= kPinnedKeys) {
         return QString();
     }
-    const char letter = static_cast<char>('a' + line);
-    return QStringLiteral("Alt+") + QLatin1Char(letter);
+    return QStringLiteral("Alt+F") + QString::number(line + 1);
 }
 
 } // namespace
@@ -214,8 +229,11 @@ QString AppListModel::footerText() const
         // 筛选之后的扁平网格：数字键是最省事的第二段输入（easymotion 风格）。
         parts << tr("0–9 直接启动");
     }
+    if (!m_recentKeys.isEmpty()) {
+        parts << tr("Alt+1–0 直接启动");
+    }
     if (!m_pinKeys.isEmpty()) {
-        parts << tr("Alt+a–z 直接启动");
+        parts << tr("Alt+F1–F12 直接启动");
     }
     if (m_allMode && m_filter.trimmed().isEmpty()) {
         // 「全部程序」列表：没有左右可走的格子，`Space`（固定）也就没提。
@@ -429,8 +447,8 @@ QVariantMap AppListModel::activateItem(int itemIndex)
         return makeNoneDecision(true);
     }
     // 选中项跟着走：这一格在当前视图里就把高亮挪过去。**找不到也照样返回
-    // `choose`** —— `Alt` + 字母（已固定程序的固定快捷键）在筛选之后可能作用在
-    // 一个没显示出来的条目上，那正是它存在的意义。
+    // `choose`** —— `Alt` + 数字 / 功能键（已固定 / 最近使用的快捷键）在筛选
+    // 之后可能作用在一个没显示出来的条目上，那正是它存在的意义。
     const std::optional<std::pair<int, int>> position = positionOfItem(itemIndex);
     if (position.has_value()
         && (position->first != m_selectedRow || position->second != m_selectedColumn)) {
@@ -510,19 +528,31 @@ QVariantMap AppListModel::afterContextMenu(bool invoked)
 
 QVariantMap AppListModel::handleKey(int key, int modifiers)
 {
-    // 已固定程序的固定快捷键：`Alt` + 字母（见头文件）。
+    // 最近使用程序的跳转键：`Alt` + `1`..`9`、`Alt` + `0`（见头文件）。
     //
-    // 必须**恰好**按住 `Alt`：`Ctrl`/`Shift` 的组合（`Ctrl+A` 全选、输入法的
-    // 候选键）与 `AltGr`（在 Windows 上是 `Ctrl+Alt`）都要放行给筛选框。
-    if (!m_pinKeys.isEmpty() && modifiers == Qt::AltModifier && key >= Qt::Key_A
-        && key <= Qt::Key_Z) {
-        const int line = key - Qt::Key_A;
+    // 必须**恰好**按住 `Alt`：`Ctrl`/`Shift` 的组合与 `AltGr`（在 Windows 上是
+    // `Ctrl+Alt`）都要放行给筛选框。
+    if (!m_recentKeys.isEmpty() && modifiers == Qt::AltModifier && key >= Qt::Key_0
+        && key <= Qt::Key_9) {
+        // 第 1 个是 `Alt+1`、……第 9 个是 `Alt+9`、第 10 个是 `Alt+0`。
+        const int line = key == Qt::Key_0 ? 9 : key - Qt::Key_1;
+        if (line < static_cast<int>(m_recentShown.size())) {
+            return activateItem(m_recentShown[static_cast<std::size_t>(line)]);
+        }
+        // 没分到号的数字：吃掉它。放行的话它会变成筛选框里的一个字符
+        // （用户想按 `Alt+3` 却看到筛选串多了一个 `3`）。
+        return makeNoneDecision(true);
+    }
+    // 已固定程序的固定快捷键：`Alt` + `F1`..`F12`（见头文件）。
+    //
+    // 同样必须**恰好**按住 `Alt`。
+    if (!m_pinKeys.isEmpty() && modifiers == Qt::AltModifier && key >= Qt::Key_F1
+        && key <= Qt::Key_F12) {
+        const int line = key - Qt::Key_F1;
         if (line < static_cast<int>(m_pinnedShown.size())) {
             return activateItem(m_pinnedShown[static_cast<std::size_t>(line)]);
         }
-        // 没固定到第 27 个以后的：吃掉这个键。放行的话它会变成筛选框里的一个
-        // 字母（用户想按 `Alt+z` 却看到筛选串多了一个 `z`），而 `Alt` + 字母
-        // 在卡片里本来也没有别的用途。
+        // 没固定到第 13 个以后的：吃掉这个键（理由同上）。
         return makeNoneDecision(true);
     }
     // 数字快速启动键：只有在「筛选之后」这种模式里才把数字键吃掉（否则用户要在
@@ -753,12 +783,21 @@ void AppListModel::rebuildRows(int keepItem)
         m_recentShown.push_back(found.value());
     }
 
-    // 已固定程序的固定快捷键（`Alt` + 字母，与 `m_pinnedShown` 的顺序一一
-    // 对应，最多 26 个）。**不随筛选 / 视图变化**：卡片开着就一直有效。
+    // 最近使用程序的跳转键（`Alt` + `1`..`9` / `Alt` + `0`，与 `m_recentShown`
+    // 的顺序一一对应，最多 10 个）。**不随筛选 / 视图变化**。
+    m_recentKeys.clear();
+    const int recents = std::min(static_cast<int>(m_recentShown.size()), kRecentKeys);
+    for (int line = 0; line < recents; ++line) {
+        m_recentKeys.insert(m_recentShown[static_cast<std::size_t>(line)],
+                            recentKeyLabelForLine(line));
+    }
+
+    // 已固定程序的固定快捷键（`Alt` + `F1`..`F12`，与 `m_pinnedShown` 的顺序
+    // 一一对应，最多 12 个）。**不随筛选 / 视图变化**：卡片开着就一直有效。
     //
-    // 与 `m_itemKeys` 分开存：数字键是「这次筛选里第几个」，字母是「固定列表里
-    // 第几个」，两者可能同时命中同一个条目；`itemModels()` 让数字优先显示，
-    // 但 `handleKey()` 两条路径都认。
+    // 与 `m_itemKeys` / `m_recentKeys` 分开存：筛选号码是「这次筛选里第几个」，
+    // 数字 / 功能键是「最近使用 / 固定列表里第几个」，它们可能同时命中同一个
+    // 条目；`itemModels()` 让筛选号码优先显示，但 `handleKey()` 每条路径都认。
     m_pinKeys.clear();
     const int pins = std::min(static_cast<int>(m_pinnedShown.size()), kPinnedKeys);
     for (int line = 0; line < pins; ++line) {
@@ -919,11 +958,14 @@ QVariantList AppListModel::itemModels(const std::vector<int> &items) const
         map.insert(QStringLiteral("icon"), entry.iconSource);
         map.insert(QStringLiteral("pinned"),
                    !entry.key.isEmpty() && m_pinned.contains(entry.key));
-        // 数字优先（号码必须与显示序号一一对应）；没有号码的已固定程序显示
-        // 它的固定快捷键（`Alt` + 字母）。
+        // 筛选号码优先（号码必须与显示序号一一对应）；否则是最近使用的
+        // `Alt` + 数字，再否则是已固定的 `Alt` + 功能键。
         const QString digit = m_itemKeys.value(index);
+        const QString recent = m_recentKeys.value(index);
         map.insert(QStringLiteral("key"),
-                   digit.isEmpty() ? m_pinKeys.value(index) : digit);
+                   !digit.isEmpty() ? digit
+                                    : (!recent.isEmpty() ? recent
+                                                         : m_pinKeys.value(index)));
         list.push_back(map);
     }
     return list;

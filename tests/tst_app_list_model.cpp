@@ -4,8 +4,9 @@
 // 筛选 = 扁平网格、全部 = 按首字母分组的一行一个）、角色、拼音 / 首字母筛选、
 // 键盘选中项（方向键 / Home / End / PgUp / PgDn，跳过表头、到边界夹住）、
 // `Space` 固定、`Enter`/`Esc` 的语义、「最近使用」的记账、筛选之后的**数字快速
-// 启动键**（0 起、只给前 10 条）、已固定程序的 **`Alt` + 字母**快捷键（a 起、
-// 不随筛选变化、最多 26 个），以及卡片高度。
+// 启动键**（0 起、只给前 10 条）、最近使用程序的 **`Alt` + 数字**跳转键
+// （`1`–`9`、`0`）、已固定程序的 **`Alt` + 功能键**快捷键（`F1`–`F12`，
+// 不随筛选变化、最多 12 个），以及卡片高度。
 //
 // **开始菜单的扫描与图标都不在这里**：前者要真机（`platform/win/apps`，见
 // `tst_interactive`），后者是 `app::AppIconProvider` 的异步活儿（由对话框那边
@@ -169,8 +170,9 @@ private slots:
     void onlyTheFirstTenMatchesGetAKey();
     void digitKeysLaunchTheNumberedProgram();
     void digitsGoToTheFilterWhenNothingIsFiltered();
-    void pinnedProgramsGetFixedAltLetterKeys();
-    void onlyTheFirstTwentySixPinsGetALetter();
+    void pinnedProgramsGetFixedAltFunctionKeys();
+    void onlyTheFirstTwelvePinsGetAFunctionKey();
+    void recentProgramsGetAltDigitKeys();
     void resetClearsFilterAndAllMode();
     void contextMenuDecidesWhetherToCloseTheCard();
     void itemIndexForVisibleWalksTheRows();
@@ -305,6 +307,15 @@ void TestAppListModel::recentIsCappedAndExcludesPinned()
     for (int index : itemIndices(model, 3)) {
         QVERIFY(index != 0);
     }
+
+    // 最近使用的前 10 个拿到 `Alt` + `1`..`9` / `Alt` + `0`（第 11、12 个没有）。
+    QCOMPARE(itemKey(model, 3, 0), QStringLiteral("Alt+1"));
+    QCOMPARE(itemKey(model, 3, 5), QStringLiteral("Alt+6"));
+    QCOMPARE(itemKey(model, 4, 0), QStringLiteral("Alt+7"));
+    QCOMPARE(itemKey(model, 4, 3), QStringLiteral("Alt+0"));
+    QCOMPARE(itemKey(model, 4, 4), QString());
+    QCOMPARE(indexOf(model.handleKey(Qt::Key_1, Qt::AltModifier)), 1);
+    QCOMPARE(indexOf(model.handleKey(Qt::Key_0, Qt::AltModifier)), 10);
 }
 
 void TestAppListModel::filterFlattensToAGrid()
@@ -793,61 +804,61 @@ void TestAppListModel::digitsGoToTheFilterWhenNothingIsFiltered()
     QVERIFY(!handledOf(model.handleKey(Qt::Key_7)));
 }
 
-void TestAppListModel::pinnedProgramsGetFixedAltLetterKeys()
+void TestAppListModel::pinnedProgramsGetFixedAltFunctionKeys()
 {
     app::AppListModel model;
     core::LauncherState state;
-    // 固定顺序 = 字母顺序（与显示顺序无关）。
+    // 固定顺序 = 功能键顺序（与显示顺序无关）。
     state.pinned = {keyFor(2), keyFor(0), keyFor(1)};
     model.setState(state);
     model.setItems(std::nullopt, sampleItems(8));
 
     // 行：0 表头 / 1 网格（三个固定）/ 2 「全部程序」按钮。
-    QCOMPARE(itemKey(model, 1, 0), QStringLiteral("Alt+a"));
-    QCOMPARE(itemKey(model, 1, 1), QStringLiteral("Alt+b"));
-    QCOMPARE(itemKey(model, 1, 2), QStringLiteral("Alt+c"));
+    QCOMPARE(itemKey(model, 1, 0), QStringLiteral("Alt+F1"));
+    QCOMPARE(itemKey(model, 1, 1), QStringLiteral("Alt+F2"));
+    QCOMPARE(itemKey(model, 1, 2), QStringLiteral("Alt+F3"));
     QVERIFY(itemIndices(model, 1) == std::vector<int>({2, 0, 1}));
-    QVERIFY(model.footerText().contains(QStringLiteral("Alt+a–z 直接启动")));
+    QVERIFY(model.footerText().contains(QStringLiteral("Alt+F1–F12 直接启动")));
 
-    // `Alt` + 字母启动固定列表里的第几个，与它显示在哪一格无关。
-    QVariantMap chosen = model.handleKey(Qt::Key_A, Qt::AltModifier);
+    // `Alt` + 功能键启动固定列表里的第几个，与它显示在哪一格无关。
+    QVariantMap chosen = model.handleKey(Qt::Key_F1, Qt::AltModifier);
     QCOMPARE(decisionOf(chosen), QStringLiteral("choose"));
     QVERIFY(handledOf(chosen));
     QCOMPARE(indexOf(chosen), 2);
-    QCOMPARE(indexOf(model.handleKey(Qt::Key_B, Qt::AltModifier)), 0);
-    QCOMPARE(indexOf(model.handleKey(Qt::Key_C, Qt::AltModifier)), 1);
+    QCOMPARE(indexOf(model.handleKey(Qt::Key_F2, Qt::AltModifier)), 0);
+    QCOMPARE(indexOf(model.handleKey(Qt::Key_F3, Qt::AltModifier)), 1);
 
-    // 没固定到东西的字母：吃掉但什么都不做（放行会变成筛选框里的一个字符）。
-    chosen = model.handleKey(Qt::Key_Z, Qt::AltModifier);
+    // 没固定到东西的功能键：吃掉但什么都不做（放行会变成别处的按键）。
+    chosen = model.handleKey(Qt::Key_F12, Qt::AltModifier);
     QCOMPARE(decisionOf(chosen), QStringLiteral("none"));
     QVERIFY(handledOf(chosen));
     QCOMPARE(indexOf(chosen), -1);
 
-    // 必须**恰好**按住 `Alt`：裸字母（打字）与 `Ctrl+A`（全选）都要放给筛选框，
-    // `AltGr`（= `Ctrl+Alt`）也不能当成快捷键。
-    QVERIFY(!handledOf(model.handleKey(Qt::Key_A)));
-    QVERIFY(!handledOf(model.handleKey(Qt::Key_A, Qt::ControlModifier)));
-    QVERIFY(!handledOf(model.handleKey(Qt::Key_A, Qt::AltModifier | Qt::ControlModifier)));
-    QVERIFY(!handledOf(model.handleKey(Qt::Key_A, Qt::AltModifier | Qt::ShiftModifier)));
+    // 必须**恰好**按住 `Alt`：裸功能键（F1 是帮助）、`Ctrl+F1` 与 `AltGr`
+    // （= `Ctrl+Alt`）都不能当成快捷键。
+    QVERIFY(!handledOf(model.handleKey(Qt::Key_F1)));
+    QVERIFY(!handledOf(model.handleKey(Qt::Key_F1, Qt::ControlModifier)));
+    QVERIFY(!handledOf(model.handleKey(Qt::Key_F1, Qt::AltModifier | Qt::ControlModifier)));
+    QVERIFY(!handledOf(model.handleKey(Qt::Key_F1, Qt::AltModifier | Qt::ShiftModifier)));
 
-    // **不随筛选变化**：筛掉固定项之后（它们根本不在网格里）`Alt` + 字母照样有效；
-    // 而网格里显示的是数字号码（数字与显示序号一一对应，优先画）。
+    // **不随筛选变化**：筛掉固定项之后（它们根本不在网格里）`Alt` + 功能键照样
+    // 有效；而网格里显示的是数字号码（数字与显示序号一一对应，优先画）。
     model.setFilter(QStringLiteral("app01"));
     QCOMPARE(model.visibleCount(), 1);
     QCOMPARE(itemKey(model, 0, 0), QStringLiteral("0"));
-    QCOMPARE(indexOf(model.handleKey(Qt::Key_A, Qt::AltModifier)), 2);
-    QCOMPARE(indexOf(model.handleKey(Qt::Key_B, Qt::AltModifier)), 0);
+    QCOMPARE(indexOf(model.handleKey(Qt::Key_F1, Qt::AltModifier)), 2);
+    QCOMPARE(indexOf(model.handleKey(Qt::Key_F2, Qt::AltModifier)), 0);
     QVERIFY(model.footerText().contains(QStringLiteral("0–9 直接启动")));
-    QVERIFY(model.footerText().contains(QStringLiteral("Alt+a–z 直接启动")));
+    QVERIFY(model.footerText().contains(QStringLiteral("Alt+F1–F12 直接启动")));
 
-    // 一个都没固定时没有这套快捷键：`Alt` + 字母原样放行。
+    // 一个都没固定时没有这套快捷键：`Alt` + 功能键原样放行。
     app::AppListModel bare;
     bare.setItems(std::nullopt, sampleItems(3));
-    QVERIFY(!handledOf(bare.handleKey(Qt::Key_A, Qt::AltModifier)));
-    QVERIFY(!bare.footerText().contains(QStringLiteral("Alt+a–z")));
+    QVERIFY(!handledOf(bare.handleKey(Qt::Key_F1, Qt::AltModifier)));
+    QVERIFY(!bare.footerText().contains(QStringLiteral("Alt+F1")));
 }
 
-void TestAppListModel::onlyTheFirstTwentySixPinsGetALetter()
+void TestAppListModel::onlyTheFirstTwelvePinsGetAFunctionKey()
 {
     app::AppListModel model;
     core::LauncherState state;
@@ -857,15 +868,45 @@ void TestAppListModel::onlyTheFirstTwentySixPinsGetALetter()
     model.setState(state);
     model.setItems(std::nullopt, sampleItems(28));
 
-    // 行：0 表头 / 1..5 网格（4 行 6 个 + 4 个）/ 6 按钮。第 26 个（下标 25）
-    // 是 `Alt+z`，第 27、28 个没有字母（也不画徽标）。
-    QCOMPARE(itemKey(model, 5, 0), QStringLiteral("Alt+y"));
-    QCOMPARE(itemKey(model, 5, 1), QStringLiteral("Alt+z"));
-    QCOMPARE(itemKey(model, 5, 2), QString());
+    // 行：0 表头 / 1..5 网格（4 行 6 个 + 4 个）/ 6 按钮。只有前 12 个有
+    // `Alt` + 功能键（第 12 个是 `Alt+F12`），第 13 个起不画徽标。
+    QCOMPARE(itemKey(model, 1, 0), QStringLiteral("Alt+F1"));
+    QCOMPARE(itemKey(model, 2, 0), QStringLiteral("Alt+F7"));
+    QCOMPARE(itemKey(model, 2, 5), QStringLiteral("Alt+F12"));
+    QCOMPARE(itemKey(model, 3, 0), QString());
     QCOMPARE(itemKey(model, 5, 3), QString());
 
-    QCOMPARE(indexOf(model.handleKey(Qt::Key_Z, Qt::AltModifier)), 25);
-    QCOMPARE(indexOf(model.handleKey(Qt::Key_Y, Qt::AltModifier)), 24);
+    QCOMPARE(indexOf(model.handleKey(Qt::Key_F12, Qt::AltModifier)), 11);
+    QCOMPARE(indexOf(model.handleKey(Qt::Key_F1, Qt::AltModifier)), 0);
+}
+
+void TestAppListModel::recentProgramsGetAltDigitKeys()
+{
+    app::AppListModel model;
+    core::LauncherState state;
+    state.recent = {keyFor(0), keyFor(1)};
+    model.setState(state);
+    model.setItems(std::nullopt, sampleItems(6));
+
+    // 行：0 表头（「最近使用」）/ 1 网格 / 2 「全部程序」按钮。
+    QCOMPARE(kinds(model), QStringList({QStringLiteral("header"), QStringLiteral("grid"),
+                                        QStringLiteral("button")}));
+    QCOMPARE(itemKey(model, 1, 0), QStringLiteral("Alt+1"));
+    QCOMPARE(itemKey(model, 1, 1), QStringLiteral("Alt+2"));
+    QVERIFY(model.footerText().contains(QStringLiteral("Alt+1–0 直接启动")));
+
+    // `Alt` + 数字启动「最近使用」里的第几个。
+    QCOMPARE(indexOf(model.handleKey(Qt::Key_1, Qt::AltModifier)), 0);
+    QCOMPARE(indexOf(model.handleKey(Qt::Key_2, Qt::AltModifier)), 1);
+    // 没分到号的数字被吃掉但什么都不做。
+    const QVariantMap eaten = model.handleKey(Qt::Key_3, Qt::AltModifier);
+    QCOMPARE(decisionOf(eaten), QStringLiteral("none"));
+    QVERIFY(handledOf(eaten));
+    // 必须**恰好**按住 `Alt`：裸数字与 `Ctrl+数字` 都要放行（筛选框 / 筛选号码）。
+    QVERIFY(!handledOf(model.handleKey(Qt::Key_1)));
+    QVERIFY(!handledOf(model.handleKey(Qt::Key_1, Qt::ControlModifier)));
+    QVERIFY(!handledOf(model.handleKey(Qt::Key_1, Qt::AltModifier | Qt::ControlModifier)));
+    QVERIFY(!handledOf(model.handleKey(Qt::Key_1, Qt::AltModifier | Qt::ShiftModifier)));
 }
 
 void TestAppListModel::resetClearsFilterAndAllMode()

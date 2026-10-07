@@ -116,6 +116,7 @@ $VK_S = 0x53
 $VK_ESC = 0x1B
 $VK_BACK = 0x08
 $VK_RETURN = 0x0D
+$VK_F2 = 0x71
 $VK_F6 = 0x75
 $VK_F7 = 0x76
 $VK_F8 = 0x77
@@ -1147,13 +1148,13 @@ try {
     $appsShort = [FlowInject]::WindowRect($daemon.Id, $APPS_TITLE)[3]
     Check '固定之后卡片高度不变（内容变少也不缩）' (
         $appsTall -gt 0 -and [Math]::Abs($appsShort - $appsTall) -le 2)
-    # `Alt` + 字母是**已固定程序**的固定快捷键（按固定顺序 `Alt+a`、`Alt+b`……）。
-    # 这里**只能按没分配到的字母** —— 按中了 `Alt+a` 会真的启动那个程序。固定了
-    # 1 条时 `Alt+z` 没分配，应当被吃掉：卡片还在、条数还是 1（漏进筛选框的话
-    # 筛选串会变成 `z`，标题里的条数几乎一定会跟着变）。
-    Chord @($VK_ALT) 0x5A                    # `Alt+z`
+    # `Alt` + 功能键是**已固定程序**的固定快捷键（按固定顺序 `Alt+F1`、`Alt+F2`……）。
+    # 这里**只能按没分配到的功能键** —— 按中了 `Alt+F1` 会真的启动那个程序。固定了
+    # 1 条时 `Alt+F2` 没分配，应当被吃掉：卡片还在、条数还是 1（漏进筛选框的话
+    # 筛选串会多一个字符，标题里的条数几乎一定会跟着变）。
+    Chord @($VK_ALT) $VK_F2                  # `Alt+F2`
     Pump 400
-    Check 'Alt+字母（没固定到的）被吃掉、没漏进筛选框' (
+    Check 'Alt+功能键（没固定到的）被吃掉、没漏进筛选框' (
         [FlowInject]::HasWindowTitled($daemon.Id, $APPS_TITLE) -and
         (AppsCount) -eq 1)
     # 固定是持久的：关掉再打开，那一条还在。
