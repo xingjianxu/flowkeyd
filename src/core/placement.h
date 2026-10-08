@@ -92,4 +92,24 @@ bool windowMatchesRule(const WindowRule &rule,
                        const QString &title,
                        const std::optional<QString> &executableName);
 
+/// 命中这个窗口的**第一条**规则（规则按书写顺序匹配，先写的赢）。
+///
+/// 一条都没命中时返回 `nullptr`。`window_rule` 的摆放与 `window` 动作的
+/// 「跨虚拟桌面怎么走」共用这一条查找。
+const WindowRule *firstWindowRule(const std::vector<WindowRule> &rules,
+                                  const QString &title,
+                                  const std::optional<QString> &executableName);
+
+/// 这个窗口所在的程序在配置里**声明了固定的虚拟桌面**吗？
+///
+/// 判据：命中这个窗口的第一条 `window_rule` 写了 `desktop`。`window` 动作的
+/// `activate` 靠它决定窗口在别的虚拟桌面上时往哪边走：
+///   * 声明了固定桌面 —— 用户按快捷键就是想过去，把**视图**切到它那张桌面
+///     （`window_rule` 的语义：这个程序属于那张桌面）；
+///   * 没声明 —— 窗口跟着用户走，把它**搬到当前桌面**再激活。不这样做的话
+///     Windows 会把视图切到窗口上一次所在的那张桌面上。
+bool windowRulePinsDesktop(const std::vector<WindowRule> &rules,
+                           const QString &title,
+                           const std::optional<QString> &executableName);
+
 } // namespace flowkeyd::core

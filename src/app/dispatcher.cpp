@@ -436,6 +436,47 @@ constexpr std::uint64_t kDefaultLaunchWaitMs = 3000;
 /// 等待该窗口时的轮询间隔。
 constexpr unsigned long kPollIntervalMs = 50;
 
+/// 没声明固定桌面的程序：窗口在别的虚拟桌面上时把它拉到**当前**桌面。
+///
+/// `window` 动作的 `activate` 靠这一步避免 Windows 把视图切到窗口上一次所在的
+/// 那张桌面上（`raiseWindow` 的默认行为）。判断“算不算声明了固定桌面”看的是
+/// 命中这个窗口的第一条 `window_rule` 有没有 `desktop`：写了就把视图切过去，
+/// 没写（或者压根没有规则）就把窗口搬过来。
+///
+/// 返回非空字符串表示**真的搬了**（内容是搬到了哪张桌面），供日志拼接；
+/// 其它情况（声明了固定桌面 / 已经在当前桌面 / 问不出来 / 搬失败）都返回空。
+std::optional<QString> bringWindowToCurrentDesktop(const core::Compiled &config, HWND hwnd)
+{
+    const QString title = win::window::windowTitle(hwnd);
+    const std::optional<QString> process = win::window::processName(hwnd);
+    if (core::windowRulePinsDesktop(config.windowRules, title, process)) {
+        win::logDebug(QStringLiteral("window %1 is pinned to its own desktop by a window rule")
+                          .arg(core::rustDebug(title)));
+        return std::nullopt;
+    }
+    // 便宜的先问一句：已经在当前桌面就什么都不做（这一步只是
+    // `IVirtualDesktopManager::IsWindowOnCurrentVirtualDesktop`，不碰未公开接口）。
+    QString onCurrentError;
+    const std::optional<bool> onCurrent =
+        win::desktop::isWindowOnCurrentDesktop(hwnd, &onCurrentError);
+    if (!onCurrent.has_value()) {
+        win::logDebug(QStringLiteral("could not tell whether %1 is on the current desktop: %2")
+                          .arg(core::rustDebug(title), onCurrentError));
+        return std::nullopt;
+    }
+    if (*onCurrent) {
+        return std::nullopt;
+    }
+    QString detail;
+    QString error;
+    if (!win::desktop::moveWindowToCurrentDesktop(hwnd, &detail, &error)) {
+        win::logWarn(QStringLiteral("could not bring %1 to the current desktop: %2")
+                         .arg(core::rustDebug(title), error));
+        return std::nullopt;
+    }
+    return detail;
+}
+
 /// 启动 `window` 动作指定的程序，然后等待它的窗口出现并激活它。
 ///
 /// 运行在工作线程上，所以这个轮询循环允许 sleep；钩子回调永远不会走到这里。
@@ -443,6 +484,7 @@ constexpr unsigned long kPollIntervalMs = 50;
 /// 这里**不**套用 `toggle`：刚启动的窗口往往自己就抢到了前台，在这种时候
 /// 把“启动它”变成“立刻收起它”毫无道理。
 bool launchThenActivate(ExpandContext &ctx,
+                        const core::Compiled &config,
                         const core::LaunchSpec &launch,
                         const core::WindowQuery &query,
                         bool animate,
@@ -474,12 +516,16 @@ bool launchThenActivate(ExpandContext &ctx,
     while (true) {
         HWND hwnd = win::window::find(query);
         if (hwnd != nullptr) {
+            const std::optional<QString> brought = bringWindowToCurrentDesktop(config, hwnd);
             QString placement;
             if (!win::window::applyTo(hwnd, core::WindowOp::Activate, animate, &placement, error)) {
                 return false;
             }
             if (detail != nullptr) {
                 *detail = QStringLiteral("started %1, then %2").arg(started, placement);
+                if (brought.has_value()) {
+                    *detail += QStringLiteral(" (brought to %1)").arg(*brought);
+                }
             }
             return true;
         }
@@ -496,6 +542,7 @@ bool launchThenActivate(ExpandContext &ctx,
 }
 
 void executeWindowAction(ExpandContext &ctx,
+                         const core::Compiled &config,
                          const core::Action &action,
                          const QString &hotkey)
 {
@@ -525,11 +572,23 @@ void executeWindowAction(ExpandContext &ctx,
             }
             return;
         }
+        // 声明了固定桌面的程序不动窗口（用户按快捷键就是想过去，`raiseWindow`
+        // 会切视图）；没声明的先把窗口拉到当前桌面，再激活它。
+        QString brought;
+        if (action.windowOp == core::WindowOp::Activate) {
+            if (const std::optional<QString> moved = bringWindowToCurrentDesktop(config, hwnd);
+                moved.has_value()) {
+                brought = *moved;
+            }
+        }
         if (!win::window::applyTo(hwnd, action.windowOp, animate, &detail, &error,
                                   action.follow.value_or(false))) {
             win::logError(QStringLiteral("`%1` window: %2").arg(hotkey, error));
-        } else {
+        } else if (brought.isEmpty()) {
             win::logInfo(QStringLiteral("`%1` -> %2").arg(hotkey, detail));
+        } else {
+            win::logInfo(QStringLiteral("`%1` -> %2 (brought to %3)")
+                             .arg(hotkey, detail, brought));
         }
         return;
     }
@@ -537,7 +596,7 @@ void executeWindowAction(ExpandContext &ctx,
     if (action.launch.has_value() && action.windowOp == core::WindowOp::Activate) {
         QString detail;
         QString error;
-        if (!launchThenActivate(ctx, *action.launch, query, animate, &detail, &error)) {
+        if (!launchThenActivate(ctx, config, *action.launch, query, animate, &detail, &error)) {
             win::logError(QStringLiteral("`%1` window: %2").arg(hotkey, error));
         } else {
             win::logInfo(QStringLiteral("`%1` -> %2").arg(hotkey, detail));
@@ -545,19 +604,6 @@ void executeWindowAction(ExpandContext &ctx,
         return;
     }
     win::logError(QStringLiteral("`%1` window: %2").arg(hotkey, win::window::missing(query)));
-}
-
-/// `window_rule` 里第一条命中这个窗口的规则。
-const core::WindowRule *firstWindowRule(const core::Compiled &config,
-                                        const QString &title,
-                                        const std::optional<QString> &process)
-{
-    for (const core::WindowRule &rule : config.windowRules) {
-        if (core::windowMatchesRule(rule, title, process)) {
-            return &rule;
-        }
-    }
-    return nullptr;
 }
 
 /// 窗口类名，只用于日志诊断。
@@ -608,7 +654,7 @@ void placeWindowOnce(const std::shared_ptr<const core::Compiled> &config,
 
     const QString title = win::window::windowTitle(hwnd);
     const std::optional<QString> process = win::window::processName(hwnd);
-    const core::WindowRule *rule = firstWindowRule(*config, title, process);
+    const core::WindowRule *rule = core::firstWindowRule(config->windowRules, title, process);
     if (rule == nullptr) {
         return;
     }
@@ -913,7 +959,7 @@ void executeAction(Runtime *runtime,
         executeClipboardAction(ctx, action, hotkey);
         break;
     case core::Action::Kind::Window:
-        executeWindowAction(ctx, action, hotkey);
+        executeWindowAction(ctx, *config, action, hotkey);
         break;
     case core::Action::Kind::Notify: {
         const QString title = ctx.expand(action.title);

@@ -137,6 +137,19 @@ bool moveWindowToDesktop(HWND hwnd,
                          QString *error,
                          bool *changed = nullptr);
 
+/// 把窗口搬到**当前**虚拟桌面（它已经在当前桌面时是空操作）。
+///
+/// 与 `switchToWindowDesktop()` 方向相反：那个把视图带到窗口那儿，这个把窗口
+/// 带到用户这儿。`window` 动作激活一个**没有**声明固定桌面的程序时用它 ——
+/// 否则 Windows 会把视图切到窗口上一次所在的那张桌面上去。
+///
+/// 调用方紧接着就要激活这个窗口（`window::raiseWindow`），所以这里**等 shell
+/// 真的把窗口搬过去**再返回：虚拟桌面的移动是异步的，不等的话随后的
+/// `switchToWindowDesktop` 会读到旧的桌面 GUID、把视图又切走。
+///
+/// 成功时 `detail` 是 `"desktop 2/4"` / `"already on desktop 1/4"`。
+bool moveWindowToCurrentDesktop(HWND hwnd, QString *detail, QString *error);
+
 /// 把窗口移到相邻的虚拟桌面（`delta`：`-1` 上一张，`+1` 下一张）。
 ///
 /// 与 `moveWindowToDesktop` 不同，这里**首尾相接**：窗口在第一张桌面上再往

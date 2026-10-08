@@ -683,6 +683,34 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
     * 验收：`scripts/acceptance.ps1` 的启动器那一段加了 3 条（用拼音首字母 `dyxx` /
       `sz` 筛，纯 ASCII 注入得了），见第 5 节。
 
+32. **没声明固定桌面的程序：`window("activate")` 把窗口搬到当前桌面，而不是把视图切走。**
+    项目所有者 2026-10 提的需求：「如果一个程序在配置里没声明固定所在的 desktop，那么
+    通过快捷键唤起它时，把它自动唤起到当前桌面」—— 不这样做，Windows 会把视图切到那个
+    窗口上一次所在的那张桌面上。
+
+    * 判据是「**命中这个窗口的第一条 `window_rule` 有没有 `desktop`**」（规则按书写顺序
+      匹配，先写的赢）：`core::windowRulePinsDesktop()` / `core::firstWindowRule()` 是纯
+      逻辑，`tst_placement` 盯着。
+      * 写了 `desktop` —— 用户按快捷键就是想过去，保持老行为：`raiseWindow` 切到它所在
+        的那张桌面并激活它（视图跟着走）。
+      * 没写（或者压根没有规则）—— 窗口跟着用户走：
+        `win::desktop::moveWindowToCurrentDesktop()` 先把它搬到**当前**桌面，再激活；
+        视图不动。
+    * 只对 `op = "activate"` 生效；`launch` 回退那条路径也算（新窗口找到之后同样处理）。
+      其余 op（`minimize` / `maximize` / 四个 `move_*` / `close` / `toggle_topmost`）
+      本来就不切视图，行为一个字没改。
+    * **搬必须在激活之前、而且必须等它搬完**：虚拟桌面的移动是异步的，立刻激活的话
+      `window::raiseWindow` 会读到旧的桌面 GUID、把视图切过去 —— 那正是要避免的事。
+      所以 `moveWindowToCurrentDesktop()` 内部等桌面 GUID 真的变了再返回
+      （`waitForDesktopChange()`，与 `moveWindowToAdjacentDesktop` 同一条理由）。
+    * “要不要搬”先问一句**便宜**的 `isWindowOnCurrentDesktop()`（公开的
+      `IVirtualDesktopManager`，不碰版本表那套未公开接口）：已经在当前桌面上就什么都不做。
+      问不出来（锁屏 / 非交互会话 / 窗口不属于任何桌面）时**不动窗口**，交给
+      `raiseWindow` 的老行为处理。
+    * 日志里会多一段 `(brought to desktop 2/4)`（`window` 动作那条 INFO 行），外面可以
+      靠它观察这次到底搬了没有。
+    * `all_desktops = true` **不算**“声明了固定桌面”：窗口本来就到处都是，不需要谁搬。
+
 ---
 
 ## 3. 环境与工具链
@@ -1107,6 +1135,21 @@ debug 构建 + 31 个测试全绿、release 零警告。**这次按项目所有�
 `MOUSEEVENTF_MOVE` 的 `SendInput` 返回 1 而光标纹丝不动）。所以脚本里要用绝对定位
 （`SetCursorPos`，也就是 `[FlowInject]::Cursor()`）走路，别指望“相对移动多少像素”。
 
+**「跨桌面唤起」这条路的自动化覆盖是 `tst_interactive`，不在 `acceptance.ps1` 里。**
+`scripts/acceptance.ps1` 从头到尾**不碰虚拟桌面**（它要自己造第二个桌面、还要把用户的
+窗口搬来搬去，代价与风险都不划算），所以 §2 第 32 条那两个方向分别由：
+
+* `tst_placement`（纯逻辑）盯“命中这个窗口的第一条 `window_rule` 有没有 `desktop`”；
+* `tst_interactive::bringsAWindowOnAnotherDesktopToTheCurrentOne()`（真机，需要
+  `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1`）盯“窗口被搬到当前桌面、而**视图没动**”，
+  外加“已经在当前桌面时是空操作”；
+* `tst_interactive::activatesAWindowThatIsOnAnotherDesktop()` 盯另一个方向
+  （`raiseWindow` 仍然会把视图切到窗口那张桌面）。
+
+它跑之前先建一次窗口、等 shell 登记它（刚创建的窗口 `GetWindowDesktopId` 会给全零
+GUID）—— 同文件里的 `moveWindowToAnotherDesktopAndBack()` 没等，**它是 flaky 的**
+（第一次跑挂过、隔一会儿重跑就过），需要重跑一次再下结论。
+
 ### 手工冒烟清单（脚本覆盖不到的部分）
 
 1. `--check --config tmp/smoke.lua` 通过，`--list` 形状与 README 一致。
@@ -1143,6 +1186,12 @@ debug 构建 + 31 个测试全绿、release 零警告。**这次按项目所有�
     选项」-> `Enter`，应当弹出电源选项）与一个设置页（筛 `sz` -> 「设置：显示」-> `Enter`，
     应当打开设置 app 的显示那一页）；再右键一个控制面板格，菜单里应当有「打开」这类
     正常条目（与资源管理器里一致）。
+13. **跨桌面唤起（§2 第 32 条）的真机手感**：切到第 2 张虚拟桌面，按下一个**没写
+    `window_rule` `desktop`** 的程序（例如记亊本）的 `window("activate")` 快捷键 ——
+    窗口应该被**拉到第 2 张桌面**、视图**不切**，日志里有 `(brought to desktop 2/2)`；
+    再给同一个程序写一条 `window_rule{ desktop = 1 }` 重载配置，再按一次 —— 这次应该是
+    **切到第 1 张桌面**、窗口留在那儿；最后确认窗口不是最大化/最小化状态、也没有
+    “卡在按下状态”的修饰键。
 
 ---
 
@@ -2078,6 +2127,13 @@ FreeType 字体引擎、程序启动器（`apps()` + 异步图标）、启动器
   （像 `launch`），照 `LaunchFields` 的做法把“写了哪些键”记下来。
 * **新的窗口条件**：`core/window_match`（纯逻辑）+ `platform/win/window` 的枚举适配 +
   `launchThenActivate` 回退 + 手工冒烟清单里加一条用例。
+* **「窗口在别的虚拟桌面上时怎么办」的其它规则**：决定这一步的是
+  `core::windowRulePinsDesktop()`（纯逻辑）+ `dispatcher.cpp` 的
+  `bringWindowToCurrentDesktop()`（两个调用点：`executeWindowAction` 与
+  `launchThenActivate`）+ `platform/win/desktop::moveWindowToCurrentDesktop()`。
+  要加第三神语义就照这三层拆，别把配置查询塞进平台层；纯逻辑那一条改完在
+  `tst_placement` 里加断言，真机行为在 `tst_interactive` 里加一条
+  （参照 `bringsAWindowOnAnotherDesktopToTheCurrentOne` 的窗口登记等待）。
 * **启动器右键菜单的新行为**：平台层在 `platform/win/shell_menu.*`（要换条目只改
   `QueryContextMenu` 的 flags；某一条该不该出现 / 变灰是 `IContextMenu` 自己的事），
   「执行之前先干点什么」走 `showItemMenu()` 的 `beforeInvoke` 回调，而「选完关不关

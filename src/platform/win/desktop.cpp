@@ -307,6 +307,9 @@ public:
     /// 把窗口移到第 `index` 个桌面（从 1 开始）。
     bool moveWindowToDesktop(HWND hwnd, std::uint32_t index, QString *detail, QString *error) const;
 
+    /// 把窗口搬到**当前**桌面（已经在当前桌面时是空操作）。
+    bool moveWindowToCurrentDesktop(HWND hwnd, QString *detail, QString *error) const;
+
     /// 把窗口移到相邻的桌面（首尾相接）；`follow` 还要把视图也切过去。
     bool moveWindowToAdjacent(HWND hwnd, int delta, bool follow, QString *detail, QString *error) const;
 
@@ -886,6 +889,54 @@ bool Session::moveWindowToDesktop(HWND hwnd,
     return moveViewToDesktopIndex(hwnd, desktops, static_cast<std::size_t>(index) - 1, detail, error);
 }
 
+bool Session::moveWindowToCurrentDesktop(HWND hwnd, QString *detail, QString *error) const
+{
+    if (m_viewCollection.get() == nullptr) {
+        if (error != nullptr) {
+            *error = QStringLiteral("the shell's IApplicationViewCollection is not available; "
+                                    "cannot move windows between desktops");
+        }
+        return false;
+    }
+    std::vector<ComPtr> desktops;
+    if (!enumerateDesktops(&desktops, error)) {
+        return false;
+    }
+    ComPtr current;
+    if (!currentDesktop(&current, error)) {
+        return false;
+    }
+    const std::optional<std::size_t> here = position(desktops, current);
+    if (!here.has_value()) {
+        if (error != nullptr) {
+            *error = QStringLiteral("could not find the current desktop in the shell's list");
+        }
+        return false;
+    }
+    // 已经在这张桌面上时不要调 `MoveViewToDesktop`：过一会儿那次
+    // `waitForDesktopChange` 必然超时，白等一二百毫秒。
+    QString ignored;
+    const std::optional<std::size_t> already = desktopIndexOfWindow(hwnd, desktops, &ignored);
+    if (already.has_value() && *already == *here) {
+        if (detail != nullptr) {
+            *detail = QStringLiteral("already on desktop %1/%2").arg(*here + 1).arg(desktops.size());
+        }
+        return true;
+    }
+    const std::optional<QString> before = windowDesktopId(hwnd, 5);
+    if (!moveViewToDesktopIndex(hwnd, desktops, *here, detail, error)) {
+        return false;
+    }
+    // `MoveViewToDesktop` 异步生效：调用方紧接着要激活这个窗口，而
+    // `window::raiseWindow` 会在窗口还“在别的桌面上”时把视图切过去 ——
+    // 那正是这一步要避免的事。所以等 shell 真的换了桌面 GUID 再返回
+    // （与 `moveWindowToAdjacent` 同一条理由）。
+    if (before.has_value()) {
+        waitForDesktopChange(hwnd, before);
+    }
+    return true;
+}
+
 bool Session::moveWindowToAdjacent(HWND hwnd,
                                    int delta,
                                    bool follow,
@@ -1325,6 +1376,44 @@ bool moveWindowToDesktop(HWND hwnd,
     }
     if (changed != nullptr) {
         *changed = localChanged;
+    }
+    return true;
+}
+
+bool moveWindowToCurrentDesktop(HWND hwnd, QString *detail, QString *error)
+{
+    if (hwnd == nullptr || IsWindow(hwnd) == 0) {
+        if (error != nullptr) {
+            *error = QStringLiteral("the window is gone");
+        }
+        return false;
+    }
+    QString localDetail;
+    QString localError;
+    bool ok = false;
+    inSta([&]() {
+        Apartment apartment;
+        if (!apartment.enter(&localError)) {
+            return;
+        }
+        const WindowsVersion version = windowsVersion();
+        const ApiEntry &api = apiFor(version.build, version.revision);
+        Session session;
+        if (!session.open(api, version, &localError)) {
+            return;
+        }
+        ok = session.moveWindowToCurrentDesktop(hwnd, &localDetail, &localError);
+    });
+    if (!ok) {
+        if (error != nullptr) {
+            *error = localError.isEmpty()
+                         ? QStringLiteral("could not move the window to the current desktop")
+                         : localError;
+        }
+        return false;
+    }
+    if (detail != nullptr) {
+        *detail = localDetail;
     }
     return true;
 }

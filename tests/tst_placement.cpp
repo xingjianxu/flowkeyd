@@ -58,6 +58,8 @@ private slots:
     void placementRectAlignsTopLeftWhenLargerThanTheWorkArea();
     void windowMatchesRuleRequiresEveryCondition();
     void windowRuleSummaryIsReadable();
+    void firstWindowRulePicksTheFirstMatch();
+    void windowRulePinsDesktopOnlyWhenTheWinningRuleSaysSo();
 };
 
 void TestPlacement::sortedMonitorsOrdersLeftThenTop()
@@ -300,6 +302,68 @@ void TestPlacement::windowRuleSummaryIsReadable()
     cleared.topmost = false;
     QCOMPARE(cleared.summary(),
              QStringLiteral("process \"wezterm\", single desktop, not topmost"));
+}
+
+void TestPlacement::firstWindowRulePicksTheFirstMatch()
+{
+    const std::optional<QString> wezterm(QStringLiteral("wezterm-gui.exe"));
+    core::WindowRule byTitle = rule(QStringLiteral("wezterm"));
+    byTitle.name = QStringLiteral("before");
+    byTitle.process.reset();
+    byTitle.title = QStringLiteral("still on");
+
+    core::WindowRule byProcess = rule(QStringLiteral("wezterm"));
+    byProcess.name = QStringLiteral("after");
+
+    const std::vector<core::WindowRule> rules{byTitle, byProcess};
+
+    // 两条都命中时先写的赢（与 `--check` 的“先写的先匹配”一致）。
+    const core::WindowRule *first =
+        core::firstWindowRule(rules, QStringLiteral("still on the desktop"), wezterm);
+    QVERIFY(first != nullptr);
+    QCOMPARE(first->name, QStringLiteral("before"));
+
+    // 只命中第二条时就返回第二条。
+    first = core::firstWindowRule(rules, QStringLiteral("somewhere else"), wezterm);
+    QVERIFY(first != nullptr);
+    QCOMPARE(first->name, QStringLiteral("after"));
+
+    // 一条都不命中时是空指针。
+    QVERIFY(core::firstWindowRule(rules, QStringLiteral("somewhere else"),
+                                  std::optional<QString>(QStringLiteral("chrome.exe")))
+            == nullptr);
+}
+
+void TestPlacement::windowRulePinsDesktopOnlyWhenTheWinningRuleSaysSo()
+{
+    const std::optional<QString> wezterm(QStringLiteral("wezterm-gui.exe"));
+
+    // 压根没有规则 → 不固定（窗口跟着用户走）。
+    QVERIFY(!core::windowRulePinsDesktop({}, QStringLiteral("anything"), wezterm));
+
+    // 命中第一条写了 `desktop` 的规则 → 固定。
+    core::WindowRule pinned = rule(QStringLiteral("wezterm"));
+    pinned.desktop = 2;
+    QVERIFY(core::windowRulePinsDesktop({pinned}, QStringLiteral("anything"), wezterm));
+
+    // 命中第一条**没**写 `desktop` 的规则 → 不固定，哪怕后面还有一条写了也一样
+    // （匹配顺序就是摆放顺序，“先写的赢”）。
+    core::WindowRule plain = rule(QStringLiteral("wezterm"));
+    QVERIFY(!core::windowRulePinsDesktop({plain, pinned}, QStringLiteral("anything"), wezterm));
+
+    // 固定只对**命中这个窗口**的规则有意义：同一个程序另写一条带 `desktop` 的规则、
+    // 但被 `title` 挡在外面时不算。
+    core::WindowRule titled = rule(QStringLiteral("wezterm"));
+    titled.title = QStringLiteral("project");
+    titled.desktop = 3;
+    QVERIFY(core::windowRulePinsDesktop({titled}, QStringLiteral("project - wezterm"), wezterm));
+    QVERIFY(!core::windowRulePinsDesktop({titled}, QStringLiteral("untitled"), wezterm));
+
+    // `all_desktops = true` 不是 `desktop`：钉在所有桌面上的窗口本来就看得见，
+    // 不需要谁把它搬到当前桌面去。
+    core::WindowRule all = rule(QStringLiteral("wezterm"));
+    all.allDesktops = true;
+    QVERIFY(!core::windowRulePinsDesktop({all}, QStringLiteral("anything"), wezterm));
 }
 
 QTEST_MAIN(TestPlacement)

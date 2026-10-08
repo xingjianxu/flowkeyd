@@ -152,4 +152,24 @@ bool windowMatchesRule(const WindowRule &rule,
     return true;
 }
 
+const WindowRule *firstWindowRule(const std::vector<WindowRule> &rules,
+                                  const QString &title,
+                                  const std::optional<QString> &executableName)
+{
+    for (const WindowRule &rule : rules) {
+        if (windowMatchesRule(rule, title, executableName)) {
+            return &rule;
+        }
+    }
+    return nullptr;
+}
+
+bool windowRulePinsDesktop(const std::vector<WindowRule> &rules,
+                           const QString &title,
+                           const std::optional<QString> &executableName)
+{
+    const WindowRule *rule = firstWindowRule(rules, title, executableName);
+    return rule != nullptr && rule->desktop.has_value();
+}
+
 } // namespace flowkeyd::core

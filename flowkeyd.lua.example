@@ -323,8 +323,11 @@ hotkey{
 -- `activate` 默认带 `toggle`：按下去时如果 WezTerm 已经在前台，就把它最小化，
 -- 于是这一个键在唤起与收起之间切换（和点任务栏按钮一样）。想让它永远只往前抬，
 -- 像上面的 `focus-notepad` 那样写 `toggle = false`。
--- 窗口不在你当前那张虚拟桌面上时（例如下面的 `window_rule` 把它放在第 2 张桌面）
--- 不算“已经在前台”：按下去会切到它所在的那张桌面并激活它。
+-- 窗口不在你当前那张虚拟桌面上时不算“已经在前台”，按下去会把它弄到你眼前来。
+-- 怎么弄，看这个程序有没有声明固定桌面：下面这条 `window_rule` 给它写了
+-- `desktop = 2`，所以按下去是**切到第 2 张桌面**再激活它（视图跟着过去）；
+-- 没写 `desktop` 的程序（例如下面的 `focus-vscode`）则是把窗口**搬到当前桌面**
+-- 再激活，视图不动 —— 不然 Windows 会把你带去它上次所在的那张桌面。
 hotkey{
   name = "focus-wezterm",
   comment = "Win+s 唤起 WezTerm；没在运行时先启动它。",
@@ -624,7 +627,10 @@ hotkey{
 --
 -- process / title   至少写一个：前者匹配可执行文件名（写 `wezterm` 能匹配
 --                   `wezterm-gui.exe`），后者匹配窗口标题，都是大小写无关子串。
--- desktop           可选，虚拟桌面序号（1 起，Task View 从左到右）。
+-- desktop           可选，虚拟桌面序号（1 起，Task View 从左到右）。它还决定
+--                   跨桌面唤起时的行为：写了 desktop 的程序用 window("activate")
+--                   唤起时是**切到那张桌面**，没写的则是把窗口**搬到当前桌面**
+--                   （视图不动，见上面的 focus-wezterm / focus-vscode）。
 -- all_desktops      可选；true 把窗口钉在**所有**虚拟桌面上（Task View 里的
 --                   「在所有桌面显示」），false 显式取消钉住。与 desktop 互斥。
 -- topmost           可选；true 让窗口**始终在最上层**（WS_EX_TOPMOST），

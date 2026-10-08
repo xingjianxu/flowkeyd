@@ -287,6 +287,7 @@ private slots:
     void movesAWindowToTheAdjacentDesktop();
     void movesAWindowToTheAdjacentDesktopAndFollows();
     void activatesAWindowThatIsOnAnotherDesktop();
+    void bringsAWindowOnAnotherDesktopToTheCurrentOne();
     void placementMovesAWindowToAnotherMonitor();
     void movesAWindowToTheAdjacentMonitor();
     void pinsAWindowToAllDesktops();
@@ -917,6 +918,80 @@ void TestInteractive::activatesAWindowThatIsOnAnotherDesktop()
                                                         &changedBack),
              qPrintable(error));
     QVERIFY2(!changedBack, "moving a window to the desktop it already is on reported a change");
+}
+
+/// `window` 动作的另一半：**没**声明固定桌面的程序，把窗口搬到当前桌面而不是切视图。
+///
+/// 这是 2026-10 那次的配套：上面那个用例盯“声明了固定桌面 → 切视图”，
+/// 这里盯“没声明 → 搬窗口”，也就是 `moveWindowToCurrentDesktop`。
+void TestInteractive::bringsAWindowOnAnotherDesktopToTheCurrentOne()
+{
+    if (!interactiveEnabled()) {
+        QSKIP("set FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1 to run the interactive tests");
+    }
+    QString error;
+    platform::win::desktop::Snapshot snapshot;
+    QVERIFY2(platform::win::desktop::probe(&snapshot, &error), qPrintable(error));
+    if (snapshot.count < 2) {
+        QSKIP("only one virtual desktop exists; nothing to move a window to");
+    }
+
+    const QString marker =
+        QStringLiteral("flowkeyd-bringback-%1").arg(QCoreApplication::applicationPid());
+    TestWindow window(marker);
+    HWND hwnd = window.hwnd();
+    QVERIFY2(hwnd != nullptr, "the test window was not created");
+    QString detail;
+
+    // 把它激活一次并等 shell 登记它（刚创建的窗口 `GetWindowDesktopId` 会给全零 GUID）。
+    QVERIFY2(platform::win::window::raiseWindow(hwnd), "could not activate the fresh window");
+    for (int i = 0; i < 40; ++i) {
+        if (platform::win::desktop::windowDesktopId(hwnd, &error).has_value()) {
+            break;
+        }
+        QThread::msleep(50);
+    }
+
+    const std::uint32_t other = snapshot.current == 1 ? 2 : 1;
+    bool changed = false;
+    QVERIFY2(platform::win::desktop::moveWindowToDesktop(hwnd, other, &detail, &error, &changed),
+             qPrintable(error));
+    QVERIFY2(changed, "moveWindowToDesktop did not report a real desktop change");
+    // 把视图明确留在原来那张桌面（搬前台窗口时 Windows 有时候会把视图一起带走）。
+    QVERIFY2(platform::win::desktop::switchTo(snapshot.current, &detail, &error), qPrintable(error));
+
+    bool left = false;
+    for (int i = 0; i < 60 && !left; ++i) {
+        const auto onCurrent = platform::win::desktop::isWindowOnCurrentDesktop(hwnd, &error);
+        QVERIFY2(onCurrent.has_value(), qPrintable(error));
+        left = !*onCurrent;
+        if (!left) {
+            QThread::msleep(50);
+        }
+    }
+    QVERIFY2(left, "the window did not leave the current desktop");
+
+    // 关键断言：窗口被带回当前桌面，而视图**没有**被切走。
+    QVERIFY2(platform::win::desktop::moveWindowToCurrentDesktop(hwnd, &detail, &error),
+             qPrintable(error));
+    QVERIFY2(detail.startsWith(QStringLiteral("desktop ")), qPrintable(detail));
+
+    platform::win::desktop::Snapshot after;
+    QVERIFY2(platform::win::desktop::probe(&after, &error), qPrintable(error));
+    QCOMPARE(after.current, snapshot.current);
+    const auto onCurrent = platform::win::desktop::isWindowOnCurrentDesktop(hwnd, &error);
+    QVERIFY2(onCurrent.has_value(), qPrintable(error));
+    QVERIFY2(*onCurrent, "the window did not come back to the current desktop");
+    // 这正是 `window` 动作里紧接着做的那一步：窗口已经在当前桌面上，所以
+    // `raiseWindow` 不再需要（也不应该）切视图。
+    QVERIFY2(platform::win::window::raiseWindow(hwnd), "could not activate the brought window");
+    QVERIFY2(platform::win::window::isActive(hwnd),
+             "a window brought to the current desktop must count as active again");
+
+    // 已经在当前桌面上时是空操作（不要白调一次 `MoveViewToDesktop`）。
+    QVERIFY2(platform::win::desktop::moveWindowToCurrentDesktop(hwnd, &detail, &error),
+             qPrintable(error));
+    QVERIFY2(detail.startsWith(QStringLiteral("already on desktop ")), qPrintable(detail));
 }
 
 /// `window_rule` 的显示器部分：把窗口摆到另一块显示器并最大化，再还原。
