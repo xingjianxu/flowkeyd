@@ -3,7 +3,7 @@
 // 这是 `QSystemTrayIcon`（QtWidgets）而不是 QML：托盘菜单要直接触发
 // `ControlCmd`，走 C++ 更直接（见 AGENTS.md 第 10 节）。
 //
-// 菜单项：查看日志 / 挂起·恢复 / 重载配置 / 打开配置文件 / 检查更新 /
+// 菜单项：查看日志 / 挂起·恢复 / 重载配置 / **配置...** / 打开配置文件 / 检查更新 /
 // 版本 / 退出，
 // 悬停提示显示构建版本、当前虚拟桌面与挂起状态，气泡提示用于 `notify` 动作与错误报告。
 // 图标本身平时是应用图标，但守护进程读到当前桌面后会换成**数字徽标**（第几号桌面，
@@ -52,6 +52,8 @@ signals:
     void suspendToggleRequested();
     /// 「重载配置」被点击。
     void reloadRequested();
+    /// 「配置...」被点击（图形化配置界面）。
+    void configureRequested();
     /// 「打开配置文件」被点击。
     void openConfigRequested();
     /// 「检查更新」被点击（在线更新：查 GitHub Release、下载、替换并重启）。
@@ -72,6 +74,7 @@ private:
     QAction *m_logAction = nullptr;
     QAction *m_suspendAction = nullptr;
     QAction *m_reloadAction = nullptr;
+    QAction *m_configureAction = nullptr;
     QAction *m_openConfigAction = nullptr;
     QAction *m_updateAction = nullptr;
     QAction *m_versionAction = nullptr;

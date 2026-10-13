@@ -14,6 +14,8 @@
 
 #include "app/app_icon.h"
 #include "app/app_icons.h"
+#include "app/config_editor.h"
+#include "app/config_window.h"
 #include "app/log_window.h"
 #include "app/popup_host.h"
 #include "app/runtime.h"
@@ -565,6 +567,13 @@ int main(int argc, char *argv[])
     app::LogWindow logWindow(&engine, win::logFilePath());
     platform::win::Tray tray(appIcon);
 
+    // 图形化配置界面：模型（`ConfigEditor`）与宿主（`ConfigWindow`）分开 —— 模型只
+    // 依赖 QtCore，所以它自己那套行为能在 `tst_config_editor` 里直接跑。求值器就是
+    // 守护进程读配置用的那一个，所以界面写出来的东西一定读得回来。
+    app::ConfigEditor configEditor;
+    configEditor.setEvaluator(lua::makeLuaEvaluator());
+    app::ConfigWindow configWindow(&engine, &configEditor);
+
     // `menu` / `help` / 窗口切换器 / 程序启动器的窗口：必须在 GUI 线程上创建，所以
     // 放在这里，由 Runtime 转发（动作跑在工作线程上）。
     app::PopupHost popupHost(&engine);
@@ -598,6 +607,11 @@ int main(int argc, char *argv[])
                                              : QStringLiteral("hotkeys resumed from the tray menu"));
                      });
     QObject::connect(&tray, &platform::win::Tray::reloadRequested, &runtime,
+                     &app::Runtime::reloadFromAnyThread);
+    // 「配置...」：打开图形化配置界面（保存成功后界面会要求重载配置）。
+    QObject::connect(&tray, &platform::win::Tray::configureRequested, &runtime,
+                     [&runtime, &configWindow]() { configWindow.open(runtime.configPath()); });
+    QObject::connect(&configWindow, &app::ConfigWindow::reloadRequested, &runtime,
                      &app::Runtime::reloadFromAnyThread);
     QObject::connect(&tray, &platform::win::Tray::openConfigRequested, &runtime, [&runtime]() {
         QString error;

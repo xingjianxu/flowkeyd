@@ -28,6 +28,9 @@ Tray::Tray(const QIcon &icon, QObject *parent) : QObject(parent)
     m_menu->addSeparator();
     m_suspendAction = m_menu->addAction(QStringLiteral("挂起快捷键(&S)"));
     m_reloadAction = m_menu->addAction(QStringLiteral("重载配置(&L)"));
+    // 图形化配置界面（项目所有者 2026-10 要求）：不用自己写 Lua 也能改配置。
+    // 放在「打开配置文件」上面：它是常规入口，手写文件是它旁边那条退路。
+    m_configureAction = m_menu->addAction(QStringLiteral("配置(&C)..."));
     m_openConfigAction = m_menu->addAction(QStringLiteral("打开配置文件(&O)"));
     // 在线更新：查 GitHub Release，有新版本就弹更新窗口（下载 + 替换 + 重启）。
     m_updateAction = m_menu->addAction(QStringLiteral("检查更新(&U)..."));
@@ -44,6 +47,7 @@ Tray::Tray(const QIcon &icon, QObject *parent) : QObject(parent)
     connect(m_logAction, &QAction::triggered, this, &Tray::logWindowRequested);
     connect(m_suspendAction, &QAction::triggered, this, &Tray::suspendToggleRequested);
     connect(m_reloadAction, &QAction::triggered, this, &Tray::reloadRequested);
+    connect(m_configureAction, &QAction::triggered, this, &Tray::configureRequested);
     connect(m_openConfigAction, &QAction::triggered, this, &Tray::openConfigRequested);
     connect(m_updateAction, &QAction::triggered, this, &Tray::checkUpdateRequested);
     connect(m_quitAction, &QAction::triggered, this, &Tray::quitRequested);

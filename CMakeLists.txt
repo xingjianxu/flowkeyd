@@ -161,6 +161,10 @@ add_library(flowkeyd_core STATIC
     src/core/app_list.h
     src/core/config.cpp
     src/core/config.h
+    src/core/config_map.cpp
+    src/core/config_map.h
+    src/core/config_writer.cpp
+    src/core/config_writer.h
     src/core/desktop_badge.cpp
     src/core/desktop_badge.h
     src/core/engine.cpp
@@ -224,6 +228,8 @@ qt_add_resources(flowkeyd_lua "lua_prelude"
 add_library(flowkeyd_models STATIC
     src/app/app_list_model.cpp
     src/app/app_list_model.h
+    src/app/config_editor.cpp
+    src/app/config_editor.h
     src/app/help_model.cpp
     src/app/help_model.h
     src/app/menu_model.cpp
@@ -348,7 +354,85 @@ set(FLOWKEYD_QML_FILES
     src/qml/SwitchPopup.qml
     src/qml/AppPopup.qml
     src/qml/UpdatePopup.qml
+    # 图形化配置界面（托盘菜单「配置...」）：主窗口 + 共用控件 + 四个编辑弹层。
+    # 每个文件都要有一个等于文件名的别名，它们才是以类型名被引用的。
+    src/qml/ConfigWindow.qml
+    src/qml/ConfigText.qml
+    src/qml/ConfigGeneralPage.qml
+    src/qml/ConfigEntryListPage.qml
+    src/qml/ConfigAdvancedPage.qml
+    src/qml/SettingCard.qml
+    src/qml/SettingRow.qml
+    src/qml/EntryRow.qml
+    src/qml/ChoiceRow.qml
+    src/qml/BoolRow.qml
+    src/qml/TriRow.qml
+    src/qml/SpinRow.qml
+    src/qml/TextRow.qml
+    src/qml/ChordsEditor.qml
+    src/qml/ActionEditor.qml
+    src/qml/ActionListEditor.qml
+    src/qml/LaunchFieldsEditor.qml
+    src/qml/WindowRuleFields.qml
+    src/qml/HotkeyFields.qml
+    src/qml/OverlayCard.qml
+    src/qml/ConfirmOverlay.qml
+    src/qml/RemapOverlay.qml
+    src/qml/HotkeyOverlay.qml
+    src/qml/WindowRuleOverlay.qml
+    src/qml/AppOverlay.qml
 )
+set_source_files_properties(src/qml/ConfigWindow.qml
+    PROPERTIES QT_RESOURCE_ALIAS ConfigWindow.qml)
+set_source_files_properties(src/qml/ConfigGeneralPage.qml
+    PROPERTIES QT_RESOURCE_ALIAS ConfigGeneralPage.qml)
+set_source_files_properties(src/qml/ConfigEntryListPage.qml
+    PROPERTIES QT_RESOURCE_ALIAS ConfigEntryListPage.qml)
+set_source_files_properties(src/qml/ConfigAdvancedPage.qml
+    PROPERTIES QT_RESOURCE_ALIAS ConfigAdvancedPage.qml)
+set_source_files_properties(src/qml/SettingCard.qml
+    PROPERTIES QT_RESOURCE_ALIAS SettingCard.qml)
+set_source_files_properties(src/qml/SettingRow.qml
+    PROPERTIES QT_RESOURCE_ALIAS SettingRow.qml)
+set_source_files_properties(src/qml/EntryRow.qml
+    PROPERTIES QT_RESOURCE_ALIAS EntryRow.qml)
+set_source_files_properties(src/qml/ChoiceRow.qml
+    PROPERTIES QT_RESOURCE_ALIAS ChoiceRow.qml)
+set_source_files_properties(src/qml/BoolRow.qml
+    PROPERTIES QT_RESOURCE_ALIAS BoolRow.qml)
+set_source_files_properties(src/qml/TriRow.qml
+    PROPERTIES QT_RESOURCE_ALIAS TriRow.qml)
+set_source_files_properties(src/qml/SpinRow.qml
+    PROPERTIES QT_RESOURCE_ALIAS SpinRow.qml)
+set_source_files_properties(src/qml/TextRow.qml
+    PROPERTIES QT_RESOURCE_ALIAS TextRow.qml)
+set_source_files_properties(src/qml/ChordsEditor.qml
+    PROPERTIES QT_RESOURCE_ALIAS ChordsEditor.qml)
+set_source_files_properties(src/qml/ActionEditor.qml
+    PROPERTIES QT_RESOURCE_ALIAS ActionEditor.qml)
+set_source_files_properties(src/qml/ActionListEditor.qml
+    PROPERTIES QT_RESOURCE_ALIAS ActionListEditor.qml)
+set_source_files_properties(src/qml/LaunchFieldsEditor.qml
+    PROPERTIES QT_RESOURCE_ALIAS LaunchFieldsEditor.qml)
+set_source_files_properties(src/qml/WindowRuleFields.qml
+    PROPERTIES QT_RESOURCE_ALIAS WindowRuleFields.qml)
+set_source_files_properties(src/qml/HotkeyFields.qml
+    PROPERTIES QT_RESOURCE_ALIAS HotkeyFields.qml)
+set_source_files_properties(src/qml/OverlayCard.qml
+    PROPERTIES QT_RESOURCE_ALIAS OverlayCard.qml)
+set_source_files_properties(src/qml/ConfirmOverlay.qml
+    PROPERTIES QT_RESOURCE_ALIAS ConfirmOverlay.qml)
+set_source_files_properties(src/qml/RemapOverlay.qml
+    PROPERTIES QT_RESOURCE_ALIAS RemapOverlay.qml)
+set_source_files_properties(src/qml/HotkeyOverlay.qml
+    PROPERTIES QT_RESOURCE_ALIAS HotkeyOverlay.qml)
+set_source_files_properties(src/qml/WindowRuleOverlay.qml
+    PROPERTIES QT_RESOURCE_ALIAS WindowRuleOverlay.qml)
+set_source_files_properties(src/qml/AppOverlay.qml
+    PROPERTIES QT_RESOURCE_ALIAS AppOverlay.qml)
+# 下拉框的中文对照表：注册成单例（QML 里直接用 `ConfigText.label(...)`）。
+set_source_files_properties(src/qml/ConfigText.qml
+    PROPERTIES QT_RESOURCE_ALIAS ConfigText.qml QT_QML_SINGLETON_TYPE TRUE)
 set_source_files_properties(src/qml/LogWindow.qml
     PROPERTIES QT_RESOURCE_ALIAS LogWindow.qml)
 set_source_files_properties(src/qml/MenuPopup.qml
@@ -371,6 +455,8 @@ qt_add_executable(flowkeyd
     src/app/app_icon.h
     src/app/app_icons.cpp
     src/app/app_icons.h
+    src/app/config_window.cpp
+    src/app/config_window.h
     src/app/dispatcher.cpp
     src/app/dispatcher.h
     src/app/log_model.cpp
@@ -582,6 +668,8 @@ flowkeyd_add_test(tst_template)
 flowkeyd_add_test(tst_version)
 flowkeyd_add_test(tst_desktop_badge)
 flowkeyd_add_test(tst_lua LIBS flowkeyd_lua)
+flowkeyd_add_test(tst_config_writer LIBS flowkeyd_lua)
+flowkeyd_add_test(tst_config_editor LIBS flowkeyd_models flowkeyd_lua)
 flowkeyd_add_test(tst_autostart LIBS flowkeyd_platform)
 flowkeyd_add_test(tst_layout LIBS flowkeyd_platform)
 flowkeyd_add_test(tst_input LIBS flowkeyd_platform)
