@@ -7,6 +7,7 @@
 #include "core/placement.h"
 #include "core/template.h"
 #include "core/window_match.h"
+#include "core/window_monitor_state.h"
 #include "platform/win/apps.h"
 #include "platform/win/audio.h"
 #include "platform/win/clipboard.h"
@@ -21,6 +22,7 @@
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QThread>
 #include <QTimer>
@@ -31,6 +33,22 @@
 namespace flowkeyd::app {
 
 namespace win = flowkeyd::platform::win;
+
+/// `monitor = "last"` 那份持久记忆 + 它的落盘位置。
+///
+/// **只在真的用到 `"last"` 时才读/写磁盘**（`"cursor"` / `"none"` 完全不碰
+/// 这个文件）；第一次用到时读一次，之后每次变化都写回。读写都在动作线程上，
+/// 所以不需要加锁（与 `launcher.json` 同一条分工）。
+///
+/// 定义在具名命名空间里（不在下面的匿名命名空间）是因为 `Dispatcher` 用
+/// `std::unique_ptr<MonitorMemory>` 持有它 —— 头文件里只能看到一条前置声明。
+struct MonitorMemory
+{
+    core::WindowMonitorState state;
+    /// `<配置目录>/windows.json`。
+    QString path;
+    bool loaded = false;
+};
 
 namespace {
 
@@ -436,6 +454,230 @@ constexpr std::uint64_t kDefaultLaunchWaitMs = 3000;
 /// 等待该窗口时的轮询间隔。
 constexpr unsigned long kPollIntervalMs = 50;
 
+// ---------------------------------------------------------------------------
+// 窗口摆到哪一块显示器上（`monitor = "cursor"` / `"last"` / `"none"`）
+// ---------------------------------------------------------------------------
+
+/// 读一个小状态文件；不存在或读不出来就返回空的（并写一条 debug 日志）。
+QByteArray readStateFile(const QString &path)
+{
+    QFile file(path);
+    if (!file.exists()) {
+        return {};
+    }
+    if (!file.open(QIODevice::ReadOnly)) {
+        win::logDebug(QStringLiteral("could not read %1: %2").arg(path, file.errorString()));
+        return {};
+    }
+    return file.readAll();
+}
+
+void loadMonitorMemory(MonitorMemory *memory)
+{
+    if (memory == nullptr || memory->loaded) {
+        return;
+    }
+    memory->loaded = true;
+    const QByteArray json = readStateFile(memory->path);
+    if (json.trimmed().isEmpty()) {
+        return;
+    }
+    QString error;
+    memory->state = core::parseWindowMonitorState(json, &error);
+    if (!error.isEmpty()) {
+        win::logWarn(QStringLiteral("window monitor state: %1").arg(error));
+    }
+}
+
+void saveMonitorMemory(MonitorMemory *memory)
+{
+    if (memory == nullptr || memory->path.isEmpty()) {
+        return;
+    }
+    const QString directory = QFileInfo(memory->path).absolutePath();
+    if (!directory.isEmpty()) {
+        QDir().mkpath(directory);
+    }
+    QFile file(memory->path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        win::logWarn(QStringLiteral("could not write %1: %2").arg(memory->path, file.errorString()));
+        return;
+    }
+    file.write(core::serializeWindowMonitorState(memory->state));
+}
+
+/// 记住一个程序落在了哪块显示器上（只有真的变了才落盘）。
+void rememberMonitorDevice(MonitorMemory *memory, const QString &programKey, const QString &device)
+{
+    if (memory == nullptr) {
+        return;
+    }
+    loadMonitorMemory(memory);
+    if (core::rememberWindowMonitor(&memory->state, programKey, device)) {
+        saveMonitorMemory(memory);
+    }
+}
+
+/// 解析出来的目标显示器。
+struct MonitorTarget
+{
+    /// **已排序**列表里的下标；`std::nullopt` = 这次不摆（`why` 里说明原因）。
+    std::optional<std::size_t> index;
+    /// 没摆成的原因（给 debug 日志用的一句话）。
+    QString why;
+};
+
+/// 把 `MonitorRef` 解析成已排序列表里的下标。
+///
+/// * `"cursor"` 现查光标所在的那一块；
+/// * `"last"` 查那份持久记忆；**第一次还没有记忆时记下窗口现在在哪一块屏上**
+///   （于是下一次就摆到那儿），这次什么都不做；
+/// * `"none"` 与具体的三种（序号 / `"primary"` / 设备名）照旧。
+MonitorTarget resolveWindowMonitor(MonitorMemory *memory,
+                                   const core::MonitorRef &ref,
+                                   const std::vector<core::MonitorDescription> &monitors,
+                                   HWND hwnd,
+                                   const std::optional<QString> &process)
+{
+    MonitorTarget out;
+    switch (ref.kind) {
+    case core::MonitorRef::Kind::None:
+        out.why = QStringLiteral("the target monitor is disabled (monitor = \"none\")");
+        return out;
+    case core::MonitorRef::Kind::Cursor:
+        out.index = win::monitor::indexForCursor(monitors);
+        if (!out.index.has_value()) {
+            out.why = QStringLiteral("could not tell which monitor the cursor is on");
+        }
+        return out;
+    case core::MonitorRef::Kind::Last: {
+        const QString key = core::windowMonitorKey(process);
+        if (key.isEmpty() || memory == nullptr) {
+            out.why = QStringLiteral("could not tell which program the window belongs to");
+            return out;
+        }
+        const std::optional<QString> device = rememberedWindowMonitor(memory->state, key);
+        if (!device.has_value()) {
+            // 还没有记忆：记下它现在在哪一块屏上（`windows.json` 里就有了身份），
+            // 下一次再唤起它就摆到那儿。
+            const std::optional<std::size_t> current = win::monitor::indexForWindow(monitors, hwnd);
+            if (current.has_value()) {
+                rememberMonitorDevice(memory, key, monitors[*current].device);
+                out.why = QStringLiteral("no monitor remembered yet; noted monitor %1/%2")
+                              .arg(*current + 1)
+                              .arg(monitors.size());
+            } else {
+                out.why = QStringLiteral("no monitor remembered yet");
+            }
+            return out;
+        }
+        core::MonitorRef wanted;
+        wanted.kind = core::MonitorRef::Kind::Device;
+        wanted.device = *device;
+        out.index = core::selectMonitor(monitors, wanted);
+        if (!out.index.has_value()) {
+            out.why = QStringLiteral("the remembered monitor %1 is not connected")
+                          .arg(core::rustDebug(*device));
+        }
+        return out;
+    }
+    case core::MonitorRef::Kind::Index:
+    case core::MonitorRef::Kind::Primary:
+    case core::MonitorRef::Kind::Device:
+        out.index = core::selectMonitor(monitors, ref);
+        if (!out.index.has_value()) {
+            out.why = QStringLiteral("no monitor matches %1").arg(ref.describe());
+        }
+        return out;
+    }
+    return out;
+}
+
+/// 一次「把窗口搬到目标显示器上」的结果。
+struct MonitorMove
+{
+    /// 真的搬了时是给日志用的一行（`placed 1280x800 at 1920,320 on monitor 2/2`）。
+    std::optional<QString> detail;
+    /// 没搬时的原因（给 debug 日志用）。
+    QString skipped;
+};
+
+/// 按 `ref` 把窗口搬到目标显示器上（`window` 动作的 `activate` 走这条）。
+///
+/// **已经在目标那一块屏上时什么都不做**：用户自己摆好的位置不该因为唤起一次就
+/// 被重新居中（重新摆几何只能发生在 `window_rule` 那三个时机）。目标是 `"last"`
+/// 时，搬完会把落点记进那份持久记忆。
+MonitorMove moveWindowToTargetMonitor(MonitorMemory *memory,
+                                      const core::MonitorRef &ref,
+                                      HWND hwnd,
+                                      const std::optional<QString> &process)
+{
+    MonitorMove out;
+    if (ref.kind == core::MonitorRef::Kind::None) {
+        out.skipped = QStringLiteral("the target monitor is disabled (monitor = \"none\")");
+        return out;
+    }
+    if (hwnd == nullptr) {
+        out.skipped = QStringLiteral("no window");
+        return out;
+    }
+    const std::vector<core::MonitorDescription> monitors = core::sortedMonitors(win::monitor::list());
+    if (monitors.empty()) {
+        out.skipped = QStringLiteral("no monitors");
+        return out;
+    }
+    const MonitorTarget target = resolveWindowMonitor(memory, ref, monitors, hwnd, process);
+    if (!target.index.has_value()) {
+        out.skipped = target.why;
+        return out;
+    }
+    const std::optional<std::size_t> current = win::monitor::indexForWindow(monitors, hwnd);
+    if (current.has_value() && *current == *target.index) {
+        out.skipped = QStringLiteral("already on monitor %1/%2")
+                          .arg(*target.index + 1)
+                          .arg(monitors.size());
+        return out;
+    }
+    QString detail;
+    QString error;
+    if (!win::monitor::moveToMonitor(hwnd, monitors, *target.index, &detail, &error)) {
+        out.skipped = error;
+        return out;
+    }
+    if (ref.kind == core::MonitorRef::Kind::Last) {
+        rememberMonitorDevice(memory, core::windowMonitorKey(process), monitors[*target.index].device);
+    }
+    out.detail = detail;
+    return out;
+}
+
+/// `window` 动作的 `activate`：把窗口摆到该去的那块显示器上，返回给日志用的一行
+/// （空串 = 什么都没做）。
+///
+/// 目标 = 动作自己的 `monitor` → 命中它的第一条 `window_rule` 的 `monitor` →
+/// `settings.window_monitor`（默认 = 光标所在的那一块），见
+/// `core::windowActionMonitor()`。目标是 `"cursor"` / `"last"` 时，光标的当前位置
+/// 与服务里那份记忆都是现查的。
+QString bringWindowToActionMonitor(MonitorMemory *memory,
+                                   const core::Compiled &config,
+                                   const std::optional<core::MonitorRef> &actionMonitor,
+                                   HWND hwnd,
+                                   const QString &hotkey)
+{
+    const QString title = win::window::windowTitle(hwnd);
+    const std::optional<QString> process = win::window::processName(hwnd);
+    const core::WindowRule *rule = core::firstWindowRule(config.windowRules, title, process);
+    const core::MonitorRef target = core::windowActionMonitor(actionMonitor, rule, config.settings);
+    const MonitorMove move = moveWindowToTargetMonitor(memory, target, hwnd, process);
+    if (!move.skipped.isEmpty()) {
+        win::logDebug(QStringLiteral("`%1` monitor: %2").arg(hotkey, move.skipped));
+    }
+    if (move.detail.has_value()) {
+        win::logDebug(QStringLiteral("`%1` monitor: %2").arg(hotkey, *move.detail));
+    }
+    return move.detail.value_or(QString());
+}
+
 /// 没声明固定桌面的程序：窗口在别的虚拟桌面上时把它拉到**当前**桌面。
 ///
 /// `window` 动作的 `activate` 靠这一步避免 Windows 把视图切到窗口上一次所在的
@@ -484,7 +726,9 @@ std::optional<QString> bringWindowToCurrentDesktop(const core::Compiled &config,
 /// 这里**不**套用 `toggle`：刚启动的窗口往往自己就抢到了前台，在这种时候
 /// 把“启动它”变成“立刻收起它”毫无道理。
 bool launchThenActivate(ExpandContext &ctx,
+                        MonitorMemory *memory,
                         const core::Compiled &config,
+                        const std::optional<core::MonitorRef> &actionMonitor,
                         const core::LaunchSpec &launch,
                         const core::WindowQuery &query,
                         bool animate,
@@ -517,6 +761,11 @@ bool launchThenActivate(ExpandContext &ctx,
         HWND hwnd = win::window::find(query);
         if (hwnd != nullptr) {
             const std::optional<QString> brought = bringWindowToCurrentDesktop(config, hwnd);
+            // 刚启动的窗口可能出现在 Windows 自己挑的那一块屏上：按 `window_rule`
+            // / `settings.window_monitor` 把它摆过去（默认 = 光标所在的那一块），
+            // **再激活它**（这样它最终就在正确的位置上、而且是前台的）。
+            const QString moved =
+                bringWindowToActionMonitor(memory, config, actionMonitor, hwnd, QStringLiteral("launch"));
             QString placement;
             if (!win::window::applyTo(hwnd, core::WindowOp::Activate, animate, &placement, error)) {
                 return false;
@@ -525,6 +774,9 @@ bool launchThenActivate(ExpandContext &ctx,
                 *detail = QStringLiteral("started %1, then %2").arg(started, placement);
                 if (brought.has_value()) {
                     *detail += QStringLiteral(" (brought to %1)").arg(*brought);
+                }
+                if (!moved.isEmpty()) {
+                    *detail += QStringLiteral(" (%1)").arg(moved);
                 }
             }
             return true;
@@ -542,6 +794,7 @@ bool launchThenActivate(ExpandContext &ctx,
 }
 
 void executeWindowAction(ExpandContext &ctx,
+                         MonitorMemory *memory,
                          const core::Compiled &config,
                          const core::Action &action,
                          const QString &hotkey)
@@ -575,20 +828,31 @@ void executeWindowAction(ExpandContext &ctx,
         // 声明了固定桌面的程序不动窗口（用户按快捷键就是想过去，`raiseWindow`
         // 会切视图）；没声明的先把窗口拉到当前桌面，再激活它。
         QString brought;
+        QString placed;
         if (action.windowOp == core::WindowOp::Activate) {
             if (const std::optional<QString> moved = bringWindowToCurrentDesktop(config, hwnd);
                 moved.has_value()) {
                 brought = *moved;
             }
+            // 然后在“该去的那块显示器”上出现（默认 = 光标所在的那一块）。
+            // 搬屏必须在激活之前：激活之后再 `SetWindowPos` 会让它看起来“先跳
+            // 一下”，而且最大化窗口重新进最大化时更干净。
+            placed = bringWindowToActionMonitor(memory, config, action.monitor, hwnd, hotkey);
         }
         if (!win::window::applyTo(hwnd, action.windowOp, animate, &detail, &error,
                                   action.follow.value_or(false))) {
             win::logError(QStringLiteral("`%1` window: %2").arg(hotkey, error));
-        } else if (brought.isEmpty()) {
+        } else if (brought.isEmpty() && placed.isEmpty()) {
             win::logInfo(QStringLiteral("`%1` -> %2").arg(hotkey, detail));
         } else {
-            win::logInfo(QStringLiteral("`%1` -> %2 (brought to %3)")
-                             .arg(hotkey, detail, brought));
+            QStringList notes;
+            if (!brought.isEmpty()) {
+                notes.append(QStringLiteral("brought to %1").arg(brought));
+            }
+            if (!placed.isEmpty()) {
+                notes.append(placed);
+            }
+            win::logInfo(QStringLiteral("`%1` -> %2 (%3)").arg(hotkey, detail, notes.join(", ")));
         }
         return;
     }
@@ -596,7 +860,8 @@ void executeWindowAction(ExpandContext &ctx,
     if (action.launch.has_value() && action.windowOp == core::WindowOp::Activate) {
         QString detail;
         QString error;
-        if (!launchThenActivate(ctx, config, *action.launch, query, animate, &detail, &error)) {
+        if (!launchThenActivate(ctx, memory, config, action.monitor, *action.launch, query, animate,
+                                &detail, &error)) {
             win::logError(QStringLiteral("`%1` window: %2").arg(hotkey, error));
         } else {
             win::logInfo(QStringLiteral("`%1` -> %2").arg(hotkey, detail));
@@ -635,7 +900,8 @@ bool isPlaceableWindow(HWND hwnd)
 /// 虚拟桌面时，把视图也切过去并重新激活它（`window_rule` 的语义是“这个程序属于
 /// 那张桌面”，而用户刚刚把它弄出来）。启动 / 显示器重新接入那两遍只是重新摆放
 /// 已经在位的窗口，跟着走只会把视图无谓地切来切去。
-void placeWindowOnce(const std::shared_ptr<const core::Compiled> &config,
+void placeWindowOnce(MonitorMemory *memory,
+                     const std::shared_ptr<const core::Compiled> &config,
                      HWND hwnd,
                      bool followDesktop)
 {
@@ -661,6 +927,12 @@ void placeWindowOnce(const std::shared_ptr<const core::Compiled> &config,
 
     QStringList done;
     bool movedToAnotherDesktop = false;
+    // 目标显示器：规则自己写了 `monitor` 就用它，否则用 `settings.window_monitor`
+    // （默认 = 光标所在的那一块）；`monitor = "none"` 表示这条规则不碰显示器。
+    // 解析不定（光标问不到、`"last"` 还没记忆、那块屏没接）时只记一条 warning，
+    // 窗口留在原处 —— 与以前找不到目标显示器时的行为一致。
+    const core::MonitorRef target = rule->monitor.value_or(config->settings.windowMonitor);
+    const bool placesMonitor = target.kind != core::MonitorRef::Kind::None;
     if (rule->desktop.has_value()) {
         QString detail;
         QString error;
@@ -675,22 +947,44 @@ void placeWindowOnce(const std::shared_ptr<const core::Compiled> &config,
         }
     }
 
-    if (rule->applyGeometry) {
+    if (rule->applyGeometry || placesMonitor) {
         const std::vector<core::MonitorDescription> monitors =
             core::sortedMonitors(win::monitor::list());
+        // 动态目标（光标所在的那一块 / 上次记住的那一块）而且规则里没写具体几何时，
+        // 这一步只负责“把它放对屏”：已经在目标那一块上就**不去碰它**（用户自己
+        // 摆好的位置不该因为窗口再显示一次就被重新居中）。写死了显示器（`monitor = 2`
+        // 这类）或写了 `maximize` / `x` / `y` / `width` / `height` 时照旧每次摆到位。
+        const bool explicitGeometry = rule->maximize || rule->x.has_value()
+            || rule->y.has_value() || rule->width.has_value() || rule->height.has_value();
+        const bool placeOnly = core::monitorRefIsDynamic(target) && !explicitGeometry;
         std::optional<std::size_t> index;
-        if (rule->monitor.has_value()) {
-            index = core::selectMonitor(monitors, *rule->monitor);
-        } else {
+        QString why;
+        if (rule->monitor.has_value() && !placesMonitor) {
+            // 显式关掉了显示器（`monitor = "none"`）却写了位置 / 大小：只改几何，
+            // 窗口留在它现在所在的那一块屏上。
             index = win::monitor::indexForWindow(monitors, hwnd);
+            if (!index.has_value()) {
+                why = QStringLiteral("could not tell which monitor the window is on");
+            }
+        } else {
+            const MonitorTarget resolved =
+                resolveWindowMonitor(memory, target, monitors, hwnd, process);
+            index = resolved.index;
+            why = resolved.why;
+        }
+        if (index.has_value() && placeOnly) {
+            const std::optional<std::size_t> current = win::monitor::indexForWindow(monitors, hwnd);
+            if (current.has_value() && *current == *index) {
+                // 已经在该在的那块屏上：什么都不做，也不是错误。
+                index = std::nullopt;
+                why.clear();
+            }
         }
         if (!index.has_value()) {
-            win::logWarn(QStringLiteral("window rule `%1`: no monitor matches %2; leaving %3 where it is")
-                             .arg(rule->name,
-                                  rule->monitor.has_value()
-                                      ? rule->monitor->describe()
-                                      : QStringLiteral("the current monitor"),
-                                  core::rustDebug(title)));
+            if (!why.isEmpty()) {
+                win::logWarn(QStringLiteral("window rule `%1`: %2; leaving %3 where it is")
+                                 .arg(rule->name, why, core::rustDebug(title)));
+            }
         } else {
             const core::Rect current =
                 win::monitor::windowRect(hwnd).value_or(core::Rect{0, 0, 800, 600});
@@ -808,6 +1102,7 @@ void executeClipboardAction(ExpandContext &ctx,
 /// 执行一个动作。`ctx` 在单次触发期间共享，所以剪贴板只读一次。
 void executeAction(Runtime *runtime,
                    Dispatcher *dispatcher,
+                   MonitorMemory *memory,
                    const std::shared_ptr<const core::Compiled> &config,
                    const QString &hotkey,
                    const core::Action &action,
@@ -959,7 +1254,7 @@ void executeAction(Runtime *runtime,
         executeClipboardAction(ctx, action, hotkey);
         break;
     case core::Action::Kind::Window:
-        executeWindowAction(ctx, *config, action, hotkey);
+        executeWindowAction(ctx, memory, *config, action, hotkey);
         break;
     case core::Action::Kind::Notify: {
         const QString title = ctx.expand(action.title);
@@ -1047,6 +1342,20 @@ void executeAction(Runtime *runtime,
 Dispatcher::Dispatcher(Runtime *runtime, QObject *parent)
     : QObject(parent), m_runtime(runtime)
 {
+}
+
+Dispatcher::~Dispatcher() = default;
+
+MonitorMemory *Dispatcher::monitorMemory()
+{
+    if (!m_monitorMemory) {
+        m_monitorMemory = std::make_unique<MonitorMemory>();
+        // 状态文件就在配置文件旁边（`windows.json`，见 core/window_monitor_state.h），
+        // 所以常驻实例与开发/验收实例各用各的。**不在这里读盘**：只有真的用到
+        // `"last"` 时才读（见 loadMonitorMemory）。
+        m_monitorMemory->path = core::windowMonitorStatePath(m_runtime->configPath());
+    }
+    return m_monitorMemory.get();
 }
 
 /// 启动器目录的缓存有效期：超过它就在下一次弹出前重扫一遍。
@@ -1214,7 +1523,7 @@ void Dispatcher::applyPlacementRules(const std::shared_ptr<const core::Compiled>
                           .arg(event.windows.size()));
         for (HWND hwnd : event.windows) {
             // 窗口第一次出现：规则把它搬到别的桌面时，视图也跟着过去。
-            placeWindowOnce(config, hwnd, true);
+            placeWindowOnce(monitorMemory(), config, hwnd, true);
         }
         return;
     }
@@ -1227,7 +1536,7 @@ void Dispatcher::applyPlacementRules(const std::shared_ptr<const core::Compiled>
             .arg(windows.size()));
     for (HWND hwnd : windows) {
         // 启动与显示器重新接入：只重新摆放，不动视图（见 `placeWindowOnce`）。
-        placeWindowOnce(config, hwnd, false);
+        placeWindowOnce(monitorMemory(), config, hwnd, false);
     }
 }
 
@@ -1251,8 +1560,9 @@ void Dispatcher::runActions(const std::shared_ptr<const core::Compiled> &config,
         return;
     }
     ExpandContext ctx(m_runtime, name);
+    MonitorMemory *memory = monitorMemory();
     for (const core::Action &action : actions) {
-        executeAction(m_runtime, this, config, name, action, ctx);
+        executeAction(m_runtime, this, memory, config, name, action, ctx);
     }
 }
 

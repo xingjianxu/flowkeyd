@@ -517,6 +517,12 @@ core::Action convertAction(lua_State *L, int index)
         action.toggle = optBool(L, index, "toggle");
         action.animate = optBool(L, index, "animate");
         action.follow = optBool(L, index, "follow");
+        // `op = "activate"` 把窗口摆到哪一块显示器上（默认 = 光标所在的那一块）。
+        int monitor = 0;
+        if (pushField(L, index, "monitor", &monitor)) {
+            action.monitor = convertMonitorRef(L, monitor);
+            lua_pop(L, 1);
+        }
         int launch = 0;
         if (pushField(L, index, "launch", &launch)) {
             if (lua_type(L, launch) != LUA_TTABLE) {
@@ -722,7 +728,7 @@ core::Settings convertSettings(lua_State *L, int index)
     checkFields(L, index,
                 {"log_level", "swallow", "exact_modifiers", "release_modifiers",
                  "repeat_interval_ms", "repeat_delay_ms", "tick_ms", "input_backend",
-                 "single_instance", "elevate", "remote_desktop"});
+                 "single_instance", "elevate", "remote_desktop", "window_monitor"});
     core::Settings settings;
     if (auto value = optString(L, index, "log_level")) {
         settings.logLevel = *value;
@@ -753,6 +759,14 @@ core::Settings convertSettings(lua_State *L, int index)
     }
     if (auto value = optBool(L, index, "elevate")) {
         settings.elevate = *value;
+    }
+    // 窗口**没写明 `monitor`** 时摆到哪一块显示器上（默认 = 光标所在的那一块）。
+    // 取值与 `window_rule` 的 `monitor` 完全一样，另外还多一个 `"none"`
+    // （= 本特性存在之前的行为：flowkeyd 完全不碰窗口的位置）。
+    int windowMonitor = 0;
+    if (pushField(L, index, "window_monitor", &windowMonitor)) {
+        settings.windowMonitor = convertMonitorRef(L, windowMonitor);
+        lua_pop(L, 1);
     }
     // `remote_desktop = true|false`，或者一张表：
     //
@@ -876,12 +890,24 @@ core::MonitorRef convertMonitorRef(lua_State *L, int index)
             ref.kind = core::MonitorRef::Kind::Primary;
             return ref;
         }
+        if (text.compare(QLatin1String("cursor"), Qt::CaseInsensitive) == 0) {
+            ref.kind = core::MonitorRef::Kind::Cursor;
+            return ref;
+        }
+        if (text.compare(QLatin1String("last"), Qt::CaseInsensitive) == 0) {
+            ref.kind = core::MonitorRef::Kind::Last;
+            return ref;
+        }
+        if (text.compare(QLatin1String("none"), Qt::CaseInsensitive) == 0) {
+            ref.kind = core::MonitorRef::Kind::None;
+            return ref;
+        }
         ref.kind = core::MonitorRef::Kind::Device;
         ref.device = text;
         return ref;
     }
-    fail(QStringLiteral("invalid type: %1, expected a monitor number, \"primary\" or a device "
-                        "name like \"DISPLAY2\"")
+    fail(QStringLiteral("invalid type: %1, expected a monitor number, \"primary\", "
+                        "\"cursor\", \"last\", \"none\" or a device name like \"DISPLAY2\"")
              .arg(luaTypeName(lua_type(L, index))));
 }
 

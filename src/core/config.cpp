@@ -137,19 +137,6 @@ RepeatSpec RepeatSpec::makeConfig(std::optional<std::uint32_t> intervalMs,
 // window_rule
 // ---------------------------------------------------------------------------
 
-QString MonitorRef::describe() const
-{
-    switch (kind) {
-    case Kind::Index:
-        return QStringLiteral("monitor %1").arg(index);
-    case Kind::Primary:
-        return QStringLiteral("primary monitor");
-    case Kind::Device:
-        return QStringLiteral("monitor %1").arg(rustDebug(device));
-    }
-    return QStringLiteral("monitor");
-}
-
 QString WindowRule::summary() const
 {
     QStringList parts;
@@ -714,14 +701,24 @@ std::optional<ConfigError> compile(const Config &config,
         rule.monitor = def.monitor;
         rule.allDesktops = def.allDesktops;
         rule.topmost = def.topmost;
-        rule.maximize = def.maximize.value_or(def.monitor.has_value() && !hasGeometry);
-        rule.applyGeometry = def.monitor.has_value() || hasGeometry || rule.maximize;
+        // 默认最大化只对**写死**的显示器生效（`monitor = 2` / `"primary"` /
+        // `"DISPLAY2"`）：`"cursor"` / `"last"` 是动态目标，一个“跟着鼠标走”的
+        // 窗口不该因为目标变了就突然铺满屏幕。
+        const bool pinsMonitor = def.monitor.has_value()
+            && def.monitor->kind != MonitorRef::Kind::None;
+        rule.maximize = def.maximize.value_or(def.monitor.has_value()
+                                              && monitorRefIsConcrete(*def.monitor) && !hasGeometry);
+        rule.applyGeometry = pinsMonitor || hasGeometry || rule.maximize;
         rule.x = def.x;
         rule.y = def.y;
         rule.width = def.width;
         rule.height = def.height;
+        // 「只匹配窗口、什么都不做」：连缺省的显示器也没得摆（`monitor` 写的是
+        // `"none"`，或者 `settings.window_monitor = "none"`）才算。
+        const bool hasDefaultMonitor = !def.monitor.has_value()
+            && config.settings.windowMonitor.kind != MonitorRef::Kind::None;
         if (!rule.desktop.has_value() && !rule.applyGeometry && !rule.allDesktops.has_value()
-            && !rule.topmost.has_value()) {
+            && !rule.topmost.has_value() && !hasDefaultMonitor) {
             warnings.append(QStringLiteral("%1: only matches windows and does nothing").arg(label));
             continue;
         }
@@ -919,6 +916,13 @@ void validateAction(const QString &label, const Action &action, QStringList *err
                 QStringLiteral("%1: `animate` has no effect on %2 (no window transition is involved); "
                                "drop it or use activate/minimize/maximize/restore/"
                                "move_left_monitor/move_right_monitor")
+                    .arg(label, windowOpDebugName(action.windowOp)));
+        }
+        // `monitor` 只影响 `op = "activate"`（把它摆到哪一块显示器上）；写在别
+        // 的 op 上是一个静默的空操作，所以拒绝。
+        if (action.monitor.has_value() && action.windowOp != WindowOp::Activate) {
+            errors->append(
+                QStringLiteral("%1: `monitor` only works with op = \"activate\", not %2")
                     .arg(label, windowOpDebugName(action.windowOp)));
         }
         break;

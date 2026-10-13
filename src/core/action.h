@@ -4,6 +4,8 @@
 // 而且它必须能安全地跨 钩子线程 → 工作线程 传递（见 AGENTS.md 第 7 节第 15 条）。
 #pragma once
 
+#include "core/monitor_ref.h"
+
 #include <QMap>
 #include <QString>
 #include <QStringList>
@@ -234,6 +236,11 @@ struct Action
     /// **把视图也切到目标桌面**并重新激活那个窗口（默认 `false`，即只搬窗口、
     /// 视图不动）。写在其它的 op 上会被 `--check` 拒绝。
     std::optional<bool> follow;
+    /// `window` 动作的 `op = "activate"` 把窗口摆到哪一块显示器上。
+    /// 不写时的优先级：命中的第一条 `window_rule` 的 `monitor` →
+    /// `settings.window_monitor`（默认 = 光标所在的那一块）；`monitor = "none"`
+    /// 就是“这次不碰窗口的显示器”。写在其它的 op 上会被 `--check` 拒绝。
+    std::optional<MonitorRef> monitor;
 
     // notify
     QString title;

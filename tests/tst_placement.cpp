@@ -60,6 +60,10 @@ private slots:
     void windowRuleSummaryIsReadable();
     void firstWindowRulePicksTheFirstMatch();
     void windowRulePinsDesktopOnlyWhenTheWinningRuleSaysSo();
+    void monitorRefKindsAreClassified();
+    void monitorRefDescriptionsAreReadable();
+    void selectMonitorIgnoresRuntimeTargets();
+    void windowActionMonitorPrefersTheMostSpecificTarget();
 };
 
 void TestPlacement::sortedMonitorsOrdersLeftThenTop()
@@ -364,6 +368,126 @@ void TestPlacement::windowRulePinsDesktopOnlyWhenTheWinningRuleSaysSo()
     core::WindowRule all = rule(QStringLiteral("wezterm"));
     all.allDesktops = true;
     QVERIFY(!core::windowRulePinsDesktop({all}, QStringLiteral("anything"), wezterm));
+}
+
+void TestPlacement::monitorRefKindsAreClassified()
+{
+    // 写死的三种：配置里说清了是哪一块屏，`window_rule` 因此可以默认最大化。
+    core::MonitorRef index;
+    index.kind = core::MonitorRef::Kind::Index;
+    QVERIFY(core::monitorRefIsConcrete(index));
+    QVERIFY(!core::monitorRefIsDynamic(index));
+
+    core::MonitorRef primary;
+    primary.kind = core::MonitorRef::Kind::Primary;
+    QVERIFY(core::monitorRefIsConcrete(primary));
+
+    core::MonitorRef device;
+    device.kind = core::MonitorRef::Kind::Device;
+    device.device = QStringLiteral("DISPLAY2");
+    QVERIFY(core::monitorRefIsConcrete(device));
+
+    // 运行时才知道的两种：目标跟着光标 / 记忆变，不该跟着默认最大化。
+    core::MonitorRef cursor;
+    cursor.kind = core::MonitorRef::Kind::Cursor;
+    QVERIFY(!core::monitorRefIsConcrete(cursor));
+    QVERIFY(core::monitorRefIsDynamic(cursor));
+
+    core::MonitorRef last;
+    last.kind = core::MonitorRef::Kind::Last;
+    QVERIFY(!core::monitorRefIsConcrete(last));
+    QVERIFY(core::monitorRefIsDynamic(last));
+
+    // `"none"` 两边都不算：它表示“不碰显示器”。
+    core::MonitorRef none;
+    none.kind = core::MonitorRef::Kind::None;
+    QVERIFY(!core::monitorRefIsConcrete(none));
+    QVERIFY(!core::monitorRefIsDynamic(none));
+}
+
+void TestPlacement::monitorRefDescriptionsAreReadable()
+{
+    core::MonitorRef ref;
+    ref.kind = core::MonitorRef::Kind::Index;
+    ref.index = 2;
+    QCOMPARE(ref.describe(), QStringLiteral("monitor 2"));
+    ref.kind = core::MonitorRef::Kind::Primary;
+    QCOMPARE(ref.describe(), QStringLiteral("primary monitor"));
+    ref.kind = core::MonitorRef::Kind::Device;
+    ref.device = QStringLiteral("DISPLAY2");
+    QCOMPARE(ref.describe(), QStringLiteral("monitor \"DISPLAY2\""));
+    ref.kind = core::MonitorRef::Kind::Cursor;
+    QCOMPARE(ref.describe(), QStringLiteral("the monitor under the cursor"));
+    ref.kind = core::MonitorRef::Kind::Last;
+    QCOMPARE(ref.describe(), QStringLiteral("the monitor it was last placed on"));
+    ref.kind = core::MonitorRef::Kind::None;
+    QCOMPARE(ref.describe(), QStringLiteral("no monitor"));
+}
+
+void TestPlacement::selectMonitorIgnoresRuntimeTargets()
+{
+    const std::vector<core::MonitorDescription> sorted = core::sortedMonitors({
+        monitor(QStringLiteral("\\\\.\\DISPLAY2"), 1920, 0, 1920, 1080),
+        monitor(QStringLiteral("\\\\.\\DISPLAY1"), 0, 0, 1920, 1080, true),
+    });
+    // 光标 / 上次那块屏由运行时解析（要问系统、要查记忆），`selectMonitor` 只管
+    // 写死的那三种；`"none"` 根本不是一个目标。
+    for (const core::MonitorRef::Kind kind : {core::MonitorRef::Kind::Cursor,
+                                              core::MonitorRef::Kind::Last,
+                                              core::MonitorRef::Kind::None}) {
+        core::MonitorRef ref;
+        ref.kind = kind;
+        QCOMPARE(core::selectMonitor(sorted, ref), std::nullopt);
+    }
+}
+
+void TestPlacement::windowActionMonitorPrefersTheMostSpecificTarget()
+{
+    core::Settings settings;
+    // 默认：光标所在的那一块。
+    QCOMPARE(settings.windowMonitor.kind, core::MonitorRef::Kind::Cursor);
+
+    core::MonitorRef ruleMonitor;
+    ruleMonitor.kind = core::MonitorRef::Kind::Index;
+    ruleMonitor.index = 3;
+    core::MonitorRef actionMonitor;
+    actionMonitor.kind = core::MonitorRef::Kind::Index;
+    actionMonitor.index = 2;
+
+    core::WindowRule byProcess = rule(QStringLiteral("chrome"));
+    byProcess.monitor = ruleMonitor;
+
+    // 三样都没有：用全局默认。
+    QCOMPARE(core::windowActionMonitor(std::nullopt, nullptr, settings).kind,
+             core::MonitorRef::Kind::Cursor);
+    // 只有规则：用规则上的。
+    const core::MonitorRef fromRule = core::windowActionMonitor(std::nullopt, &byProcess, settings);
+    QCOMPARE(fromRule.kind, core::MonitorRef::Kind::Index);
+    QCOMPARE(fromRule.index, std::uint32_t(3));
+    // 动作上写了：动作的赢。
+    const core::MonitorRef fromAction =
+        core::windowActionMonitor(actionMonitor, &byProcess, settings);
+    QCOMPARE(fromAction.index, std::uint32_t(2));
+    // 规则没写 `monitor`：回落到全局默认。
+    core::WindowRule plain = rule(QStringLiteral("chrome"));
+    QCOMPARE(core::windowActionMonitor(std::nullopt, &plain, settings).kind,
+             core::MonitorRef::Kind::Cursor);
+    // `monitor = "none"` 逐层都能“显式关掉”。
+    core::MonitorRef none;
+    none.kind = core::MonitorRef::Kind::None;
+    plain.monitor = none;
+    QCOMPARE(core::windowActionMonitor(std::nullopt, &plain, settings).kind,
+             core::MonitorRef::Kind::None);
+    QCOMPARE(core::windowActionMonitor(none, &byProcess, settings).kind,
+             core::MonitorRef::Kind::None);
+    // 全局默认换成别的取值时也跟着变。
+    core::Settings off = settings;
+    off.windowMonitor = none;
+    core::WindowRule unset = rule(QStringLiteral("chrome"));
+    QCOMPARE(core::windowActionMonitor(std::nullopt, &unset, off).kind,
+             core::MonitorRef::Kind::None);
+    QCOMPARE(core::windowActionMonitor(std::nullopt, nullptr, off).kind,
+             core::MonitorRef::Kind::None);
 }
 
 QTEST_MAIN(TestPlacement)

@@ -56,6 +56,12 @@ std::optional<std::size_t> selectMonitor(const std::vector<MonitorDescription> &
         }
         return std::nullopt;
     }
+    case MonitorRef::Kind::Cursor:
+    case MonitorRef::Kind::Last:
+    case MonitorRef::Kind::None:
+        // 运行时才知道是哪一块（或者根本不摆）：调用方先看
+        // `monitorRefIsDynamic()` / `Kind::None`，不靠这里。
+        return std::nullopt;
     }
     return std::nullopt;
 }
@@ -170,6 +176,19 @@ bool windowRulePinsDesktop(const std::vector<WindowRule> &rules,
 {
     const WindowRule *rule = firstWindowRule(rules, title, executableName);
     return rule != nullptr && rule->desktop.has_value();
+}
+
+MonitorRef windowActionMonitor(const std::optional<MonitorRef> &actionMonitor,
+                               const WindowRule *rule,
+                               const Settings &settings)
+{
+    if (actionMonitor.has_value()) {
+        return *actionMonitor;
+    }
+    if (rule != nullptr && rule->monitor.has_value()) {
+        return *rule->monitor;
+    }
+    return settings.windowMonitor;
 }
 
 } // namespace flowkeyd::core

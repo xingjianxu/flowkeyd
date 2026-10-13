@@ -11,6 +11,7 @@
 
 #include "core/action.h"
 #include "core/keys.h"
+#include "core/monitor_ref.h"
 #include "core/remote_desktop.h"
 
 #include <QByteArray>
@@ -110,6 +111,13 @@ struct Settings
     /// 默认 = `builtinRemoteDesktopProcesses()`；配置里写了就**整体替换**
     /// （空表 = 谁都不算，等于关掉这个功能）。
     QStringList remoteDesktopProcesses = builtinRemoteDesktopProcesses();
+    /// 窗口**没有写明 `monitor`** 时摆到哪一块显示器上（默认 = 光标所在的那一块）。
+    ///
+    /// 取值与 `window_rule` 的 `monitor` 完全一样（序号 / `"primary"` / 设备名 /
+    /// `"cursor"` / `"last"` / `"none"`）；`"none"` 就是本特性存在之前的行为
+    /// —— flowkeyd 完全不碰窗口的位置。`window_rule` 与 `window` 动作上写了
+    /// `monitor` 的条目不受它影响（显式写的优先）。
+    MonitorRef windowMonitor{MonitorRef::Kind::Cursor, 1, QString()};
 };
 
 /// 一个或多个动作。
@@ -190,27 +198,6 @@ struct RemapDef
     std::optional<bool> remoteDesktop;
 };
 
-/// `window_rule{...}` 里的目标显示器。
-///
-/// 三种写法：
-///   * `monitor = 2`         —— 1 起，按「先左后右、再上后下」的排列顺序；
-///   * `monitor = "primary"` —— 主显示器；
-///   * `monitor = "DISPLAY2"` —— `EnumDisplayMonitors` 的设备名（可写全名
-///     `\\.\DISPLAY2`，比较时会剥掉 `\\.\` 前缀并忽略大小写）。
-struct MonitorRef
-{
-    enum class Kind { Index, Primary, Device };
-
-    Kind kind = Kind::Index;
-    /// `Kind::Index`：1 起的序号。
-    std::uint32_t index = 1;
-    /// `Kind::Device`：设备名。
-    QString device;
-
-    /// 供日志与摘要使用的可读形式。
-    QString describe() const;
-};
-
 /// 一条 `window_rule{...}`：某个程序的窗口出现时放到哪个虚拟桌面 / 显示器。
 ///
 /// 触发时机只有三个：窗口第一次出现、之前断开的显示器重新接上、以及 flowkeyd
@@ -229,7 +216,7 @@ struct WindowRuleDef
     std::optional<bool> allDesktops;
     /// 让窗口始终在最上层（`true`）或取消置顶（`false`）。不写就是不去碰它。
     std::optional<bool> topmost;
-    /// 目标显示器；不写就是窗口当前所在的那一个。
+    /// 目标显示器；不写就用 `settings.window_monitor`（默认 = 光标所在的那一块）。
     std::optional<MonitorRef> monitor;
     /// 是否铺满目标显示器的工作区。默认：给了 `monitor`、又没写位置/大小时为 true。
     std::optional<bool> maximize;
@@ -322,6 +309,11 @@ struct CompiledRemap
 /// `applyGeometry` 区分「这条规则只挪虚拟桌面」与「还要摆到某个显示器上」：
 /// 只写 `desktop` 时窗口的大小/位置保持不动，不会因为默认最大化而突然被放大。
 /// `allDesktops` / `topmost` 是另外两个与几何无关的开关（见 `WindowRuleDef`）。
+///
+/// **没写 `monitor` 时目标由 `settings.window_monitor` 决定**（默认 = 光标所在的
+/// 那一块，见 `core/placement.h` 的 `windowActionMonitor()`）：所以一条
+/// `applyGeometry` 为 false 的规则（例如只写了 `all_desktops`）仍然会把窗口摆到
+/// 那块显示器上（保持大小并居中）。
 struct WindowRule
 {
     QString name;

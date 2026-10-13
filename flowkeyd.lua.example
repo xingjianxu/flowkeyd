@@ -93,6 +93,20 @@ settings{
   --   * 单条例外：想「在远程桌面里也照常拦」的快捷键 / 重映射上写
   --     `remote_desktop = true`（见下面的 mute）。
   remote_desktop = true,
+
+  -- 窗口**没有写明 `monitor`** 时摆到哪一块显示器上（`--list` 会把它列出来）。
+  -- 取值与 `window_rule` / `window` 动作的 `monitor` 完全一样：
+  --   * "cursor"（默认）—— 发起这次摆放时光标所在的那一块：按 Win+1 唤起
+  --     Chrome 时它会出现在你正在看的那块屏上，而不是 Windows 自己挑的那块；
+  --   * "last"  —— 这个程序**上一次被摆到过**的那一块（记在配置文件旁边的
+  --     `windows.json` 里，重启 flowkeyd 也记得）；适合“这个程序永远回到上次
+  --     那块屏”的用法；
+  --   * "none"  —— 完全不碰窗口的位置（= 本特性存在之前的行为）；
+  --   * 也可以写具体的显示器（`2` / "primary" / "DISPLAY2"），于是所有没写
+  --     `monitor` 的窗口都摆到那一块。
+  -- 单个 `window_rule` / `window()` 动作上写了 `monitor` 的条目不受这里影响
+  -- （显式写的优先；写 `monitor = "none"` 就是那一项不跟缺省走）。
+  window_monitor = "cursor",
 }
 
 -- =============================================================================
@@ -328,6 +342,13 @@ hotkey{
 -- `desktop = 2`，所以按下去是**切到第 2 张桌面**再激活它（视图跟着过去）；
 -- 没写 `desktop` 的程序（例如下面的 `focus-vscode`）则是把窗口**搬到当前桌面**
 -- 再激活，视图不动 —— 不然 Windows 会把你带去它上次所在的那张桌面。
+--
+-- 在哪块**显示器**上出现由 `settings.window_monitor` 决定（默认 = 光标所在的那
+-- 一块）：唤起时如果窗口不在那块屏上，就把它搬过去（保持大小并居中，除非规则
+-- 里写了 maximize / 位置 / 大小）；已经在那一块上就不动它。想给单个快捷键
+-- 定一个目标（或者“这一条不要搬屏”）就在动作上写 `monitor`：
+--   window("activate", { process = "wezterm", monitor = 2 })
+--   window("activate", { process = "code", monitor = "none" })   -- 待着别动
 hotkey{
   name = "focus-wezterm",
   comment = "Win+s 唤起 WezTerm；没在运行时先启动它。",
@@ -635,8 +656,18 @@ hotkey{
 --                   「在所有桌面显示」），false 显式取消钉住。与 desktop 互斥。
 -- topmost           可选；true 让窗口**始终在最上层**（WS_EX_TOPMOST），
 --                   false 显式取消置顶。
--- monitor           可选：`2`（1 起，按显示器排列「先左后右、再上后下」）、
---                   `"primary"`、`"DISPLAY2"`（设备名，也可写全名 `\\.\DISPLAY2`）。
+-- monitor           可选。写了就是“这块屏”：`2`（1 起，按显示器排列「先左后右、
+--                   再上后下」）、`"primary"`、`"DISPLAY2"`（设备名，也可写全名
+--                   `\\.\DISPLAY2`）。
+--                   **不写**就用 `settings.window_monitor`：默认 `"cursor"`，即把
+--                   窗口摆到窗口出现时光标所在的那一块屏上（保持大小并居中，
+--                   不会顺手最大化）；`"last"` 是“这个程序上次被摆到过的那一块”
+--                   （记在 `windows.json`，重启也跟着）；`"none"` 是“不碰显示器”。
+--                   这两个字也能直接写在 monitor 上：
+--                     monitor = "cursor"   -- 这个程序永远跟着鼠标出现
+--                     monitor = "last"     -- 这个程序永远回到上次那块屏
+--                     monitor = "none"     -- 位置完全不管（只在你写了桌面 / 置顶 /
+--                                          -- 大小位置时其余部分照旧生效）
 -- maximize          可选；**默认：写了 monitor、又没写位置 / 大小时为 true**，
 --                   即铺满目标显示器的工作区（扣掉任务栏）。
 -- x / y             可选，相对目标显示器工作区左上角的偏移（像素）。
@@ -644,6 +675,9 @@ hotkey{
 -- enabled           可选，false 表示忽略这条。
 --
 -- 只写 desktop 时窗口的大小 / 位置保持不动（不会因为“默认最大化”而突然变大）。
+-- 只写 monitor（或干脆不写 monitor，让 settings.window_monitor 决定）时：写死了
+-- 哪一块（数字 / "primary" / 设备名）默认最大化；`"cursor"` / `"last"` 这两个
+-- 动态目标不默认最大化，只把窗口搬到那块屏上（保持大小并居中）。
 -- 规则按书写顺序匹配，先写的赢。
 
 window_rule{
@@ -653,8 +687,8 @@ window_rule{
   monitor = 2,
 }
 
--- 指定大小与位置：相对目标显示器工作区的左上角。不写 monitor 时默认放在
--- 窗口当前所在的那块显示器上。
+-- 指定大小与位置：相对目标显示器工作区的左上角。不写 monitor 时用
+-- `settings.window_monitor`（默认 = 光标所在的那块屏）。
 window_rule{
   name = "code-primary",
   process = "code",
@@ -666,6 +700,15 @@ window_rule{
   height = 800,
 }
 
+-- 动态目标：不写 monitor 的规则本身就跟着 `settings.window_monitor` 走；这条是
+-- 显式把它写成“这个程序永远回到上次被摆到的那一块屏”（记在 `windows.json`）。
+-- 第一次唤起它时不摆（还没有记忆），只把落点记下来。
+window_rule{
+  name = "teams-last-monitor",
+  process = "teams",
+  monitor = "last",
+}
+
 -- 只按标题匹配也行（两个都给时都要满足）。
 window_rule{
   name = "steam-on-second",
@@ -674,12 +717,15 @@ window_rule{
 }
 
 -- 钉在所有虚拟桌面 + 始终在最上层：适合音乐播放器 / 便签 / 悬浮工具这类
--- “切到哪张桌面都想看得见”的窗口。两者都不算几何，所以窗口的大小 / 位置不变。
+-- “切到哪张桌面都想看得见”的窗口。两者都不算几何，但“没写 monitor”仍然会让
+-- 窗口被摆到缺省的那块屏上（默认 = 光标所在的那块）；想让它待在原地就写
+-- `monitor = "none"`。
 window_rule{
   name = "music-everywhere",
   process = "spotify",
   all_desktops = true,
   topmost = true,
+  monitor = "none",
 }
 
 -- =============================================================================

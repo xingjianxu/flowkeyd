@@ -29,6 +29,34 @@ BOOL CALLBACK enumMonitorProc(HMONITOR handle, HDC, LPRECT, LPARAM data)
     return TRUE;
 }
 
+/// 把 `MONITORINFOEXW` 的设备名对回**已排序**列表里的下标。
+std::optional<std::size_t> indexForDevice(const std::vector<core::MonitorDescription> &sorted,
+                                          const QString &device)
+{
+    const QString wanted = core::normalizeDeviceName(device);
+    for (std::size_t index = 0; index < sorted.size(); ++index) {
+        if (core::normalizeDeviceName(sorted[index].device) == wanted) {
+            return index;
+        }
+    }
+    return std::nullopt;
+}
+
+/// 把一个 `HMONITOR` 转成已排序列表里的下标。
+std::optional<std::size_t> indexForHandle(const std::vector<core::MonitorDescription> &sorted,
+                                         HMONITOR handle)
+{
+    if (handle == nullptr) {
+        return std::nullopt;
+    }
+    MONITORINFOEXW info{};
+    info.cbSize = sizeof(info);
+    if (GetMonitorInfoW(handle, &info) == 0) {
+        return std::nullopt;
+    }
+    return indexForDevice(sorted, QString::fromWCharArray(info.szDevice));
+}
+
 } // namespace
 
 std::vector<core::MonitorDescription> list()
@@ -41,22 +69,17 @@ std::vector<core::MonitorDescription> list()
 std::optional<std::size_t> indexForWindow(const std::vector<core::MonitorDescription> &sorted,
                                           HWND hwnd)
 {
-    const HMONITOR handle = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
-    if (handle == nullptr) {
+    return indexForHandle(sorted, MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST));
+}
+
+std::optional<std::size_t> indexForCursor(const std::vector<core::MonitorDescription> &sorted)
+{
+    POINT point{};
+    if (GetCursorPos(&point) == 0) {
         return std::nullopt;
     }
-    MONITORINFOEXW info{};
-    info.cbSize = sizeof(info);
-    if (GetMonitorInfoW(handle, &info) == 0) {
-        return std::nullopt;
-    }
-    const QString device = core::normalizeDeviceName(QString::fromWCharArray(info.szDevice));
-    for (std::size_t index = 0; index < sorted.size(); ++index) {
-        if (core::normalizeDeviceName(sorted[index].device) == device) {
-            return index;
-        }
-    }
-    return std::nullopt;
+    // 光标刚好落在两块屏的缝隙上时算最近的那一块（`MONITOR_DEFAULTTONEAREST`）。
+    return indexForHandle(sorted, MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST));
 }
 
 std::optional<core::Rect> windowRect(HWND hwnd)
@@ -138,7 +161,11 @@ bool applyPlacement(HWND hwnd, const core::Rect &rect, bool maximize, QString *e
     return true;
 }
 
-bool moveToAdjacentMonitor(HWND hwnd, int delta, QString *detail, QString *error)
+bool moveToMonitor(HWND hwnd,
+                   const std::vector<core::MonitorDescription> &sorted,
+                   std::size_t target,
+                   QString *detail,
+                   QString *error)
 {
     if (hwnd == nullptr || IsWindow(hwnd) == 0) {
         if (error != nullptr) {
@@ -146,9 +173,47 @@ bool moveToAdjacentMonitor(HWND hwnd, int delta, QString *detail, QString *error
         }
         return false;
     }
+    if (target >= sorted.size()) {
+        if (error != nullptr) {
+            *error = QStringLiteral("the target monitor is not connected");
+        }
+        return false;
+    }
+
+    const core::MonitorDescription &destination = sorted[target];
+    const core::Rect current = windowRect(hwnd).value_or(core::Rect{0, 0, 800, 600});
+    // 保留最大化状态；普通窗口保持原有大小并居中到目标显示器的工作区
+    // （`placementRect` 的位置/大小参数全空时就是居中）。
+    const bool maximize = IsZoomed(hwnd) != 0;
+    const core::Rect rect = core::placementRect(current, destination, maximize, std::nullopt,
+                                                std::nullopt, std::nullopt, std::nullopt);
+    if (!applyPlacement(hwnd, rect, maximize, error)) {
+        return false;
+    }
+    if (detail != nullptr) {
+        *detail = QStringLiteral("%1 %2x%3 at %4,%5 on monitor %6/%7")
+                      .arg(maximize ? QStringLiteral("maximized") : QStringLiteral("placed"),
+                           QString::number(rect.width),
+                           QString::number(rect.height),
+                           QString::number(rect.x),
+                           QString::number(rect.y),
+                           QString::number(target + 1),
+                           QString::number(sorted.size()));
+    }
+    return true;
+}
+
+bool moveToAdjacentMonitor(HWND hwnd, int delta, QString *detail, QString *error)
+{
     if (delta != -1 && delta != 1) {
         if (error != nullptr) {
             *error = QStringLiteral("the monitor step must be -1 (left) or +1 (right)");
+        }
+        return false;
+    }
+    if (hwnd == nullptr || IsWindow(hwnd) == 0) {
+        if (error != nullptr) {
+            *error = QStringLiteral("the window is gone");
         }
         return false;
     }
@@ -176,28 +241,7 @@ bool moveToAdjacentMonitor(HWND hwnd, int delta, QString *detail, QString *error
         }
         return false;
     }
-
-    const core::MonitorDescription &destination = monitors[*target];
-    const core::Rect current = windowRect(hwnd).value_or(core::Rect{0, 0, 800, 600});
-    // 保留最大化状态；普通窗口保持原有大小并居中到目标显示器的工作区
-    // （`placementRect` 的位置/大小参数全空时就是居中）。
-    const bool maximize = IsZoomed(hwnd) != 0;
-    const core::Rect rect = core::placementRect(current, destination, maximize, std::nullopt,
-                                                std::nullopt, std::nullopt, std::nullopt);
-    if (!applyPlacement(hwnd, rect, maximize, error)) {
-        return false;
-    }
-    if (detail != nullptr) {
-        *detail = QStringLiteral("%1 %2x%3 at %4,%5 on monitor %6/%7")
-                      .arg(maximize ? QStringLiteral("maximized") : QStringLiteral("placed"),
-                           QString::number(rect.width),
-                           QString::number(rect.height),
-                           QString::number(rect.x),
-                           QString::number(rect.y),
-                           QString::number(*target + 1),
-                           QString::number(monitors.size()));
-    }
-    return true;
+    return moveToMonitor(hwnd, monitors, *target, detail, error);
 }
 
 } // namespace flowkeyd::platform::win::monitor

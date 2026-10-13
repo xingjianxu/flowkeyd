@@ -107,6 +107,11 @@ QString renderBindings(const core::Compiled &compiled)
                             : processes.join(QStringLiteral(", ")),
                         keep.isEmpty() ? QStringLiteral("-") : keep.join(QStringLiteral("; ")));
     }
+    // 窗口**没写明 `monitor`** 时摆到哪一块显示器上：也是一项全局行为，而且默认
+    // 值不是“不做任何事”（默认是光标所在的那一块），所以列出来。
+    out += QStringLiteral("  window monitor: %1 (for rules and window actions that do not "
+                          "name one)\n")
+               .arg(compiled.settings.windowMonitor.describe());
     for (const core::Binding &binding : compiled.bindings) {
         QStringList chords;
         for (const core::Chord &chord : binding.chords) {

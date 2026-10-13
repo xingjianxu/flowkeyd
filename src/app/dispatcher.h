@@ -10,6 +10,7 @@
 #include "core/app_list.h"
 #include "core/config.h"
 #include "core/engine.h"
+#include "core/window_monitor_state.h"
 #include "platform/win/hook.h"
 
 #include <QObject>
@@ -25,6 +26,12 @@ namespace flowkeyd::app {
 
 class Runtime;
 
+/// `monitor = "last"` 那份持久记忆（定义在 `dispatcher.cpp` 里）。
+///
+/// 它只是一份小状态 + 一个落盘位置，没必要把实现细节掳到头上，所以用一条前置
+/// 声明 + `unique_ptr`（析构函数因此在 `.cpp` 里显式定义）。
+struct MonitorMemory;
+
 /// 跑在 `QThread` 上的执行器。
 ///
 /// 自己不是线程：对象被 `moveToThread()` 到工作线程，`submit()` 从钩子线程
@@ -35,6 +42,7 @@ class Dispatcher : public QObject
 
 public:
     explicit Dispatcher(Runtime *runtime, QObject *parent = nullptr);
+    ~Dispatcher() override;
 
     /// 线程安全：把一个已触发的快捷键排入工作线程队列。
     void submit(std::shared_ptr<const core::Compiled> config, core::Trigger trigger);
@@ -105,6 +113,13 @@ private:
     int m_desktopCount = 0;
     /// 上一次轮询是不是失败（只在状态翻转时打一条 debug 日志，不要每 500 ms 写一行）。
     bool m_desktopWatchFailed = false;
+
+    /// `monitor = "last"` 那份记忆（`<配置目录>/windows.json`）：**第一次真的
+    /// 用到 `"last"` 时才建**（`"cursor"` / `"none"` 完全不碰这个文件）。
+    std::unique_ptr<MonitorMemory> m_monitorMemory;
+
+    /// 上一条记忆的访问器（第一次调用时建出来，并记住配置目录旁边的落盘位置）。
+    MonitorMemory *monitorMemory();
 };
 
 } // namespace flowkeyd::app

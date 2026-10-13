@@ -125,7 +125,7 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
 | 互斥体     | `Local\flowkeyd-<配置路径散列>`                                                 |
 | 开机自启   | 计划任务 `flowkeyd` 指向**当前运行 exe**（启动时自注册自检）                    |
 | 在线更新   | 托盘菜单 *检查更新* → GitHub `releases/latest` → slim 包 → sha256 → 换 exe + 重启 |
-| 自动化测试 | Qt Test 单元测试 + `scripts/acceptance.ps1`（161 → 165 项检查，需交互式桌面）         |
+| 自动化测试 | Qt Test 单元测试 + `scripts/acceptance.ps1`（161 → 166 项检查，现在跑起来是 163：3 条数字键检查常被跳过；需交互式桌面）         |
 | 依赖管理   | CMake Presets + Ninja，`vendor/lua` 静态编进二进制                             |
 
 ---
@@ -711,6 +711,50 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
       靠它观察这次到底搬了没有。
     * `all_desktops = true` **不算**“声明了固定桌面”：窗口本来就到处都是，不需要谁搬。
 
+33. **没写 `monitor` 的窗口摆到哪块显示器上：`settings.window_monitor`，默认 = 光标
+    所在的那一块。** 项目所有者 2026-10 提的需求：唤起一个**没配 monitor** 的程序时，
+    让它出现在鼠标所在的那块屏上；这个行为可配，能改成“出现在之前 active 后所在的
+    monitor 上”。
+
+    * `settings.window_monitor` 取值与 `monitor` 完全一样（`2` / `"primary"` /
+      设备名 / `"cursor"` / `"last"` / `"none"`），默认 `"cursor"`。
+      `MonitorRef` 因此多了 `Cursor` / `Last` / `None` 三个 `Kind`
+      （`core/monitor_ref.{h,cpp}`，从 `config.h` 里拆出来是因为 `action.h` 也要用它）。
+      `monitorRefIsConcrete()`（序号 / 主显示器 / 设备名）与 `monitorRefIsDynamic()`
+      （光标 / 上次那块）是纯逻辑，`selectMonitor()` 对这三种返回 `nullopt`。
+    * `"last"` 是**flowkeyd 自己记住的**：`<配置目录>/windows.json`，键是**可执行
+      文件名的小写**（与 `process` 同一套），值是**设备名**（序号会随排列变，设备名
+      跟着那块屏走）。只有真的用到 `"last"` 时才读/写这个文件。第一次还没有记忆时
+      **不动窗口、只把落点记下来**，于是“这个程序永远回到上次那块屏”从第二次开始生效。
+      纯逻辑在 `core/window_monitor_state.*`（`tst_window_monitor_state` 盯着），
+      落盘在 `app::Dispatcher` 的 `MonitorMemory` 上（动作线程，与 `launcher.json`
+      同一条分工）。
+    * **优先级**（`core::windowActionMonitor()`，纯逻辑、`tst_placement` 盯着）：
+      `window` 动作自己的 `monitor` → 命中这个窗口的第一条 `window_rule` 的 `monitor`
+      → `settings.window_monitor`。`monitor = "none"` 逐层都能“显式关掉”。
+    * **生效时机**（项目所有者的选择：“所有 window_rule 匹配到的窗口”，而不只是
+      快捷键唤起）：`window_rule` 的三个时机（窗口第一次出现 / 显示器重接 /
+      flowkeyd 启动）与 `window` 动作的 `op = "activate"`（含 `launch` 回退那条路）。
+      于是**双击图标开出来的窗口**也会被搬到光标那块屏 —— 这是刻意的默认，
+      写 `monitor = "none"`（或全局 `window_monitor = "none"`）关掉。
+    * **几何怎么处理**（项目所有者的选择：“保持大小并居中”，与
+      `move_left_monitor` / `move_right_monitor` 一致）：目标是动态的（`"cursor"` /
+      `"last"` / 由 `settings.window_monitor` 继承来的那种）而且规则里没写
+      `maximize` / `x` / `y` / `width` / `height` 时，只“把它放对屏”；已经在目标
+      那一块上就**不去碰它**（否则每次唤起都会把用户摆好的窗口重新居中）。
+      写死的三种仍然照旧：写 `monitor` 又没写位置大小时默认最大化。
+      为此 `WindowRule::maximize` 的默认值只对 `monitorRefIsConcrete()` 为真时才为
+      true。
+    * 平台层只多两个函数：`win::monitor::indexForCursor()`（`GetCursorPos` +
+      `MonitorFromPoint`）与 `win::monitor::moveToMonitor()`（`moveToAdjacentMonitor`
+      重构后调的其实是它）。
+    * `--list` 多打一行 `window monitor: … (for rules and window actions that do not
+      name one)` —— 这是全局行为且默认不是“什么都不做”，需要能一眼看到。
+    * 一个副带效果：以前 `window_rule{ process = "x" }`（什么都没写）会被 `--check`
+      以「only matches windows and does nothing」丢掉；现在它有意义了（摆到缺省
+      显示器），只有在 `monitor` 写了 `"none"` 或全局也是 `"none"` 时才会再报那条
+      warning。
+
 ---
 
 ## 3. 环境与工具链
@@ -788,7 +832,9 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
 | `src/core/app_list.*` | **程序启动器**的纯逻辑：条目类型（`AppEntry`：显示名 + 启动名 + 目标 + 参数）、「算不算程序」与「算不算卸载程序」两条判据、图标键（启动名的 64 位 FNV-1a）与**取图标的名字**（`appIconLaunchName()`：`ms-settings:` 页面借「设置」应用那一张）、扫描结果的去重/排序、**跨来源合并**（`appendLauncherEntries()`：同名丢掉后面的）、名字匹配（字面 + 拼音 + 首字母）、「全部程序」列表的排序键与分组表头（`appSortInfo`/`appSortText`/`appGroupLetter`，§2 第 27/29/30 条）、**内置的 26 个常用 `ms-settings:` 设置页表**（`windowsSettingsPages()` / `settingsNamesAreChinese()` / `builtinSettingsEntries()`，中英对照，§2 第 31 条） |
 | `src/core/launcher_state.*` | 程序启动器的**持久状态**：`LauncherState`（固定 + 最近使用的**图标键**列表）、`launcherStatePath()`（配置文件旁边的 `launcher.json`）、容错的 JSON 解析 / 序列化、`touchRecent()`（最近在前 + 截到 `kRecentLimit`）/ `togglePinned()`（§2 第 30 条） |
 | `src/core/pinyin.*` / `src/core/pinyin_data.*` | 汉字 → 读音（去声调、多音字、`ü` → `v`/`u`）的查询层 + 生成的读音表（`tools/pinyin_gen.ps1` 从 mozillazg/pinyin-data 生成，见§2 第 29 条） |
-| `src/core/placement.*` | `window_rule` 的纯逻辑：显示器排序与选择、重连检测、摆放几何、规则匹配、`stepIndex()` |
+| `src/core/monitor_ref.*` | 「窗口该摆到哪块显示器上」的取值：`MonitorRef`（序号 / `primary` / 设备名 / `cursor` / `last` / `none`）与 `monitorRefIsConcrete()` / `monitorRefIsDynamic()`。单独一个头是因为 `core/action.h`（`window` 动作的 `monitor`）与 `core/config.h` 都要用它（§2 第 33 条） |
+| `src/core/window_monitor_state.*` | `monitor = "last"` 的**持久记忆**：程序（可执行文件名小写）→ 显示器设备名，`windowMonitorStatePath()`（配置文件旁边的 `windows.json`）、容错的 JSON 解析 / 序列化、`rememberWindowMonitor()` / `rememberedWindowMonitor()`（§2 第 33 条） |
+| `src/core/placement.*` | `window_rule` 的纯逻辑：显示器排序与选择、重连检测、摆放几何、规则匹配、`stepIndex()`、`windowActionMonitor()`（动作 → 规则 → 全局缺省的优先级） |
 | `src/core/log_tail.*` | 日志文件的增量尾随（纯逻辑）：按字节读、末尾不完整的 UTF-8 序列不消费、半行留到下一轮、一次最多 1000 行 |
 | `src/core/update_check.*` | 在线更新纯逻辑：仓库地址、`releases/latest` JSON 解析、资产挑选、版本比较、`buildVersionDate()` |
 | `src/core/version.*` / `src/core/desktop_badge.*` | 构建版本号；托盘数字徽标的文字与字号 |
@@ -797,7 +843,7 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
 | `ffi.h/.cpp` | 全部 Win32 声明、结构体与常量（`INPUT` 的 40 字节布局有 `static_assert`） |
 | `nt.h/.cpp` | 未公开的 `win32u.dll` 导出，运行时解析并校验 |
 | `dwm.h/.cpp` | 运行时解析的 `dwmapi`：`DwmSetWindowAttribute`（关过渡动画）、`DwmGetWindowAttribute`（读 `DWMWA_CLOAKED`）。拿不到时只是保留动画 / 按“它在显示”处理，动作不失败 |
-| `monitor.h/.cpp` | 显示器枚举、窗口在哪块屏、`applyPlacement`（`SetWindowPlacement` + `SetWindowPos`，带 `SWP_NOACTIVATE`，最大化时先还原再最大化）。**几何判断不在这一层** |
+| `monitor.h/.cpp` | 显示器枚举、窗口在哪块屏（`indexForWindow`）、**光标在哪块屏**（`indexForCursor`）、`applyPlacement`（`SetWindowPlacement` + `SetWindowPos`，带 `SWP_NOACTIVATE`，最大化时先还原再最大化）、`moveToMonitor`（保持最大化状态 / 保持大小并居中）与 `moveToAdjacentMonitor`。**几何判断不在这一层** |
 | `input.h/.cpp` | 按键注入（`SendInput`/`NtUserSendInput`）、按键状态、`ModifierGuard`（含菜单遮断标记）、`FLOWKEYD_ACCEPT_INJECTED` 测试后门、`copySelection` |
 | `ime.h/.cpp` | 运行时解析的 `imm32.dll`：`readMode`/`useAlphanumericMode`/`restoreMode`。拿不到 `imm32` 或没有输入上下文时**不当错误** |
 | `hook.h/.cpp` | 钩子回调、**钩子线程自己的 Win32 消息循环**、`SetTimer`、控制消息、重载；还有 `window_rule` 的两个监听：`SetWinEventHook`（`EVENT_OBJECT_SHOW`/`DESTROY`，按 HWND 去重）与 350 ms 显示器轮询，外加 `EVENT_SYSTEM_FOREGROUND`（远程桌面放行，`noteForegroundWindow()`）。**定时器 id 必须用 `SetTimer` 的返回值**（§10） |
@@ -812,7 +858,7 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
 | `logging.h/.cpp` / `single_instance.h/.cpp` | 英文、分级别、可选 ANSI 颜色的日志器；按配置路径散列命名的互斥体 + `--quit` 的命名事件通道 |
 | `elevate.h/.cpp` / `autostart.h/.cpp` / `update.h/.cpp` | `ShellExecuteW("runas")` 自提权 + 降级；计划任务（纯函数 `buildTaskXml`/`taskXmlCommand`/`sameExecutablePath` + `ensureAutostart(spec, confirm)`）；换 exe 的最后一步（改名 → 就位 → 启动 → 2.5 秒确认 → 失败回滚） |
 | `src/app/` | 组装层：把 core/lua/platform 串起来，并拥有 Qt 对象 |
-| `dispatcher.h/.cpp` | **动作工作线程**（`QThread`）：执行动作列表、`window` 的“先启动再激活”与默认开的 `toggle`、`menu`/`help`/`windows`/`apps` 的窗口请求、`window_rule`（三遍）、`startDesktopWatch()`/`pollDesktop()`；启动器的持久状态文件路径也是在这里算好塞进 `AppRequest` 的（`core::launcherStatePath(runtime->configPath())`） |
+| `dispatcher.h/.cpp` | **动作工作线程**（`QThread`）：执行动作列表、`window` 的“先启动再激活”与默认开的 `toggle`、**把窗口摆到该去的那块显示器上**（`session.window_monitor` / 动作与规则上的 `monitor`，§2 第 33 条，含 `MonitorMemory` 那份 `windows.json` 记忆）、`menu`/`help`/`windows`/`apps` 的窗口请求、`window_rule`（三遍）、`startDesktopWatch()`/`pollDesktop()`；启动器的持久状态文件路径也是在这里算好塞进 `AppRequest` 的（`core::launcherStatePath(runtime->configPath())`） |
 | `runtime.h/.cpp` | 引擎 + 钩子 + 分发 + 托盘 + 弹窗的总装；`ControlCmd`（suspend/reload/quit）通道；`--quit` 的事件句柄（`QWinEventNotifier` 在 GUI 线程上监听）；`reportDesktop()`/`desktopChanged`；`showSwitchFromAnyThread()` 等 |
 | `log_model.h/.cpp` | 日志窗口的模型：尾随日志文件、最多 1000 行、按级别配色、子串过滤 |
 | `menu_model.h/.cpp` / `help_model.h/.cpp` / `window_list_model.h/.cpp` / `app_list_model.h/.cpp` | 四个卡片的**纯逻辑**（`QAbstractListModel`，只用 QtCore）。行几何与鼠标命中**不归它们管**（`ListView`/`GridView` + `ItemDelegate`）；`help` 只管筛选/选中项/`Enter`/`Esc`/`setSelected`；`menu` 还持有悬停（`Enter` 执行光标下那一条）；`window_list` 管进程名前缀筛选、自动激活与数字选择模式；`app_list` 管**行**式的三个视图（已固定 + 最近使用 + 「全部程序」按钮 / 筛选用的扁平网格 / 按首字母分组的一行一个）、名字/拼音/首字母子串筛选（搜索串来自 `core::appSearchText()`，§2 第 29 条）、筛选之后前 10 条的**数字快速启动键**（`0` 起、图标右上角的号码）、最近使用程序的 **`Alt` + 数字跳转键**（`Alt+1`–`Alt+9`/`Alt+0`）与已固定程序的 **`Alt` + 功能键固定快捷键**（`Alt+F1`–`Alt+F12`，均不随筛选变化）、`Space` 固定与「最近使用」的记账、以及卡片高度（§2 第 27/30 条） |
@@ -821,8 +867,8 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
 | `update_model.h/.cpp` / `update_archive.h/.cpp` / `updater.h/.cpp` | 更新卡片的状态机（八个阶段、版本号/发布说明/进度/按钮可见性，**不联网不解压不换文件**）；从 zip 里取出新 exe（`QZipReader` + PE 魔数检查）；联网编排（异步 `QNetworkAccessManager` + sha256 + 解压到 `<exe>.new` + mtime 对齐发布日） |
 | `app_icon.h/.cpp` | 把 qrc 里的 9 张 PNG 帧拼成多尺寸 `QIcon`（`applicationIcon()`）；`desktopIcon(number)` 现画桌面号徽标 |
 | `src/qml/` | `LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`、`SwitchPopup.qml`、`AppPopup.qml`、`UpdatePopup.qml`。都写 `pragma ComponentBehavior: Bound`；**五个弹窗的 `flags` 都带 `Qt.Tool`**；配色一律用 `palette`（没有单独的 `Style.qml`）；中文一律 `font.family: "Microsoft YaHei"`；列表/网格全部是标准 `ListView`/`GridView` + `ItemDelegate`（+ `ScrollBar`） |
-| `tests/` | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_remote_desktop`、`tst_log_tail`、`tst_audio`、`tst_autostart`、`tst_menu_model`、`tst_help_model`、`tst_window_list_model`、`tst_app_list`、`tst_app_list_model`、`tst_launcher_state`、`tst_power_table`、`tst_desktop_table`、`tst_placement`、`tst_layout`、`tst_version`、`tst_desktop_badge`、`tst_update`、`tst_update_model`、`tst_update_install`、`tst_command_line`、`tst_instance`、`tst_input`，以及需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1` 的 `tst_interactive`（真机：剪贴板/音量/窗口/虚拟桌面/钉住/置顶/输入法/覆盖层/更新下载；联网那条还要 `FLOWKEYD_ALLOW_NETWORK_TESTS=1`） |
-| `scripts/acceptance.ps1` | 桌面行为验收（注入按键 + 焦点捕捉窗口的外部观察，161 → 165 项检查），需交互式桌面，**不属于 `ctest`** |
+| `tests/` | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_remote_desktop`、`tst_log_tail`、`tst_audio`、`tst_autostart`、`tst_menu_model`、`tst_help_model`、`tst_window_list_model`、`tst_app_list`、`tst_app_list_model`、`tst_launcher_state`、`tst_window_monitor_state`、`tst_power_table`、`tst_desktop_table`、`tst_placement`、`tst_layout`、`tst_version`、`tst_desktop_badge`、`tst_update`、`tst_update_model`、`tst_update_install`、`tst_command_line`、`tst_instance`、`tst_input`，以及需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1` 的 `tst_interactive`（真机：剪贴板/音量/窗口/虚拟桌面/钉住/置顶/输入法/覆盖层/更新下载；联网那条还要 `FLOWKEYD_ALLOW_NETWORK_TESTS=1`） |
+| `scripts/acceptance.ps1` | 桌面行为验收（注入按键 + 焦点捕捉窗口的外部观察，161 → 166 项检查，现在跑起来是 163）。需交互式桌面，**不属于 `ctest`** |
 | `scripts/release.ps1` | 构建 release + 打包（完整包 + 精简升级包，各附 `.sha256`）+ 用 `gh` 上传 GitHub Release。tag 取刚构建的 exe 的 `--version`。**发布说明由脚本自己写**（上一个 Release 的 tag → HEAD 的提交主题，按提交信息前缀分类成新功能/修复/变更/其它，纯文档/测试类只计数；`-Notes`/`-NotesFile` 可以整份替换），不用 `gh --generate-notes`。工作区脏或 HEAD 没推到 origin 会直接拒绝（要 `-AllowDirty`/`-Push`）。**唯一的新前置依赖是 `gh`**。开关：`-SkipBuild`/`-SkipResident`/`-SkipUpload`/`-Clobber` |
 
 > `scripts/install.ps1` / `uninstall.ps1` **已删除**：自启的注册、刷新与删除现在全在
@@ -915,7 +961,7 @@ dir build\dist-release               # 发布包（release 构建自动产出，
 ### 桌面行为怎么验证
 
 ```powershell
-# 161 → 165 项检查，约三分钟，会持续注入按键/抢焦点；按工作约定第 6 条先提醒用户
+# 161 → 166 项检查，约三分钟，会持续注入按键/抢焦点；按工作约定第 6 条先提醒用户
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance.ps1
 powershell.exe ... -Phase config      # 只看配置，不注入按键
 ```
@@ -1137,6 +1183,34 @@ debug 构建 + 31 个测试全绿、release 零警告。**这次按项目所有�
 `WorkingDirectory` 一致）的顺序切到新 exe。**这份 AGENTS 记录本身是构建之后的纯文档
 提交**，按 §11 的说法不重新构建（`--version` 的哈希会停在 `85fba8b`）。
 
+**2026-10-13：没写 `monitor` 的窗口改成按 `settings.window_monitor` 摆到光标 / 上次
+那块屏（§2 第 33 条）。** `scripts/acceptance.ps1 -Phase all` 在 release 产物上跑：
+**`checks: 163, failures: 0`**（`-Phase config` 也在里面，全绿）。比 165 少 2 条：
+那 3 条数字快速启动键检查因为真机目录里没有 1..8 个程序的单字母筛选串而被跳过
+（脚本打了诊断），而这一次给启动器之外的路径新加了 1 条（见下）。
+
+* **新增的验收检查**：`window("activate", { monitor = "last" })`——第一次还没有记忆时
+  **不动窗口**、只把落点写进配置文件旁边的 `windows.json`（脚本开头会把那个文件删掉），
+  这是那份持久状态唯一的端到端覆盖（纯逻辑在 `tst_window_monitor_state`，优先级在
+  `tst_placement`）。
+* **没有别的验收检查**：光标真实位置要人工挪鼠标、`"last"` 的第二段（真把窗口搬回去）
+  是跨屏行为，两条都不适合放进这个脚本 —— 那一部分放在
+  `tst_interactive::movesAWindowToTheMonitorUnderTheCursor()`（真机：把光标挪到另一块
+  屏 + `moveToMonitor()`，游标用 RAII 守卫放回原处；单屏 QSKIP）。
+
+debug 32 个测试全绿（新增 `tst_window_monitor_state`）、两条 profile 零警告、
+`--check` 在 `flowkeyd.lua.example`（47/3/8）与用户的真实配置上都是零警告。
+
+顺带修了一条**验收脚本自己的 flake**（第一次跑挂了两条）：右键弹出的原生 shell 菜单
+只能拿「类名是 `#32768` 的可见窗口存在」作判据，而解析 shell 条目 +
+`QueryContextMenu` 要 100~200 ms，这段时间里别的 `#32768` 窗口会让“存在”提前成立，
+于是 `ClassRect` 读回全 0、两条尺寸检查（菜单位置 / 每条 22 逻辑像素）一起挂掉。
+实测：插一条 1.8 s 的采样探针（`tmp/instrument.ps1` + `tmp/accept-probe.ps1`）跑出
+`vis=False` 六轮之后菜单才出现，而菜单一旦出现就一直稳定在 `355x327`（8 条目 ×
+44 物理 = 22 逻辑像素，正是它该有的值）；探针那一轮 `checks: 162, failures: 0`。
+现在那条等待的判据是三条一起看：**可见窗口存在 + 矩形非空 + 守护进程日志里已经有
+`shell menu: N item(s)`**，改完重跑 pristine 脚本得到 `checks: 163, failures: 0`。
+
 **锁屏时 `tmp/preview/` 的 `checkAppsMenu()` 会挂**（2026-10 实测两次）：那张原生菜单是
 `TrackPopupMenuEx` 的模态循环，`GetForegroundWindow() == 0` 时往 `#32768` 投 `Esc`
 也收不掉，一直阻塞到进程被杀。现在那一项在 `GetForegroundWindow() == 0` 时直接跳过
@@ -1344,7 +1418,7 @@ GUID）—— 同文件里的 `moveWindowToAnotherDesktopAndBack()` 没等，**�
 | 6 弹窗 `menu` / `help` | **已完成** | `flowkeyd_models` + 两张 QML 卡片；`tst_menu_model`/`tst_help_model` 全绿 |
 | 7 虚拟桌面 + 电源 | **已完成** | `desktop`/`power` + dispatcher 接线；`tst_desktop_table`/`tst_power_table` 全绿 |
 | 8 示例配置 + README | **已完成** | 覆盖全特性的 `flowkeyd.lua.example`（`--check` 零警告）；README 已写全 |
-| 9 验收（无 e2e 的替代） | **已完成** | `scripts/acceptance.ps1`（现在 165 项）+ `FLOWKEYD_ACCEPT_INJECTED` 测试后门 |
+| 9 验收（无 e2e 的替代） | **已完成** | `scripts/acceptance.ps1`（现在 166 项）+ `FLOWKEYD_ACCEPT_INJECTED` 测试后门 |
 | 10 接管 | **已完成** | 真实配置迁到 `.config\flowkeyd\config.lua`；常驻由计划任务 `flowkeyd` 指向当前运行的 exe |
 
 第 10 阶段之后新增的能力（都在本文件对应章节有记录）：
@@ -1356,7 +1430,8 @@ FreeType 字体引擎、程序启动器（`apps()` + 异步图标）、启动器
 首字母（§2 第 29 条）、启动器的固定 / 最近使用 / 「全部程序」分组列表（§2 第 30 条）、
 启动器目录加上控制面板项与内置设置页（§2 第 31 条）、弹窗缩放过期自愈（显示器缩放变过
 之后丢掉窗口缓存重建，§2 第 23 条 / §10）、跳桌面唤起（没声明固定桌面的程序会把窗口
-搬到当前桌面，§2 第 32 条）。
+搬到当前桌面，§2 第 32 条）、没写 `monitor` 的窗口按 `settings.window_monitor` 摆到
+光标 / 上次那块屏（§2 第 33 条）。
 
 ---
 
@@ -2134,6 +2209,15 @@ FreeType 字体引擎、程序启动器（`apps()` + 异步图标）、启动器
   （或只影响 `summary()`）→ `app/dispatcher` 的 `placeWindowOnce` → README 的 `window_rule`
   一节与示例 → `tst_placement`/`tst_config`/`tst_lua`。如果新字段要调新的 Win32/COM 后端，
   放在 `platform/win/*` 里，并在 `tst_interactive` 里加一条真机验证。
+* **新的 `monitor` 取值 / 新的显示器算法**：取值本身加在 `core/monitor_ref.h` 的
+  `Kind` 上（`lua_config.cpp` 的 `convertMonitorRef` 与 `selectMonitor()` / `describe()` /
+  `monitorRefIsConcrete()` / `monitorRefIsDynamic()` 四处都要跟）→ 解析成“哪一块”的
+  那一步只有两个地方：`dispatcher.cpp` 的 `resolveWindowMonitor()`（问系统 / 查记忆）
+  与 `placeWindowOnce`（摆几何）；真要调新的 Win32/COM 后端就放给
+  `platform/win/monitor.*`（像 `indexForCursor` 那样）→ README 的
+  「窗口摆到哪块显示器上」一节与示例配置 → `tst_placement`（纯逻辑）+
+  需要真桌面的放 `tst_interactive`。**状况是 `Kind::None` 一定要单独处理**：它不是
+  “摆到某一块”，而是“这次不碰位置”。
 * **新的 app 字段**：`core/config.h` 的 `AppDef` 加字段 → `lua_config.cpp` 的 `convertApp` 加
   白名单与读取 → 在 `core/config.cpp` 的 `expandApps` 里决定怎么继承/忽略
   （纯逻辑，`tst_config` 直接测）→ `lua_prelude.lua` 的 `app` 注释 → README 与示例 →
@@ -2230,7 +2314,8 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、`--ch
 
 * `settings{}`：`log_level`、`swallow`、`exact_modifiers`、`release_modifiers`、
   `repeat_interval_ms`、`repeat_delay_ms`、`tick_ms`、`input_backend`、`single_instance`、
-  `elevate`、`remote_desktop`。**未知键报错。**
+  `elevate`、`remote_desktop`、`window_monitor`。**未知键报错。**
+  `window_monitor`（默认 `"cursor"`）= 没写明 `monitor` 时摆到哪块屏（§2 第 33 条）。
 * `hotkey{}`：`keys`（单个和弦或一组）、`name`、`trigger`（`press`/`release`/`repeat`）、
   `action`（别名 `press`、`on_press`）、`on_release`、`swallow`、`repeatable`
   （`true` 或 `{ interval_ms, delay_ms }`；也认 `["repeat"]`）、`enabled`、`comment`、
@@ -2241,7 +2326,8 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、`--ch
 * `remote_desktop`（`settings` 一项 + 每个 `hotkey`/`remap` 一项）：见 §2 第 26 条。
   `settings.remote_desktop` 是 `true` / `false`，或者 `{ enabled = …, processes = { … } }`；
   条目上的 `remote_desktop = true` = 在远程桌面里也照常拦（默认 `false` = 放行）。
-* `window_rule{}`：见 §2 第 13 条。
+* `window_rule{}`：见 §2 第 13 条；`monitor` 的六种取值（含 `"cursor"` / `"last"` /
+  `"none"`）与缺省行为见 §2 第 33 条。
 * `app{}`：见 §2 第 15 条；声明式写法叫 `apps`。
 * 和弦语法：`~` 放行原始按键、`*` 忽略额外修饰键；`Numpad*` 与主键盘同名键不同。
   **和弦的结构是 `Modifiers + 一个按键`**：`keys = "NumpadSub+NumpadAdd"` 是语法错
@@ -2258,6 +2344,9 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、`--ch
   **就在当前虚拟桌面上**。
 * `window` 动作顶层的 `wait_ms` 是 `launch.wait_ms` 的简写；没有 `launch` 可覆盖时要报错。
 * `window` 的 `animate`（默认**关**）只对会改变窗口状态的 `op` 有意义。
+* `window` 的 `monitor` 只对 `op = "activate"` 有意义：显式指定这次把窗口摆到哪块屏
+  （不写就走“命中的 `window_rule` 的 `monitor` → `settings.window_monitor`”）。
+  写在其它的 op 上会被 `--check` 拒绝（§2 第 33 条）。
 * `windows([title])` 是窗口切换器（§2 第 21/22/24 条）。常见绑法是 `keys = "LWin"` +
   `trigger = "release"`（「轻碰 Win」）。
 * `apps([title])` 是程序启动器（§2 第 27/31 条）：列表来自**三份来源** ——

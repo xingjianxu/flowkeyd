@@ -112,4 +112,16 @@ bool windowRulePinsDesktop(const std::vector<WindowRule> &rules,
                            const QString &title,
                            const std::optional<QString> &executableName);
 
+/// `window` 动作的 `op = "activate"` 该把窗口摆到哪一块显示器上。
+///
+/// 优先级（显式写的赢）：
+///   1. 动作自己的 `monitor`（`window("activate", { monitor = 2 })`）；
+///   2. 命中这个窗口的第一条 `window_rule` 的 `monitor`；
+///   3. 都没有时用 `settings.windowMonitor`（默认 = 光标所在的那一块）。
+///
+/// 返回 `Kind::None` 表示这次不碰窗口的显示器（`monitor = "none"`）。
+MonitorRef windowActionMonitor(const std::optional<MonitorRef> &actionMonitor,
+                               const WindowRule *rule,
+                               const Settings &settings);
+
 } // namespace flowkeyd::core

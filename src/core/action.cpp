@@ -435,6 +435,9 @@ QString Action::summary() const
         if (follow.value_or(false)) {
             text += QLatin1String(" (follow)");
         }
+        if (monitor.has_value()) {
+            text += QStringLiteral(" (on %1)").arg(monitor->describe());
+        }
         return text;
     }
     case Kind::Notify:

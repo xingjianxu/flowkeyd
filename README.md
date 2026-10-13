@@ -318,6 +318,7 @@ settings{ log_level = "info", swallow = true, tick_ms = 15 }
 | `single_instance`    | `true`   | 另一个实例已占用同一配置时拒绝启动                                                           |
 | `elevate`            | `true`   | 以守护进程模式启动时，没有管理员权限就自动提权重启（`--no-elevate` 覆盖）                     |
 | `remote_desktop`     | `true`   | 前台窗口是远程桌面客户端时**放行**（不拦截、不触发）；`false` 关掉检测；写成表可以换进程名单（见[远程桌面](#远程桌面)） |
+| `window_monitor`     | `"cursor"` | 窗口**没写明 `monitor`** 时摆到哪块显示器上：`"cursor"`（光标所在的那一块）、`"last"`（这个程序上次被摆到过的那一块）、`"none"`（不碰位置），也可以写具体的一块（`2` / `"primary"` / `"DISPLAY2"`）见[窗口摆到哪块显示器上](#窗口摆到哪块显示器上) |
 
 ### 远程桌面
 
@@ -362,6 +363,47 @@ remap{ from = "CapsLock", to = "Esc", remote_desktop = true }
 `remote desktop detected (mstsc.exe): hotkeys and remaps pass through` 与
 `left the remote desktop (…): hotkeys and remaps are active again`；`--list` 会把它当前
 认的名单与例外一起打出来。
+
+### 窗口摆到哪块显示器上
+
+**没有写明 `monitor`** 的窗口摆放规则（以及 `window("activate")` 动作）统一由
+`settings.window_monitor` 决定摆到哪块显示器上，默认是 **`"cursor"`：光标所在的
+那一块屏**。它的理由很实际：按 `Win+1` 唤起 Chrome、按 `Win+2` 唤起 VS Code 时，
+你正在看的就是光标所在的那块屏 —— 窗口应该出现在那里，而不是 Windows 自己挑的
+那一个。
+
+```lua
+settings{ window_monitor = "cursor" }   -- 默认：跟着鼠标走
+settings{ window_monitor = "last" }     -- 回到这个程序上次被摆到的那一块屏
+settings{ window_monitor = "none" }     -- 不碰窗口的位置（本特性之前的行为）
+settings{ window_monitor = 2 }          -- 所有没写 monitor 的窗口都去第 2 块屏
+```
+
+| 取值 | 含义 |
+| ---- | ---- |
+| `"cursor"` | 光标现在所在的那一块（默认；每次摆放都现问系统） |
+| `"last"` | 这个程序**上一次被摆到过**的那一块，记在配置文件旁边的 `windows.json` 里（重启 flowkeyd、程序关掉再开都记得）。第一次还没有记忆时不动窗口，只把落点记下来 |
+| `"none"` | 完全不管位置（本特性存在之前的行为：窗口出现在 Windows 决定的地方） |
+| `2` / `"primary"` / `"DISPLAY2"` | 具体的一块：1 起的序号（先左后右、再上后下）、主显示器、设备名 |
+
+* **单个条目上的 `monitor` 永远赢过这里**：`window_rule{ process = "code", monitor = 2 }`
+  或 `window("activate", { process = "code", monitor = 2 })` 就只跟那块屏走；
+  写 `monitor = "none"` 就是这一项不跟缺省走（位置不动）。
+* **`"cursor"` / `"last"` 不默认最大化**：动态目标只把窗口**搬到那块屏上**（保持
+  大小并居中，最大化状态保留）。只有写死的那几种（序号 / `"primary"` / 设备名）
+  才会因为“写了 `monitor`、又没写位置大小”而默认铺满工作区。规则里写了
+  `maximize` / `x` / `y` / `width` / `height` 时当然按规则走。
+* **已经在目标那一块屏上时就不去碰它**（否则每次唤起都会把你摆好的窗口重新居中）。
+* 找不到目标时不报错、也不乱摆：`"last"` 记的那块屏没接上、光标问不到、序号越界 ——
+  都只写一条日志，窗口留在原处（与以前的“找不到匹配的显示器”一致）。
+* 什么时候会摆：`window_rule` 的三个时机（窗口第一次出现、显示器重新接上、
+  flowkeyd 启动）与 `window` 动作的 `op = "activate"`（包括刚要启动的那个窗口）。
+  之后不再干预。
+* `"last"` 的状态文件 `windows.json` 就在 `config.lua` 旁边，**你别手改它**：
+  删掉就等于“还没记过”，下一次唤起会把落点重新记一遍。
+
+> `window_monitor = "none"` 之外的取值都意味着“没写 `monitor` 的规则也会动窗口”。
+> 想让某条规则完全不碰位置，在它自己身上写 `monitor = "none"`。
 
 ### `hotkey{ ... }`
 
@@ -458,7 +500,7 @@ Enter 与主键盘的 Enter 共用 `VK_RETURN`，区分靠的是 Windows 的扩�
 | `volume`    | `op` = `up`/`down`/`set`/`mute`/`unmute`/`toggle`、`level`（0-100）、`step`                               | 对默认输出设备使用 Core Audio                                                                                                                                                                                                                                                            |
 | `media`     | `op` = `play_pause`/`next`/`prev`/`stop`                                                                  |                                                                                                                                                                                                                                                                                           |
 | `clipboard` | `op` = `get`/`set`/`append`/`clear`、`text`                                                               |                                                                                                                                                                                                                                                                                           |
-| `window`    | `op` = `activate`/`minimize`/`maximize`/`restore`/`close`/`toggle_topmost`/`move_prev_desktop`/`move_next_desktop`/`move_left_monitor`/`move_right_monitor`、`target`、`process`、`launch`、`wait_ms`、`toggle`、`animate`、`follow` | `target` 匹配窗口标题的子串，`process` 匹配可执行文件名（`wezterm` 也能匹配 `wezterm-gui.exe`）；既没有 `target` 也没有 `process` 就表示前台窗口。`launch = { program, args[], cwd, show, shell, env{}, wait_ms }` 会在没有任何匹配时启动该程序，然后等待它的窗口（默认 3000 ms）并激活它。`toggle`（默认开，只对 `op = "activate"` 有意义）会在目标窗口已经在前台时改为最小化它。`animate`（默认**关**）控制这次状态变化要不要播放 DWM 的过渡动画。`wait_ms` 写在动作顶层时是 `launch.wait_ms` 的简写；在 `app{}` 里 `launch` 还会继承 app 的 `launch`（逐字段合并）。四个 `move_*` op 把**当前窗口**（不写 `target`/`process` 时）挪到相邻的虚拟桌面 / 显示器：`move_prev_desktop`/`move_next_desktop` 只动虚拟桌面且**首尾相接**（显示器上的几何不变，视图**不**跟着走），`move_left_monitor`/`move_right_monitor` 只动显示器（保留最大化状态，否则保持原有大小并居中到目标工作区；没有更左/更右那一块时失败，**不循环**）。这四个 op 都不套用 `toggle`、也不接受 `launch`。`follow = true` 只能写给 `move_prev_desktop`/`move_next_desktop`：搬完之后把视图也切到目标桌面并重新激活那个窗口（用户跟着窗口一起过去；不写时视图不动，与 Windows 自己的 `Win+Ctrl+Shift+←/→` 一致），写在其它的 op 上会被 `--check` 拒绝 |
+| `window`    | `op` = `activate`/`minimize`/`maximize`/`restore`/`close`/`toggle_topmost`/`move_prev_desktop`/`move_next_desktop`/`move_left_monitor`/`move_right_monitor`、`target`、`process`、`launch`、`wait_ms`、`toggle`、`animate`、`follow`、`monitor` | `target` 匹配窗口标题的子串，`process` 匹配可执行文件名（`wezterm` 也能匹配 `wezterm-gui.exe`）；既没有 `target` 也没有 `process` 就表示前台窗口。`launch = { program, args[], cwd, show, shell, env{}, wait_ms }` 会在没有任何匹配时启动该程序，然后等待它的窗口（默认 3000 ms）并激活它。`toggle`（默认开，只对 `op = "activate"` 有意义）会在目标窗口已经在前台时改为最小化它。`animate`（默认**关**）控制这次状态变化要不要播放 DWM 的过渡动画。`wait_ms` 写在动作顶层时是 `launch.wait_ms` 的简写；在 `app{}` 里 `launch` 还会继承 app 的 `launch`（逐字段合并）。四个 `move_*` op 把**当前窗口**（不写 `target`/`process` 时）挪到相邻的虚拟桌面 / 显示器：`move_prev_desktop`/`move_next_desktop` 只动虚拟桌面且**首尾相接**（显示器上的几何不变，视图**不**跟着走），`move_left_monitor`/`move_right_monitor` 只动显示器（保留最大化状态，否则保持原有大小并居中到目标工作区；没有更左/更右那一块时失败，**不循环**）。这四个 op 都不套用 `toggle`、也不接受 `launch`。`follow = true` 只能写给 `move_prev_desktop`/`move_next_desktop`：搬完之后把视图也切到目标桌面并重新激活那个窗口（用户跟着窗口一起过去；不写时视图不动，与 Windows 自己的 `Win+Ctrl+Shift+←/→` 一致），写在其它的 op 上会被 `--check` 拒绝。`monitor` 只对 `op = "activate"` 有意义：指定这次把窗口摆到哪块显示器上（`2` / `"primary"` / `"DISPLAY2"` / `"cursor"` / `"last"` / `"none"`），不写就按命中的 `window_rule` → `settings.window_monitor`（默认 = 光标所在的那一块），见[窗口摆到哪块显示器上](#窗口摆到哪块显示器上)；写在其它的 op 上会被 `--check` 拒绝 |
 | `notify`    | `title`、`body`                                                                                           | 托盘气泡提示                                                                                                                                                                                                                                                                              |
 | `menu`      | `title`、`items[]`（每项 `{ key, label, hint, action }`）                                                  | 弹出一个选单让用户挑一项（见[选单与电源](#选单与电源)）；条目上的单字符 `key` 直接选中它，`↑`/`↓` + `Enter` 与鼠标也能选，`Esc`（或点到别的地方）只关窗口。没有 `action`（或 `none()`）的条目只是把选单关掉                                                                         |
 | `help`      | `title`（可选，默认「快捷键」）                                                                            | 弹出一个**快捷键帮助**（见[快捷键帮助](#快捷键帮助)）：列出当前配置里全部生效的快捷键与重映射；筛选框里直接输入（鼠标点一下就进去）就筛选；`↑`/`↓`、`PgUp`/`PgDn` 或滚轮/拖动滚动条滚动（滚动不改选中项）；**`Enter` 或双击一行 = 关掉窗口并执行那一行的动作**；左键点一行 = 选中它并把它的按键复制到剪贴板；`quit`/`suspend`/`power` 这类危险动作要按两次；`Esc` 依次是「取消确认 → 清筛选 → 关窗」。列表由配置本身生成，所以没有别的参数 |
@@ -519,6 +561,12 @@ hotkey{
 
 `all_desktops = true` 不算“声明了固定桌面”（窗口本来就到处都是，不需要搬）；
 `launch` 回退那条路径（窗口是这次刚启动的）同样按上面两条处理。
+
+**在哪块显示器上出现**是另一回事，由 `settings.window_monitor` 决定（默认 = 光标
+所在的那一块），优先级是“动作上的 `monitor` → 命中的第一条 `window_rule` 的
+`monitor` → `settings.window_monitor`”。窗口不在那块屏上时就把它搬过去（保持大小
+并居中；最大化状态保留），已经在那一块上就不动它。想让某一条快捷键不要搬屏，写
+`monitor = "none"`。具体见[窗口摆到哪块显示器上](#窗口摆到哪块显示器上)。
 
 （`target` 和 `process` 都不写时目标就是前台窗口本身，于是 `window("activate")` 会变成
 “最小化当前窗口”——那种场合本来就该写 `window("minimize")`。）
@@ -674,21 +722,33 @@ window_rule{
   行为：用 `window` 动作唤起一个写了 `desktop` 的程序时，视图会切到那张桌面；
   没写 `desktop` 的程序则会被**搬到当前桌面**（见[窗口动作](#动作)里的
   “已经在前台”那一段）。
-* `monitor` 有三种写法：
+* `monitor` 有六种写法：
   * `2` —— 1 起的序号，按显示器排列「先左后右、再上后下」；
   * `"primary"` —— 主显示器；
-  * `"DISPLAY2"` —— 显示器设备名（也可写全名 `\\.\DISPLAY2`）。
+  * `"DISPLAY2"` —— 显示器设备名（也可写全名 `\\.\DISPLAY2`）；
+  * `"cursor"` —— 光标所在的那一块（每次摆放现查）；
+  * `"last"` —— 这个程序上一次被摆到过的那一块（记在 `windows.json`）；
+  * `"none"` —— 不碰窗口的位置（这一项不跟 `settings.window_monitor` 走）。
 
-  找不到匹配的显示器时只记一条 warning，窗口留在原处（例如笔记本没插外接屏时）。
+  **不写**就用 `settings.window_monitor`（默认 `"cursor"` = 光标所在的那一块，见
+  [窗口摆到哪块显示器上](#窗口摆到哪块显示器上)）。因此写 `monitor = "none"` 是
+  “这条规则不要摆显示器”的显式写法。找不到匹配的显示器时只记一条日志，窗口留在
+  原处（例如笔记本没插外接屏时）。
 * `all_desktops = true` 把窗口**钉在所有虚拟桌面上**（Task View 里的「在所有桌面
   显示」）：切到哪张桌面都看得见它。`false` 是显式取消钉住，不写就不去碰它。它与
   `desktop` 互斥，两个都写会被 `--check` 拒绝。
 * `topmost = true` 让窗口**始终在最上层**；`false` 是显式取消置顶，不写就不去碰它。
-* `all_desktops` 与 `topmost` 都不算“几何”：只写它们（没写 `monitor`）时窗口的大小
-  与位置保持不动，也不会因为默认最大化而突然变大。
-* **默认最大化。** 只写了 `monitor`（而没写位置 / 大小）时，窗口会铺满那块显示器的
-  **工作区**（扣掉任务栏）。只写 `desktop` 时窗口的大小与位置保持不动；
-  `maximize = true` 与 `x`/`y`/`width`/`height` 不能同时写。
+* `all_desktops` 与 `topmost` 都不算“几何”：只写它们（没写 `monitor`）时窗口的
+  大小与位置保持不动，也不会因为默认最大化而突然变大。不过注意“没写 `monitor`”
+  本身仍然按 `settings.window_monitor` 把它摆到缺省的那块屏上；想让它待在原地
+  就写 `monitor = "none"`。
+* **默认最大化。** 只写了**写死**的 `monitor`（而没写位置 / 大小）时，窗口会铺满
+  那块显示器的**工作区**（扣掉任务栏）。`monitor = "cursor"` / `"last"` 是动态
+  目标，**不**默认最大化，只把窗口搬到那块屏上（保持大小并居中）；不写 `monitor`
+  时也一样（用 `settings.window_monitor`，默认也是动态的 `"cursor"`）。
+  只写 `desktop` 时窗口的大小与位置保持不动（除非缺省显示器不是 `"none"`：那种
+  情况下窗口还是会被搬到缺省的那块屏上）。`maximize = true` 与
+  `x`/`y`/`width`/`height` 不能同时写。
 * `x`/`y` 是相对**目标显示器工作区左上角**的偏移，`width`/`height` 是像素；没给的项
   保持窗口原来的大小 / 居中。窗口比工作区还大时对齐工作区左上角，保证标题栏可见。
 * 同一个窗口只处理一次：已经摆放过的窗口再次显示（从托盘还原、最小化后还原）不会再摆
@@ -1182,6 +1242,14 @@ Release 的版本号与发布说明（这次更新大概改了什么），显示
   `help` 的筛选仍然是子串匹配。两者的列表都是按下快捷键那一刻枚举出来的快照：之后新
   开的窗口要重新按一次才会出现。`help` 列出的是当前配置里的绑定，改完配置要 `reload`
   才会反映出来。
+* **没写 `monitor` 的 `window_rule` / `window()` 动作现在会动窗口的位置**：默认
+  `settings{ window_monitor = "cursor" }` 表示“把它摆到光标所在的那块屏上”，所以
+  双击图标开出来的窗口也会被搬到光标那块屏（而不是 Windows 自己挑的那块），而且
+  不限于快捷键唤起。想关掉就写 `settings{ window_monitor = "none" }`，或者给那一条
+  规则 / 动作写 `monitor = "none"`。写死的那几种（`2` / `"primary"` / `"DISPLAY2"`）
+  不受影响，仍然是“摆到位、只写 monitor 时默认最大化”。`"last"` 那本账记在配置文件
+  旁边的 `windows.json` 里（删掉它就等于“还没记过”）；若那台显示器没插上，这次就只
+  记一条日志、窗口留在原处。
 * **动作表顶层的拼写错误是静默的**：`window("activate", { togle = false })` 里的
   `togle` 会被直接忽略。`hotkey{}`、`settings{}`、`remap{}` 以及选单的**条目**都是
   严格检查的，只有动作表这一层没有。

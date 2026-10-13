@@ -41,6 +41,7 @@ private slots:
     void movingWindowOpsAreValidated();
     void windowRulesCompile();
     void windowRuleGeometryDefaults();
+    void windowRuleDefaultMonitor();
     void windowRulePinsAndTopmost();
     void windowRuleProblemsAreReported();
     void appsExpandIntoHotkeysAndWindowRules();
@@ -589,6 +590,29 @@ void TestConfig::movingWindowOpsAreValidated()
     QVERIFY(!parseActionShorthand(QStringLiteral("window:move_next_desktop"), &plain).has_value());
     QVERIFY(!plain.follow.has_value());
 
+    // `monitor` 只影响 `op = "activate"`（把它摆到哪一块显示器上），
+    // 而且会出现在摘要里；写到别的 op 上要拒绝。
+    Action placed = windowAction(WindowOp::Activate);
+    MonitorRef onSecond;
+    onSecond.kind = MonitorRef::Kind::Index;
+    onSecond.index = 2;
+    placed.monitor = onSecond;
+    Config placedConfig;
+    placedConfig.hotkeys.push_back(hotkey(QStringLiteral("F1"), specOne(placed)));
+    const auto placedCompiled = compileOrDie(placedConfig);
+    QCOMPARE(placedCompiled->bindings.at(0).press.at(0).summary(),
+             QStringLiteral("window Activate foreground (on monitor 2)"));
+    for (const WindowOp op : {WindowOp::MoveLeftMonitor, WindowOp::Minimize}) {
+        Action bad = windowAction(op);
+        bad.monitor = onSecond;
+        Config badConfig;
+        badConfig.hotkeys.push_back(hotkey(QStringLiteral("F1"), specOne(bad)));
+        const auto badError = compileConfig(badConfig);
+        QVERIFY2(badError.has_value(), "monitor must be rejected outside op = activate");
+        QVERIFY2(badError->toString().contains(QStringLiteral("monitor")),
+                 qPrintable(badError->toString()));
+    }
+
     // 写到别的 op 上是一个静默的空操作，所以 `--check` 必须拒绝（显式 false 也一样）。
     for (const WindowOp op : {WindowOp::Activate, WindowOp::MoveLeftMonitor}) {
         Action bad = windowAction(op);
@@ -659,6 +683,67 @@ void TestConfig::windowRuleGeometryDefaults()
     QVERIFY(compiled->windowRules.at(0).applyGeometry);
     QVERIFY(!compiled->windowRules.at(0).maximize);
     QCOMPARE(compiled->windowRules.at(0).width, std::optional<std::uint32_t>(1280));
+}
+
+void TestConfig::windowRuleDefaultMonitor()
+{
+    // 什么都没写的规则现在也有意义（把窗口摆到 `settings.window_monitor`，
+    // 默认是光标所在的那一块），所以不再是“只匹配窗口、什么都不做”。
+    Config plain;
+    WindowRuleDef onlyProcess;
+    onlyProcess.process = QStringLiteral("chrome");
+    plain.windowRules.push_back(onlyProcess);
+    auto compiled = compileOrDie(plain);
+    QCOMPARE(compiled->windowRules.size(), std::size_t(1));
+    QVERIFY(compiled->warnings.isEmpty());
+    // 缺省的显示器不是几何：`applyGeometry` 为 false，更不该默认最大化。
+    QVERIFY(!compiled->windowRules.at(0).applyGeometry);
+    QVERIFY(!compiled->windowRules.at(0).maximize);
+    QVERIFY(!compiled->windowRules.at(0).monitor.has_value());
+
+    // `settings.window_monitor = "none"` 把这项默认整个关掉：那条规则又变成空操作。
+    Config off = plain;
+    off.settings.windowMonitor.kind = MonitorRef::Kind::None;
+    off.settings.windowMonitor.index = 1;
+    compiled = compileOrDie(off);
+    QVERIFY(compiled->windowRules.empty());
+    QCOMPARE(compiled->warnings.size(), 1);
+    QVERIFY2(compiled->warnings.at(0).contains(QStringLiteral("does nothing")),
+             qPrintable(compiled->warnings.at(0)));
+
+    // `monitor = "cursor"` / `"last"` 是动态目标：不默认最大化，但要摆几何。
+    for (const MonitorRef::Kind kind : {MonitorRef::Kind::Cursor, MonitorRef::Kind::Last}) {
+        Config dynamic;
+        WindowRuleDef rule;
+        rule.process = QStringLiteral("chrome");
+        MonitorRef ref;
+        ref.kind = kind;
+        rule.monitor = ref;
+        dynamic.windowRules.push_back(rule);
+        const auto dynamicCompiled = compileOrDie(dynamic);
+        QVERIFY(dynamicCompiled->windowRules.at(0).applyGeometry);
+        QVERIFY(!dynamicCompiled->windowRules.at(0).maximize);
+    }
+
+    // `monitor = "none"` 是显式“不碰显示器”：它自己不算几何，但搭配位置 / 大小时
+    // 仍然只改几何（窗口留在现在那块屏上）。
+    Config none;
+    WindowRuleDef noMonitor;
+    noMonitor.process = QStringLiteral("chrome");
+    MonitorRef offRef;
+    offRef.kind = MonitorRef::Kind::None;
+    noMonitor.monitor = offRef;
+    none.windowRules.push_back(noMonitor);
+    const auto noneCompiled = compileOrDie(none);
+    QVERIFY(noneCompiled->windowRules.empty());
+    QCOMPARE(noneCompiled->warnings.size(), 1);
+
+    Config noneSized = none;
+    noneSized.windowRules.at(0).width = 1280;
+    const auto noneSizedCompiled = compileOrDie(noneSized);
+    QCOMPARE(noneSizedCompiled->windowRules.size(), std::size_t(1));
+    QVERIFY(noneSizedCompiled->windowRules.at(0).applyGeometry);
+    QVERIFY(!noneSizedCompiled->windowRules.at(0).maximize);
 }
 
 namespace {

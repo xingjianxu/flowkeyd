@@ -64,6 +64,7 @@ private slots:
     void loopsCanGenerateBindings();
     void helpersBuildTheSameTablesAsTheRawForm();
     void movingWindowOpsAreConverted();
+    void windowActionMonitorIsConverted();
     void runWithoutArgsAndWithEmptyArgs();
     void menuAndPowerHelpersBuildTheExpectedTables();
     void helpHelperTakesAnOptionalTitle();
@@ -198,6 +199,33 @@ void TestLua::movingWindowOpsAreConverted()
     QCOMPARE(c->bindings[1].press.at(0).follow, std::optional<bool>(true));
     QVERIFY(!c->bindings[0].press.at(0).follow.has_value());
     QVERIFY(!c->bindings[2].press.at(0).follow.has_value());
+}
+
+void TestLua::windowActionMonitorIsConverted()
+{
+    const auto c = parse(R"(
+        hotkey{ keys = "Win+1", action = window("activate", { monitor = 2 }) }
+        hotkey{ keys = "Win+2", action = window("activate", { monitor = "cursor" }) }
+        hotkey{ keys = "Win+3", action = window("activate", { monitor = "last" }) }
+        hotkey{ keys = "Win+4", action = window("activate", { monitor = "none" }) }
+        hotkey{ keys = "Win+5", action = window("activate") }
+    )");
+    QVERIFY(c.has_value());
+    QCOMPARE(c->bindings.size(), std::size_t(5));
+    QCOMPARE(c->bindings[0].press.at(0).monitor->kind, core::MonitorRef::Kind::Index);
+    QCOMPARE(c->bindings[0].press.at(0).monitor->index, std::uint32_t(2));
+    QCOMPARE(c->bindings[1].press.at(0).monitor->kind, core::MonitorRef::Kind::Cursor);
+    QCOMPARE(c->bindings[2].press.at(0).monitor->kind, core::MonitorRef::Kind::Last);
+    QCOMPARE(c->bindings[3].press.at(0).monitor->kind, core::MonitorRef::Kind::None);
+    // 不写就留给运行时（动作 → 命中的 window_rule → settings.window_monitor）。
+    QVERIFY(!c->bindings[4].press.at(0).monitor.has_value());
+
+    // `monitor` 写在不支持的 op 上会被 `--check` 拒绝（这里是 `fail parse()` 那一路：
+    // 转换本身不报错，`compile()` 才报，所以看错误文本里有 `monitor`）。
+    const QString bad = failure(R"(hotkey{ keys = "Win+y", action = window("move_left_monitor", { monitor = 2 }) })");
+    QVERIFY2(bad.contains(QStringLiteral("monitor")), qPrintable(bad));
+    const QString wrongType = failure(R"(hotkey{ keys = "Win+1", action = window("activate", { monitor = {} }) })");
+    QVERIFY2(wrongType.contains(QStringLiteral("monitor")), qPrintable(wrongType));
 }
 
 void TestLua::runWithoutArgsAndWithEmptyArgs()
@@ -618,9 +646,40 @@ void TestLua::windowRulesAreConverted()
     QVERIFY2(unknown.contains(QStringLiteral("unknown field `togle`")), qPrintable(unknown));
     QVERIFY2(unknown.contains(QStringLiteral("window_rule #1")), qPrintable(unknown));
 
-    // monitor 只接受数字 / "primary" / 设备名。
+    // monitor 只接受数字 / "primary" / 设备名 / "cursor" / "last" / "none"。
     const QString badMonitor = failure(R"(window_rule{ process = "a", monitor = true })");
     QVERIFY2(badMonitor.contains(QStringLiteral("monitor")), qPrintable(badMonitor));
+
+    // 运行时才知道的两个目标：`"cursor"`（光标所在的那一块，默认）与 `"last"`
+    // （这个程序上一次被摆到过的那一块）；`"none"` 是显式“不碰显示器”。
+    const auto dynamic = parse(R"(
+        window_rule{ process = "a", monitor = "cursor" }
+        window_rule{ process = "b", monitor = "LAST" }
+        window_rule{ process = "c", monitor = "none", width = 800 }
+    )");
+    QVERIFY(dynamic.has_value());
+    QCOMPARE(dynamic->windowRules[0].monitor->kind, core::MonitorRef::Kind::Cursor);
+    // 取值大小写无关（与 `"primary"` 一致）。
+    QCOMPARE(dynamic->windowRules[1].monitor->kind, core::MonitorRef::Kind::Last);
+    QCOMPARE(dynamic->windowRules[2].monitor->kind, core::MonitorRef::Kind::None);
+    // 动态目标不默认最大化（“跟着鼠标走”的窗口不该突然铺满屏幕）。
+    QVERIFY(!dynamic->windowRules[0].maximize);
+    QVERIFY(!dynamic->windowRules[1].maximize);
+
+    // `settings.window_monitor`：窗口没写明 monitor 时摆到哪一块屏（默认光标）。
+    const auto settings = parse(R"(
+        settings{ window_monitor = "last" }
+        window_rule{ process = "a" }
+    )");
+    QVERIFY(settings.has_value());
+    QCOMPARE(settings->settings.windowMonitor.kind, core::MonitorRef::Kind::Last);
+    QCOMPARE(settings->windowRules.size(), std::size_t(1));
+    QVERIFY(!settings->windowRules[0].monitor.has_value());
+    const QString badWindowMonitor =
+        failure(R"(settings{ window_monitor = true })");
+    QVERIFY2(badWindowMonitor.contains(QStringLiteral("monitor")), qPrintable(badWindowMonitor));
+    const QString unknownSetting = failure(R"(settings{ window_monitors = 1 })");
+    QVERIFY2(unknownSetting.contains(QStringLiteral("unknown field")), qPrintable(unknownSetting));
 
     // 写了 monitor 但没写位置/大小：默认最大化（在 compile() 里定）。
     const auto maximizeDefault = parse(R"(window_rule{ process = "a", monitor = "primary" })");

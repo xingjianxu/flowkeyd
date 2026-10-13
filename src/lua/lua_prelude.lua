@@ -90,6 +90,11 @@ end
 --                x = 0, y = 0, width = 1280, height = 800 }
 --   window_rule{ process = "wezterm", all_desktops = true }   -- 钉在所有虚拟桌面上
 --   window_rule{ process = "code", topmost = true }           -- 始终在最上层
+-- monitor 有六种写法：`2`（1 起，先左后右、再上后下）/ "primary" / "DISPLAY2"，
+-- 以及三个“不写死”的取值："cursor"（光标所在的那一块）、"last"（这个程序上一次
+-- 被摆到过的那一块，记在 windows.json）、"none"（不碰窗口的位置）。**不写 monitor**
+-- 就用 settings.window_monitor（默认 "cursor"）：所以没写 monitor 的规则也会把窗口
+-- 摆到光标所在的那块屏上（保持大小并居中），不想这样就在这儿写 "none"。
 -- 触发时机只有三个：窗口第一次出现、断开的显示器重新接上、flowkeyd 启动时；
 -- 之后不再干预（用户自己移动/缩放窗口不会被纠正）。
 -- all_desktops = true 与 desktop 互斥；all_desktops / topmost 写 false 就是
@@ -127,7 +132,14 @@ end
 -- 注册一组全局设置。可以多次调用，后写的键覆盖先写的。
 -- 字段：log_level / swallow / exact_modifiers / release_modifiers /
 --       repeat_interval_ms / repeat_delay_ms / tick_ms / input_backend /
---       single_instance / elevate / remote_desktop。
+--       single_instance / elevate / remote_desktop / window_monitor。
+--
+-- window_monitor（默认 "cursor"）：窗口**没写明 monitor** 时摆到哪一块显示器上。
+--   "cursor" 光标所在的那一块（默认：唤起一个程序时它出现在你正在看的那块屏上）；
+--   "last"   这个程序上一次被摆到过的那一块（记在配置文件旁边的 windows.json）；
+--   "none"   不碰窗口的位置（本特性存在之前的行为）；
+--   也可以写具体的一块（`2` / "primary" / "DISPLAY2"）。
+--   单个 window_rule / window() 动作上写了 monitor 的条目不受它影响（显式写的优先）。
 --
 -- remote_desktop（默认 true）：前台窗口的属主进程命中远程桌面客户端名单时，
 --   **不拦截、不触发**任何快捷键与重映射（键要原样送给对面那台机器）。
@@ -249,6 +261,13 @@ end
 -- `op = "activate"` 默认带 `toggle`：目标窗口已经在前台时就把它最小化，
 -- 于是同一个快捷键在唤起与收起之间切换（任务栏按钮的行为）。
 -- `toggle = false` 表示“永远只往前抬，从不收起”。
+--
+-- `monitor`（只对 `op = "activate"` 有意义）指定这次把窗口摆到哪块显示器上：
+--   window("activate", { process = "code", monitor = 2 })
+--   window("activate", { process = "code", monitor = "none" })  -- 待着别动
+-- 不写就按命中的 window_rule 的 monitor → settings.window_monitor（默认 = 光标
+-- 所在的那一块）。窗口已经在目标那块屏上就不动它；搬家时保持大小并居中，
+-- 最大化状态保留。写在其它的 op 上会被 `--check` 拒绝。
 -- 动画默认关：最小化/最大化/还原不播放 DWM 的过渡（按窗口的
 -- DWMWA_TRANSITIONS_FORCEDISABLED，不改系统设置）；`animate = true` 恢复。
 function window(op, opts)

@@ -290,6 +290,7 @@ private slots:
     void bringsAWindowOnAnotherDesktopToTheCurrentOne();
     void placementMovesAWindowToAnotherMonitor();
     void movesAWindowToTheAdjacentMonitor();
+    void movesAWindowToTheMonitorUnderTheCursor();
     void pinsAWindowToAllDesktops();
     void topmostIsAppliedAndCleared();
     void foregroundQuerySkipsOverlayWindows();
@@ -1131,6 +1132,87 @@ void TestInteractive::movesAWindowToTheAdjacentMonitor()
     QVERIFY2(!platform::win::monitor::moveToAdjacentMonitor(hwnd, -1, &detail, &error),
              "moving left from the leftmost monitor must fail");
     QVERIFY(!error.isEmpty());
+}
+
+/// `monitor = "cursor"` 的真实效果：看光标在哪一块屏，就把窗口搬过去
+/// （`indexForCursor` + `moveToMonitor`，默认 `settings.window_monitor` 走的就是
+/// 这两步）。
+///
+/// 需要两块屏；这个用例会暂时把光标挪到另一块屏上，跑完必定放回去（即使是断言
+/// 失败也会通过 `CursorGuard` 放回去）。
+void TestInteractive::movesAWindowToTheMonitorUnderTheCursor()
+{
+    if (!interactiveEnabled()) {
+        QSKIP("set FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1 to run the interactive tests");
+    }
+    const std::vector<core::MonitorDescription> monitors =
+        core::sortedMonitors(platform::win::monitor::list());
+    if (monitors.size() < 2) {
+        QSKIP("only one monitor is connected; nothing to move a window to");
+    }
+    const QString marker =
+        QStringLiteral("flowkeyd-cursormon-%1").arg(QCoreApplication::applicationPid());
+    TestWindow window(marker);
+    HWND hwnd = window.hwnd();
+    QVERIFY2(hwnd != nullptr, "the test window was not created");
+
+    // 光标跑完要放回原处（不然用户的鼠标会莫名其妙停在另一块屏上）。
+    POINT original{};
+    QVERIFY(GetCursorPos(&original) != 0);
+    struct CursorGuard
+    {
+        POINT point{};
+        ~CursorGuard() { SetCursorPos(point.x, point.y); }
+    } guard{original};
+
+    // 把窗口放到一块屏上，把光标放到**另一块**屏上。
+    const auto windowIndex = platform::win::monitor::indexForWindow(monitors, hwnd);
+    QVERIFY(windowIndex.has_value());
+    const std::size_t cursorIndex = *windowIndex == 0 ? monitors.size() - 1 : 0;
+    const core::MonitorDescription &cursorMonitor = monitors[cursorIndex];
+    const core::Rect before =
+        platform::win::monitor::windowRect(hwnd).value_or(core::Rect{0, 0, 800, 600});
+    QString error;
+    QVERIFY2(platform::win::monitor::applyPlacement(
+                 hwnd, core::Rect{monitors[*windowIndex].work.x + 60,
+                                  monitors[*windowIndex].work.y + 60,
+                                  before.width,
+                                  before.height},
+                 false, &error),
+             qPrintable(error));
+    QVERIFY(SetCursorPos(cursorMonitor.work.x + cursorMonitor.work.width / 2,
+                         cursorMonitor.work.y + cursorMonitor.work.height / 2)
+            != 0);
+
+    // 光标那一块屏就是 `"cursor"` 解析出来的目标（`GetCursorPos` 与
+    // `MonitorFromPoint` 都会立刻看到刚设的位置）。
+    QCOMPARE(platform::win::monitor::indexForCursor(monitors),
+             std::optional<std::size_t>(cursorIndex));
+
+    const core::Rect beforeMove =
+        platform::win::monitor::windowRect(hwnd).value_or(core::Rect{0, 0, 800, 600});
+    QString detail;
+    QVERIFY2(platform::win::monitor::moveToMonitor(hwnd, monitors, cursorIndex, &detail, &error),
+             qPrintable(error));
+    QVERIFY(!detail.isEmpty());
+
+    bool onTarget = false;
+    for (int i = 0; i < 60 && !onTarget; ++i) {
+        const auto index = platform::win::monitor::indexForWindow(monitors, hwnd);
+        onTarget = index.has_value() && *index == cursorIndex;
+        if (!onTarget) {
+            QThread::msleep(50);
+        }
+    }
+    QVERIFY2(onTarget, "the window did not end up on the monitor under the cursor");
+
+    // 保持大小并居中（与 `move_left_monitor` / `move_right_monitor` 同一套）。
+    const core::Rect after =
+        platform::win::monitor::windowRect(hwnd).value_or(core::Rect{0, 0, 0, 0});
+    QCOMPARE(after.width, beforeMove.width);
+    QCOMPARE(after.height, beforeMove.height);
+    QCOMPARE(after.x, cursorMonitor.work.x + (cursorMonitor.work.width - after.width) / 2);
+    QCOMPARE(after.y, cursorMonitor.work.y + (cursorMonitor.work.height - after.height) / 2);
 }
 
 /// `window_rule` 的 `all_desktops`：走未公开的 `IVirtualDesktopPinnedApps`

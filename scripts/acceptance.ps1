@@ -151,6 +151,9 @@ New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
 # 每次都从「什么都没固定」开始，否则上一次跑出来的固定项会让标题里的条数与
 # 卡片的几何前后不一致。
 Remove-Item (Join-Path $WorkDir 'launcher.json') -ErrorAction SilentlyContinue
+# 窗口摆放的 `monitor = "last"` 记忆（`windows.json`）也在配置文件旁边：同样清掉，
+# 这样下面那条检查一定是「第一次还没有记忆」的路径。
+Remove-Item (Join-Path $WorkDir 'windows.json') -ErrorAction SilentlyContinue
 $config = Join-Path $WorkDir 'accept.lua'
 $daemonLog = Join-Path $WorkDir 'daemon.log'
 $daemonOut = Join-Path $WorkDir 'daemon.out'
@@ -600,11 +603,14 @@ hotkey { name = "accept-once", comment = "once", keys = "F15",
 hotkey { name = "accept-win", comment = "win chord", keys = "Win+s",
   action = clipboard("set", { text = "WIN-S-OK" }) }
 
--- 4. window 动作 + 默认的 toggle。
+-- 4. window 动作 + 默认的 toggle，加上 `monitor = "last"`（动态目标）。
+--    第一次还没有记忆时它**不动窗口**、只把落点记进配置文件旁边的 `windows.json`，
+--    于是下面那两条 toggle 检查照旧。
 hotkey { name = "accept-window", comment = "window toggle", keys = "Ctrl+Alt+F17",
   action = window("activate", {
     process = "powershell",
     target = "$targetTitle",
+    monitor = "last",
     launch = {
       program = "powershell.exe",
       args = { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", [[$targetScript]] },
@@ -1089,8 +1095,16 @@ try {
         # 第 1 格（下标 0）的中心：内边距 12 + 半格 63；列表顶 50 + 半格 44。
         [FlowInject]::RightClick($appsRect[0] + [int](75 * $appsScale),
                                  $appsRect[1] + [int](94 * $appsScale))
+        # 菜单「出来了」的判据要三条一起看：类名是 `#32768` 的**可见**窗口存在、它的
+        # 矩形**非空**、而且守护进程日志里已经有那行 `shell menu: N item(s)`（它写在
+        # `TrackPopupMenuEx` 之前一步）。只等第一条是不够的：解析 shell 条目 +
+        # `QueryContextMenu` 要 100~200 ms，这一段时间里别的 `#32768` 窗口（或菜单自己
+        # 布局中的一瞬）会让“存在”提前成立，于是下面的 `ClassRect` 读回全 0，把两条尺寸
+        # 检查一起搞挂 —— 2026-10 就是这样偶发失败过一次。
         $shellMenuUp = WaitUntil {
-            [FlowInject]::HasWindowOfClass($daemon.Id, '#32768') } 3000
+            [FlowInject]::HasWindowOfClass($daemon.Id, '#32768') -and
+            (([FlowInject]::ClassRect($daemon.Id, '#32768'))[2]) -gt 0 -and
+            ((DaemonText) -match 'shell menu: \d+ item\(s\)') } 3000
         if (-not $shellMenuUp) { Diag "no shell menu window after the right click: $(FgInfo)" }
         Check '右键一格弹出系统菜单（#32768 窗口）' $shellMenuUp
         if ($shellMenuUp) {
@@ -1307,6 +1321,15 @@ try {
     $appeared = WaitUntil { @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -eq $targetTitle }).Count -ge 1 } 25000
     Check 'window activate 启动了目标窗口' $appeared
     Check 'window activate 把它拿到前台' (WaitUntil { [FlowInject]::ForegroundTitle() -eq $targetTitle } 8000)
+    # `monitor = "last"`：动态目标。第一次还没有记忆时**不动窗口**（光标在哪块屏都
+    # 不影响它），只把落点记进配置文件旁边的 `windows.json`。这是那份持久状态唯一的
+    # 端到端覆盖（纯逻辑在 `tst_window_monitor_state`，优先级在 `tst_placement`）。
+    $windowState = Join-Path $WorkDir 'windows.json'
+    $lastRecorded = (WaitUntil { Test-Path $windowState } 4000)
+    if (-not $lastRecorded) { Diag 'no windows.json after an activate with monitor = last' }
+    Check '`monitor = "last"` 第一次唤起就把落点记进了 windows.json' (
+        $lastRecorded -and
+        ([System.IO.File]::ReadAllText($windowState) -match 'powershell\.exe'))
     $targetProc = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -eq $targetTitle } | Select-Object -First 1
     if ($null -eq $targetProc) { throw '目标窗口在做 toggle 检查之前就没了' }
     CtrlAlt $VK_F17
