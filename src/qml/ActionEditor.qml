@@ -358,43 +358,16 @@ Column {
             spacing: 6
             visible: root.windowOp === "activate" && root.hasLaunch
 
-            TextRow {
-                width: root.width
-                label: qsTr("启动的程序")
-                value: root.action.launch && root.action.launch.program !== undefined
-                    ? root.action.launch.program : ""
-                onEdited: {
-                    if (root.action.launch)
-                        root.action.launch.program = value
-                }
+            // `launch` 的字段块与 `app{}` 的启动方式共用同一个组件（`program` /
+            // `args` / `cwd` / `show` / `shell` / `env` / `wait_ms` 七项一个不少）。
+            // `wait_ms` 由下面那条自己画：动作顶层的 `wait_ms` 覆盖 `launch.wait_ms`，
+            // 两个一起摆出来只会让人困惑。
+            LaunchFieldsEditor {
+                editor: root.editor
+                showWaitMs: false
+                spec: root.action.launch ? root.action.launch : ({})
             }
-            SettingRow {
-                width: root.width
-                label: qsTr("启动参数")
-                hint: qsTr("一行一个参数")
-                TextField {
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: Math.min(340, parent.width)
-                    text: root.action.launch ? root.linesOf(root.action.launch.args) : ""
-                    onTextEdited: {
-                        if (root.action.launch)
-                            root.action.launch.args = root.listOfLines(text)
-                    }
-                }
-            }
-            TextRow {
-                width: root.width
-                label: qsTr("启动的工作目录")
-                value: root.action.launch && root.action.launch.cwd !== undefined ? root.action.launch.cwd : ""
-                onEdited: {
-                    if (!root.action.launch)
-                        return
-                    if (value.length > 0)
-                        root.action.launch.cwd = value
-                    else
-                        delete root.action.launch.cwd
-                }
-            }
+
             SpinRow {
                 width: root.width
                 label: qsTr("等窗口出现")

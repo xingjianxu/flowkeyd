@@ -85,6 +85,19 @@
 12. **不要把某台机器上真实使用的配置文件写进仓库**：只放产品文档与参考配置（`README.md`、
     `flowkeyd.lua.example`）。真实配置的绑定清单、`--check` 计数、路径，以及“本机现在跑的是哪一个
     exe”都不记录。**修改真实配置后不需要更新 README 或本文件。**
+13. **可配置的东西必须三处同时到位：`README.md`（schema 的权威定义，必要时连
+    `flowkeyd.lua.example`）、`src/core/config_map.cpp` 的 `*ToMap`/`*FromMap`、以及
+    `src/qml/` 里对应的图形化界面（页 / 弹层 / `ActionEditor` 的 `visible: root.type === "…"`
+    分支，外加 `ConfigText.qml` 里的中文名）。** 新增、修改、删除任何一个字段或取值（含默认值
+    与取值范围）都要把这三处一起改；`settings`/`hotkey`/`remap`/`window_rule`/`app`/`launch`/
+    选单条目与全部 20 种动作一视同仁。
+    * **界面那一侧漏接不会报任何错**：字段被默默丢掉、或者用户在界面里根本改不了它（第 10 节
+      有两个实例）。`tst_config_writer` 的整份配置往返与 `tst_config_editor` 的示例配置往返
+      只盯住第 2 处；第 1 处与第 3 处没有自动检查，只能靠这份清单人肉过一遍。
+    * 查缺口时**不能只 grep 字段名**：`name`/`enabled` 这种名字在 README 别处也会出现，
+      要按「每一节的字段表」逐行对照代码里的白名单（`src/lua/lua_config.cpp` 的 `checkFields`
+      与 `convertAction`）与界面（`config_map.cpp` + QML）。
+    * 只改真实配置（不进仓库的那份）不在此列，见第 12 条。
 
 ---
 
@@ -758,7 +771,7 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
 | `update_model.*` / `update_archive.*` / `updater.*` | 更新卡片的状态机（八个阶段、版本号/发布说明/进度/按钮可见性，**不联网不解压不换文件**）；从 zip 里取出新 exe（`QZipReader` + PE 魔数检查）；联网编排（异步 `QNetworkAccessManager` + sha256 + 解压到 `<exe>.new` + mtime 对齐发布日） |
 | `app_icon.h/.cpp` | 把 qrc 里的 9 张 PNG 帧拼成多尺寸 `QIcon`（`applicationIcon()`）；`desktopIcon(number)` 现画桌面号徽标 |
 | `src/qml/` | 六个窗口：`ConfigWindow.qml`（左导航 + 分组卡片，见第 2 节第 34 条）、`LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`、`SwitchPopup.qml`、`AppPopup.qml`、`UpdatePopup.qml`；配置界面另有一组共用控件（`SettingCard`/`SettingRow`/`ChoiceRow`/`BoolRow`/`TriRow`/`SpinRow`/`TextRow`/`EntryRow`/`ChordsEditor`/`ActionEditor`/`ActionListEditor`/`LaunchFieldsEditor`/`WindowRuleFields`/`HotkeyFields`/`OverlayCard`/`ConfigText` 单例 与四个编辑弹层）。都写 `pragma ComponentBehavior: Bound`；**五个弹窗的 `flags` 都带 `Qt.Tool`**（配置界面是普通窗口，不加）；配色一律用 `palette`（没有单独的 `Style.qml`）；中文一律 `font.family: "Microsoft YaHei"`；列表/网格全部是标准 `ListView`/`GridView` + `ItemDelegate`（+ `ScrollBar`） |
-| `tests/` | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_config_map`、`tst_config_writer`、`tst_config_editor`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_remote_desktop`、`tst_log_tail`、`tst_audio`、`tst_autostart`、`tst_menu_model`、`tst_help_model`、`tst_window_list_model`、`tst_app_list`、`tst_app_list_model`、`tst_launcher_state`、`tst_window_monitor_state`、`tst_power_table`、`tst_desktop_table`、`tst_placement`、`tst_layout`、`tst_version`、`tst_desktop_badge`、`tst_update`、`tst_update_model`、`tst_update_install`、`tst_command_line`、`tst_instance`、`tst_input`，以及需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1` 的 `tst_interactive`（真机：剪贴板/音量/窗口/虚拟桌面/钉住/置顶/输入法/覆盖层/更新下载；联网那条还要 `FLOWKEYD_ALLOW_NETWORK_TESTS=1`） |
+| `tests/` | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_config_writer`、`tst_config_editor`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_remote_desktop`、`tst_log_tail`、`tst_audio`、`tst_autostart`、`tst_menu_model`、`tst_help_model`、`tst_window_list_model`、`tst_app_list`、`tst_app_list_model`、`tst_launcher_state`、`tst_window_monitor_state`、`tst_power_table`、`tst_desktop_table`、`tst_placement`、`tst_layout`、`tst_version`、`tst_desktop_badge`、`tst_update`、`tst_update_model`、`tst_update_install`、`tst_command_line`、`tst_instance`、`tst_input`，以及需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1` 的 `tst_interactive`（真机：剪贴板/音量/窗口/虚拟桌面/钉住/置顶/输入法/覆盖层/更新下载；联网那条还要 `FLOWKEYD_ALLOW_NETWORK_TESTS=1`） |
 | `scripts/acceptance.ps1` | 桌面行为验收（注入按键 + 焦点捕捉窗口的外部观察，166 项检查，实跑 163）。需交互式桌面，**不属于 `ctest`** |
 | `scripts/release.ps1` | 构建 release + 打包（完整包 + 精简升级包，各附 `.sha256`）+ 用 `gh` 上传 GitHub Release。tag 取刚构建的 exe 的 `--version`。**发布说明由脚本自己写**（上一个 Release 的 tag → HEAD 的提交主题，按前缀分类；`-Notes`/`-NotesFile` 可整份替换），不用 `gh --generate-notes`。工作区脏或 HEAD 没推到 origin 会直接拒绝（要 `-AllowDirty`/`-Push`）。**唯一的新前置依赖是 `gh`**。开关：`-SkipBuild`/`-SkipResident`/`-SkipUpload`/`-Clobber` |
 
@@ -1366,7 +1379,7 @@ IME 切换）、弹窗不进任务栏 + 预热、发布包精简、精简升级�
   `window_list_model` 那样把属性类型写成 `QRect`（`PopupRect` 有隐式转换）。光看 `qmllint` 与单测都
   发现不了，是“把窗口 grab 成图看一眼”看出来的。
 
-#### 图形化配置界面（2026-10，四条都是在真机上撞出来的）
+#### 图形化配置界面（2026-10，下面这些都是在真机上撞出来的）
 
 * **`Row`（定位器）+ 子项锚点当 `ItemDelegate.contentItem` 会直接崩。** 现象：一个由
   `Repeater` 建在 `ColumnLayout` 里的 `ItemDelegate`，它的 `contentItem` 是一个 `Row`，行里有
@@ -1405,6 +1418,23 @@ IME 切换）、弹窗不进任务栏 + 预热、发布包精简、精简升级�
   `qmldir`（就一行 `singleton ConfigText 1.0 ConfigText.qml`）才认得单例。想验证**模块装载**那条路
   （守护进程走的是 `loadFromModule`）就把 `build/<preset>/Flowkeyd` 整个拷到一个临时目录、删掉
   qmldir 里的 `prefer :/qt/qml/…` 那一行（那个 qrc 在 exe 里）再用 `-I` 指过去。
+  只想验**某一个表单组件**（例如 `ActionEditor` 的某个动作分支或 `LaunchFieldsEditor`）时
+  不必造假模型：`editor: null` 就够了（代码里到处都写了 `root.editor ? … : []`）—— 把每种
+  动作各建一个 `ActionEditor`、让它跑两秒，再看 stderr 里有没有 `TypeError` /
+  `is not a function` / 绑定警告（**`console.log` 也走 stderr**，所以要
+  `QT_ASSUME_STDERR_HAS_CONSOLE=1`；GUI 子系统的 `qml.exe` 不设它时什么都看不到）。
+* **动作的 `launch` 有两个写法，别只给一个写界面。** `window` 动作的 `launch` 与 `app{}` 的
+  `launch` 字段完全一样（`program`/`args`/`cwd`/`show`/`shell`/`env`/`wait_ms`），但
+  `ActionEditor.qml` 一开始是手写的几个格子（只有 `program`/`args`/`cwd`/`wait_ms`），于是
+  `show`/`shell`/`env` 在界面里**改不了**（配置里写了的那三项能原样保留，只是看不见、改不动，
+  一声不响）。现在两者共用 `LaunchFieldsEditor`（`showWaitMs: false`，`wait_ms` 由动作顶层那条
+  自己画）。**同一份字段块只在一个组件里实现**，这就是 `WindowRuleFields` / `HotkeyFields` 已经
+  用的办法。
+* **`remap{}` 的 `name` / `enabled` 一度没写进 README。** 配置认、界面认、`--list` 也打，只有
+  README 的 `remap{}` 那一节漏了（第 14 节的速查表当时也漏了 `enabled`）。**对照三处清单
+  （工作约定第 13 条）时别只查“代码里有没有”，还要把文档那一列逐字段过一遍**：这两个名字在
+  `hotkey{}` 的表格与示例配置里都出现过，所以 grep 字段名是对不出来的 —— 得按“每一节自己的
+  字段表”核对。
 
 ### Windows 领域坑
 
@@ -1690,7 +1720,9 @@ IME 切换）、弹窗不进任务栏 + 预热、发布包精简、精简升级�
    本文件。动到脚本覆盖不到的界面（托盘菜单、日志窗口、`animate`）时，仍然要人眼过一遍。
 4. **测试绝不执行真实的系统电源动作**（工作约定第 10 条）。
 5. `flowkeyd --check --config flowkeyd.lua.example` 通过（零警告）。
-6. 用户可见行为有变化时更新 `README.md`，有新经验时更新本文件。
+6. 用户可见行为有变化时更新 `README.md`，有新经验时更新本文件；**新增 / 修改 / 删除可配置项
+   （字段、取值、默认值）时按工作约定第 13 条把 README、`core/config_map.*` 与 QML 界面三处
+   一起改**，并在提交信息里注明对已有配置的兼容性。
 7. `git commit`：提交信息里说明**为什么**（尤其是引入新依赖时）。
 8. 仓库里不留垃圾：`tmp/`、`build/`、临时配置文件都在 `.gitignore` 里。
    **发布目录 `build/dist-release/` 里只允许有 `flowkeyd.exe` 与它需要的运行时**。
@@ -1811,7 +1843,8 @@ IME 切换）、弹窗不进任务栏 + 预热、发布包精简、精简升级�
   同时记得接上图形界面那边：`core::settingsToMap()`/`settingsFromMap()`（或对应的条目转换函数）、
   `core::configToLua()` 如果新字段有“两种书写形状”（像 `remote_desktop`），再在 `ConfigGeneralPage` /
   `ConfigAdvancedPage` / 对应的弹层里加一行。`tst_config_writer` 的**整份配置往返**会把接错的地方直接
-  暴露出来（它拿真 Lua 层读回自己写的东西，逐字段对比）。
+  暴露出来（它拿真 Lua 层读回自己写的东西，逐字段对比）。三处清单（含「界面漏接不报错」这条）见
+  工作约定第 13 条；**README 那一处要在同一个任务里改完**，不要留到以后。
 * **新的窗口摆放字段**：`core/config` 加字段 → `lua_config.cpp` 的 `convertWindowRule` 加白名单与读取
   → `lua_prelude.lua` 的 `window_rule` 注释 → `core/placement` 里影响几何/匹配（或只影响
   `summary()`）→ `app/dispatcher` 的 `placeWindowOnce` → README 的 `window_rule` 一节与示例 →
@@ -1917,7 +1950,7 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、`--ch
   `{ interval_ms, delay_ms }`；也认 `["repeat"]`）、`enabled`、`comment`、`remote_desktop`。
   `trigger = "repeat"` 与 `repeatable = true` 是同一件事；**互相矛盾的组合要被拒绝**。
 * `remap{}`：`from`（键或和弦）、`to`（键名或发送脚本）、`mode`（`hold` 默认 / `tap`）、`swallow`、
-  `name`、`remote_desktop`。
+  `name`、`enabled`、`remote_desktop`。
 * `remote_desktop`（`settings` 一项 + 每个 `hotkey`/`remap` 一项）：见第 2 节第 26 条。
   `settings.remote_desktop` 是 `true` / `false`，或者 `{ enabled = …, processes = { … } }`；条目上的
   `remote_desktop = true` = 在远程桌面里也照常拦（默认 `false` = 放行）。

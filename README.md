@@ -683,13 +683,25 @@ TRUE)`：调 `ShowWindow` 前设上、调完立刻设回，所以**不改系统�
 
 ```lua
 remap{
+  name = "capslock-to-escape", -- 可选，日志与 `--list` 里的名字（默认 `remap #N`）
   from = "CapsLock",     -- 一个按键名或一个和弦
   to = "Esc",            -- 一个按键名，或者 "^{c}" 这样的发送脚本
   mode = "hold",         -- hold（默认）或 tap
   swallow = true,        -- 默认取 settings.swallow
+  enabled = true,        -- 可选，false 表示不生效（条目留着，`--list` 里标出来）
   remote_desktop = true, -- 可选：在远程桌面里也照常生效（默认 false，见[远程桌面](#远程桌面)）
 }
 ```
+
+| 键               | 默认               | 含义                                                                 |
+| ---------------- | ------------------ | -------------------------------------------------------------------- |
+| `from`           | （必填）           | 一个按键名或一个和弦，例如 `"CapsLock"`（字母键名要小写）             |
+| `to`             | （必填）           | 目标：一个键名（`"Esc"`）或一段发送脚本（`"^{c}"`）                  |
+| `mode`           | `"hold"`           | `hold`：按住 `from` 期间一直按住目标；`tap`：每次按下只执行一遍脚本   |
+| `swallow`        | `settings.swallow` | 是否把 `from` 对前台应用隐藏                                         |
+| `name`           | `remap #N`         | 日志与 `--list` 里用的标签                                           |
+| `enabled`        | `true`             | `false` 会在不删除条目的前提下禁用它（`--check` 会给一条 `disabled`） |
+| `remote_desktop` | `false`            | `true` 表示「在远程桌面里也照常生效」（见[远程桌面](#远程桌面)）       |
 
 `hold` 在 `from` 按下时按下目标、在 `from` 松开时松开目标，这正是 `CapsLock -> Esc`
 或 `CapsLock -> Ctrl` 想要的行为。`tap` 每次按下只执行整个脚本一次。

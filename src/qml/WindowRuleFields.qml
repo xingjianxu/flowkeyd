@@ -64,7 +64,7 @@ Column {
     TextRow {
         width: fields.width
         label: qsTr("摆到显示器")
-        hint: qsTr("序号（1 起）／primary／DISPLAY2／cursor／last；留空则用全局设置")
+        hint: qsTr("序号（1 起）／primary／DISPLAY2／cursor／last／none；留空则用全局设置")
         value: fields.rule.monitor !== undefined ? String(fields.rule.monitor) : ""
         onEdited: {
             if (value.length > 0)
