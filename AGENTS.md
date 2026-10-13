@@ -1278,6 +1278,20 @@ GUID）—— 同文件里的 `moveWindowToAnotherDesktopAndBack()` 没等，**�
     再给同一个程序写一条 `window_rule{ desktop = 1 }` 重载配置，再按一次 —— 这次应该是
     **切到第 1 张桌面**、窗口留在那儿；最后确认窗口不是最大化/最小化状态、也没有
     “卡在按下状态”的修饰键。
+14. **窗口摆到光标那块屏（§2 第 33 条）的真机手感**：把鼠标放到**左边**那块屏，
+    按下某个**没写 `monitor`** 的程序的 `window("activate")` 快捷键（它的窗口本来
+    在右边那块屏上）—— 窗口应该被**搬到鼠标那一块**（保持大小并居中，不跟着最大化），
+    日志里多一段 `placed 1280x800 at … on monitor 1/2`；再保持鼠标不动按一次（先
+    `toggle` 收起、再按一次恢复）—— 这次日志里是 `already on monitor 1/2`，
+    而**窗口的位置没有被重新居中**（自己把它拖到角落再按一次就看得出）。然后把
+    鼠标放到右边那块屏、再按一次 —— 窗口跟过去。
+    再把配置改成 `settings{ window_monitor = "last" }`（或给那一条写
+    `monitor = "last"`）重载：第一次按**不会动窗口**（日志 `no monitor remembered
+    yet; noted monitor 1/2`，旁边多出一个 `windows.json`），把它拖到另一块屏再按一次
+    —— 从此它每次都回到那块屏；把那块屏的显示器断开（或把 `windows.json` 里的设备名
+    改错）后按一次：只记一条 warning（`the remembered monitor … is not connected`）、
+    窗口留在原处。靠 `settings{ window_monitor = "none" }` 把整项关掉后重载，
+    再按一次应当**完全不动窗口**。
 
 ---
 
