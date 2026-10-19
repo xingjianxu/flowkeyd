@@ -36,6 +36,11 @@ inline std::uint64_t monotonicMs()
 /// 本模块（exe）的 `HMODULE`；装钩子时用它。
 HMODULE moduleHandle();
 
+/// 当前进程的完整可执行文件路径（`GetModuleFileNameW`，长路径安全）。
+///
+/// 取不到时返回空串。计划任务、在线更新、代理进程（`--shell-open`）都用它。
+QString currentExecutablePath();
+
 /// `FormatMessageW` 渲染的 Windows 错误文本（英文，可断言）。
 QString winErrorMessage(unsigned long code);
 

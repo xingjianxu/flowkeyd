@@ -371,6 +371,12 @@ QVariantMap launchToMap(const LaunchSpec &spec, const LaunchFields &fields, bool
     if (take(fields.waitMs) && spec.waitMs.has_value()) {
         out.insert(QStringLiteral("wait_ms"), static_cast<qulonglong>(*spec.waitMs));
     }
+    // `elevated` 在遮罩模式（动作自己的 `launch`）里同样要能写成 `false`：那是
+    // 对 `app{ launch = { elevated = true } }` 的逐字段覆盖。未遮罩时与其它字段
+    // 一样整份写出（`elevated = false` 就是默认值，写出来无害）。
+    if (take(fields.elevated)) {
+        out.insert(QStringLiteral("elevated"), spec.elevated);
+    }
     return out;
 }
 
@@ -385,6 +391,7 @@ LaunchSpec launchFromMap(const QVariantMap &map, bool masked, LaunchFields *fiel
     spec.shell = boolOr(map, "shell", false);
     spec.env = envFromMap(stringMapOr(map, "env"));
     spec.waitMs = optionalU64(map, "wait_ms");
+    spec.elevated = boolOr(map, "elevated", false);
     if (fields != nullptr) {
         if (masked) {
             // 界面交回来的字典只有写过的键，所以“在不在”就是掩码。
@@ -395,6 +402,7 @@ LaunchSpec launchFromMap(const QVariantMap &map, bool masked, LaunchFields *fiel
             fields->shell = has(map, "shell");
             fields->env = has(map, "env");
             fields->waitMs = has(map, "wait_ms");
+            fields->elevated = has(map, "elevated");
         } else {
             *fields = LaunchFields{};
         }
@@ -603,6 +611,7 @@ QVariantMap actionToMap(const Action &action)
         out.insert(QStringLiteral("show"), enumName(kShowModes, action.show));
         out.insert(QStringLiteral("shell"), action.shell);
         out.insert(QStringLiteral("wait"), action.wait);
+        out.insert(QStringLiteral("elevated"), action.elevated);
         if (!action.env.isEmpty()) {
             out.insert(QStringLiteral("env"), envVariant(action.env));
         }
@@ -729,6 +738,7 @@ Action actionFromMap(const QVariantMap &map, QStringList *errors, const QString 
                           .value_or(ShowMode::Normal);
         action.shell = boolOr(map, "shell", false);
         action.wait = boolOr(map, "wait", false);
+        action.elevated = boolOr(map, "elevated", false);
         action.env = envFromMap(stringMapOr(map, "env"));
     } else if (type == QLatin1String("send")) {
         action.kind = Action::Kind::Send;
@@ -841,7 +851,8 @@ QVariantMap defaultActionMap(const QString &type)
                       {"args", QVariantList()},
                       {"show", QStringLiteral("normal")},
                       {"shell", false},
-                      {"wait", false}});
+                      {"wait", false},
+                      {"elevated", false}});
     }
     if (type == QLatin1String("send")) {
         return mapOf({{"type", QStringLiteral("send")}, {"keys", QString()}});

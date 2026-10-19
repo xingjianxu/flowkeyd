@@ -23,21 +23,29 @@
 
 #include <cstring>
 #include <functional>
+#include <utility>
+#include <vector>
 
 #include "app/updater.h"
 #include "core/action.h"
 #include "core/keys.h"
 #include "core/placement.h"
+#include "platform/win/apps.h"
 #include "platform/win/audio.h"
 #include "platform/win/clipboard.h"
 #include "platform/win/desktop.h"
 #include "platform/win/dwm.h"
+#include "platform/win/elevate.h"
 #include "platform/win/ffi.h"
 #include "platform/win/ime.h"
 #include "platform/win/input.h"
 #include "platform/win/monitor.h"
 #include "platform/win/process.h"
 #include "platform/win/window.h"
+
+// `ConvertSidToStringSidW`（完整性级别的 SID 文本）。（`windows.h` 已经由
+// `platform/win/ffi.h` 引进来。）
+#include <sddl.h>
 
 using namespace flowkeyd;
 
@@ -66,6 +74,64 @@ bool spinUntil(const std::function<bool()> &done, int timeoutMs)
         QThread::msleep(20);
     }
     return done();
+}
+
+/// 某个进程的令牌完整性级别（`S-1-16-8192` = Medium、`S-1-16-12288` = High）。
+///
+/// 用它断言「以普通用户权限启动」：`whoami /groups` 的输出是本地化的，而 SID
+/// 永远一样；直接读令牌比让子进程写文件更省事。
+QString integritySidOf(DWORD pid)
+{
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (process == nullptr) {
+        return QString();
+    }
+    HANDLE token = nullptr;
+    if (OpenProcessToken(process, TOKEN_QUERY, &token) == 0) {
+        CloseHandle(process);
+        return QString();
+    }
+    DWORD size = 0;
+    GetTokenInformation(token, TokenIntegrityLevel, nullptr, 0, &size);
+    std::vector<unsigned char> storage(size + sizeof(wchar_t) * 2, 0);
+    auto *label = reinterpret_cast<TOKEN_MANDATORY_LABEL *>(storage.data());
+    QString result;
+    if (size != 0 && GetTokenInformation(token, TokenIntegrityLevel, label, size, &size) != 0) {
+        LPWSTR text = nullptr;
+        if (ConvertSidToStringSidW(label->Label.Sid, &text) != 0) {
+            result = QString::fromWCharArray(text);
+            LocalFree(text);
+        }
+    }
+    CloseHandle(token);
+    CloseHandle(process);
+    return result;
+}
+
+/// 从 `runCommand()` 的 detail（`pid 1234 (as user)`）里取出进程号。
+DWORD pidFromDetail(const QString &detail)
+{
+    const QRegularExpressionMatch match =
+        QRegularExpression(QStringLiteral("pid (\\d+)")).match(detail);
+    return match.hasMatch() ? static_cast<DWORD>(match.captured(1).toULong()) : 0;
+}
+
+/// 把测试启动的进程收掉，别在机器上留一个跑几十秒的控制台子进程。
+void terminateProcess(DWORD pid)
+{
+    if (HANDLE process = OpenProcess(PROCESS_TERMINATE, FALSE, pid)) {
+        TerminateProcess(process, 0);
+        CloseHandle(process);
+    }
+}
+
+/// 代理进程用的那个 exe（就在测试自己的产物目录里）。
+///
+/// 产品里代理进程**就是本进程**；测试进程是 `tst_interactive.exe`，它自己没有
+/// `--shell-*` 那条内部命令，所以要显式指向 `flowkeyd.exe`。
+QString shellHelperExecutable()
+{
+    return QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("flowkeyd.exe"));
 }
 
 /// 测试自己的一个普通顶层窗口。
@@ -298,6 +364,9 @@ private slots:
     void cloakedWindowsAreHiddenFromTheSwitcher();
     void cloakedWindowsOnOtherDesktopsStaySwitchable();
     void switchesTheInputMethodToEnglish();
+    void launchesProgramsWithTheRequestedPrivilege();
+    void opensTargetsAsTheLoggedOnUser();
+    void reportsALauncherFailureFromTheShellHelper();
     void checksAndDownloadsAnUpdateFromGitHub();
 };
 
@@ -1595,6 +1664,131 @@ void TestInteractive::switchesTheInputMethodToEnglish()
         platform::win::ime::restoreMode(window.hwnd(), platform::win::ime::Mode{});
     QVERIFY2(nothing.ok, qPrintable(nothing.detail));
     QVERIFY(!nothing.changed);
+}
+
+/// `run` 的默认权限：**以当前登录用户的普通权限启动**。
+///
+/// 这是本特性的核心断言：提权实例必须把子进程降到中等完整性
+/// （`S-1-16-8192`），而不是继承自己的管理员令牌（`S-1-16-12288`）。
+/// `elevated = true` 那一半只在**本进程已经提权**时才跑 —— 没提权时它会弹 UAC，
+/// 而自动化绝不能弹出那个框。
+void TestInteractive::launchesProgramsWithTheRequestedPrivilege()
+{
+    if (!interactiveEnabled()) {
+        QSKIP("set FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1 to run the interactive tests");
+    }
+    platform::win::RunCommandSpec spec;
+    // 一个活 20 秒左右的隐藏控制台进程：我们只需要读完它的令牌。
+    spec.program = QStringLiteral("ping -n 20 127.0.0.1 >nul");
+    spec.shell = true;
+    spec.show = core::ShowMode::Hidden;
+    QString detail;
+    QString error;
+    QVERIFY2(platform::win::runCommand(spec, &detail, &error), qPrintable(error));
+    const DWORD pid = pidFromDetail(detail);
+    QVERIFY2(pid != 0, qPrintable(detail));
+    const QString integrity = integritySidOf(pid);
+    terminateProcess(pid);
+    QVERIFY2(integrity == QStringLiteral("S-1-16-8192"),
+             qPrintable(QStringLiteral("the default `run` did not start a normal-user process "
+                                       "(integrity %1; detail %2)")
+                            .arg(integrity.isEmpty() ? QStringLiteral("(unknown)") : integrity,
+                                 detail)));
+
+    if (!platform::win::isElevated()) {
+        // `elevated = true` 会弹 UAC：自动化不碰。
+        return;
+    }
+    spec.elevated = true;
+    QVERIFY2(platform::win::runCommand(spec, &detail, &error), qPrintable(error));
+    const DWORD elevatedPid = pidFromDetail(detail);
+    QVERIFY2(elevatedPid != 0, qPrintable(detail));
+    const QString elevatedIntegrity = integritySidOf(elevatedPid);
+    terminateProcess(elevatedPid);
+    QVERIFY2(elevatedIntegrity == QStringLiteral("S-1-16-12288"),
+             qPrintable(QStringLiteral("`elevated = true` did not start an elevated process "
+                                       "(integrity %1; detail %2)")
+                            .arg(elevatedIntegrity.isEmpty() ? QStringLiteral("(unknown)")
+                                                             : elevatedIntegrity,
+                                 detail)));
+}
+
+/// `open` 动作与程序启动器的 shell 调用：提权实例会把它们交给一个**普通权限的
+/// 代理进程**，所以打开的文档 / 脚本 / 启动器条目都不会跟着 flowkeyd 一起提权。
+///
+/// 让一个批处理写 `whoami /groups`（SID 与系统语言无关）：它由 shell 间接启动，
+/// 所以这条同时验证了「代理进程起来了」与「它调 shell 时也是普通权限」。两种
+/// 模式（`--shell-open` / `--shell-app`）各跑一遍。
+void TestInteractive::opensTargetsAsTheLoggedOnUser()
+{
+    if (!interactiveEnabled()) {
+        QSKIP("set FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1 to run the interactive tests");
+    }
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+
+    const std::pair<platform::win::ShellHelperRequest::Mode, QString> cases[] = {
+        {platform::win::ShellHelperRequest::Mode::Open, QStringLiteral("open")},
+        {platform::win::ShellHelperRequest::Mode::App, QStringLiteral("app")},
+    };
+    for (const auto &[mode, tag] : cases) {
+        const QString script = dir.filePath(tag + QStringLiteral(".bat"));
+        const QString output = dir.filePath(tag + QStringLiteral(".txt"));
+        {
+            QFile file(script);
+            QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+            file.write(QStringLiteral("@echo off\r\nwhoami /groups > \"%~dp0%1.txt\"\r\n")
+                           .arg(tag)
+                           .toUtf8());
+        }
+
+        // 产品路径：提权时 `openTarget()` / `apps::launchAppAsUser()` 就是这么把请求
+        // 交给代理进程的（测试进程不是 flowkeyd.exe，所以要显式给出）。
+        platform::win::ShellHelperRequest request;
+        request.mode = mode;
+        request.target = script;
+        request.show = core::ShowMode::Hidden;
+        const platform::win::ShellHelperOutcome outcome =
+            platform::win::runShellHelperAsUser(request, shellHelperExecutable());
+        QVERIFY2(outcome.started, qPrintable(outcome.error));
+        QVERIFY2(outcome.exitCode == 0, qPrintable(outcome.output));
+
+        QElapsedTimer timer;
+        timer.start();
+        while (!QFile::exists(output) && timer.elapsed() < 20000) {
+            QThread::msleep(50);
+        }
+        QFile written(output);
+        QVERIFY2(written.open(QIODevice::ReadOnly),
+                 qPrintable(QStringLiteral("the %1 batch file never wrote its output").arg(tag)));
+        const QString text = QString::fromLatin1(written.readAll());
+        QVERIFY2(text.contains(QStringLiteral("S-1-16-8192")),
+                 qPrintable(QStringLiteral("the %1 target did not run as a normal user:\n%2")
+                                .arg(tag, text)));
+        QVERIFY2(!text.contains(QStringLiteral("S-1-16-12288")),
+                 qPrintable(QStringLiteral("the %1 target inherited the elevated token:\n%2")
+                                .arg(tag, text)));
+    }
+}
+
+/// 程序启动器：条目在**普通权限的代理进程**里激活；代理失败时它写回的错误文本
+/// 要原样回到调用方，否则日志里就只剩一句“没启动”。
+///
+/// 故意用一个不存在的条目：它不会真的升起任何程序，只验证 `--shell-app` 那条
+/// 分支与结果文件（`--shell-result`）的回传。
+void TestInteractive::reportsALauncherFailureFromTheShellHelper()
+{
+    if (!interactiveEnabled()) {
+        QSKIP("set FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1 to run the interactive tests");
+    }
+    platform::win::ShellHelperRequest request;
+    request.mode = platform::win::ShellHelperRequest::Mode::App;
+    request.target = QStringLiteral("shell:AppsFolder\\flowkeyd-no-such-package-000000!App");
+    const platform::win::ShellHelperOutcome outcome =
+        platform::win::runShellHelperAsUser(request, shellHelperExecutable());
+    QVERIFY2(outcome.started, qPrintable(outcome.error));
+    QVERIFY(outcome.exitCode != 0);
+    QVERIFY2(!outcome.output.isEmpty(), "the shell helper did not report why the launch failed");
 }
 
 /// 在线更新真的去 GitHub 走一遍：检查最新发布 → 下载 **slim 升级包** →

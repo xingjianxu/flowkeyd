@@ -24,9 +24,6 @@ namespace flowkeyd::platform::win {
 /// 计划任务名（登录时以最高权限启动的 flowkeyd）。
 QString autostartTaskName();
 
-/// 当前进程的完整可执行文件路径。
-QString currentExecutablePath();
-
 /// 当前用户的 `DOMAIN\user`（计划任务的 `UserId`）。
 QString currentUserAccount();
 

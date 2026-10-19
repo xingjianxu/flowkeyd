@@ -270,6 +270,9 @@ void mergeLaunch(Action &action, const std::optional<LaunchSpec> &base)
             if (written.waitMs) {
                 merged.waitMs = own.waitMs;
             }
+            if (written.elevated) {
+                merged.elevated = own.elevated;
+            }
         }
         action.launch = merged;
         // 合并完就是一份完整的 `launch`，下次再合并时整份都算显式写的。

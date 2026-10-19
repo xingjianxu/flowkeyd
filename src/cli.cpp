@@ -119,6 +119,31 @@ std::optional<QString> parseCli(const QStringList &args, CliOptions *out)
                 return QStringLiteral("%1 需要一个取值").arg(name);
             }
             cli.updatedFrom = *value;
+        } else if (name == QLatin1String("--shell-open")
+                   || name == QLatin1String("--shell-app")
+                   || name == QLatin1String("--shell-args")
+                   || name == QLatin1String("--shell-cwd")
+                   || name == QLatin1String("--shell-show")
+                   || name == QLatin1String("--shell-result")) {
+            // 内部协议（见 cli.h）：提权实例把 `open` / 程序启动器交给普通权限的
+            // 代理进程时用的就是这些。
+            const auto value = takeValue();
+            if (!value.has_value()) {
+                return QStringLiteral("%1 需要一个取值").arg(name);
+            }
+            if (name == QLatin1String("--shell-open")) {
+                cli.shellOpen = *value;
+            } else if (name == QLatin1String("--shell-app")) {
+                cli.shellApp = *value;
+            } else if (name == QLatin1String("--shell-args")) {
+                cli.shellArgs = *value;
+            } else if (name == QLatin1String("--shell-cwd")) {
+                cli.shellCwd = *value;
+            } else if (name == QLatin1String("--shell-show")) {
+                cli.shellShow = *value;
+            } else {
+                cli.shellResult = *value;
+            }
         } else if (name == QLatin1String("-h") || name == QLatin1String("--help")) {
             cli.showHelp = true;
         } else if (name == QLatin1String("-V") || name == QLatin1String("--version")) {

@@ -93,7 +93,18 @@ StartMenuScan listControlPanelItems();
 ///      失败也不要弹系统对话框，我们只把它写进日志）；
 ///   2. `SHParseDisplayName` + `SEE_MASK_IDLIST`（微软给商店应用写的那条路）。
 /// 可以在这条线程上任意调用（内部自己声明一次 COM 单元模型）。
+///
+/// **这条函数就在本进程里调 shell**：提权运行时开出来的程序也会提权。产品路径
+/// 用的是 `launchAppAsUser()`，它会把提权实例的请求交给普通权限的代理进程。
 bool launchApp(const QString &launchName, QString *error);
+
+/// 启动一个 `AppEntry::launch`，**以当前登录用户的普通权限**。
+///
+/// `ShellExecuteExW` 没有令牌参数，所以提权运行时只能换一个进程：这里用
+/// `process.h` 的 `runShellHelperAsUser()` 起一个隐藏的代理进程（flowkeyd 自己
+/// 的副本，`--shell-app`），由它在普通权限下调 `launchApp()`。没提权时直接
+/// 调 `launchApp()`，不多起进程。
+bool launchAppAsUser(const QString &launchName, QString *error);
 
 /// 从 shell 里取出来的一个图标位图。
 ///

@@ -325,6 +325,26 @@ int main(int argc, char *argv[])
                 .arg(shown)));
         return 1;
     }
+    // 内部命令：普通权限的 shell 代理进程（见 `platform/win/process.h`）。提权实例
+    // 把 `open` 动作与程序启动器的 shell 调用交给它，这样开出来的程序不会跟着
+    // flowkeyd 一起提权。和其它离线命令一样：不提权、不读配置、不装钩子。
+    if (options.isShellHelper()) {
+        win::ShellHelperRequest request;
+        if (options.shellApp.has_value()) {
+            request.mode = win::ShellHelperRequest::Mode::App;
+            request.target = *options.shellApp;
+        } else {
+            request.mode = win::ShellHelperRequest::Mode::Open;
+            request.target = *options.shellOpen;
+            request.args = options.shellArgs;
+            request.cwd = options.shellCwd;
+            request.show = core::showModeFromName(
+                               options.shellShow.value_or(QStringLiteral("normal")))
+                               .value_or(core::ShowMode::Normal);
+        }
+        request.resultPath = options.shellResult;
+        return win::runShellHelper(request);
+    }
     // 离线命令到此为止：**绝不允许**提权，也绝不安装钩子（不变量 11）。
     if (options.check || options.list) {
         const bool usingDefault = !options.config.has_value();

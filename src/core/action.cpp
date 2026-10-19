@@ -55,6 +55,21 @@ QString showModeDebugName(ShowMode mode)
     return QStringLiteral("Normal");
 }
 
+QString showModeName(ShowMode mode)
+{
+    switch (mode) {
+    case ShowMode::Normal:
+        return QStringLiteral("normal");
+    case ShowMode::Hidden:
+        return QStringLiteral("hidden");
+    case ShowMode::Minimized:
+        return QStringLiteral("minimized");
+    case ShowMode::Maximized:
+        return QStringLiteral("maximized");
+    }
+    return QStringLiteral("normal");
+}
+
 QString volumeOpDebugName(VolumeOp op)
 {
     switch (op) {
@@ -400,6 +415,10 @@ QString Action::summary() const
         if (!args.isEmpty()) {
             text += QLatin1Char(' ') + args.join(QLatin1Char(' '));
         }
+        if (elevated) {
+            // 默认是普通权限，所以只有显式要求提权的条目才标出来。
+            text += QLatin1String(" (elevated)");
+        }
         return text;
     }
     case Kind::Send:
@@ -424,7 +443,8 @@ QString Action::summary() const
         const WindowQuery query = WindowQuery::make(target, process);
         QString text = QStringLiteral("window %1 %2").arg(windowOpDebugName(windowOp), query.describe());
         if (launch.has_value()) {
-            text += QLatin1String(" (launch if missing)");
+            text += launch->elevated ? QLatin1String(" (launch if missing, elevated)")
+                                     : QLatin1String(" (launch if missing)");
         }
         if (toggle.has_value() && !*toggle) {
             text += QLatin1String(" (no toggle)");

@@ -45,6 +45,21 @@ struct CliOptions
     /// 内部标记：本进程是「在线更新」重启起来的，`--updated-from` 后面是更新前的
     /// 版本号（启动后用一条托盘通知告诉用户更新成功了）。
     std::optional<QString> updatedFrom;
+
+    /// 内部命令：普通权限代理进程要做的 shell 动作（见 `platform/win/process.h`）。
+    ///
+    /// 参数由 `process::runShellHelperAsUser()` 生成，不是给用户手写的：
+    /// `--shell-open <目标>` / `--shell-app <启动名>` 二选一，另外还有
+    /// `--shell-args` / `--shell-cwd` / `--shell-show` / `--shell-result`。
+    std::optional<QString> shellOpen;
+    std::optional<QString> shellApp;
+    std::optional<QString> shellArgs;
+    std::optional<QString> shellCwd;
+    std::optional<QString> shellShow;
+    std::optional<QString> shellResult;
+    /// 本进程是那条代理命令吗（`--shell-open` / `--shell-app`）。
+    bool isShellHelper() const { return shellOpen.has_value() || shellApp.has_value(); }
+
     bool showHelp = false;
     bool showVersion = false;
 
@@ -54,7 +69,10 @@ struct CliOptions
     /// `--quit` 不在其中：它不装钩子、不提权，但确实要去碰另一个正在跑的实例
     /// （所以由 main 单独处理，见 AGENTS.md 第 10 节）。
     /// `--remove-autostart` 也不在：它要管理员权限才能删任务。
-    bool isOfflineCommand() const { return showHelp || showVersion || listKeys || check || list; }
+    bool isOfflineCommand() const
+    {
+        return showHelp || showVersion || listKeys || check || list || isShellHelper();
+    }
 };
 
 /// 解析参数（含程序名，会被跳过）。

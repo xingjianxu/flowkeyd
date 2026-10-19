@@ -468,6 +468,8 @@ core::Action convertAction(lua_State *L, int index)
             enumName(L, index, "show", {"normal", "hidden", "minimized", "maximized"}, QStringLiteral("normal")));
         action.shell = optBool(L, index, "shell").value_or(false);
         action.wait = optBool(L, index, "wait").value_or(false);
+        // 默认 `false` = 当前登录用户的普通权限（守护进程自己也提权时仍然如此）。
+        action.elevated = optBool(L, index, "elevated").value_or(false);
         action.env = optStringMap(L, index, "env").value_or(QMap<QString, QString>());
     } else if (type == QLatin1String("send")) {
         action.kind = core::Action::Kind::Send;
@@ -621,7 +623,7 @@ core::Action convertAction(lua_State *L, int index)
 core::LaunchSpec convertLaunchSpec(lua_State *L, int index, core::LaunchFields *fields)
 {
     checkFields(L, index,
-                {"program", "args", "cwd", "show", "shell", "env", "wait_ms"});
+                {"program", "args", "cwd", "show", "shell", "env", "wait_ms", "elevated"});
     if (fields != nullptr) {
         // 记下显式写了哪些字段：app 的 `launch` 与动作的 `launch` 要逐字段合并，
         // 而 `show` / `shell` / `args` 的默认值与“没写”在值上分不开。
@@ -632,6 +634,7 @@ core::LaunchSpec convertLaunchSpec(lua_State *L, int index, core::LaunchFields *
         fields->shell = hasField(L, index, "shell");
         fields->env = hasField(L, index, "env");
         fields->waitMs = hasField(L, index, "wait_ms");
+        fields->elevated = hasField(L, index, "elevated");
     }
     core::LaunchSpec spec;
     spec.program = reqString(L, index, "program");
@@ -642,6 +645,7 @@ core::LaunchSpec convertLaunchSpec(lua_State *L, int index, core::LaunchFields *
     spec.shell = optBool(L, index, "shell").value_or(false);
     spec.env = optStringMap(L, index, "env").value_or(QMap<QString, QString>());
     spec.waitMs = optU64(L, index, "wait_ms");
+    spec.elevated = optBool(L, index, "elevated").value_or(false);
     return spec;
 }
 

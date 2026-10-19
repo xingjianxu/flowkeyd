@@ -244,7 +244,7 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
     * `window` 就是一条 `window_rule`（字段完全一样），`process`/`title`/`name` 自动继承，显式写的
       优先；不写 `window` 就只展开快捷键。
     * `launch` 就是这个程序怎么启动，字段与 `window` 动作的 `launch` 一样（`program`/`args`/`cwd`/
-      `show`/`shell`/`env`/`wait_ms`）。它也是**默认值**：动作不写 `launch` 就整份继承，写了就
+      `show`/`shell`/`env`/`wait_ms`/`elevated`）。它也是**默认值**：动作不写 `launch` 就整份继承，写了就
       **逐字段合并**；动作顶层的 `wait_ms` 覆盖 `launch.wait_ms`（没有 `launch` 却写 `wait_ms` 要报错）。
     * “写了哪些字段”由 Lua 层在转换时记进 `core::LaunchFields`（`show`/`shell`/`args` 的默认值与
       “没写”在值上分不开），见第 10 节。
@@ -453,7 +453,8 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
     * **启动走 `shell:AppsFolder\<AUMID>`**（`apps::launchApp()`）：先把解析名当 `lpFile` 交给
       `ShellExecuteExW`，失败再走 `SHParseDisplayName` + `SEE_MASK_IDLIST`（两条真机都验过）。
       参数、工作目录、`runas` 标记、商店应用的激活全部交给 shell。**代价是提权实例启动的程序也是提权
-      的**（与 `run` 同一个已知限制，已写进 README）。
+      的**（与 `run` 同一个已知限制）—— 2026-10 之后这一条由 `apps::launchAppAsUser()`（必要时经
+      普通权限的代理进程）修正，见第 2 节第 35 条。
     * **列表按需重扫**：缓存在动作线程上，最多 30 秒；`Runtime::start()` 还会排队扫一次，所以装完程序
       不用重启 flowkeyd。
     * **网格是 6 列 × 6 行**（`AppListModel` 的 `columns()` / `cellWidth()` / `cellHeight()`），
@@ -676,6 +677,35 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
     * **保存成功就重载**：`ConfigEditor::saved` → `ConfigWindow::reloadRequested()` →
       `Runtime::reloadFromAnyThread()`。界面**自己不碰钩子线程**，也不弹一个「要重载吗」。
 
+35. **启动的程序默认是「当前登录用户的普通权限」，`elevated = true` 才提权。** 项目所有者
+    2026-10 拍板（四个选项都是当场问的）：选项放在**每个动作上**（不是全局设置）、`run` 与
+    `open` 与程序启动器**一视同仁**、程序启动器的**右键菜单保持现状**（写进已知限制）。
+    * 理由：守护进程默认提权运行，继承令牌会让**每一条**快捷键启动的东西都变成管理员进程 ——
+      拖放失效、配置写到奇怪的地方、有些程序直接拒绝启动。
+    * 配置面：`run` 的 `elevated`、`launch` 的 `elevated`（`window` 的 `launch` 与 `app{}` 的
+      `launch` 共用同一份字段块，所以也进 `core::LaunchFields` 做逐字段合并）、`--list` 摘要里
+      只给显式的提权项的尾巴加 `(elevated)`。只有 `run` / `launch` 有这一项：`open` 没有参数
+      （它总是普通权限），程序启动器的例外走右键菜单自带的「以管理员身份运行」。
+    * **怎么做到**（`platform/win/process.cpp`）：从登录 shell（`GetShellWindow()` 的属主进程，
+      兜底 = 本会话第一个 `explorer.exe`）拿一份主令牌，`CreateProcessWithTokenW` 启动 →
+      子进程落在 Medium；`elevated = true` 而自己没提权时用 `ShellExecuteW("runas")`（会弹 UAC，
+      而且**没法转交 `env`**，写了 `env` 只给一条 warning）。拿不到令牌 / Secondary Logon 被禁用时
+      **退回继承当前令牌**并写 warning（“按键按下去什么都不发生”比“这次提权了”更糟）。
+    * **`ShellExecuteExW` 没有令牌参数**，所以 `open` 与程序启动器（`apps::launchAppAsUser()`）
+      把请求交给一个**普通权限的代理进程**：flowkeyd 自己的隐藏副本，内部命令
+      `--shell-open` / `--shell-app`（+ `--shell-args`/`--shell-cwd`/`--shell-show`/`--shell-result`，
+      新的 `platform/win/ffi::currentExecutablePath()`）。代理进程在 `main` 的离线命令那一类里：
+      **不提权、不读配置、不装钩子、不碰单实例锁**，结果写到 `%TEMP%` 的一个小文件里（失败时里面是
+      错误文本）。代价是每次多起一个隐藏进程（实测总体 ~120 ms）。没提权时直接在本进程里调 shell。
+    * **右键菜单不在这一层**：`shell_menu` 的命令由 shell 在 flowkeyd 自己的进程里执行，所以从
+      那里选「打开」开出来的程序会提权。改成普通权限要把菜单宿主（含 `#32768` 消息转发）整个搬到
+      代理进程，风险与代价都不划算。
+    * 验证：`tst_interactive::launchesProgramsWithTheRequestedPrivilege`（读**目标进程令牌**的
+      完整性 SID：默认必须是 `S-1-16-8192`；本进程已提权时再验 `elevated = true` 是
+      `S-1-16-12288`）、`opensTargetsAsTheLoggedOnUser`（`open` 与 `app` 两种模式各跑一遍）、
+      `reportsALauncherFailureFromTheShellHelper`；断言用**中文 SID** 而不是 `whoami` 的本地化
+      文本，而且**不写 `whoami` 那种一次性文件**以外的任何东西。
+
 ---
 
 ## 3. 环境与工具链
@@ -736,8 +766,8 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
 | `install.ps1` | 对外一键安装器（**纯 ASCII、无 BOM**，见工作约定第 9 条） |
 | `logo.svg` / `assets/` / `tools/icon_gen` | 图标美术源（唯一真源）；`assets/flowkeyd.ico`（exe 资源，windres 嵌进 PE）+ `assets/icons/flowkeyd-<n>.png`（qrc 里的多尺寸 `QIcon`）；`tools/icon_gen`（`EXCLUDE_FROM_ALL` 的 `icons` 目标，把 svg 光栅化） |
 | `tools/pinyin_gen.ps1` | 生成 `src/core/pinyin_data.cpp`（程序启动器的拼音表）：离线跑一次、结果提交进仓库（第 2 节第 29 条） |
-| `src/main.cpp` | `AttachConsole` + `QT_QPA_PLATFORM=windows:fontengine=freetype`（**第一行**）+ CLI 分发 + 日志初始化 + 提权前的单实例预检 + 自启确认框 + 组装 Runtime + 接 `desktopChanged` 到 Tray + 排队 `PopupHost::preload()` |
-| `src/cli.h/.cpp` | 参数解析 + 中文帮助文本（手写）；`--quit` 走单独早期分支 |
+| `src/main.cpp` | `AttachConsole` + `QT_QPA_PLATFORM=windows:fontengine=freetype`（**第一行**）+ CLI 分发（含代理进程的 `--shell-*` 那条离线分支，见第 2 节第 35 条）+ 日志初始化 + 提权前的单实例预检 + 自启确认框 + 组装 Runtime + 接 `desktopChanged` 到 Tray + 排队 `PopupHost::preload()` |
+| `src/cli.h/.cpp` | 参数解析 + 中文帮助文本（手写）；`--quit` 走单独早期分支；`--shell-open`/`--shell-app`/`--shell-args`/`--shell-cwd`/`--shell-show`/`--shell-result` 是**内部协议**（不进帮助文本，见第 2 节第 35 条） |
 | `src/core/` | **纯逻辑层：不碰 Win32、不碰 Qt GUI**（只用 QtCore），能被 Qt Test 直接测 |
 | `src/core/keys.*` | 键名 ↔ `VK` 表、`Modifiers`、`Chord`、AutoHotkey 发送脚本解析、小键盘 Enter 的内部伪码 `0x100`、`key_from_hook()`/`native_key()`、大写字母键名检查 |
 | `src/core/config.*` | 配置结构体、严格校验（未知字段要报错）、编译成 `Compiled`/`Binding`/`CompiledRemap`、配置文件搜寻与旧 TOML 的迁移提示、`AppDef` + `expandApps`/`applyWindowDefaults` |
@@ -758,7 +788,7 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
 | `src/core/update_check.*` | 在线更新纯逻辑：仓库地址、`releases/latest` JSON 解析、资产挑选、版本比较、`buildVersionDate()` |
 | `src/core/version.*` / `src/core/desktop_badge.*` | 构建版本号；托盘数字徽标的文字与字号 |
 | `src/lua/lua_config.*` + `src/lua/lua_prelude.lua` | **Lua 与 C++ 的唯一边界**（转成 `core::Config`，逐条目、带上下文的错误；BOM 剔除、`.toml` 拒绝）；注入配置脚本的 DSL（纯 Lua，改它不需要改 C++，编进 qrc） |
-| `src/platform/win/` | Win32 后端，每个文件只做一件事：`ffi.*`（全部 Win32 声明、结构体与常量，`INPUT` 的 40 字节布局有 `static_assert`）、`nt.*`（运行时解析的 `win32u.dll` 导出）、`dwm.*`（`DwmSetWindowAttribute` 关过渡动画 / `DwmGetWindowAttribute` 读 `DWMWA_CLOAKED`；拿不到时保留动画、动作不失败）、`monitor.*`（枚举、`indexForWindow`、`indexForCursor`、`applyPlacement`、`moveToMonitor`、`moveToAdjacentMonitor`；**几何判断不在这一层**）、`input.*`（`SendInput`/`NtUserSendInput`、按键状态、`ModifierGuard`、`FLOWKEYD_ACCEPT_INJECTED` 后门、`copySelection`）、`ime.*`（运行时解析的 `imm32.dll`）、`hook.*`（钩子回调 + 钩子线程自己的消息循环 + `SetTimer` + 控制消息 + 重载；`window_rule` 的两个监听 `SetWinEventHook` 与 350 ms 显示器轮询；`EVENT_SYSTEM_FOREGROUND`；**定时器 id 必须用 `SetTimer` 的返回值**）、`apps.*`（两份扫描 + `launchApp()` + `shellIcon()` + `StaThread`）、`shell_menu.*`、`audio.*`（手写 vtable，**高风险**，MTA）、`clipboard.*`、`window.*`、`desktop.*`（`IVirtualDesktopManagerInternal` 按版本查表 + 不随版本变的 `IVirtualDesktopPinnedApps`）、`power.*`、`tray.*`、`logging.*` / `single_instance.*`、`elevate.*` / `autostart.*` / `update.*` |
+| `src/platform/win/` | Win32 后端，每个文件只做一件事：`ffi.*`（全部 Win32 声明、结构体与常量，`INPUT` 的 40 字节布局有 `static_assert`，外加 `currentExecutablePath()`）、`nt.*`（运行时解析的 `win32u.dll` 导出）、`process.*`（`run`：直接 `CreateProcessW` / 用登录 shell 的令牌 / `runas` 三条路；`open` 与程序启动器的 `--shell-*` 代理进程，见第 2 节第 35 条）、`dwm.*`（`DwmSetWindowAttribute` 关过渡动画 / `DwmGetWindowAttribute` 读 `DWMWA_CLOAKED`；拿不到时保留动画、动作不失败）、`monitor.*`（枚举、`indexForWindow`、`indexForCursor`、`applyPlacement`、`moveToMonitor`、`moveToAdjacentMonitor`；**几何判断不在这一层**）、`input.*`（`SendInput`/`NtUserSendInput`、按键状态、`ModifierGuard`、`FLOWKEYD_ACCEPT_INJECTED` 后门、`copySelection`）、`ime.*`（运行时解析的 `imm32.dll`）、`hook.*`（钩子回调 + 钩子线程自己的消息循环 + `SetTimer` + 控制消息 + 重载；`window_rule` 的两个监听 `SetWinEventHook` 与 350 ms 显示器轮询；`EVENT_SYSTEM_FOREGROUND`；**定时器 id 必须用 `SetTimer` 的返回值**）、`apps.*`（两份扫描 + `launchApp()`（在本进程里调 shell）+ `launchAppAsUser()`（必要时经代理进程）+ `shellIcon()` + `StaThread`）、`shell_menu.*`、`audio.*`（手写 vtable，**高风险**，MTA）、`clipboard.*`、`window.*`、`desktop.*`（`IVirtualDesktopManagerInternal` 按版本查表 + 不随版本变的 `IVirtualDesktopPinnedApps`）、`power.*`、`tray.*`、`logging.*` / `single_instance.*`、`elevate.*` / `autostart.*` / `update.*` |
 | `src/app/` | 组装层：把 core/lua/platform 串起来，并拥有 Qt 对象 |
 | `dispatcher.h/.cpp` | **动作工作线程**（`QThread`）：执行动作列表、`window` 的“先启动再激活”与默认开的 `toggle`、**把窗口摆到该去的那块显示器上**（第 2 节第 33 条，含 `MonitorMemory`）、`menu`/`help`/`windows`/`apps` 的窗口请求、`window_rule`（三遍）、`startDesktopWatch()`/`pollDesktop()`；启动器的持久状态文件路径也是在这里算好塞进 `AppRequest` 的 |
 | `runtime.h/.cpp` | 引擎 + 钩子 + 分发 + 托盘 + 弹窗的总装；`ControlCmd`（suspend/reload/quit）通道；`--quit` 的事件句柄（`QWinEventNotifier` 在 GUI 线程上监听）；`reportDesktop()`/`desktopChanged` |
@@ -771,7 +801,7 @@ UI 只有托盘图标与五个 QML 卡片（日志窗口、`menu` 选单、`help
 | `update_model.*` / `update_archive.*` / `updater.*` | 更新卡片的状态机（八个阶段、版本号/发布说明/进度/按钮可见性，**不联网不解压不换文件**）；从 zip 里取出新 exe（`QZipReader` + PE 魔数检查）；联网编排（异步 `QNetworkAccessManager` + sha256 + 解压到 `<exe>.new` + mtime 对齐发布日） |
 | `app_icon.h/.cpp` | 把 qrc 里的 9 张 PNG 帧拼成多尺寸 `QIcon`（`applicationIcon()`）；`desktopIcon(number)` 现画桌面号徽标 |
 | `src/qml/` | 六个窗口：`ConfigWindow.qml`（左导航 + 分组卡片，见第 2 节第 34 条）、`LogWindow.qml`、`MenuPopup.qml`、`HelpPopup.qml`、`SwitchPopup.qml`、`AppPopup.qml`、`UpdatePopup.qml`；配置界面另有一组共用控件（`SettingCard`/`SettingRow`/`ChoiceRow`/`BoolRow`/`TriRow`/`SpinRow`/`TextRow`/`EntryRow`/`ChordsEditor`/`ActionEditor`/`ActionListEditor`/`LaunchFieldsEditor`/`WindowRuleFields`/`HotkeyFields`/`OverlayCard`/`ConfigText` 单例 与四个编辑弹层）。都写 `pragma ComponentBehavior: Bound`；**五个弹窗的 `flags` 都带 `Qt.Tool`**（配置界面是普通窗口，不加）；配色一律用 `palette`（没有单独的 `Style.qml`）；中文一律 `font.family: "Microsoft YaHei"`；列表/网格全部是标准 `ListView`/`GridView` + `ItemDelegate`（+ `ScrollBar`） |
-| `tests/` | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_config_writer`、`tst_config_editor`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_remote_desktop`、`tst_log_tail`、`tst_audio`、`tst_autostart`、`tst_menu_model`、`tst_help_model`、`tst_window_list_model`、`tst_app_list`、`tst_app_list_model`、`tst_launcher_state`、`tst_window_monitor_state`、`tst_power_table`、`tst_desktop_table`、`tst_placement`、`tst_layout`、`tst_version`、`tst_desktop_badge`、`tst_update`、`tst_update_model`、`tst_update_install`、`tst_command_line`、`tst_instance`、`tst_input`，以及需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1` 的 `tst_interactive`（真机：剪贴板/音量/窗口/虚拟桌面/钉住/置顶/输入法/覆盖层/更新下载；联网那条还要 `FLOWKEYD_ALLOW_NETWORK_TESTS=1`） |
+| `tests/` | Qt Test：`tst_keys`、`tst_engine`、`tst_config`、`tst_config_writer`、`tst_config_editor`、`tst_lua`、`tst_template`、`tst_send_script`、`tst_window_match`、`tst_remote_desktop`、`tst_log_tail`、`tst_audio`、`tst_autostart`、`tst_menu_model`、`tst_help_model`、`tst_window_list_model`、`tst_app_list`、`tst_app_list_model`、`tst_launcher_state`、`tst_window_monitor_state`、`tst_power_table`、`tst_desktop_table`、`tst_placement`、`tst_layout`、`tst_version`、`tst_desktop_badge`、`tst_update`、`tst_update_model`、`tst_update_install`、`tst_command_line`、`tst_instance`、`tst_input`，以及需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1` 的 `tst_interactive`（真机：剪贴板/音量/窗口/虚拟桌面/钉住/置顶/输入法/覆盖层/**启动权限**/更新下载；联网那条还要 `FLOWKEYD_ALLOW_NETWORK_TESTS=1`） |
 | `scripts/acceptance.ps1` | 桌面行为验收（注入按键 + 焦点捕捉窗口的外部观察，166 项检查，实跑 163）。需交互式桌面，**不属于 `ctest`** |
 | `scripts/release.ps1` | 构建 release + 打包（完整包 + 精简升级包，各附 `.sha256`）+ 用 `gh` 上传 GitHub Release。tag 取刚构建的 exe 的 `--version`。**发布说明由脚本自己写**（上一个 Release 的 tag → HEAD 的提交主题，按前缀分类；`-Notes`/`-NotesFile` 可整份替换），不用 `gh --generate-notes`。工作区脏或 HEAD 没推到 origin 会直接拒绝（要 `-AllowDirty`/`-Push`）。**唯一的新前置依赖是 `gh`**。开关：`-SkipBuild`/`-SkipResident`/`-SkipUpload`/`-Clobber` |
 
@@ -970,6 +1000,16 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
     块屏再按一次 —— 从此它每次都回到那块屏；把那块屏的显示器断开（或把 `windows.json` 里的设备名改错）
     后按一次：只记一条 warning（`the remembered monitor … is not connected`）、窗口留在原处。
     靠 `settings{ window_monitor = "none" }` 把整项关掉后重载，再按一次应当**完全不动窗口**。
+15. **启动权限**（第 2 节第 35 条）：常驻实例是提权的，所以拿它验反而最直接 ——
+    1. 按一个 `action = run("notepad.exe")` 的快捷键，然后在**任务管理器**里看那个 `notepad.exe`：
+       「详细信息」页的 `notepad.exe` 行右键只能看到「结束任务」而**没有** UAC 盾牌图标；以管理员启动
+       的会话里跑 `whoami /groups` 会看到 `High Mandatory Level`，普通权限是 `Medium`。命令行最快：
+       `& build\dist-release\flowkeyd.exe --list` 里那条摘要应当**没有** `(elevated)`。
+    2. 同一个键写 `run("notepad.exe", nil, { elevated = true })`（或给 `launch` 加 `elevated = true`）
+       重载 —— 从**非提权**的实例按下去应当弹一次 UAC（这个 agent 验证不了，必须人按）；
+       从提权实例按下去**不弹**（已经是管理员了）。
+    3. `open([[...\x.docx]])` 与从启动器点一个程序：开出来的程序同样应当是普通权限；
+       但启动器**右键菜单**里的「打开」开出来的是提权的（已知限制）。
 
 ---
 
@@ -1109,7 +1149,7 @@ IME 切换）、弹窗不进任务栏 + 预热、发布包精简、精简升级�
 `install.ps1` 一键安装、FreeType 字体引擎、程序启动器（+ 异步图标、数据源换成 `shell:AppsFolder`、
 拼音 / 首字母筛选、固定 / 最近使用 / 「全部程序」分组列表、控制面板项与内置设置页）、弹窗缩放过期
 自愈、跳桌面唤起（第 2 节第 32 条）、没写 `monitor` 的窗口按 `settings.window_monitor` 摆位
-（第 2 节第 33 条）。
+（第 2 节第 33 条）、图形化配置界面（第 34 条）、启动的程序默认以普通用户权限启动（第 35 条）。
 
 ---
 
@@ -1529,7 +1569,25 @@ IME 切换）、弹窗不进任务栏 + 预热、发布包精简、精简升级�
 * **终端窗口不能靠标题找**（`process = "wezterm"`，窗口属于 `wezterm-gui.exe`）。
 * **`run`/`window.launch` 走 `CreateProcess`、不查 `App Paths`、也不能用 `DETACHED_PROCESS`**
   （会静默杀死控制台子进程，用 `CREATE_NO_WINDOW`）。
-* **提权后的进程会把它启动的子进程一起提权**（写进 README 的已知限制）。
+* **启动的子进程默认不再继承管理员令牌**（第 2 节第 35 条）：提权实例会从登录 shell 复制一份
+  令牌，用 `CreateProcessWithTokenW` 启动。三个真机踩过的点：
+  * **`CreateProcessAsUser` 用不了**：它要 `SeAssignPrimaryTokenPrivilege`，而提权管理员令牌里
+    根本没有这条（`AdjustTokenPrivileges` 报 1300 ERROR_NOT_ALL_ASSIGNED、
+    `CreateProcessAsUser` 报 1314 ERROR_PRIVILEGE_NOT_HELD）。`CreateProcessWithTokenW` 只要
+    `SeImpersonatePrivilege`（提权管理员默认就有），代价是经过 Secondary Logon 服务。
+  * **不能同时传 `lpApplicationName` 与 `lpFile`**：那样子进程的 `argv[0]` 变成 exe 路径、
+    **原来第一个参数被吞掉**（`--shell-open <路径>` 会变成 `argv[1] = <路径>`……看起来“什么都没发生”）。
+    要么只传 `lpApplicationName = nullptr` + 完整命令行（现在的做法），要么把 `lpFile` 置 null。
+  * **`CreateProcessWithTokenW` 会丢掉我们的环境块**（真机：代理进程里 `PATH` 没了，于是子进程
+    找不到 `flowkeyd.exe` 旁边的 Qt DLL，报「找不到 Qt6Core.dll」）→ 必须显式给 `lpEnvironment`
+    （`buildEnvironmentBlock({})` + `CREATE_UNICODE_ENVIRONMENT`）。`runCommand()` 因此**总是**
+    显式传环境块（两条路都一样，免得“用 token 启动的子进程没有 `PATH`”这种隐形的半残）。
+* **代理进程 = 我们自己的 exe**，所以从**别的可执行文件**（例如 `tst_interactive.exe`）里调用
+  时要显式告诉它用哪个 exe（`runShellHelperAsUser(request, helperExecutable)`）；默认是
+  `currentExecutablePath()`。不提供这个口的后果曾经是：测试进程把测试自己又启动了一遍，
+  在那条路径上它是 MTA、而且没有控制台，于是弹一个「找不到 Qt6Test.dll」。
+* **从提权的进程里 `ShellExecuteW` 开出来的东西也是提权的**（实测：子进程 `whoami /groups`
+  仍报 `S-1-16-12288`）。这就是 `open` / 程序启动器必须绕一次代理进程的原因。
 * **中文错误文案不可断言**（`FormatMessageW` 是本地化的）—— 这也是我们日志与校验信息保持英文的实际
   原因。
 * **`IShellItemImageFactory::GetImage()` 在 `.lnk` 上很慢**：真机实测每个图标约 **3 ms**（首次冷启动
@@ -1759,11 +1817,9 @@ IME 切换）、弹窗不进任务栏 + 预热、发布包精简、精简升级�
 16. **程序启动器的打磨**：数据源已经三份了，卸载程序也已经滤掉，剩下的就是各类工具项
     （「【小狼毫】输入法设定」这种）。可做的：按名字/目录过滤掉工具项（需要给 `apps()` 加参数与校验，
     或者加一张可配置的排除表）、最近使用优先排序、按开始菜单子目录分组、把图标缓存到磁盘。
-17. **以“登录用户”（中等完整性）权限启动程序**：现在走 `ShellExecuteW(open, <lnk>)`，提权实例启动的
-    子进程会继承管理员令牌（与 `run` 同一个已知限制，README 里写着）。真做法是从 `explorer.exe` 复制
-    一份令牌（`DuplicateTokenEx` + `CreateProcessWithTokenW`）并走解析出来的 `target`/`args`/`cwd`；
-    商店/UWP 应用还得让 explorer 代劳。**没做是因为当时没法验证**（agent 的 shell 没有提权，拉不起
-    一个提权实例；UAC 提示也不该由 agent 去点）。
+17. **程序启动器右键菜单里的命令仍然提权**：它们由 shell 在 flowkeyd 自己的进程里执行（第 2 节
+    第 35 条）。要改成普通权限就得把整个菜单宿主（`IContextMenu` 的消息转发 + `#32768` 菜单窗口
+    的尺寸/坐标、`beforeInvoke` 收卡片）搬到一个代理进程里 —— 代价与风险都不划算。
 
 ---
 
@@ -1966,6 +2022,9 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、`--ch
   的动作表。简写字符串：`"run:…"`、`"send:…"`、`"type:…"`、`"open:…"`、`"notify:t|b"`、
   `"volume:up"`、`"media:next"`、`"clipboard:get"`、`"window:minimize"`、`"desktop:1"`、
   `"power:sleep"`、裸关键字 `reload`/`quit`/`help`/`windows`/`apps`/`none`。
+* **启动权限**（第 2 节第 35 条）：`run` 与 `launch`（`window` 的 / `app{}` 的，共用一份字段块）都有
+  `elevated`，**默认 `false` = 当前登录用户的普通权限**；`open` 与程序启动器没有这个字段（它们总是
+  普通权限）。
 * **完全没有动作**的快捷键就是一个按键屏蔽器（会吞掉它匹配到的按键）。
 * `window` 的 `toggle`（默认**开**）只对 `op = "activate"` 有意义；`launch` 回退不套用它；显式
   `toggle = false` 才关闭。“已经激活”要同时满足：前台、未最小化、**就在当前虚拟桌面上**。

@@ -3,7 +3,9 @@
 
 #include "platform/win/apps.h"
 
+#include "platform/win/elevate.h"
 #include "platform/win/ffi.h"
+#include "platform/win/process.h"
 
 #include <objbase.h>
 #include <shellapi.h>
@@ -406,6 +408,35 @@ bool launchApp(const QString &launchName, QString *error)
                      .arg(launchName, winErrorMessage(secondError));
     }
     return false;
+}
+
+bool launchAppAsUser(const QString &launchName, QString *error)
+{
+    if (!isElevated()) {
+        // 自己就是普通权限：直接调 shell 就行。
+        return launchApp(launchName, error);
+    }
+    ShellHelperRequest request;
+    request.mode = ShellHelperRequest::Mode::App;
+    request.target = launchName;
+    const ShellHelperOutcome outcome = runShellHelperAsUser(request);
+    if (!outcome.started) {
+        if (error != nullptr) {
+            *error = outcome.error;
+        }
+        return false;
+    }
+    if (outcome.exitCode != 0) {
+        if (error != nullptr) {
+            *error = outcome.output.isEmpty()
+                ? QStringLiteral("the shell helper could not launch %1 (exit code %2)")
+                      .arg(launchName)
+                      .arg(outcome.exitCode)
+                : outcome.output;
+        }
+        return false;
+    }
+    return true;
 }
 
 ShellIcon shellIcon(const QString &path, int size)

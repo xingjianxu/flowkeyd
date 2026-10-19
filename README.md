@@ -495,21 +495,21 @@ Enter 与主键盘的 Enter 共用 `VK_RETURN`，区分靠的是 Windows 的扩�
 
 | 类型        | 字段                                                                                                      | 说明                                                                                                                                                                                                                                                                                      |
 | ----------- | --------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `run`       | `program`、`args[]`、`cwd`、`shell`、`show`（`normal`/`hidden`/`minimized`/`maximized`）、`wait`、`env{}` | 启动一个进程；`shell = true` 时通过 `cmd.exe /C` 运行                                                                                                                                                                                                                                     |
+| `run`       | `program`、`args[]`、`cwd`、`shell`、`show`（`normal`/`hidden`/`minimized`/`maximized`）、`wait`、`env{}`、`elevated` | 启动一个进程；`shell = true` 时通过 `cmd.exe /C` 运行。**默认以当前登录用户的普通权限启动**（守护进程自己提权时也一样），`elevated = true` 才以管理员权限启动（flowkeyd 没提权时会弹 UAC），见[启动的程序用什么权限](#启动的程序用什么权限) |
 | `send`      | `keys`、`delay_ms`、`release_modifiers`                                                                   | AutoHotkey 发送脚本：`^{c}`、`{Enter}`、`{Esc 3}`、`{Enter down}`、`{{}`、`{Text}hello`                                                                                                                                                                                                   |
 | `caps_lock` | `state` = `off`                                                                                           | 仅当 CapsLock 当前开启时将其关闭；适合与 `send` 组合，实现 CapsLock 层快捷键的兜底逻辑                                                                                                                                                                                                    |
 | `type`      | `text`、`delay_ms`、`release_modifiers`                                                                   | 字面 Unicode 注入，与键盘布局无关                                                                                                                                                                                                                                                         |
-| `open`      | `target`、`args`、`cwd`、`show`                                                                           | `ShellExecuteW`：URL、文档、文件夹                                                                                                                                                                                                                                                        |
+| `open`      | `target`、`args`、`cwd`、`show`                                                                           | `ShellExecuteW`：URL、文档、文件夹。打开的文档程序同样是**当前登录用户的普通权限**（见[启动的程序用什么权限](#启动的程序用什么权限)）                                                                                                                                                                                                                                                        |
 | `volume`    | `op` = `up`/`down`/`set`/`mute`/`unmute`/`toggle`、`level`（0-100）、`step`                               | 对默认输出设备使用 Core Audio                                                                                                                                                                                                                                                            |
 | `media`     | `op` = `play_pause`/`next`/`prev`/`stop`                                                                  |                                                                                                                                                                                                                                                                                           |
 | `clipboard` | `op` = `get`/`set`/`append`/`clear`、`text`                                                               |                                                                                                                                                                                                                                                                                           |
-| `window`    | `op` = `activate`/`minimize`/`maximize`/`restore`/`close`/`toggle_topmost`/`move_prev_desktop`/`move_next_desktop`/`move_left_monitor`/`move_right_monitor`、`target`、`process`、`launch`、`wait_ms`、`toggle`、`animate`、`follow`、`monitor` | `target` 匹配窗口标题的子串，`process` 匹配可执行文件名（`wezterm` 也能匹配 `wezterm-gui.exe`）；既没有 `target` 也没有 `process` 就表示前台窗口。`launch = { program, args[], cwd, show, shell, env{}, wait_ms }` 会在没有任何匹配时启动该程序，然后等待它的窗口（默认 3000 ms）并激活它。`toggle`（默认开，只对 `op = "activate"` 有意义）会在目标窗口已经在前台时改为最小化它。`animate`（默认**关**）控制这次状态变化要不要播放 DWM 的过渡动画。`wait_ms` 写在动作顶层时是 `launch.wait_ms` 的简写；在 `app{}` 里 `launch` 还会继承 app 的 `launch`（逐字段合并）。四个 `move_*` op 把**当前窗口**（不写 `target`/`process` 时）挪到相邻的虚拟桌面 / 显示器：`move_prev_desktop`/`move_next_desktop` 只动虚拟桌面且**首尾相接**（显示器上的几何不变，视图**不**跟着走），`move_left_monitor`/`move_right_monitor` 只动显示器（保留最大化状态，否则保持原有大小并居中到目标工作区；没有更左/更右那一块时失败，**不循环**）。这四个 op 都不套用 `toggle`、也不接受 `launch`。`follow = true` 只能写给 `move_prev_desktop`/`move_next_desktop`：搬完之后把视图也切到目标桌面并重新激活那个窗口（用户跟着窗口一起过去；不写时视图不动，与 Windows 自己的 `Win+Ctrl+Shift+←/→` 一致），写在其它的 op 上会被 `--check` 拒绝。`monitor` 只对 `op = "activate"` 有意义：指定这次把窗口摆到哪块显示器上（`2` / `"primary"` / `"DISPLAY2"` / `"cursor"` / `"last"` / `"none"`），不写就按命中的 `window_rule` → `settings.window_monitor`（默认 = 光标所在的那一块），见[窗口摆到哪块显示器上](#窗口摆到哪块显示器上)；写在其它的 op 上会被 `--check` 拒绝 |
+| `window`    | `op` = `activate`/`minimize`/`maximize`/`restore`/`close`/`toggle_topmost`/`move_prev_desktop`/`move_next_desktop`/`move_left_monitor`/`move_right_monitor`、`target`、`process`、`launch`、`wait_ms`、`toggle`、`animate`、`follow`、`monitor` | `target` 匹配窗口标题的子串，`process` 匹配可执行文件名（`wezterm` 也能匹配 `wezterm-gui.exe`）；既没有 `target` 也没有 `process` 就表示前台窗口。`launch = { program, args[], cwd, show, shell, env{}, wait_ms, elevated }` 会在没有任何匹配时启动该程序，然后等待它的窗口（默认 3000 ms）并激活它。`toggle`（默认开，只对 `op = "activate"` 有意义）会在目标窗口已经在前台时改为最小化它。`animate`（默认**关**）控制这次状态变化要不要播放 DWM 的过渡动画。`wait_ms` 写在动作顶层时是 `launch.wait_ms` 的简写；在 `app{}` 里 `launch` 还会继承 app 的 `launch`（逐字段合并）。四个 `move_*` op 把**当前窗口**（不写 `target`/`process` 时）挪到相邻的虚拟桌面 / 显示器：`move_prev_desktop`/`move_next_desktop` 只动虚拟桌面且**首尾相接**（显示器上的几何不变，视图**不**跟着走），`move_left_monitor`/`move_right_monitor` 只动显示器（保留最大化状态，否则保持原有大小并居中到目标工作区；没有更左/更右那一块时失败，**不循环**）。这四个 op 都不套用 `toggle`、也不接受 `launch`。`follow = true` 只能写给 `move_prev_desktop`/`move_next_desktop`：搬完之后把视图也切到目标桌面并重新激活那个窗口（用户跟着窗口一起过去；不写时视图不动，与 Windows 自己的 `Win+Ctrl+Shift+←/→` 一致），写在其它的 op 上会被 `--check` 拒绝。`monitor` 只对 `op = "activate"` 有意义：指定这次把窗口摆到哪块显示器上（`2` / `"primary"` / `"DISPLAY2"` / `"cursor"` / `"last"` / `"none"`），不写就按命中的 `window_rule` → `settings.window_monitor`（默认 = 光标所在的那一块），见[窗口摆到哪块显示器上](#窗口摆到哪块显示器上)；写在其它的 op 上会被 `--check` 拒绝 |
 | `notify`    | `title`、`body`                                                                                           | 托盘气泡提示                                                                                                                                                                                                                                                                              |
 | `menu`      | `title`、`items[]`（每项 `{ key, label, hint, action }`）                                                  | 弹出一个选单让用户挑一项（见[选单与电源](#选单与电源)）；条目上的单字符 `key` 直接选中它，`↑`/`↓` + `Enter` 与鼠标也能选，`Esc`（或点到别的地方）只关窗口。没有 `action`（或 `none()`）的条目只是把选单关掉                                                                         |
 | `help`      | `title`（可选，默认「快捷键」）                                                                            | 弹出一个**快捷键帮助**（见[快捷键帮助](#快捷键帮助)）：列出当前配置里全部生效的快捷键与重映射；筛选框里直接输入（鼠标点一下就进去）就筛选；`↑`/`↓`、`PgUp`/`PgDn` 或滚轮/拖动滚动条滚动（滚动不改选中项）；**`Enter` 或双击一行 = 关掉窗口并执行那一行的动作**；左键点一行 = 选中它并把它的按键复制到剪贴板；`quit`/`suspend`/`power` 这类危险动作要按两次；`Esc` 依次是「取消确认 → 清筛选 → 关窗」。列表由配置本身生成，所以没有别的参数 |
 | `windows`   | `title`（可选，只用作**窗口标题**）                                                                        | 弹出一个**窗口切换器**（见[窗口切换器](#窗口切换器)）：列出当前所有打开的程序窗口（**进程名在上、窗口标题在下**），输入按**进程名前缀**筛选（标题只显示、不参与匹配）；**筛选到只剩一个窗口就直接激活它**，多条时用 `↑`/`↓` + `Enter` 或鼠标点选，`Esc` 关窗；筛到一个进程、而它开了多个窗口时进入**数字选择模式**（前 10 行依次是 `1`..`9`、`0`，按数字直接切过去）。卡片**没有标题行**（筛选框就是第一行，列表与它同宽），打开的瞬间还会把输入法切成英文、关掉时把打开前的模式写回去；卡片开着时**再按一次同一个快捷键就是关掉它**（与 `Esc` 同义） |
 | `power`     | `op` = `sleep`/`hibernate`/`shutdown`/`restart`/`logoff`/`lock`/`screen_off`                                | 系统电源：睡眠、休眠、关机、重启、注销、锁定、关屏。关机/重启/注销需要管理员权限（flowkeyd 默认就提权运行），失败时会写日志并弹一个气泡；`screen_off` 只是关掉全部显示器（不睡眠），不需要权限，任意按键/鼠标动作都会把屏幕重新点亮                                                                                      |
-| `apps`      | `title`（可选，只用作**窗口标题**）                                                                        | 弹出一个**程序启动器**（见[程序启动器](#程序启动器)）：开始菜单里的程序分三段摆出来 —— 「已固定」「最近使用」（最多两行）与一个「全部程序」按钮；输入按**名字 / 拼音 / 首字母的子串**筛选（`code`、`jishiben`、`jsb` 都能找到「记事本」与 `Visual Studio Code`）；用 `↑`/`↓`/`←`/`→` + `Enter`（或鼠标点一下）启动高亮那一个，**筛选之后前 10 个结果各带一个 `0`–`9` 的快速启动键**（图标右上角，按一下直接启动，easymotion 风格），**最近使用的程序另有 `Alt` + 数字（`Alt+1`–`Alt+9`、`Alt+0`）、已固定的程序另有 `Alt` + 功能键（`Alt+F1`–`Alt+F12`）的快速启动键**，`Space` 固定 / 取消固定，**右键某一格弹出那个程序的原生 Windows 右键菜单**，`Esc` 关窗；卡片开着时**再按一次同一个快捷键就是关掉它**。目录来自三个地方：`shell:AppsFolder`（与开始菜单「所有应用」一致，含商店应用与系统工具；文档 / 网址 / 卸载程序被滤掉）、**控制面板的「所有控制面板项」**（网络连接、电源选项、程序和功能、设备管理器……），以及**内置的常用「Windows 设置」页**（显示、声音、网络、电源和睡眠，共 26 个 `ms-settings:` 页面，名字带「设置：」前缀）；启动与图标都交给 shell |
+| `apps`      | `title`（可选，只用作**窗口标题**）                                                                        | 弹出一个**程序启动器**（见[程序启动器](#程序启动器)）：开始菜单里的程序分三段摆出来 —— 「已固定」「最近使用」（最多两行）与一个「全部程序」按钮；输入按**名字 / 拼音 / 首字母的子串**筛选（`code`、`jishiben`、`jsb` 都能找到「记事本」与 `Visual Studio Code`）；用 `↑`/`↓`/`←`/`→` + `Enter`（或鼠标点一下）启动高亮那一个，**筛选之后前 10 个结果各带一个 `0`–`9` 的快速启动键**（图标右上角，按一下直接启动，easymotion 风格），**最近使用的程序另有 `Alt` + 数字（`Alt+1`–`Alt+9`、`Alt+0`）、已固定的程序另有 `Alt` + 功能键（`Alt+F1`–`Alt+F12`）的快速启动键**，`Space` 固定 / 取消固定，**右键某一格弹出那个程序的原生 Windows 右键菜单**，`Esc` 关窗；卡片开着时**再按一次同一个快捷键就是关掉它**。目录来自三个地方：`shell:AppsFolder`（与开始菜单「所有应用」一致，含商店应用与系统工具；文档 / 网址 / 卸载程序被滤掉）、**控制面板的「所有控制面板项」**（网络连接、电源选项、程序和功能、设备管理器……），以及**内置的常用「Windows 设置」页**（显示、声音、网络、电源和睡眠，共 26 个 `ms-settings:` 页面，名字带「设置：」前缀）；启动与图标都交给 shell，启动的程序是**当前登录用户的普通权限** |
 | `desktop`   | `switch`（从 1 开始）                                                                                     | 切到第 N 个虚拟桌面（Task View 里从左到右的顺序）                                                                                                                                                                                                                                          |
 | `suspend`   | `state` = `on`/`off`/`toggle`                                                                             | 暂停快捷键匹配；suspend 快捷键本身仍然可用                                                                                                                                                                                                                                                |
 | `reload`    |                                                                                                           | 重新读取配置文件                                                                                                                                                                                                                                                                          |
@@ -802,6 +802,7 @@ app{
     program = [[C:\tools\ksolaunch.exe]],
     args = { "/prometheus" },
     wait_ms = 10000,
+    -- elevated = true,            -- 以管理员权限启动（默认 = 普通用户权限）
   },
   window = {                     -- 可选：window_rule 的全部字段
     desktop = 3,
@@ -821,7 +822,7 @@ app{
 * `window` 就是一条 `window_rule`，字段完全一样；`process` / `title` / `name` 自动
   继承，显式写在 `window` 里的优先。不写 `window` 就只展开快捷键。
 * `launch` 就是这个程序怎么启动，字段与 `window` 动作的 `launch` 完全一样
-  （`program`、`args[]`、`cwd`、`show`、`shell`、`env{}`、`wait_ms`）。`hotkeys` 里的
+  （`program`、`args[]`、`cwd`、`show`、`shell`、`env{}`、`wait_ms`、`elevated`）。`hotkeys` 里的
   `window()` 动作会自动继承它；动作自己写了 `launch` 时**逐字段合并**（写了的覆盖，
   没写的继续继承），动作顶层的 `wait_ms` 覆盖 `launch.wait_ms`。于是最常见的写法就是
   `action = window("activate")`。
@@ -1033,7 +1034,8 @@ hotkey{
 
 `apps()` 弹出一张卡片，把目录里的程序分成三段（每一项是图标 + 名字）：**已固定**、
 **最近使用**（最多两行）、以及一个 **全部程序（N）** 按钮。输入就按名字筛选、`Enter`
-或左键单击启动它（目录来自开始菜单、控制面板与内置的系统设置页，见下）：
+或左键单击启动它（目录来自开始菜单、控制面板与内置的系统设置页，见下）。启动的程序
+是**当前登录用户的普通权限**：flowkeyd 自己提权运行也不会把它一起提上去。
 
 ```lua
 hotkey{
@@ -1082,8 +1084,9 @@ hotkey{
   图标借「设置」应用那一张。
 * **启动走的是同一条路**（把启动名交给 shell）：开始菜单与应用商店条目的启动名是
   `shell:AppsFolder\<AppUserModelID>`、控制面板项是它的 shell 解析名
-  （`::{26EE0668-…}\0\::{…}`）、设置页是 `ms-settings:` URI。参数、工作目录、`runas`
-  标记、商店应用的激活全部由 shell 处理，与点开始菜单 / 控制面板一样。
+  （`::{26EE0668-…}\0\::{…}`）、设置页是 `ms-settings:` URI。参数、工作目录、商店应用的
+  激活全部由 shell 处理，与点开始菜单 / 控制面板一样。**启动的程序是普通权限**（见
+  [启动的程序用什么权限](#启动的程序用什么权限)）。
 * **卡片分三段（从上到下）**：
   * **已固定** —— 你按 `Space` 固定过的那些程序（网格，顺序就是你固定的顺序）；
   * **最近使用** —— 真的从启动器里启动过的程序，最多两行（12 个），最近的在前；
@@ -1135,7 +1138,9 @@ hotkey{
   「打开」「以管理员身份运行」「打开文件位置」「固定到…」「属性」「卸载」这些条目全部
   由 shell 自己生成、自己执行，flowkeyd 不去猜也不去实现它们。菜单出现在光标处，选中
   一条就把卡片收掉（让 shell 打开的东西自己拿前台），按 `Esc` 或点菜单外面取消则卡片
-  留着、可以接着选下一格。
+  留着、可以接着选下一格。**这些菜单项是由 shell 在 flowkeyd 自己的进程里执行的**，
+  所以选「打开」开出来的程序会是提权的（启动器本身的左键 / `Enter` 不会，见上）——
+  见[已知限制](#已知限制)。
 * **不切输入法**（与窗口切换器相反）：这里的名字可能是中文（「记事本」），一打开就把
   输入法切成英文反而筛不出东西。
 * 简写 `action = "apps"`；`"launcher"` 与 `"programs"` 是它的别名。`apps("程序")`
@@ -1151,6 +1156,43 @@ hotkey{
   不了提权进程的窗口）。
 * **不提权的场合。** `--check`、`--list`、`--list-keys` 都是离线命令，永远不会弹 UAC。
   另外 `--no-elevate`（或 `settings.elevate = false`）能完全关掉提权。
+
+### 启动的程序用什么权限
+
+**flowkeyd 自己提权运行，但它启动的程序默认还是你（普通用户）的权限。** 这跟在提权的
+命令提示符里 `start …` 不一样（那样启动的东西也是管理员的），刻意如此：管理员令牌下的
+浏览器 / 编辑器会丢掉拖放、把配置写到奇怪的地方，有些程序干脆拒绝在提权下启动。
+
+| 入口                            | 默认                                              | 想提权时 |
+| ------------------------------- | ------------------------------------------------- | -------- |
+| `run(...)`                      | 当前登录用户的普通权限                            | `elevated = true` |
+| `window` 的 `launch` / `app` 的 `launch` | 同上（与 app 的 `launch` 逐字段合并）      | `elevated = true` |
+| `open(...)`（文档 / URL / 文件夹） | 同上（由 shell 打开，所以打开的也是普通权限的程序） | —— |
+| 程序启动器（`apps()`）          | 同上                                              | 右键菜单里的「以管理员身份运行」 |
+| 托盘菜单里的“打开配置文件”      | 同上                                              | —— |
+
+```lua
+hotkey{ keys = "Ctrl+Alt+n", action = run("notepad.exe") }                       -- 普通权限
+hotkey{ keys = "Ctrl+Alt+m", action = run("mmc.exe", { elevated = true }) }      -- 管理员
+app{ process = "wireshark", launch = { program = "wireshark.exe", elevated = true },
+     hotkeys = { { keys = "Win+w", action = window("activate") } } }
+```
+
+* **怎么做到的**：flowkeyd 从登录 shell（`explorer.exe`）复制一份令牌，用
+  `CreateProcessWithTokenW` 启动，于是子进程落在中等完整性（Medium）上；`elevated = true`
+  而 flowkeyd 自己没提权时，改用 `ShellExecuteW("runas")` 弹一次 UAC。
+* **`open` 与程序启动器要经过 shell**（`ShellExecuteExW` 没有令牌参数），所以它们由一个
+  **隐藏的、普通权限的 flowkeyd 副本**代劳（内部命令 `--shell-open` / `--shell-app`，
+  不会装钩子、不读配置、不弹任何窗口）。代价是每次多起一个隐藏进程（几十毫秒）。
+* **拿不到普通权限时不报错、而是退回继承当前权限**（例如锁屏 / 非交互会话里没有
+  `explorer.exe`、或者 Secondary Logon 服务被禁用），日志里有一条 `could not start … as
+  the logged-on user (…); falling back to the elevated token` 的 warning。
+* **`elevated = true` 而 flowkeyd 没提权**时走 UAC：用户拒绝就失败（日志里有
+  `cannot run … as administrator: …`）；这条路**无法转交 `env{}`**（`ShellExecuteExW`
+  没有环境块参数），写了 `env` 时日志里会有一条 warning。
+* 提权的程序自己是管理员，**它启动的子进程也会继承**（Windows 的规则，flowkeyd 不管）。
+* 程序启动器**右键菜单**里的条目是由 shell 在 flowkeyd 自己的进程里执行的，所以那些
+  菜单项（除「以管理员身份运行」本意如此外）开出来的程序**会**提权 —— 见[已知限制](#已知限制)。
 
 flowkeyd **自己**会注册一个**登录时触发**的计划任务（*使用最高权限运行*）：每次启动时
 它检查这个任务，**不存在、或指向的 exe 与当前正在运行的这个不是同一个，就先弹一个确认
@@ -1246,15 +1288,19 @@ Release 的版本号与发布说明（这次更新大概改了什么），显示
 * 进入 / 离开远程桌面那一刻，**长按重复**与待定的「轻碰 Win」会作废；已经被呑掉、还按着
   的键在松开时仍然呑掉（否则前台会看到一个孤立的 key-up），而之前被某条重映射按住的目标键
   会立刻松开（`remote_desktop = true` 的例外不动它）。
-* 除非 flowkeyd 自己也提权，否则 `window` 动作无法驱动提权进程的窗口。反过来，提权后
-  的 flowkeyd 启动的子进程会继承管理员令牌（`run`、`open`、`window.launch`、以及**程序
-  启动器启动的程序**都是）。
+* 除非 flowkeyd 自己也提权，否则 `window` 动作无法驱动提权进程的窗口。
+* **flowkeyd 启动的程序默认是普通权限**（`run`、`open`、`window.launch`、程序启动器都是），
+  只有写了 `elevated = true` 的那几条才是管理员 —— 见[启动的程序用什么权限](#启动的程序用什么权限)。
+  没写却仍然提权的情况只有两种，而且都会在日志里留一条 warning：拿不到登录 shell 的令牌，
+  或者 `--no-elevate` 的 flowkeyd 自己就在提权会话里。
+* **程序启动器的右键菜单不由 flowkeyd 执行**：菜单是 shell 的，命令在 flowkeyd 自己的
+  进程里跑，所以从那里选「打开」／「打开文件位置」开出来的程序是**提权的**（左键 / `Enter`
+  启动的条目不受影响）。要让整个菜单也在普通权限下跑，得把菜单宿主（含 `#32768` 窗口的
+  消息转发）整个搬到一个代理进程里，代价与风险都不划算。
 * **图形化配置界面保存时会整体重写 `config.lua`**：界面之外的内容（注释、用循环/变量生成
   的条目）不会保留，只会留在 `config.lua.bak` 里。想要保住它们就别用界面保存（删掉文件开头
   那行标记，界面就会先问一句），或者干脆手写配置。界面也不做「只改一半」：保存就是把当前界面
   里的全部内容写成一份新的文件。
-  需要普通权限时可以让 `explorer.exe` 代劳（`action = "run:explorer.exe path"`），
-  或者直接用 `--no-elevate` 运行 flowkeyd。
 * **程序启动器列的是三份来源的条目本身**：开始菜单「所有应用」（`shell:AppsFolder`）、
   控制面板的「所有控制面板项」、以及内置的 26 个「Windows 设置」页。输入法的工具项
   （「【小狼毫】输入法设定」）这类名字也会在列表里 —— 它们确实是指向 exe 的程序，

@@ -190,6 +190,13 @@ Column {
             value: root.action.wait === true
             onPicked: function (value) { root.action.wait = value }
         }
+        BoolRow {
+            width: root.width
+            label: qsTr("以管理员身份运行")
+            hint: qsTr("默认以当前登录用户的普通权限启动")
+            value: root.action.elevated === true
+            onPicked: function (value) { root.action.elevated = value }
+        }
         SettingRow {
             width: root.width
             label: qsTr("环境变量")

@@ -66,6 +66,7 @@ private slots:
     void movingWindowOpsAreConverted();
     void windowActionMonitorIsConverted();
     void runWithoutArgsAndWithEmptyArgs();
+    void elevatedIsConverted();
     void menuAndPowerHelpersBuildTheExpectedTables();
     void helpHelperTakesAnOptionalTitle();
     void windowsHelperTakesAnOptionalTitle();
@@ -242,6 +243,42 @@ void TestLua::runWithoutArgsAndWithEmptyArgs()
         QCOMPARE(c->bindings[0].press[0].program, QStringLiteral("notepad.exe"));
         QVERIFY(c->bindings[0].press[0].args.isEmpty());
     }
+}
+
+void TestLua::elevatedIsConverted()
+{
+    // 默认 false = 以当前登录用户的普通权限启动：不写就不带管理员令牌。
+    const auto plain = parse(R"(hotkey{ keys = "F1", action = run("notepad.exe") })");
+    QVERIFY(plain.has_value());
+    QVERIFY(!plain->bindings[0].press[0].elevated);
+
+    const auto elevated = parse(R"(
+        hotkey{ keys = "F1", action = run("mmc.exe", { elevated = true }) }
+        hotkey{ keys = "F2", action = window("activate", {
+          process = "regedit",
+          launch = { program = "regedit.exe", elevated = true },
+        }) }
+        app{
+          process = "wps",
+          launch = { program = "wps.exe", elevated = true },
+          hotkeys = { { keys = "F3", action = window("activate") } },
+        }
+    )");
+    QVERIFY(elevated.has_value());
+    QCOMPARE(elevated->bindings.size(), std::size_t(3));
+    QVERIFY(elevated->bindings[0].press[0].elevated);
+    QVERIFY(elevated->bindings[1].press[0].launch.has_value());
+    QVERIFY(elevated->bindings[1].press[0].launch->elevated);
+    // app 的 `launch` 是默认值：动作没写 `elevated` 时跟着继承。
+    QVERIFY(elevated->bindings[2].press[0].launch.has_value());
+    QVERIFY(elevated->bindings[2].press[0].launch->elevated);
+
+    // 类型错了要被白名单拦下来（`elevated` 在 launch 的白名单里，但不是自由的键）。
+    const QString wrongType = failure(R"(hotkey{ keys = "F1", action = run("x", { elevated = "yes" }) })");
+    QVERIFY2(wrongType.contains(QStringLiteral("expected a boolean")), qPrintable(wrongType));
+    const QString unknown = failure(
+        R"(hotkey{ keys = "F1", action = window("activate", { process = "x", launch = { program = "x", elevate = true } }) })");
+    QVERIFY2(unknown.contains(QStringLiteral("unknown field `elevate`")), qPrintable(unknown));
 }
 
 void TestLua::menuAndPowerHelpersBuildTheExpectedTables()

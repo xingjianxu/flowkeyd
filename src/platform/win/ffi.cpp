@@ -1,11 +1,34 @@
 #include "platform/win/ffi.h"
 
+#include <vector>
+
 namespace flowkeyd::platform::win {
 
 HMODULE moduleHandle()
 {
     static HMODULE handle = GetModuleHandleW(nullptr);
     return handle;
+}
+
+QString currentExecutablePath()
+{
+    std::vector<wchar_t> buffer(512);
+    for (;;) {
+        const DWORD length = GetModuleFileNameW(nullptr,
+                                                buffer.data(),
+                                                static_cast<DWORD>(buffer.size()));
+        if (length == 0) {
+            return QString();
+        }
+        if (length < buffer.size()) {
+            return QString::fromWCharArray(buffer.data(), static_cast<int>(length));
+        }
+        // Win10 起截断时返回缓冲区大小并置 ERROR_INSUFFICIENT_BUFFER。
+        buffer.resize(buffer.size() * 2);
+        if (buffer.size() > 32768) {
+            return QString();
+        }
+    }
 }
 
 QString winErrorMessage(unsigned long code)

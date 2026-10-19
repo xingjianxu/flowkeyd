@@ -119,6 +119,11 @@ void TestConfig::summaries()
              QStringLiteral("run cmd.exe /c x"));
     QCOMPARE(sendAction(QStringLiteral("^{c}")).summary(), QStringLiteral("send ^{c}"));
 
+    // 默认是普通权限，只有显式要求提权的条目才在摘要里标出来（`--list` / 帮助窗口）。
+    Action elevatedRun = runAction(QStringLiteral("mmc.exe"));
+    elevatedRun.elevated = true;
+    QCOMPARE(elevatedRun.summary(), QStringLiteral("run mmc.exe (elevated)"));
+
     Action capsLock = actionOf(Action::Kind::CapsLock);
     QCOMPARE(capsLock.summary(), QStringLiteral("caps lock Off"));
 
@@ -151,6 +156,13 @@ void TestConfig::summaries()
     window.toggle = false;
     QCOMPARE(window.summary(),
              QStringLiteral("window Activate belonging to the process \"wezterm\" (no toggle)"));
+    LaunchSpec elevatedLaunch;
+    elevatedLaunch.program = QStringLiteral("wezterm.exe");
+    elevatedLaunch.elevated = true;
+    window.launch = elevatedLaunch;
+    QCOMPARE(window.summary(),
+             QStringLiteral("window Activate belonging to the process \"wezterm\" "
+                            "(launch if missing, elevated) (no toggle)"));
 
     Action volume = actionOf(Action::Kind::Volume);
     volume.volumeOp = VolumeOp::Set;
@@ -1032,6 +1044,7 @@ void TestConfig::appLaunchIsInheritedAndOverridden()
     launch.program = QStringLiteral("wezterm.exe");
     launch.args = QStringList{QStringLiteral("start")};
     launch.waitMs = 5000;
+    launch.elevated = true;
     app.launch = launch;
     HotkeyDef def;
     def.keys = QStringList{QStringLiteral("Win+s")};
@@ -1045,6 +1058,7 @@ void TestConfig::appLaunchIsInheritedAndOverridden()
     QCOMPARE(inherited.launch->program, QStringLiteral("wezterm.exe"));
     QCOMPARE(inherited.launch->args, QStringList{QStringLiteral("start")});
     QCOMPARE(inherited.launch->waitMs, std::optional<std::uint64_t>(5000));
+    QVERIFY(inherited.launch->elevated);
 
     // 动作顶层的 wait_ms 覆盖 app 的 wait_ms，其余字段继续继承。
     Config override;
@@ -1065,7 +1079,8 @@ void TestConfig::appLaunchIsInheritedAndOverridden()
 
     // 动作自己写了 launch 时逐字段合并：写了的覆盖，没写的继承。
     LaunchFields none;
-    none.program = none.args = none.cwd = none.show = none.shell = none.env = none.waitMs = false;
+    none.program = none.args = none.cwd = none.show = none.shell = none.env = none.waitMs
+        = none.elevated = false;
     Config partial;
     AppDef partialApp = app;
     HotkeyDef tweak;
@@ -1085,6 +1100,8 @@ void TestConfig::appLaunchIsInheritedAndOverridden()
     QCOMPARE(partialLaunch.launch->program, QStringLiteral("wezterm.exe"));
     QCOMPARE(partialLaunch.launch->args, QStringList{QStringLiteral("--new-window")});
     QCOMPARE(partialLaunch.launch->waitMs, std::optional<std::uint64_t>(5000));
+    // `elevated` 没写过，所以继续继承 app 的那一份。
+    QVERIFY(partialLaunch.launch->elevated);
 
     // 全局条目里的 wait_ms 也生效（没有 app 时不能继承，但能覆盖自己的 launch）。
     Config global;

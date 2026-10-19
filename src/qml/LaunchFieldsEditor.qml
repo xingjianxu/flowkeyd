@@ -79,6 +79,14 @@ Column {
         }
     }
 
+    BoolRow {
+        width: launch.width
+        label: qsTr("以管理员身份运行")
+        hint: qsTr("默认以当前登录用户的普通权限启动")
+        value: launch.spec.elevated === true
+        onPicked: function (value) { launch.spec.elevated = value }
+    }
+
     SpinRow {
         width: launch.width
         visible: launch.showWaitMs

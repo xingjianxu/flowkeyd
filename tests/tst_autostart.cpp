@@ -6,6 +6,8 @@
 
 #include "platform/win/autostart.h"
 
+#include "platform/win/ffi.h"
+
 using namespace flowkeyd;
 
 namespace {

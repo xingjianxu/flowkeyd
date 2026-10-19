@@ -329,6 +329,8 @@ void openWindowsAction(Runtime *runtime,
 ///
 /// **启动走 `apps::launchApp()`**（`shell:AppsFolder\<AUMID>`）：参数、工作目录、
 /// `runas` 标记、商店/UWP 应用的激活全部交给 shell，与点开始菜单一致。
+/// 以**当前登录用户的普通权限**启动（`launchAppAsUser()`）：提权实例会把它交给
+/// 一个隐藏的代理进程，否则启动器拉起的浏览器 / 商店应用也会是管理员进程。
 void openAppsAction(Runtime *runtime,
                     Dispatcher *dispatcher,
                     const std::vector<core::AppEntry> &catalog,
@@ -356,7 +358,7 @@ void openAppsAction(Runtime *runtime,
         const QString launchName = launchNames[static_cast<std::size_t>(index)];
         dispatcher->submitCall([launchName, hotkey]() {
             QString error;
-            if (!win::apps::launchApp(launchName, &error)) {
+            if (!win::apps::launchAppAsUser(launchName, &error)) {
                 win::logError(QStringLiteral("`%1` app launcher: %2").arg(hotkey, error));
                 return;
             }
@@ -745,6 +747,7 @@ bool launchThenActivate(ExpandContext &ctx,
     }
     spec.show = launch.show;
     spec.shell = launch.shell;
+    spec.elevated = launch.elevated;
     spec.wait = false;
     for (auto it = launch.env.constBegin(); it != launch.env.constEnd(); ++it) {
         spec.env.insert(ctx.expand(it.key()), ctx.expand(it.value()));
@@ -1203,6 +1206,7 @@ void executeAction(Runtime *runtime,
         spec.show = action.show;
         spec.shell = action.shell;
         spec.wait = action.wait;
+        spec.elevated = action.elevated;
         for (auto it = action.env.constBegin(); it != action.env.constEnd(); ++it) {
             spec.env.insert(ctx.expand(it.key()), ctx.expand(it.value()));
         }

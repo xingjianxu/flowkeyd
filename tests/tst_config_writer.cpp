@@ -50,6 +50,7 @@ Action windowAction()
     launch.shell = true;
     launch.env = {{QStringLiteral("K"), QStringLiteral("V")}};
     launch.waitMs = 1500;
+    launch.elevated = true;
     action.launch = launch;
     action.waitMs = 2000;
     return action;
@@ -112,6 +113,7 @@ std::vector<Action> allActions()
         action.show = ShowMode::Hidden;
         action.shell = true;
         action.wait = true;
+        action.elevated = true;
         action.env = {{QStringLiteral("A"), QStringLiteral("1\\2")},
                       {QStringLiteral("B"), QStringLiteral("quote\"")}};
         out.push_back(action);
@@ -350,6 +352,7 @@ Config sampleConfig()
         launch.args = {QStringLiteral("--open")};
         launch.show = ShowMode::Normal;
         launch.waitMs = 800;
+        launch.elevated = true;
         app.launch = launch;
 
         HotkeyDef hotkey;

@@ -61,6 +61,9 @@ enum class PowerOp { Sleep, Hibernate, Shutdown, Restart, Logoff, Lock, ScreenOf
 
 /// Rust `Debug` 风格的名字（摘要里用的就是它）。
 QString showModeDebugName(ShowMode mode);
+/// 配置里书写的名字（`normal` / `hidden` / `minimized` / `maximized`）；
+/// `showModeFromName()` 的反函数。
+QString showModeName(ShowMode mode);
 QString volumeOpDebugName(VolumeOp op);
 QString mediaOpDebugName(MediaOp op);
 QString clipboardOpDebugName(ClipboardOp op);
@@ -116,6 +119,9 @@ struct LaunchSpec
     QMap<QString, QString> env;
     /// 等待窗口出现的时间（默认 3000 ms）。
     std::optional<std::uint64_t> waitMs;
+    /// 以管理员权限启动（默认 `false` = 当前登录用户的**普通权限**）。
+    /// 与 `core::Action::elevated` 同义：`app{}` 的 `launch` 是这个程序的默认值。
+    bool elevated = false;
 };
 
 /// `launch = { ... }` 里**显式写了**哪些字段。
@@ -134,6 +140,7 @@ struct LaunchFields
     bool shell = true;
     bool env = true;
     bool waitMs = true;
+    bool elevated = true;
 };
 
 /// `menu` 动作里的一个条目。
@@ -195,6 +202,12 @@ struct Action
     ShowMode show = ShowMode::Normal;
     bool shell = false;
     bool wait = false;
+    /// 以管理员权限启动（默认 `false` = 当前登录用户的**普通权限**）。
+    ///
+    /// 默认值刻意不是「继承 flowkeyd 自己的令牌」：守护进程默认提权运行，继承会让
+    /// 每一个快捷键启动的程序都变成管理员进程（拖着 UAC 权限写注册表、拖放失效、
+    /// 部分程序拒绝在提权下启动）。
+    bool elevated = false;
     QMap<QString, QString> env;
 
     // send / type

@@ -172,6 +172,10 @@ end
 --   run("wt.exe")
 --   run("wt.exe", { "-w", "0" })
 --   run("git status --short", { shell = true, wait = true })
+--
+-- elevated（默认 false）：默认以**当前登录用户的普通权限**启动（守护进程自己提权时
+-- 也一样）；写 `elevated = true` 才以管理员权限启动（自己没提权时会弹 UAC）。
+--   run("mmc.exe", { elevated = true })
 function run(program, args, opts)
   if type(program) ~= "string" then
     error("run() expects a program string, got " .. type(program), 2)
@@ -254,9 +258,9 @@ end
 --   window("move_next_desktop", { follow = true })
 -- `follow` 只能写在这两个 op 上，写在其它的 op 上会被 `--check` 拒绝。
 --
--- `launch = { program, args[], cwd, show, shell, env{}, wait_ms }` 只在没有窗口
--- 匹配时执行；`wait_ms` 也可以写在动作顶层（它是 `launch.wait_ms` 的简写），
--- 在 app{} 里还会继承 app 的 launch。
+-- `launch = { program, args[], cwd, show, shell, env{}, wait_ms, elevated }` 只在
+-- 没有窗口匹配时执行；`wait_ms` 也可以写在动作顶层（它是 `launch.wait_ms` 的简写），
+-- 在 app{} 里还会继承 app 的 launch。`elevated` 的默认值同样是 false（普通权限）。
 --
 -- `op = "activate"` 默认带 `toggle`：目标窗口已经在前台时就把它最小化，
 -- 于是同一个快捷键在唤起与收起之间切换（任务栏按钮的行为）。
