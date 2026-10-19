@@ -1757,6 +1757,13 @@ IME 切换）、弹窗不进任务栏 + 预热、发布包精简、精简升级�
   等它真的消失，还有残留就 abort（不构建也不重启）。
 * **`Start-Process` 起的后台进程会把继承的 stdout/stderr 一直握着**，让调用方一直等 → 起后台服务就把
   两个流都重定向到文件。
+* **发布后怎么核对**（2026-10-19 那次：`scripts\release.ps1 -Push` 一次过，`100% tests passed, 0 tests
+  failed out of 34`，tag `v26-10-19-9f9fbca`）：`gh release view <tag> --json
+  tagName,isDraft,isPrerelease,assets --jq …` 看四个资产都在 `uploaded` 状态；正文要另想办法看，**别用
+  PowerShell 的 `>` 抓**：`gh`/`gh api` 的 UTF-8 stdout 会先按控制台代码页（GBK）解码、再被 `>` 写成
+  **UTF-16**，中文一律变成 `�?`，看起来像「发布页上的正文是乱码」——其实远端是好的（用 HTTP 取
+  `api.github.com/repos/<owner>/<repo>/releases/tags/<tag>` 的 `body` 才是逐字节正确的，2026-10-19 验证
+  过）。同理，收尾脚本里判断「发布成功」靠的是脚本自己的退出码 + 上面那 4 个资产。
 * **`--check` 之类的输出中文经 agent 的 bash 抓回来是乱码**（控制台代码页）→ 验收脚本把窗口标题与前台
   窗口的类名/码点写进 `-WorkDir\diag.txt`（UTF-8、无 BOM）当诊断，要读结果就用 read 工具读那个文件。
 * **窗口切换器的行为只能靠验收脚本验证**（`PopupHost` 要真 QML 窗口，单测碰不到）：用**注入的「轻碰
