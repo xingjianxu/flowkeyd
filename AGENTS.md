@@ -235,7 +235,7 @@ UI 只有托盘图标 + 日志窗口、`menu`/`help`/`windows`/`apps`/`update` �
 
 | | |
 | -- | -- |
-| 开发环境 | 原生 Windows 10.0 build 26200 (x64)，交互式桌面会话；工程路径 `D:\prj\flowkeyd` |
+| 开发环境 | 原生 Windows 10.0 build 26300（26H2，UBR 9711）(x64)，交互式桌面会话；工程路径 `D:\prj\flowkeyd` |
 | Qt | `C:\Qt\6.11.2\mingw_64`（只有 mingw_64 这一套） |
 | 编译器 | `C:\Qt\Tools\mingw1310_64\bin\g++.exe`（GCC 13.1.0） |
 | CMake / Ninja | `C:\Qt\Tools\CMake_64\bin\cmake.exe` / `C:\Qt\Tools\Ninja\ninja.exe` |

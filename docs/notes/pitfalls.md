@@ -411,6 +411,42 @@
   跑，于是**文档里写的"exe 同目录"候选实际是失效的**（`exeDir` 是空串，直接跳过）。已知小缺陷、**没改**；
   要改就得给 core 一个不依赖 Qt 实例的 exe 目录来源（例如 `core::setExeDirectory()`）。
 
+### 工作空间：隐藏窗口的实测结论（M0）
+
+一次性探针在 `tmp/wsprobe/`（`enum` / `matrix` / `hold` / `events` / `timing` / `focus` / `fgswitch` /
+`restack` / `pixel` / `uipi` / `state` / `drag`）。本机 Windows 10.0.26300 / 26H2 / UBR 9711，两块
+3840x2160@200% 的屏。
+
+* **`DwmSetWindowAttribute(DWMWA_CLOAK)` 只能 cloak 自己的窗口**：对别的进程的窗口（真机记事本、中完整性）
+  返回 `E_ACCESSDENIED`（`0x80070005`），提权窗口是 `E_HANDLE`（`0x80070006`）。**「像虚拟桌面那样 cloak
+  别人的窗口」这条路对外部进程走不通**（cloak 是 shell 内部机制）。同进程窗口 cloak 本身是好的（不发任何
+  消息、67–90 µs、`IsWindowVisible` 仍为 1、桌面归属仍可查），所以它只适合「我们藏我们自己的窗口」。
+* **`SWP_HIDEWINDOW` 不发 `WM_SHOWWINDOW`，但隐藏之后抢不到前台**：`ShowWindow(SW_HIDE)` 之后
+  `AttachThreadInput` + `SetForegroundWindow(另一个窗口)` **成功**；换成 `SetWindowPos(SWP_HIDEWINDOW)` 之后
+  同一个调用返回 **FALSE**、前台还停在那个隐藏窗口上 → 工作空间切换只能用 `SW_HIDE`。同进程对比更清楚：
+  `SW_HIDE` 会发 `WM_SHOWWINDOW(FALSE)` + `WM_WINDOWPOSCHANGED(SWP_HIDEWINDOW)`，`SWP_HIDEWINDOW` 只发后者。
+* **`SW_HIDE` 之后 `GetForegroundWindow()` 还返回那个隐藏窗口**（它的 `IsWindowVisible` 已经是 0）→
+  「隐藏旧空间的窗口、把前台交给新空间最近用过的窗口」必须显式做完两步；判断「前台到底是不是用户看得见
+  的窗口」不能只看 `GetForegroundWindow()`（虚拟桌面那条坑的另一面）。
+* **隐藏之后 `IVirtualDesktopManager::GetWindowDesktopId` 会失败**（`0x8002802B` = TYPE_E_ELEMENTNOTFOUND），
+  显示回来才恢复 → **窗口的虚拟桌面归属必须先查后缓存**，切换那一刻查不到。反例：UWP 的
+  `ApplicationFrameWindow` 隐藏后照样能查（它的归属走 app view）。
+* **两种隐藏方法都会被外部 `SetWinEventHook` 看见**：`SW_HIDE` 与 `SWP_HIDEWINDOW` 各产生一条
+  `EVENT_OBJECT_HIDE` 和一条 `EVENT_OBJECT_SHOW`（没有 `LOCATIONCHANGE`、没有 `FOREGROUND`）→ 「自己引起的
+  显隐事件」只能靠期望事件表抑制，事件本身分不出是谁干的。
+* **`SW_HIDE` 对样本程序都安全**（记事本 / Chrome / VS Code（Electron）/ WezTerm（OpenGL）/ UWP 计算器 /
+  Directory Opus）：位置、大小、最大化、最小化全部保持；显示回来后**截图像素差 0.00%**（无重绘丢失、无
+  闪烁），隐藏期间差异 72–98%。UWP 要藏的是 `ApplicationFrameHost` 的 `ApplicationFrameWindow`（藏/显
+  都是同一个 HWND，UWP 内容跟着走）。
+* **UWP 的 `ApplicationFrameWindow` / `CoreWindow` 会带着 `cloak=2` 却仍在当前桌面**（真机的「设置」就是
+  这样，`GetWindowDesktopId` 还返回全零 GUID）：`cloak != 0` 不能单独当「不在本桌面」的判据，而且「被我们
+  藏起来的窗口」将来也要跟「shell 藏的假窗口」分开（`isSwitchableWindow` 要加例外）。
+* **`SW_HIDE` 是跨线程 `SendMessage` 语义**（真机单次 0.6–2.2 ms；`SWP_HIDEWINDOW` 不发消息，0.6–1.1 ms），
+  也就是说**目标进程卡死时可能把调用线程挂住**（本次没故意挂起别人的线程，未实测）→ 只能在动作工作线程
+  做，并且**先把恢复日志写盘再隐藏**。
+* **提权窗口一律动不了**（`ShowWindow` / `SetWindowPos` 都是 `ERROR_ACCESS_DENIED`=5）→ `--no-elevate` 的
+  实例只能跳过 + 一条 warning（Q7 得证，不用再设计提权代理）。
+
 ## 原生 shell 右键菜单（`platform/win/shell_menu`）
 
 * **`TrackPopupMenuEx` 弹的是 shell 生成的菜单，所以菜单消息必须转给 `IContextMenu2/3`**：`HMENU` 里可能
@@ -514,3 +550,19 @@
   Win」+ 窗口标题前缀**这套组合从外面看。两个容易踩的点：（1）触发发生在 **Win 键松开时**，所以"第二次
   轻碰"进来时卡片已经开着；（2）遮断标记要是没生效，外壳会弹开始菜单、卡片会在 300 ms 内自己关掉 ——
   所以"卡片还在前台"要**再等半秒**再断言。
+* **「窗口还在不在 shell 眼里」可以直接数任务栏按钮**（Win11 的 XAML 任务栏照样能枚举）：
+  `AutomationElement.RootElement` → 子级里 class = `Shell_TrayWnd` → 后代的 `ControlType.Button`，数
+  `Current.Name` 里带程序名的那个。真机基线 17 个、`SW_HIDE` 期间 16 个、显示回来 17 个（那颗
+  `记事本 - 1 个运行窗口` 消失又回来）。EnumWindows + `IsWindowVisible` 能得出同样结论，但任务栏按钮
+  才是用户真正看见的那件事。
+* **「Alt+Tab 里还有没有它」只能抓图用眼睛看**：`keybd_event` 按下 `Alt` → 按下 `Tab` → 截全屏 → 松开。
+  `SW_HIDE` 藏着记事本时切换器里只剩 Chrome / 计算器 / 资源管理器，记事本那张缩略图不在了。
+* **DPI 不感知的进程里 `SetCursorPos` / `CopyFromScreen` 用的是逻辑坐标**：本机 200% 缩放差一倍，抓到的
+  整屏是 1920x1080（实际 3840x2160），鼠标注入也按 1/2 落点 → **鼠标注入与像素测量要么放进 PMv2 感知的
+  进程**（`tmp/wsprobe drag`），要么先 `SetProcessDpiAwarenessContext`。
+* **`Win+Shift+←/→`（键盘把窗口搬到另一块屏）只产生 `EVENT_OBJECT_LOCATIONCHANGE`，没有
+  `EVENT_SYSTEM_MOVESIZEEND`**（真机实测；鼠标拖动才会有 MOVESIZEEND）→ 「窗口换显示器」的检测统一走
+  顶层窗口的 LOCATIONCHANGE + 防抖，别只挂 MOVESIZEEND（M7 原计划那一条不够）。
+* **用 PowerShell 改 UTF-8 源码文件会静默弄坏它**（`Get-Content -Raw` 按 GBK 解码、中文注释里的字节被
+  吃掉导致下一行被吞进注释）：改仓库里的文本一律用 edit 工具；`tmp/` 里的一次性脚本自己读写时用
+  `[IO.File]::ReadAllText($p, (New-Object Text.UTF8Encoding($false)))`。
