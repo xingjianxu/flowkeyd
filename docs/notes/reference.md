@@ -131,6 +131,14 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
 > `tst_interactive.exe restoresHiddenWindowsFromTheRecoveryLog`（真机，通过）、
 > `--check flowkeyd.lua.example` 零警告、`--restore-windows`（有实例在跑 / 没有实例两种路径）。
 
+> **M9（工作空间与其它功能的联动）同样没跑 acceptance.ps1**（同一个理由）。只跑了：debug + release
+> 双构建、`ctest` 37 个目标全绿、单跑 `tst_interactive.exe` 的
+> `revealsAWindowHiddenInAnotherWorkspace` / `switchesWorkspacesWithRealWindows` /
+> `relocatesDisplacedWindowsWithoutChangingState` / `enumeratesManageableWindowsByTheirRecord` /
+> `listsMainWindowsButSkipsOurOwn` / `cloakedWindowsAreHiddenFromTheSwitcher`（均通过）、
+> `--check flowkeyd.lua.example` 零警告。工作空间那几条验收脚本项（含“唤起藏在空间 2 的窗口”与
+> “切换器里出现被我们藏起来的**别进程**窗口”）统一留到 M11 与整份脚本一起加。
+
 ## 手工冒烟清单（脚本覆盖不到的部分）
 
 1. `--check --config tmp/smoke.lua` 通过，`--list` 形状与 README 一致。
@@ -206,3 +214,17 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
        **不弹**。
     3. `open([[...\x.docx]])` 与从启动器点一个程序：开出来的程序同样应当是普通权限；但启动器**右键
        菜单**里的「打开」开出来的是提权的（已知限制）。
+18. **工作空间与其它功能的联动**（M9；脚本不覆盖跨进程那一半）：
+    1. 给记事本类程序写一条 `window("activate")` 快捷键，把它的窗口 `workspace("move", 2)` 藏到
+       非活动空间；再按那个快捷键 —— 那块屏应**切到空间 2**、窗口回来并拿到前台，日志里多一段
+       `(workspace 2 on \\.\DISPLAYx)`；再按一次（此时它已在活动空间里）应当是正常的 `toggle` 收起。
+    2. 同上把窗口藏到空间 2，然后开 `windows()` 切换器 —— 那个窗口**应该在列表里**（进程名 / 标题
+       照旧）；选中它 —— 同样先切到空间 2 再激活。
+    3. 给那个程序写 `window_rule{ process = "...", workspace = 2 }` 重载配置，然后在空间 1 里启动它
+       —— 新窗口应当**直接出现在空间 2、立即被藏起来**，焦点不被抢；再手动 `workspace("move", 1)`
+       把它搬回空间 1，切换几次空间也不再被规则拉回空间 2（规则只在三个时机生效）。
+    4. 把一个**看得见的**窗口用 `window("move_right_monitor")` 挪到另一块屏 —— 日志里应当有
+       `workspace ... on \\.\DISPLAYy`，之后在那块屏上切空间时它跟着新屏显隐（不再跟着旧屏）。
+    5. 把一个窗口藏到非活动空间，再对同一个程序按 `move_right_monitor` / `minimize` 的快捷键 ——
+       应该**什么都不发生**，只多一条 warning（`is hidden in another workspace`）；窗口没有被弹出来、
+       也没有卡在一种“看得见却被记录当藏着”的状态。

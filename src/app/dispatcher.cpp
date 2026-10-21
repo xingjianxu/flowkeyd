@@ -31,6 +31,8 @@
 #include <QThread>
 #include <QTimer>
 
+#include <algorithm>
+#include <cstdint>
 #include <optional>
 #include <utility>
 
@@ -291,10 +293,14 @@ void openHelpAction(Runtime *runtime,
 /// 线程执行 —— 弹窗自己从不碰窗口后端（与 `menu` / `help` 同一条分工）。
 void openWindowsAction(Runtime *runtime,
                        Dispatcher *dispatcher,
+                       const std::shared_ptr<const core::Compiled> &config,
                        const QString &hotkey,
                        const core::Action &action)
 {
-    const std::vector<win::window::OpenWindow> windows = win::window::listOpenWindows();
+    // 工作空间藏着的窗口 `IsWindowVisible` 是假的，但它们仍然是用户自己的程序
+    // 窗口，所以要靠状态机的记录把它们纳进来（M9）。
+    const std::vector<win::window::OpenWindow> windows =
+        win::window::listOpenWindows(dispatcher->trackedWorkspaceWindows());
     SwitchRequest request;
     request.title = action.windowsTitle;
     std::vector<HWND> handles;
@@ -305,22 +311,30 @@ void openWindowsAction(Runtime *runtime,
         handles.push_back(entry.hwnd);
     }
     const int count = static_cast<int>(handles.size());
-    request.onChoose = [dispatcher, hotkey, handles = std::move(handles)](int index) {
-        if (index < 0 || index >= static_cast<int>(handles.size())) {
-            return;
-        }
-        const HWND hwnd = handles[static_cast<std::size_t>(index)];
-        dispatcher->submitCall([hwnd, hotkey]() {
-            QString detail;
-            QString error;
-            if (!win::window::applyTo(hwnd, core::WindowOp::Activate, false, &detail, &error)) {
-                win::logWarn(QStringLiteral("`%1` window switcher: %2").arg(hotkey, error));
-            } else {
-                win::logInfo(QStringLiteral("`%1` -> %2 (from the window switcher)")
-                                 .arg(hotkey, detail));
+    request.onChoose =
+        [dispatcher, config, hotkey, handles = std::move(handles)](int index) {
+            if (index < 0 || index >= static_cast<int>(handles.size())) {
+                return;
             }
-        });
-    };
+            const HWND hwnd = handles[static_cast<std::size_t>(index)];
+            dispatcher->submitCall([dispatcher, config, hwnd, hotkey]() {
+                // 它在别的工作空间里时先切过去（**等切完**，窗口才真的可见），
+                // 再去激活 —— 反过来对一个 `SW_HIDE` 着的窗口调 `raiseWindow()`
+                // 是没用的。
+                const QString revealed = dispatcher->revealWindowWorkspace(*config, hwnd);
+                QString detail;
+                QString error;
+                if (!win::window::applyTo(hwnd, core::WindowOp::Activate, false, &detail, &error)) {
+                    win::logWarn(QStringLiteral("`%1` window switcher: %2").arg(hotkey, error));
+                } else if (revealed.isEmpty()) {
+                    win::logInfo(QStringLiteral("`%1` -> %2 (from the window switcher)")
+                                     .arg(hotkey, detail));
+                } else {
+                    win::logInfo(QStringLiteral("`%1` -> %2 (from the window switcher, %3)")
+                                     .arg(hotkey, detail, revealed));
+                }
+            });
+        };
     runtime->showSwitchFromAnyThread(std::move(request));
     win::logInfo(QStringLiteral("`%1` -> windows (%2 window(s))").arg(hotkey).arg(count));
 }
@@ -732,6 +746,7 @@ std::optional<QString> bringWindowToCurrentDesktop(const core::Compiled &config,
 /// 这里**不**套用 `toggle`：刚启动的窗口往往自己就抢到了前台，在这种时候
 /// 把“启动它”变成“立刻收起它”毫无道理。
 bool launchThenActivate(ExpandContext &ctx,
+                        Dispatcher *dispatcher,
                         MonitorMemory *memory,
                         const core::Compiled &config,
                         const std::optional<core::MonitorRef> &actionMonitor,
@@ -764,8 +779,11 @@ bool launchThenActivate(ExpandContext &ctx,
 
     const std::uint64_t timeout = launch.waitMs.value_or(kDefaultLaunchWaitMs);
     const std::uint64_t deadline = win::monotonicMs() + timeout;
+    // 工作空间状态机记着的窗口（可能是被藏起来的）：`find()` 靠它们才能找到
+    // 藏在别的空间里的窗口（M9）。它不会变，循环外面算一次。
+    const std::vector<HWND> tracked = dispatcher->trackedWorkspaceWindows();
     while (true) {
-        HWND hwnd = win::window::find(query);
+        HWND hwnd = win::window::find(query, tracked);
         if (hwnd != nullptr) {
             const std::optional<QString> brought = bringWindowToCurrentDesktop(config, hwnd);
             // 刚启动的窗口可能出现在 Windows 自己挑的那一块屏上：按 `window_rule`
@@ -773,6 +791,8 @@ bool launchThenActivate(ExpandContext &ctx,
             // **再激活它**（这样它最终就在正确的位置上、而且是前台的）。
             const QString moved =
                 bringWindowToActionMonitor(memory, config, actionMonitor, hwnd, QStringLiteral("launch"));
+            // 摆到别的屏之后归属跟着走（M9）：否则它还会算在原屏的那个空间里。
+            const QString rebound = dispatcher->followWindowMonitor(config, hwnd);
             QString placement;
             if (!win::window::applyTo(hwnd, core::WindowOp::Activate, animate, &placement, error)) {
                 return false;
@@ -784,6 +804,9 @@ bool launchThenActivate(ExpandContext &ctx,
                 }
                 if (!moved.isEmpty()) {
                     *detail += QStringLiteral(" (%1)").arg(moved);
+                }
+                if (!rebound.isEmpty()) {
+                    *detail += QStringLiteral(" (%1)").arg(rebound);
                 }
             }
             return true;
@@ -801,6 +824,7 @@ bool launchThenActivate(ExpandContext &ctx,
 }
 
 void executeWindowAction(ExpandContext &ctx,
+                         Dispatcher *dispatcher,
                          MonitorMemory *memory,
                          const core::Compiled &config,
                          const core::Action &action,
@@ -815,13 +839,20 @@ void executeWindowAction(ExpandContext &ctx,
     const core::WindowQuery query = core::WindowQuery::make(title, process);
     const bool animate = action.animate.value_or(false);
 
-    if (HWND hwnd = win::window::find(query); hwnd != nullptr) {
+    // 工作空间藏着的窗口也要找得到（M9）：否则 `window("activate")` 会报
+    // “no visible window …”，而用户明明有这个窗口，只是它在别的工作空间里。
+    if (HWND hwnd = win::window::find(query, dispatcher->trackedWorkspaceWindows());
+        hwnd != nullptr) {
         // 已经在前台的窗口再激活一次本来就是空操作。默认的 `toggle` 改成把它
         // 收起，于是同一个快捷键在“唤起”与“收起”之间切换。这里只处理
         // “窗口已经存在”这条路径，见 launchThenActivate。
-        const bool alreadyActive = win::window::isActive(hwnd);
+        //
+        // 被工作空间藏着的窗口不算“已经激活”（`SW_HIDE` 之后
+        // `GetForegroundWindow()` 仍然指着它，M0 实测），否则唤起会变成收起。
+        const bool hiddenByUs = dispatcher->workspaceSaysHidden(config, hwnd);
+        const bool alreadyActive = !hiddenByUs && win::window::isActive(hwnd);
         const core::WindowPlan plan =
-            core::planWindowAction(action.windowOp, action.toggle, alreadyActive);
+            core::planWindowAction(action.windowOp, action.toggle, alreadyActive, hiddenByUs);
         QString detail;
         QString error;
         if (plan == core::WindowPlan::MinimizeBecauseActive) {
@@ -835,12 +866,37 @@ void executeWindowAction(ExpandContext &ctx,
         // 声明了固定桌面的程序不动窗口（用户按快捷键就是想过去，`raiseWindow`
         // 会切视图）；没声明的先把窗口拉到当前桌面，再激活它。
         QString brought;
+        QString revealed;
         QString placed;
+        QString rebound;
+        const bool monitorMove = action.windowOp == core::WindowOp::MoveLeftMonitor
+            || action.windowOp == core::WindowOp::MoveRightMonitor;
+        // 被工作空间藏着的窗口只接受三类 op：
+        //   * `activate`（下面会先把它那块屏切过去，窗口真的可见了再激活）；
+        //   * `close` / `toggle_topmost`（不碰可见性）；
+        //   * 其它 —— 最小化 / 最大化 / 还原 / 挪屏 —— 靠 `ShowWindow` /
+        //     `SetWindowPlacement` 改显隐，会把 `SW_HIDE` 的窗口弹出来（M7 实测），
+        //     那就与状态机的记录打架了。直接拒绝，并告诉用户先切回它那个空间。
+        const bool changesVisibility = action.windowOp == core::WindowOp::Minimize
+            || action.windowOp == core::WindowOp::Maximize
+            || action.windowOp == core::WindowOp::Restore || monitorMove;
+        if (changesVisibility && hiddenByUs) {
+            win::logWarn(QStringLiteral("`%1` window: %2 is hidden in another workspace; "
+                                        "switch to its workspace before running `%3` on it")
+                             .arg(hotkey,
+                                  core::rustDebug(win::window::windowTitle(hwnd)),
+                                  core::windowOpDebugName(action.windowOp)));
+            return;
+        }
         if (action.windowOp == core::WindowOp::Activate) {
             if (const std::optional<QString> moved = bringWindowToCurrentDesktop(config, hwnd);
                 moved.has_value()) {
                 brought = *moved;
             }
+            // 它在**别的工作空间**里时先切过去（在摆屏、激活之前）：
+            // 1) 窗口得先真的可见，`raiseWindow()` 才能干活；
+            // 2) 摆屏（`SetWindowPlacement`）对一个藏着的窗口会把它弹出来。
+            revealed = dispatcher->revealWindowWorkspace(config, hwnd);
             // 然后在“该去的那块显示器”上出现（默认 = 光标所在的那一块）。
             // 搬屏必须在激活之前：激活之后再 `SetWindowPos` 会让它看起来“先跳
             // 一下”，而且最大化窗口重新进最大化时更干净。
@@ -849,16 +905,31 @@ void executeWindowAction(ExpandContext &ctx,
         if (!win::window::applyTo(hwnd, action.windowOp, animate, &detail, &error,
                                   action.follow.value_or(false))) {
             win::logError(QStringLiteral("`%1` window: %2").arg(hotkey, error));
-        } else if (brought.isEmpty() && placed.isEmpty()) {
+            return;
+        }
+        // 窗口换了显示器：四个「挪窗口」op 与 `activate` 的摆屏都算，
+        // 归属得跟着它走（M9）。藏着的窗口保留空间号，看得见的并入目标屏的活动空间。
+        if (action.windowOp == core::WindowOp::Activate
+            || action.windowOp == core::WindowOp::MoveLeftMonitor
+            || action.windowOp == core::WindowOp::MoveRightMonitor) {
+            rebound = dispatcher->followWindowMonitor(config, hwnd);
+        }
+        QStringList notes;
+        if (!brought.isEmpty()) {
+            notes.append(QStringLiteral("brought to %1").arg(brought));
+        }
+        if (!revealed.isEmpty()) {
+            notes.append(revealed);
+        }
+        if (!placed.isEmpty()) {
+            notes.append(placed);
+        }
+        if (!rebound.isEmpty()) {
+            notes.append(rebound);
+        }
+        if (notes.isEmpty()) {
             win::logInfo(QStringLiteral("`%1` -> %2").arg(hotkey, detail));
         } else {
-            QStringList notes;
-            if (!brought.isEmpty()) {
-                notes.append(QStringLiteral("brought to %1").arg(brought));
-            }
-            if (!placed.isEmpty()) {
-                notes.append(placed);
-            }
             win::logInfo(QStringLiteral("`%1` -> %2 (%3)").arg(hotkey, detail, notes.join(", ")));
         }
         return;
@@ -867,8 +938,8 @@ void executeWindowAction(ExpandContext &ctx,
     if (action.launch.has_value() && action.windowOp == core::WindowOp::Activate) {
         QString detail;
         QString error;
-        if (!launchThenActivate(ctx, memory, config, action.monitor, *action.launch, query, animate,
-                                &detail, &error)) {
+        if (!launchThenActivate(ctx, dispatcher, memory, config, action.monitor, *action.launch, query,
+                                animate, &detail, &error)) {
             win::logError(QStringLiteral("`%1` window: %2").arg(hotkey, error));
         } else {
             win::logInfo(QStringLiteral("`%1` -> %2").arg(hotkey, detail));
@@ -1262,7 +1333,7 @@ void executeAction(Runtime *runtime,
         executeClipboardAction(ctx, action, hotkey);
         break;
     case core::Action::Kind::Window:
-        executeWindowAction(ctx, memory, *config, action, hotkey);
+        executeWindowAction(ctx, dispatcher, memory, *config, action, hotkey);
         break;
     case core::Action::Kind::Notify: {
         const QString title = ctx.expand(action.title);
@@ -1333,7 +1404,7 @@ void executeAction(Runtime *runtime,
         openHelpAction(runtime, dispatcher, config, hotkey, action);
         break;
     case core::Action::Kind::Windows:
-        openWindowsAction(runtime, dispatcher, hotkey, action);
+        openWindowsAction(runtime, dispatcher, config, hotkey, action);
         break;
     case core::Action::Kind::Apps:
         openAppsAction(runtime, dispatcher, dispatcher->appCatalog(), hotkey, action);
@@ -1547,6 +1618,9 @@ void Dispatcher::applyPlacementRules(const std::shared_ptr<const core::Compiled>
             // 窗口第一次出现：规则把它搬到别的桌面时，视图也跟着过去。
             placeWindowOnce(monitorMemory(), config, hwnd, true);
         }
+        // 摆完位置再定工作空间归属（M9）：规则可能刚把它搬到了另一块屏，
+        // 归属要按**摆完之后**的位置算。
+        applyWorkspaceRules(*config, event.windows);
         return;
     }
     const std::vector<HWND> windows = win::window::topLevelWindows();
@@ -1560,6 +1634,7 @@ void Dispatcher::applyPlacementRules(const std::shared_ptr<const core::Compiled>
         // 启动与显示器重新接入：只重新摆放，不动视图（见 `placeWindowOnce`）。
         placeWindowOnce(monitorMemory(), config, hwnd, false);
     }
+    applyWorkspaceRules(*config, windows);
 }
 
 // ---------------------------------------------------------------------------
@@ -1594,12 +1669,14 @@ void Dispatcher::applyWorkspaceEvent(const std::shared_ptr<const core::Compiled>
         return;
     }
     const core::WorkspaceSettings &settings = config->settings.workspace;
+    // 先把空间划分与开关同步好（`enabled = false` 时也要同步：重启才打开时
+    // 不会拿着一份过时的空间数）。
+    syncWorkspaceLayout(*config);
     if (!settings.enabled) {
         // 关掉时当没这回事：已经藏起来的窗口由 M8 的「恢复全部窗口」兜底，
         // 而默认开启 + 没绑定的情况下这里从来不会藏着任何窗口。
         return;
     }
-    syncWorkspaceLayout(*config);
 
     switch (event.kind) {
     case core::WorkspaceEvent::Kind::Startup:
@@ -1701,7 +1778,17 @@ void Dispatcher::applyWorkspaceEvent(const std::shared_ptr<const core::Compiled>
         if (monitor.isEmpty() || monitor == record->workspace.monitor) {
             return; // 没换屏（或者问不出来）：归属不动
         }
-        applyWorkspaceEffects(m_workspace.windowMovedToMonitor(event.window, monitor),
+        // 归属怎么跟：
+        //   * 看得见的窗口 = 用户拖过来的（或被 `Win+Shift+←/→` 送过来的）→
+        //     归入目标屏的**活动空间**（决策 16 / M7）；
+        //   * 藏着的窗口不可能被拖（`SW_HIDE` 之后拖不动）→ 只可能是我们自己搬的
+        //     （`window_rule` 摆屏）→ **保留空间号**，否则规则刚设好的归属会被
+        //     这一条事件抹掉。
+        const bool hidden = !m_workspace.isVisible(event.window);
+        const core::WorkspaceEffects effects =
+            hidden ? m_workspace.windowReboundToMonitor(event.window, monitor)
+                   : m_workspace.windowMovedToMonitor(event.window, monitor);
+        applyWorkspaceEffects(effects,
                               QStringLiteral("window moved to %1").arg(monitor));
         win::logDebug(QStringLiteral("workspace: %1 moved from %2 to %3")
                           .arg(core::rustDebug(win::window::windowTitle(hwnd)),
@@ -2162,6 +2249,191 @@ QString Dispatcher::workspaceSwitchMonitor(const core::Compiled &config)
         win::logDebug(QStringLiteral("workspace: cannot tell which monitor the cursor is on"));
     }
     return device;
+}
+
+std::vector<HWND> Dispatcher::trackedWorkspaceWindows() const
+{
+    std::vector<HWND> handles;
+    const std::vector<core::WindowId> ids = m_workspace.trackedWindows();
+    handles.reserve(ids.size());
+    for (const core::WindowId id : ids) {
+        // UWP 要问 / 要列的是宿主窗口（`ApplicationFrameWindow`），与显隐同一个口径。
+        const HWND hwnd = win::workspace::manageTarget(win::workspace::handleOf(id));
+        if (hwnd != nullptr) {
+            handles.push_back(hwnd);
+        }
+    }
+    return handles;
+}
+
+bool Dispatcher::workspaceSaysHidden(const core::Compiled &config, HWND hwnd) const
+{
+    if (!config.settings.workspace.enabled || hwnd == nullptr) {
+        return false;
+    }
+    const core::WindowId id = win::workspace::idOf(hwnd);
+    if (!m_workspace.tracks(id)) {
+        return false;
+    }
+    // “在不在”只看记录（M0：`IsWindowVisible` 在 `SW_HIDE` 之后是假的）。
+    return !m_workspace.isVisible(id);
+}
+
+QString Dispatcher::revealWindowWorkspace(const core::Compiled &config, HWND hwnd)
+{
+    if (!config.settings.workspace.enabled || hwnd == nullptr) {
+        return QString();
+    }
+    syncWorkspaceLayout(config);
+    const core::WindowId id = win::workspace::idOf(hwnd);
+    if (!m_workspace.tracks(id)) {
+        return QString(); // 还没被收编（刚启动 / 规则还没跑）：没有状态可切
+    }
+    // 虚拟桌面切来切去不会给我们发事件（Windows 用的是 DWM cloak），所以切之前先
+    // 刷新一下上下文：`revealWindow()` 要拿它判断「记录里那张桌面是不是当前这张」。
+    refreshWorkspaceDesktop();
+    const core::WorkspaceEffects effects = m_workspace.revealWindow(id);
+    const std::optional<core::WindowRecord> after = m_workspace.record(id);
+    if (effects.isEmpty()) {
+        return QString();
+    }
+    applyWorkspaceEffects(effects, QStringLiteral("revealing %1")
+                                      .arg(core::rustDebug(win::window::windowTitle(hwnd))));
+    if (!after.has_value()) {
+        return QString();
+    }
+    return QStringLiteral("workspace %1 on %2")
+        .arg(after->workspace.index)
+        .arg(after->workspace.monitor);
+}
+
+QString Dispatcher::followWindowMonitor(const core::Compiled &config, HWND hwnd)
+{
+    if (!config.settings.workspace.enabled || hwnd == nullptr) {
+        return QString();
+    }
+    const core::WindowId id = win::workspace::idOf(hwnd);
+    if (!m_workspace.tracks(id)) {
+        return QString(); // 没收编：等 `WindowAppeared` 先记账
+    }
+    const std::optional<core::WindowRecord> before = m_workspace.record(id);
+    if (!before.has_value()) {
+        return QString();
+    }
+    const QString monitor = monitorKeyOf(hwnd, core::sortedMonitors(win::monitor::list()));
+    if (monitor.isEmpty() || monitor == before->workspace.monitor) {
+        return QString();
+    }
+    // 看得见的窗口并入目标屏的活动空间（与拖动一致）；藏着的窗口保留空间号
+    // （它是被我们搬的，空间号是规则 / 用户给的）。
+    const bool hidden = !m_workspace.isVisible(id);
+    const core::WorkspaceEffects effects = hidden
+        ? m_workspace.windowReboundToMonitor(id, monitor)
+        : m_workspace.windowMovedToMonitor(id, monitor);
+    applyWorkspaceEffects(effects, QStringLiteral("workspace follows the monitor"));
+    const std::optional<core::WindowRecord> after = m_workspace.record(id);
+    if (!after.has_value()) {
+        return QString();
+    }
+    win::logDebug(QStringLiteral("workspace: %1 follows %2 -> %3, space %4 (%5)")
+                      .arg(core::rustDebug(win::window::windowTitle(hwnd)),
+                           before->workspace.monitor,
+                           monitor,
+                           QString::number(after->workspace.index),
+                           hidden ? QStringLiteral("hidden, kept its space")
+                                  : QStringLiteral("visible")));
+    return QStringLiteral("workspace %1 on %2").arg(after->workspace.index).arg(monitor);
+}
+
+void Dispatcher::applyWorkspaceRules(const core::Compiled &config,
+                                      const std::vector<HWND> &windows)
+{
+    const core::WorkspaceSettings &settings = config.settings.workspace;
+    if (!settings.enabled || windows.empty() || config.windowRules.empty()) {
+        return;
+    }
+    syncWorkspaceLayout(config);
+
+    // 先解析「命中哪条规则、规则要它去哪个空间」。绝大多数窗口没有规则、或者规则里
+    // 没写 `workspace`，这一步与 `placeWindowOnce()` 用的是同一个匹配。
+    struct RuleTarget
+    {
+        core::WindowId id = 0;
+        std::uint32_t index = 1;
+    };
+    std::vector<RuleTarget> targets;
+    bool needsDesktop = false;
+    for (HWND hwnd : windows) {
+        if (hwnd == nullptr || !win::workspace::isAlive(hwnd)) {
+            continue;
+        }
+        const core::WindowId id = win::workspace::idOf(hwnd);
+        const bool tracked = m_workspace.tracks(id);
+        if (!win::workspace::isManageable(hwnd, tracked, settings.exclude)) {
+            continue;
+        }
+        const core::WindowRule *rule =
+            core::firstWindowRule(config.windowRules,
+                                  win::window::windowTitle(hwnd),
+                                  win::window::processName(hwnd));
+        if (rule == nullptr || !rule->workspace.has_value()) {
+            continue;
+        }
+        needsDesktop = needsDesktop || !tracked;
+        targets.push_back(RuleTarget{id, *rule->workspace});
+    }
+    if (targets.empty()) {
+        return;
+    }
+    if (needsDesktop) {
+        refreshWorkspaceDesktop();
+    }
+
+    // 只处理**当前虚拟桌面**上的窗口：`topLevelWindows()` 会连别的虚拟桌面上的窗口
+    // 一起列出来（虚拟桌面用 DWM cloak 藏窗口，`IsWindowVisible` 仍然是真）。
+    std::vector<core::WindowId> ids;
+    ids.reserve(targets.size());
+    for (const RuleTarget &target : targets) {
+        ids.push_back(target.id);
+    }
+    const std::vector<core::WindowId> current = windowsOnThisDesktop(ids);
+    const std::vector<core::MonitorDescription> monitors =
+        core::sortedMonitors(win::monitor::list());
+
+    int applied = 0;
+    for (const RuleTarget &target : targets) {
+        if (std::find(current.begin(), current.end(), target.id) == current.end()) {
+            continue;
+        }
+        const HWND hwnd = win::workspace::handleOf(target.id);
+        const QString title = win::window::windowTitle(hwnd);
+        core::WorkspaceEffects effects;
+        if (m_workspace.tracks(target.id)) {
+            // 已经跟踪着（启动时先收编过，或者显示器重接入）：只改归属。
+            const std::optional<core::WindowRecord> before = m_workspace.record(target.id);
+            if (before.has_value() && before->workspace.index == target.index) {
+                continue; // 规则要的就是它现在这个空间：无操作
+            }
+            effects = m_workspace.moveWindow(target.id, target.index);
+        } else {
+            const QString monitor = monitorKeyOf(hwnd, monitors);
+            if (monitor.isEmpty()) {
+                continue;
+            }
+            effects = m_workspace.windowAppeared(target.id, monitor, target.index);
+        }
+        // 规则归位**不抢焦点**（与 `window_rule` 一贯的行为一致）：启动 / 显示器
+        // 重接入都不是用户要求换窗口的时机。
+        effects.focus.reset();
+        applyWorkspaceEffects(effects, QStringLiteral("window rule put %1 in space %2")
+                                          .arg(core::rustDebug(title))
+                                          .arg(target.index));
+        ++applied;
+    }
+    if (applied > 0) {
+        win::logInfo(QStringLiteral("workspace: %1 window(s) placed by a window rule")
+                         .arg(applied));
+    }
 }
 
 void Dispatcher::executeWorkspaceAction(const core::Compiled &config,

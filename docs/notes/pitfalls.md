@@ -515,6 +515,34 @@
   重试（`switchesWorkspacesWithRealWindows` 现在重试一秒）；产品代码那边必须把 `nullopt` 当成“不知道”
   而不是“在别的桌面上”。
 
+### 工作空间与其它功能的联动（M9）
+
+* **`SW_HIDE` 之后 `GetForegroundWindow()` 仍然指着那个隐藏窗口**（M0 实测）。于是“按快捷键唤起藏在
+  别的工作空间里的窗口”会碰上两个坑，必须都挡：
+  * `window` 动作默认的 `toggle` 会把它当成“已在前台” → **收起**。`planWindowAction()` 现在多一个
+    `hiddenByUs` 参数，为真时永远走 `ApplyOp`。
+  * `raiseWindow()` 对一个藏着的窗口什么也做不了（它本来就不是可见窗口）。必须先
+    `revealWindowWorkspace()` 把空间切过去（窗口真的可见了），**再**激活；顺序反了就是“点了没反应”。
+* **`window::find()` 默认只看可见窗口**（`EnumWindows` 里先过 `IsWindowVisible`），所以藏起来的窗口
+  在 `window("activate")` 眼里等于不存在。修法是给它（与 `listOpenWindows()`）多传一份状态机记录，
+  而不是把 `IsWindowVisible` 那条过滤去掉 —— 去掉的话一堆不可见的外壳宿主窗口会混进来。
+  *  **“被我们藏着”不能用 cloak 判断**：我们用的是 `SW_HIDE`，`DWMWA_CLOAKED` 根本不是一回事；
+    `isSwitchableWindow(hwnd, hiddenByUs)` 里的 `hiddenByUs` 只能来自状态机的记录。
+  * 不用传 `hiddenByUs` 时也不能直接调 `core::isMainWindow()`（它要求 `visible`），要用
+    `core::isSwitchableWindow()`（它把 `hiddenByUs` 折成可见）—— 本机实测里这一点让新用例第一次就红了。
+* **最小化 / 最大化 / 还原 / 挪屏会把藏着的窗口弹出来**：它们走 `ShowWindow` / `SetWindowPlacement`，
+  而这两个调用都按 `showCmd` 改显隐（与 M7 那条同一个坑）。所以对一个正被藏着的窗口做这些 op 一律
+  拒绝 + warning；`close`（`PostMessage(WM_CLOSE)`）与 `toggle_topmost`（`SetWindowPos` 不带
+  `SWP_SHOWWINDOW`）不碰显隐，照旧放行。
+* **`LOCATIONCHANGE` 会把规则设好的空间号抹掉**：`window_rule` 把窗口摆到另一块屏之后，钩子的位置事件
+  晚 350 ms 才到，而“拖动”的语义是“归入目标屏的**活动空间**”。藏着的窗口**不可能被用户拖动**，所以
+  那时只能是我们自己搬的 → 用 `windowReboundToMonitor()`（只改显示器、保留空间号），
+  看得见的才用 `windowMovedToMonitor()`。
+* **`window_rule.workspace` 不要接在“窗口出现”的事件里**：`window_rule` 自己会把窗口摆到别的屏 / 别的
+  虚拟桌面，归属得按**摆完之后**的位置算。做法是把它接在 `applyPlacementRules()` 的同一遍里（三个时机
+  天然对齐），由 `applyWorkspaceRules()` 统一处理；规则归位还要把 `effects.focus` 清掉（启动与显示器
+  重接入都不是用户要求换窗口的时机，抢前台很欠）。
+
 ## 原生 shell 右键菜单（`platform/win/shell_menu`）
 
 * **`TrackPopupMenuEx` 弹的是 shell 生成的菜单，所以菜单消息必须转给 `IContextMenu2/3`**：`HMENU` 里可能

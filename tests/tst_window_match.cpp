@@ -156,6 +156,24 @@ void TestWindowMatch::switchableWindowsDropHiddenShellWindows()
     // 「主窗口」判据不理会 cloaking：`window_rule` 走的是那一条。
     QVERIFY(core::isMainWindow(hidden));
 
+    // 被**工作空间**藏起来的窗口（`hiddenByUs`）：`IsWindowVisible` 是假的，
+    // 但它仍然是用户自己的程序窗口，切换器必须能列出来（选中它先切到它那个
+    // 工作空间再激活）。判据只能看状态机的记录（M0），不能看可见性。
+    core::TopLevelWindowFacts byUs = facts;
+    byUs.visible = false;
+    byUs.hiddenByUs = true;
+    QVERIFY(core::isSwitchableWindow(byUs));
+    // 藏起来的窗口自己不是「主窗口」时（工具窗口 / 无标题）照样不进切换器。
+    core::TopLevelWindowFacts byUsTool = byUs;
+    byUsTool.toolWindow = true;
+    QVERIFY(!core::isSwitchableWindow(byUsTool));
+    // 「被我们藏着」+「shell 也 cloaked 掉、又在当前桌面」：两个排除条件互不影响，
+    // 后者仍然赢。
+    core::TopLevelWindowFacts byUsCloaked = byUs;
+    byUsCloaked.cloaked = true;
+    byUsCloaked.onCurrentDesktop = true;
+    QVERIFY(!core::isSwitchableWindow(byUsCloaked));
+
     // 连「主窗口」都不算的窗口，当然也不进切换器。
     core::TopLevelWindowFacts tool = hidden;
     tool.toolWindow = true;
@@ -187,6 +205,16 @@ void TestWindowMatch::toggleOnlyCollapsesAnAlreadyActiveWindow()
                              WindowOp::MoveLeftMonitor, WindowOp::MoveRightMonitor}) {
         QVERIFY(core::planWindowAction(op, std::nullopt, true) == WindowPlan::ApplyOp);
     }
+
+    // 被工作空间藏起来的窗口**永不**收起：`SW_HIDE` 之后 `GetForegroundWindow()`
+    // 仍然指着它（M0 实测），否则「唤起藏在别的工作空间里的窗口」会变成「最小化它」。
+    QVERIFY(core::planWindowAction(WindowOp::Activate, std::nullopt, true, true)
+            == WindowPlan::ApplyOp);
+    QVERIFY(core::planWindowAction(WindowOp::Activate, std::optional<bool>(true), true, true)
+            == WindowPlan::ApplyOp);
+    // 只影响 activate：别的 op 本来就照做。
+    QVERIFY(core::planWindowAction(WindowOp::Minimize, std::nullopt, true, true)
+            == WindowPlan::ApplyOp);
 }
 
 void TestWindowMatch::onlyStateChangingOpsHaveTransitions()

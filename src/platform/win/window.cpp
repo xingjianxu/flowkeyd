@@ -12,6 +12,7 @@
 
 #include <QHash>
 
+#include <algorithm>
 #include <optional>
 
 namespace flowkeyd::platform::win::window {
@@ -40,8 +41,13 @@ std::optional<QString> processImageName(DWORD pid)
 struct Finder
 {
     const core::WindowQuery *query = nullptr;
-    /// 已还原的窗口优于最小化的窗口。
+    /// 被工作空间藏起来的窗口（它们的 `IsWindowVisible` 是假的，但仍然是用户自己
+    /// 的程序窗口）：没有的话 `window("activate")` 根本找不到藏在别的空间里的
+    /// 窗口（M9）。
+    const std::vector<HWND> *tracked = nullptr;
+    /// 已还原的窗口优于被我们藏起来的，藏起来的优于最小化的。
     HWND restored = nullptr;
+    HWND hidden = nullptr;
     HWND minimized = nullptr;
     /// 进程 id -> 小写可执行文件名，使一次枚举中每个进程只需一次 `OpenProcess`。
     QHash<DWORD, std::optional<QString>> names;
@@ -72,8 +78,16 @@ BOOL CALLBACK enumWindowProc(HWND hwnd, LPARAM)
         return FALSE;
     }
     // 不可见窗口，以及属于别的窗口的窗口（对话框、工具提示、弹出菜单）
-    // 永远不是用户想要的那个窗口。
-    if (IsWindowVisible(hwnd) == 0 || GetWindow(hwnd, GW_OWNER) != nullptr) {
+    // 永远不是用户想要的那个窗口。**例外**：被工作空间藏起来的窗口——它们是用户
+    // 自己的程序窗口，只是 `WS_VISIBLE` 被我们清掉了。
+    const bool visible = IsWindowVisible(hwnd) != 0;
+    const bool hiddenByUs =
+        !visible && finder.tracked != nullptr
+        && std::find(finder.tracked->begin(), finder.tracked->end(), hwnd) != finder.tracked->end();
+    if (!visible && !hiddenByUs) {
+        return TRUE;
+    }
+    if (GetWindow(hwnd, GW_OWNER) != nullptr) {
         return TRUE;
     }
     const QString title = windowTitle(hwnd);
@@ -89,6 +103,14 @@ BOOL CALLBACK enumWindowProc(HWND hwnd, LPARAM)
             finder.minimized = hwnd;
         }
         // 继续找已还原的窗口。
+        return TRUE;
+    }
+    if (!visible) {
+        // 藏起来的窗口排在“看得见的”后面：同名 / 同进程的多个窗口里先给用户
+        // 那些就在眼前的。
+        if (finder.hidden == nullptr) {
+            finder.hidden = hwnd;
+        }
         return TRUE;
     }
     finder.restored = hwnd;
@@ -277,7 +299,7 @@ QString windowTitle(HWND hwnd)
     return QString::fromWCharArray(buffer, length);
 }
 
-HWND find(const core::WindowQuery &query)
+HWND find(const core::WindowQuery &query, const std::vector<HWND> &tracked)
 {
     if (query.isForeground()) {
         HWND hwnd = GetForegroundWindow();
@@ -296,11 +318,15 @@ HWND find(const core::WindowQuery &query)
     }
     Finder finder;
     finder.query = &query;
+    finder.tracked = &tracked;
     t_finder = &finder;
     EnumWindows(enumWindowProc, 0);
     t_finder = nullptr;
     if (finder.restored != nullptr) {
         return finder.restored;
+    }
+    if (finder.hidden != nullptr) {
+        return finder.hidden;
     }
     return finder.minimized;
 }
@@ -357,10 +383,17 @@ bool isMainWindowIgnoringVisibility(HWND hwnd)
     return core::isMainWindow(facts);
 }
 
-bool isSwitchableWindow(HWND hwnd)
+bool isSwitchableWindow(HWND hwnd, bool hiddenByUs)
 {
-    core::TopLevelWindowFacts facts = windowFacts(hwnd);
-    if (!core::isMainWindow(facts)) {
+    // 被工作空间藏起来的窗口 `IsWindowVisible` 是假的：判据只看它的**其他**
+    // 主窗口特征（无属主 / 非工具窗口 / 有标题 / 有尺寸），可见性交给
+    // `hiddenByUs` 这个参数（它来自状态机的记录，不是 Win32）。
+    core::TopLevelWindowFacts facts = windowFacts(hwnd, !hiddenByUs);
+    facts.hiddenByUs = hiddenByUs;
+    // 用 `core::isSwitchableWindow()` 而不是 `isMainWindow()`：前者把「被我们
+    // 藏起来的窗口」也算成可切换（它会把 `hiddenByUs` 折成可见），后者只认
+    // 当下的可见性。这里 `facts.cloaked` 还没填，所以两种写法差别只在那一句。
+    if (!core::isSwitchableWindow(facts)) {
         return false;
     }
     // 只有“看起来像主窗口”的窗口才值得问 DWM；被 cloaked 的更是少数，
@@ -394,13 +427,18 @@ namespace {
 struct WindowCollector
 {
     std::vector<OpenWindow> *out = nullptr;
+    const std::vector<HWND> *tracked = nullptr;
     DWORD self = 0;
 };
 
 BOOL CALLBACK collectOpenWindowProc(HWND hwnd, LPARAM param)
 {
     auto *collector = reinterpret_cast<WindowCollector *>(param);
-    if (!isSwitchableWindow(hwnd)) {
+    const bool hiddenByUs =
+        collector->tracked != nullptr
+        && std::find(collector->tracked->begin(), collector->tracked->end(), hwnd)
+               != collector->tracked->end();
+    if (!isSwitchableWindow(hwnd, hiddenByUs)) {
         return TRUE;
     }
     DWORD pid = 0;
@@ -419,10 +457,10 @@ BOOL CALLBACK collectOpenWindowProc(HWND hwnd, LPARAM param)
 
 } // namespace
 
-std::vector<OpenWindow> listOpenWindows()
+std::vector<OpenWindow> listOpenWindows(const std::vector<HWND> &tracked)
 {
     std::vector<OpenWindow> out;
-    WindowCollector collector{&out, GetCurrentProcessId()};
+    WindowCollector collector{&out, &tracked, GetCurrentProcessId()};
     EnumWindows(collectOpenWindowProc, reinterpret_cast<LPARAM>(&collector));
     return out;
 }

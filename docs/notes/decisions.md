@@ -641,8 +641,8 @@ active 后所在的 monitor 上"。
 ## 36. 按显示器独立的工作空间：`settings.workspace` + `workspace` 动作
 
 > 进度：**M2（配置面）/ M3（图形界面）/ M4（平台后端）/ M5（事件管线）/ M6（动作执行）/ M7（显示器拔插
-> 与拖屏）/ M8（安全与恢复）已完成**；M9-M10（与现有功能联动）**还没接线**。
-> 实施计划在仓库根的 `plan.md`（M11 收尾时删除）。
+> 与拖屏）/ M8（安全与恢复）/ M9（与现有功能的联动）已完成**；只剩 M10（`settings.workspace.new_window`
+> 等规则归属的剩余语义）。实施计划在仓库根的 `plan.md`（M11 收尾时删除）。
 
 * 术语：这个功能叫「**工作空间**」，配置名 `workspace`；「**工作区**」仍然只指显示器扣掉任务栏后的
   可用区域（`availableGeometry()` / `workArea`）；「虚拟桌面」仍然是 Windows 自己的那个。
@@ -709,6 +709,28 @@ active 后所在的 monitor 上"。
   * 手动兜底：托盘菜单「恢复全部窗口（&W）」与 `--restore-windows`（有实例在跑就通过 `-restore`
     事件请它做，没有就自己按日志恢复；**不读配置、不提权、不装钩子**，所以配置坏掉时也能用）。
   * `reload` 失败不动状态机（失败时保留旧配置），所以也不会丢已藏窗口的账。
+* **与现有功能的联动（M9）**：被藏起来的窗口 `IsWindowVisible` 是假，所以一切“找窗口 / 列窗口”的
+  地方都得多收一份状态机记录（`tracked`）：`window::find(query, tracked)`（优先级：看得见的 >
+  被我们藏着的 > 最小化的）与 `window::listOpenWindows(tracked)`；判据本身在
+  `core::isSwitchableWindow()`（`TopLevelWindowFacts::hiddenByUs`，把“被我们藏着”折成可见，
+  「主窗口」其余判据一个不少）。
+  * 唤起 = **先切空间、再激活**。`window("activate")` / `windows()` 选中 / `launch` 之后都走
+    `Dispatcher::revealWindowWorkspace()`（内部是 `core::WorkspaceState::revealWindow()`：把它那块屏
+    切到它所在的空间，效果列表里就带着它）。顺序不能反：对一个 `SW_HIDE` 着的窗口 `raiseWindow()`
+    没用，而 `SetWindowPlacement`（摆屏 / 挪屏）会把它弹出来。
+  * 被藏着的窗口**永不 `toggle` 成最小化**（`core::planWindowAction(..., hiddenByUs)`）：M0 实测
+    `SW_HIDE` 之后 `GetForegroundWindow()` 仍然指着那个隐藏窗口，不排除这一条“唤起”会变成“收起”。
+    同理，对它做最小化 / 最大化 / 还原 / 挪屏一律拒绝 + warning（这些 op 靠 `ShowWindow` /
+    `SetWindowPlacement` 改显隐）；`close` / `toggle_topmost` 不碰显隐，照旧。
+  * 换屏之后的归属分两种：**看得见的**（用户拖 / 我们摆）并入目标屏的活动空间
+    （`windowMovedToMonitor()`）；**藏着的**保留空间号（`windowReboundToMonitor()`）—— 藏着的窗口
+    不可能被拖动，它换屏一定是我们干的，不能把规则刚设好的空间号抹掉。`Dispatcher::followWindowMonitor()`
+    在 `move_left/right_monitor`、`activate` 的摆屏、`launch` 之后各调一次。
+  * `window_rule.workspace` / `app.workspace` 在 `Dispatcher::applyWorkspaceRules()` 里生效，而它挂在
+    `applyPlacementRules()` 的同一遍上，于是与 `window_rule` 的**三个时机完全一致**（窗口首次出现 /
+    显示器重新接入 / 启动），用户后来自己 `workspace("move", N)` 搬走的窗口不会被规则拉回去。
+    没被跟踪的窗口用 `windowAppeared(..., index)`（落到非活动空间 → 立即隐藏、不抢焦点），已跟踪的用
+    `moveWindow()`；两种都把 `focus` 清掉（规则归位从不抢焦点）。
 * 验证：`tst_workspace`（状态机 20 条，含 3000 步随机序列、`filterToCurrentDesktop` 的「不知道就保留」
   规则与「同一份显示器集合重发零效果」）、
   `tst_window_match`（可管理窗口与排除名单）、`tst_placement`（`windowIsOffMonitor`）、
@@ -718,8 +740,11 @@ active 后所在的 monitor 上"。
   在两个空间之间来回切：显隐、几何、Z 序与「空空间不抢焦点」）、
   `relocatesDisplacedWindowsWithoutChangingState`（两块屏：藏着的 / 最大化的 / 最小化的窗口搬屏时状态
   都不变）、`restoresHiddenWindowsFromTheRecoveryLog`（藏窗口 → 写日志 → 丢掉内存状态 → 只凭日志恢复：
-  窗口回来、日志被删掉；身份对不上 / 已经不存在的条目只被丢掉、不碰那个窗口）—— 本机实测通过。
+  窗口回来、日志被删掉；身份对不上 / 已经不存在的条目只被丢掉、不碰那个窗口）、
+  `revealsAWindowHiddenInAnotherWorkspace`（藏起来的窗口仍然被 `find` / 切换器判据认得，“先切空间”的
+  效果真的把它显示回来）—— 本机实测通过。
   纯逻辑那一半在 `tst_workspace_log`（坏 JSON 容错、64 位整数不丢精度、去重 / 移除）。
 
-> M6/M7 的验收脚本检查（`scripts/acceptance.ps1`）推后到 M9/M11：整个特性还没接完
-> （M8/M9），现在加进去的项会在 M9 之前一直失败。
+> M6/M7/M9 的验收脚本检查（`scripts/acceptance.ps1`）推后到 M11：整个特性还没接完，现在加进去的项会
+> 一直失败。跨进程那一条（切换器列表里真的出现被我们藏起来的**别进程**窗口）也只能进验收脚本 ——
+> 单测进程自己的窗口会被 `listOpenWindows()` 的“不列自己”规则挡掉。

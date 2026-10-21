@@ -204,6 +204,33 @@ public:
     /// 就让它在新显示器上显示出来。
     WorkspaceEffects windowMovedToMonitor(WindowId window, const MonitorKey &monitor);
 
+    /// 窗口被**我们自己**（`window_rule` 把它摆到了另一块屏）搬到另一块显示器：
+    /// 只改归属的显示器，**保留空间号**。
+    ///
+    /// 与 `windowMovedToMonitor()` 的分工：用户拖窗口只能拖**看得见**的窗口，所以
+    /// 那一条把窗口归到目标屏的**活动空间**是对的；而被我们藏起来（或规则刚指派了
+    /// 空间）的窗口不会自己动，它换屏一定是我们干的，那就不能把规则要求的空间号
+    /// 抹成目标屏的活动空间 —— 否则 `LOCATIONCHANGE` 晚到一步就会把刚设好的归属
+    /// 覆盖掉。
+    ///
+    /// 仍然会按新屏的活动空间重算显隐（空间号没变但活动空间不同 → 该藏就藏），
+    /// 不抢焦点。
+    WorkspaceEffects windowReboundToMonitor(WindowId window, const MonitorKey &monitor);
+
+    /// 把窗口所在的那块屏切到它自己所在的空间（`window("activate")` / 窗口
+    /// 切换器 / 启动器唤起前的准备）。
+    ///
+    /// 目标窗口正被藏在非活动空间里时（`ShowWindow(SW_HIDE)`，`IsWindowVisible`
+    /// 为假），必须先显式切过去它才会重新可见 —— 而 `raiseWindow()` 对一个藏着的
+    /// 窗口是没用的。切换到新空间的效果列表里就带着它（`show`），调用方执行完这个
+    /// 效果列表**再**去激活它，顺序不能反。
+    ///
+    /// 已经是活动空间里的窗口 → 无操作（幂等）。
+    /// 记录里的虚拟桌面**已经过时**（窗口刚被 `window("activate")` 从别的虚拟桌面
+    /// 搬到当前这一张）时就地归入那块屏的当前活动空间，必要时显式显示 —— 这时切
+    /// 空间毫无意义（它已经在这张桌面的活动空间里了）。
+    WorkspaceEffects revealWindow(WindowId window);
+
     /// 窗口最小化 / 还原（`EVENT_SYSTEM_MINIMIZESTART/END`）。只影响「切回去时该
     /// 不该聚焦它」，不产生效果。
     WorkspaceEffects windowMinimized(WindowId window, bool minimized);

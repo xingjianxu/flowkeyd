@@ -63,16 +63,31 @@ bool isMainWindow(const TopLevelWindowFacts &window)
 
 bool isSwitchableWindow(const TopLevelWindowFacts &window)
 {
-    if (!isMainWindow(window)) {
+    // 被工作空间藏起来的窗口（`hiddenByUs`）仍然是用户自己的窗口：它只是
+    // `IsWindowVisible` 为假，不能像 shell 藏起来的假窗口那样被略过。
+    TopLevelWindowFacts facts = window;
+    if (facts.hiddenByUs) {
+        facts.visible = true;
+    }
+    if (!isMainWindow(facts)) {
         return false;
     }
     // 被藏起来、又留在当前桌面上的窗口用户切不过去；cloaked 但在别的桌面上的
     // 窗口要留住（切换器会切过去）。
-    return !(window.cloaked && window.onCurrentDesktop);
+    return !(facts.cloaked && facts.onCurrentDesktop);
 }
 
-WindowPlan planWindowAction(WindowOp op, std::optional<bool> toggle, bool alreadyActive)
+WindowPlan planWindowAction(WindowOp op,
+                            std::optional<bool> toggle,
+                            bool alreadyActive,
+                            bool hiddenByUs)
 {
+    if (hiddenByUs) {
+        // 被我们藏起来的窗口：哪怕 `GetForegroundWindow()` 还指着它（M0 实测：
+        // 隐藏前台窗口之后前台指针不会自己交出去），这一下也是「唤起」而不是
+        // 「收起」。
+        return WindowPlan::ApplyOp;
+    }
     if (op == WindowOp::Activate && toggle.value_or(true) && alreadyActive) {
         return WindowPlan::MinimizeBecauseActive;
     }

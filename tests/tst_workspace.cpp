@@ -141,6 +141,8 @@ private slots:
     void monitorRemovalRehomesAndReattachRestores();
     void monitorChurnWithTheSameSetChangesNothing();
     void movedToAnotherMonitorJoinsItsActiveSpace();
+    void reboundToAnotherMonitorKeepsItsSpace();
+    void revealingAHiddenWindowSwitchesToItsSpace();
     void perDesktopSpacesAreIndependent();
     void restoreAllShowsEverything();
     void filterToCurrentDesktopKeepsUnknownWindows();
@@ -612,6 +614,98 @@ void TestWorkspace::movedToAnotherMonitorJoinsItsActiveSpace()
     // 不认识的窗口 / 空显示器名：无操作。
     QVERIFY(state.windowMovedToMonitor(99, kScreen2).isEmpty());
     QVERIFY(state.windowMovedToMonitor(1, QString()).isEmpty());
+}
+
+void TestWorkspace::reboundToAnotherMonitorKeepsItsSpace()
+{
+    core::WorkspaceState state;
+    state.setDesktop(kDeskA);
+    state.monitorsChanged({kScreen1, kScreen2});
+    state.switchTo(kScreen2, 2); // 2 号屏的活动空间是 2
+
+    // 规则把窗口放进了 1 号屏的空间 3（藏着）。我们自己把它搬到 2 号屏：
+    // **空间号不变**（不能被目标屏的活动空间 2 没收），而且仍然藏着。
+    state.windowAppeared(1, kScreen1, 3);
+    QVERIFY(!state.isVisible(1));
+    QVERIFY(state.windowReboundToMonitor(1, kScreen2).isEmpty());
+    QCOMPARE(state.record(1)->workspace.monitor, kScreen2);
+    QCOMPARE(state.record(1)->workspace.index, 3u);
+    QVERIFY(!state.isVisible(1));
+    QCOMPARE(listing(state.windowsInSpace(kScreen2, 3)), listing({1}));
+
+    // 同一个显示器 / 空设备名 / 不认识的窗口：无操作。
+    const std::uint64_t zBefore = state.record(1)->zOrder;
+    QVERIFY(state.windowReboundToMonitor(1, kScreen2).isEmpty());
+    QCOMPARE(state.record(1)->zOrder, zBefore);
+    QVERIFY(state.windowReboundToMonitor(1, QString()).isEmpty());
+    QVERIFY(state.windowReboundToMonitor(99, kScreen2).isEmpty());
+
+    // 可见的窗口换屏后按新屏的活动空间重算显隐：它在空间 1，目标屏的活动空间是 2
+    // → 该藏就藏（不能因为换屏就把它弹到人家不需要的空间上）。
+    state.windowAppeared(2, kScreen1);
+    state.switchTo(kScreen1, 1); // 幂等：1 号屏的活动空间本来就是 1
+    QVERIFY(state.isVisible(2));
+    const core::WorkspaceEffects moved = state.windowReboundToMonitor(2, kScreen2);
+    QCOMPARE(listing(moved.hide), listing({2}));
+    QCOMPARE(listing(moved.show), QStringList{});
+    QVERIFY(!moved.focus.has_value()); // 换屏绝不抢焦点
+    QCOMPARE(state.record(2)->workspace.index, 1u);
+    QVERIFY(!state.isVisible(2));
+
+    // 目标屏的活动空间就是它那个空间时，反过来该显就显。
+    state.switchTo(kScreen2, 1);
+    QVERIFY(state.isVisible(2));
+}
+
+/// `revealWindow()`：唤起藏在别的工作空间里的窗口时先把那块屏切过去，
+/// 切完（效果列表里就带着它）再由调用方去激活。
+void TestWorkspace::revealingAHiddenWindowSwitchesToItsSpace()
+{
+    core::WorkspaceState state;
+    state.setDesktop(kDeskA);
+    state.monitorsChanged({kScreen1, kScreen2});
+    state.windowAppeared(1, kScreen1);
+    state.windowAppeared(2, kScreen1, 2);
+    state.focusChanged(1);
+
+    // 窗口 2 藏在空间 2：唤起 = 切到空间 2（它出现在 `show` 里），旧空间的 1 藏起来。
+    core::WorkspaceEffects effects = state.revealWindow(2);
+    QCOMPARE(listing(effects.show), listing({2}));
+    QCOMPARE(listing(effects.hide), listing({1}));
+    QCOMPARE(activeOf(state, kScreen1), 2u);
+    QCOMPARE(activeOf(state, kScreen2), 1u); // 另一块屏一点不动
+    QVERIFY(state.isVisible(2));
+
+    // 已经在活动空间里：无操作（幂等，不重复显隐）。
+    QVERIFY(state.revealWindow(2).isEmpty());
+
+    // 不认识的窗口：无操作（还没收编时只能靠 `windowAppeared()`）。
+    QVERIFY(state.revealWindow(99).isEmpty());
+
+    // 记录里的虚拟桌面过时了（窗口刚从别的虚拟桌面被搬到当前这一张）：
+    // 就地归入那块屏的当前活动空间，**不去切旧桌面的空间**。
+    // 先在 A 桌把它藏起来（活动空间回到 1，它在空间 2），再换成 B 桌。
+    state.switchTo(kScreen1, 1);
+    QVERIFY(!state.isVisible(2));
+    state.setDesktop(kDeskB);
+    QVERIFY(!state.isVisible(2)); // 记录还写在 A 桌
+    effects = state.revealWindow(2);
+    // 它此刻是藏着的 → 必须显式显示出来，否则「唤起一个别的虚拟桌面上的窗口」
+    // 会什么也看不到。
+    QCOMPARE(listing(effects.show), listing({2}));
+    QCOMPARE(listing(effects.hide), QStringList{});
+    QVERIFY(!effects.focus.has_value()); // 聚焦交给调用方（先显后激活）
+    QCOMPARE(state.record(2)->workspace.desktop, kDeskB);
+    QCOMPARE(state.record(2)->workspace.index, 1u);
+    QVERIFY(state.isVisible(2));
+
+    // 反过来：记录过时但它此刻看得见 → 只把记录搬过来，不产生显隐效果。
+    state.setDesktop(kDeskA);
+    QVERIFY(state.isVisible(2));
+    QVERIFY(state.revealWindow(2).isEmpty());
+    QCOMPARE(state.record(2)->workspace.desktop, kDeskA);
+    QCOMPARE(state.record(2)->workspace.index, 1u);
+    QVERIFY(state.isVisible(2));
 }
 
 void TestWorkspace::perDesktopSpacesAreIndependent()

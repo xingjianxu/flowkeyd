@@ -110,6 +110,33 @@ public:
     /// `restoreWorkspaceWindows()`。
     void submitWorkspaceRestore();
 
+    // --- 工作空间与其它功能的联动（M9）---------------------------------------
+    //
+    // 下面三个都**只能在动作线程上调用**（它们碰状态机，而状态机只归这条线程）。
+
+    /// 工作空间状态机记着的窗口句柄（`windows()` 切换器用它把被我们藏起来的窗口
+    /// 也列出来）。
+    std::vector<HWND> trackedWorkspaceWindows() const;
+
+    /// 这个窗口此刻是不是**被工作空间藏着**（记录说它在非活动空间里）。
+    ///
+    /// `window("activate")` 靠它把「唤起」与「收起」分开：被藏着的窗口就算
+    /// `GetForegroundWindow()` 还指着它（M0 实测），这一下也该是唤起。
+    bool workspaceSaysHidden(const core::Compiled &config, HWND hwnd) const;
+
+    /// 唤起前的准备：目标窗口可能正被藏在别的工作空间里，先把**它那块屏**切到它
+    /// 所在的空间（窗口因此真的可见），再去激活它。
+    ///
+    /// 返回非空字符串 = 真的切了空间（一行日志用的说明）。**顺序不能反**：对一个
+    /// `SW_HIDE` 着的窗口调 `raiseWindow()` 是没用的。
+    QString revealWindowWorkspace(const core::Compiled &config, HWND hwnd);
+
+    /// 窗口被挪到别的显示器之后（四个「挪窗口」op / `window("activate")` 的
+    /// `monitor` / `window_rule` 摆屏），让它在我这儿的归属跟着走（M9）。
+    ///
+    /// 返回非空字符串 = 归属真的变了（一行日志用的说明）。
+    QString followWindowMonitor(const core::Compiled &config, HWND hwnd);
+
     /// 线程安全：现在就恢复，**最多等 `timeoutMs`**（退出 / 注销 / 关机用）。
     ///
     /// 为什么要有上限：这些都在系统的关键路径上（注销时 Windows 只等几秒），
@@ -163,6 +190,13 @@ private:
     ///   * 拔出：Windows 把窗口留在已经不存在的坐标上 → 搬到剩下的那块屏；
     ///   * 重新接入：状态机已经物归原主，窗口却不在那儿 → 搬回去。
     void relocateDisplacedWindows();
+
+    /// 按 `window_rule` / `app` 的 `workspace` 字段给一批窗口定归属（M9）。
+    ///
+    /// 与 `window_rule` 的时机完全一致（窗口首次出现 / 显示器重新接入 / 启动），
+    /// 因为就是在 `applyPlacementRules()` 的同一遍里调的：**只在这三个时机生效**，
+    /// 用户后来自己 `workspace("move", N)` 搬走的窗口不会被规则拉回去。
+    void applyWorkspaceRules(const core::Compiled &config, const std::vector<HWND> &windows);
 
     // --- 恢复日志（M8，只在动作线程上碰） ----------------------------------
 

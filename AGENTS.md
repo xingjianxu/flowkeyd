@@ -237,9 +237,9 @@ UI 只有托盘图标 + 日志窗口、`menu`/`help`/`windows`/`apps`/`update` �
     （已知限制，见第 12 节）。
 36. **工作空间：按显示器独立的一套空间（`settings.workspace` + `workspace` 动作）**。**M2（配置面）/
     M3（图形界面）/ M4（平台后端）/ M5（事件管线）/ M6（动作执行）/ M7（显示器拔插与“拖到别的屏”）/
-    M8（安全与恢复）已完成**；与 `windows()`/`window("activate")` 的联动（M9/M10）还**没接线**。
+    M8（安全与恢复）/ M9（与现有功能的联动）已完成**；只剩 M10（`new_window` 等规则归属的剩余语义）。
     要点：默认**开启**但没绑定就不会隐藏任何窗口；`count` 1–10（默认 9）；
-    `switch_target` = `"cursor"`（默认）/ `"focus"`；`new_window` = `"active"`（默认）或 1..count；
+    `switch_target` = `"cursor"`（默认）/ `"focus"`；`new_window` = `"active"`（默认）或 1..count（**M10 才接运行时**）；
     `exclude` 空串报错；动作只有 `workspace("switch"|"move", N)`，`index` ≤ `count` 在 `--check` 校验；
     规则用 `window_rule.workspace` / `app.workspace`（后者是前者的简写）；隐藏方式钉死为
     `ShowWindow(SW_HIDE)`（`platform/win/workspace.*` 里唯一一处）；“窗口在不在”只看状态机记录、
@@ -257,7 +257,15 @@ UI 只有托盘图标 + 日志窗口、`menu`/`help`/`windows`/`apps`/`update` �
     显示成功后才删条目；启动最早期（读配置之前）按日志恢复，正常退出 / 注销 / 关机（`SessionEndWatcher`
     的 `WM_QUERYENDSESSION`）前也恢复，恢复失败最多等 2–3 s，日志留着下次再恢复。手动入口：托盘
     「恢复全部窗口」与 `--restore-windows`（有实例在跑就通过 `-restore` 事件请它做，没有就自己按日志
-    恢复；不读配置、不提权）。完整理由见 `decisions.md` 第 36 条，实施计划见根目录 `plan.md`。
+    恢复；不读配置、不提权）。**联动（M9）**：被藏起来的窗口 `IsWindowVisible` 是假，所以
+    `window::find()` / `listOpenWindows()` 都要**多收一份状态机记录**（`tracked`）才能找到它；
+    `window("activate")` / `windows()` 选中 / `launch` 之后一律**先 `revealWindowWorkspace()` 切空间、再激活**
+    （顺序不能反：对 `SW_HIDE` 着的窗口 `raiseWindow()` 没用）；被藏着的窗口**永不 `toggle` 成最小化**
+    （`planWindowAction(..., hiddenByUs)`），也不接受最小化 / 最大化 / 还原 / 挪屏（那些靠 `ShowWindow` /
+    `SetWindowPlacement` 改显隐）；换屏后的归属：看得见的并入目标屏活动空间（`windowMovedToMonitor()`），
+    藏着的**保留空间号**（`windowReboundToMonitor()`）；`window_rule.workspace` 在 `applyPlacementRules()`
+    里生效，于是与 `window_rule` 的三个时机完全一致（首次出现 / 显示器重接入 / 启动），用户手动 `move`
+    之后不会被拉回去。完整理由见 `decisions.md` 第 36 条，实施计划见根目录 `plan.md`。
 
 ---
 
@@ -317,7 +325,7 @@ Qt 侧齐备：`Qt6::Quick`、`QuickControls2`、`Qt6QuickControls2FluentWinUI3S
 | `core/pinyin.*` / `core/pinyin_data.*` | 汉字读音查询 / 生成的读音表 |
 | `core/monitor_ref.*` / `core/window_monitor_state.*` | “摆到哪块屏”的取值与判据 / `monitor = "last"` 的记忆 |
 | `core/config_map.*` / `core/config_writer.*` | 结构体 ↔ QVariant 字典（界面用）/ 结构体 → Lua 源码（含生成标记、`.bak`） |
-| `core/workspace.*` | 工作空间**纯逻辑状态机**（命令 → 显隐/焦点效果列表）+ `core/workspace_event.*`（钩子线程 → 工作线程的事件 + 「自己引起的事件」抑制表）+ `core/workspace_log.*`（恢复日志 `workspace.json` 的解析 / 序列化：64 位整数写成字符串）；M1/M5/M6/M7/M8 已接线（`workspace(...)` 动作能真的显隐窗口、拔插会迁移与复位、崩溃与注销后能恢复） |
+| `core/workspace.*` | 工作空间**纯逻辑状态机**（命令 → 显隐/焦点效果列表，含 M9 的 `revealWindow` / `windowReboundToMonitor`）+ `core/workspace_event.*`（钩子线程 → 工作线程的事件 + 「自己引起的事件」抑制表）+ `core/workspace_log.*`（恢复日志 `workspace.json` 的解析 / 序列化：64 位整数写成字符串）；M1/M5/M6/M7/M8/M9 已接线（`workspace(...)` 动作能真的显隐窗口、拔插会迁移与复位、崩溃与注销后能恢复、藏在别的空间里的窗口能被唤起） |
 | `core/log_tail.*` / `core/update_check.*` / `core/version.*` / `core/desktop_badge.*` | 日志增量尾随 / 更新纯逻辑 / 版本号 / 徽标文字与字号 |
 | `src/lua/lua_config.*` + `lua_prelude.lua` | **Lua 与 C++ 的唯一边界**（转成 `core::Config`，逐条目带上下文报错）；DSL 编进 qrc |
 | `src/platform/win/` | 一个文件一件事：`ffi`（全部声明 + `currentExecutablePath()`）、`nt`、`process`（run 三条路 / open / `--shell-*` 代理）、`dwm`、`monitor`、`input`（`SendInput`、验收后门、`copySelection`）、`ime`、`hook`（回调 + 消息循环 + 定时器 + `window_rule` / 工作空间事件监听 + 显示器轮询 + 前台事件）、`apps`（扫描 + 启动 + 图标 + `StaThread`）、`shell_menu`、`audio`（MTA，高风险）、`clipboard`、`window`、`workspace`（工作空间的 hide/show/restack/身份/枚举/恢复日志读写，`SW_HIDE` 只在这里）、`session`（`WM_QUERYENDSESSION` 的隐藏窗口）、`desktop`（版本表）、`power`、`tray`、`logging`/`single_instance`（退出与「恢复全部窗口」两条事件通道）、`elevate`/`autostart`/`update` |

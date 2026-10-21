@@ -64,6 +64,13 @@ struct TopLevelWindowFacts
     bool cloaked = false;
     /// 窗口就在**当前**虚拟桌面上（只在 `cloaked` 为真时才有意义）。
     bool onCurrentDesktop = true;
+    /// 这个窗口正被**工作空间**（我们自己）用 `ShowWindow(SW_HIDE)` 藏着。
+    ///
+    /// 它和 `visible` 是两件事：`visible` 是「此刻看不看得见」（藏起来就是假），
+    /// 这个字段回答的是「是不是我们自己藏的」。用户自己的程序被藏起来之后仍然要
+    /// 能出现在窗口切换器里（选中它先切到它那个工作空间再激活），所以判据不能
+    /// 只看可见性（M0 实测结论）。
+    bool hiddenByUs = false;
 };
 
 /// 「主窗口」判据：可见、不是 Program Manager、无属主（或带 `WS_EX_APPWINDOW`）、
@@ -84,6 +91,10 @@ bool isMainWindow(const TopLevelWindowFacts &window);
 /// 被 cloaked 但确实在**别的**虚拟桌面上的窗口要保留 —— 这正是切换器与 Alt+Tab
 /// 不同的地方（`windows` 动作会切到那张桌面去），所以判据里必须带上
 /// `onCurrentDesktop`。
+///
+/// 被**工作空间**藏起来的窗口（`hiddenByUs`）要保留：`IsWindowVisible` 是假的，
+/// 但那仍然是用户自己的程序窗口。它与「shell 藏起来的假窗口」的区别只有一条 ——
+/// **状态机的记录里有它**（M0：不能用可见性判「在不在」）。
 bool isSwitchableWindow(const TopLevelWindowFacts &window);
 
 // ---------------------------------------------------------------------------
@@ -103,7 +114,14 @@ enum class WindowPlan {
 /// 只有 `op = "activate"`、`toggle` 没被显式写成 `false`、且窗口已经在前台
 /// 时才收起；其余情况一律执行原本的 op。`launch` 那条路径不走这里
 /// （它不套用 `toggle`）。
-WindowPlan planWindowAction(WindowOp op, std::optional<bool> toggle, bool alreadyActive);
+///
+/// `hiddenByUs`（正被工作空间藏着）时**永远不收起**：`SW_HIDE` 之后
+/// `GetForegroundWindow()` 仍然指着那个隐藏窗口（M0 实测），不排除这一条的话
+/// 「唤起藏在别的工作空间里的窗口」会变成「把它最小化」。
+WindowPlan planWindowAction(WindowOp op,
+                            std::optional<bool> toggle,
+                            bool alreadyActive,
+                            bool hiddenByUs = false);
 
 /// 这个 op 会不会产生窗口过渡（也就是 `animate` 对它有没有意义）。
 ///

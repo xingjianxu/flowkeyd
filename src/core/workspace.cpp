@@ -405,6 +405,33 @@ WorkspaceEffects WorkspaceState::moveWindow(WindowId window, std::uint32_t index
     return effects;
 }
 
+WorkspaceEffects WorkspaceState::revealWindow(WindowId window)
+{
+    const auto it = m_windows.find(window);
+    if (it == m_windows.end()) {
+        return {}; // 不认识的窗口：等 `windowAppeared` 收编
+    }
+    WindowRecord &record = it->second;
+    if (record.workspace.desktop != m_desktop) {
+        // 记录里的虚拟桌面已经过时（窗口刚从别的虚拟桌面被搬到当前这一张）：
+        // 就地归入那块屏的当前活动空间，必要时显式显示 —— 这时去切「那张旧桌面」
+        // 的空间毫无意义（它已经在这张桌面的活动空间里了）。
+        WorkspaceEffects effects;
+        const bool wasVisible = isVisible(window);
+        MonitorSpaces &spaces = ensureSpaces(m_desktop, record.workspace.monitor);
+        record.workspace.desktop = m_desktop;
+        record.workspace.index = spaces.active;
+        record.homeMonitor.reset();
+        record.homeIndex.reset();
+        if (!wasVisible) {
+            effects.show.push_back(window);
+        }
+        return effects;
+    }
+    // 它那块屏的活动空间就是它所在的空间 → 无操作（已经在活动空间里了）。
+    return switchTo(record.workspace.monitor, record.workspace.index);
+}
+
 WorkspaceEffects WorkspaceState::windowAppeared(WindowId window,
                                                 const MonitorKey &monitor,
                                                 std::optional<std::uint32_t> index)
@@ -464,6 +491,34 @@ WorkspaceEffects WorkspaceState::windowMovedToMonitor(WindowId window, const Mon
     record.homeIndex.reset();
     if (!wasVisible) {
         // 藏着却还能被拖走（理论上只有隐藏失败才会发生）：让它在新显示器上出现。
+        effects.show.push_back(window);
+    }
+    return effects;
+}
+
+WorkspaceEffects WorkspaceState::windowReboundToMonitor(WindowId window, const MonitorKey &monitor)
+{
+    WorkspaceEffects effects;
+    const auto it = m_windows.find(window);
+    if (it == m_windows.end()) {
+        return effects; // 不认识的窗口：等 `windowAppeared` 收编
+    }
+    WindowRecord &record = it->second;
+    if (monitor.isEmpty() || monitor == record.workspace.monitor) {
+        return effects;
+    }
+    const bool wasVisible = isVisible(window);
+    record.workspace.monitor = monitor;
+    MonitorSpaces &spaces = ensureSpaces(record.workspace.desktop, monitor);
+    // 空间号**不动**：它是规则 / 用户给的，换屏不该把它没收。
+    record.workspace.index = clampIndex(record.workspace.index, spaces);
+    record.zOrder = ++m_zSeq;
+    record.homeMonitor.reset();
+    record.homeIndex.reset();
+    const bool nowVisible = record.workspace.index == spaces.active;
+    if (wasVisible && !nowVisible) {
+        effects.hide.push_back(window);
+    } else if (!wasVisible && nowVisible) {
         effects.show.push_back(window);
     }
     return effects;

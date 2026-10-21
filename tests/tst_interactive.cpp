@@ -428,6 +428,7 @@ private slots:
     void hidesAndShowsAWindowWithoutTouchingIt();
     void enumeratesManageableWindowsByTheirRecord();
     void switchesWorkspacesWithRealWindows();
+    void revealsAWindowHiddenInAnotherWorkspace();
     void relocatesDisplacedWindowsWithoutChangingState();
     void restoresHiddenWindowsFromTheRecoveryLog();
     void hookThreadReportsWorkspaceEventsForForeignWindows();
@@ -1955,6 +1956,66 @@ void TestInteractive::switchesWorkspacesWithRealWindows()
         // Z 序：`b` 仍然压在 `a` 上面（`restack()` 拼错了方向会立刻在这里露出来）。
         QVERIFY2(zIndexOf(a) < zIndexOf(b), "the Z order of the space was not restored");
     }
+}
+
+/// 联动（M9）：被工作空间藏起来的窗口仍然要“找得到、看得见”。
+///
+/// 三件事一起验：
+///   * `window::find()` / `listOpenWindows()` 靠**状态机的记录**把被我们藏起来的窗口
+///     也算进来（不能看 `IsWindowVisible`，它已经是假的了）；
+///   * 唤起之前先把那块屏切到它所在的空间（`revealWindow()` → 效果列表里就带着它）；
+///   * 切完之后它真的又可见了（`raiseWindow()` 对一个 `SW_HIDE` 着的窗口是没用的）。
+void TestInteractive::revealsAWindowHiddenInAnotherWorkspace()
+{
+    if (!interactiveEnabled()) {
+        QSKIP("set FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1 to run the interactive tests");
+    }
+    namespace ws = platform::win::workspace;
+    const QString marker =
+        QStringLiteral("flowkeyd-reveal-%1").arg(QCoreApplication::applicationPid());
+    TestWindow window(marker);
+    HWND hwnd = window.hwnd();
+    QVERIFY2(hwnd != nullptr, "the test window was not created");
+    QVERIFY(platform::win::window::isMainWindow(hwnd));
+
+    const core::MonitorKey monitor = QStringLiteral("test-monitor");
+    const core::WindowId id = ws::idOf(hwnd);
+    core::WorkspaceState state(2);
+    state.windowAppeared(id, monitor);
+
+    // 切到空间 2（空的）：窗口被藏起来，与本机上的真实效果一致。
+    const core::WorkspaceEffects hidden = state.switchTo(monitor, 2);
+    QCOMPARE(hidden.hide.size(), static_cast<std::size_t>(1));
+    QString error;
+    QVERIFY2(applyWorkspaceEffectsForTest(hidden, &error), qPrintable(error));
+    QVERIFY(IsWindowVisible(hwnd) == 0);
+
+    // 切换器与 `window("activate")` 靠记录把它找回来（不传记录就找不到）。
+    //
+    // 注意：`listOpenWindows()` 会把**本进程**的窗口全部排除（切换器不该列出
+    // flowkeyd 自己的弹窗 / 日志窗口），所以“列表里真的有一条”那一步在这里验不了；
+    // 收集器拿来判断的就是 `isSwitchableWindow(hwnd, tracked)`，这里直接盯它。
+    // 跨进程那一半留给 M11 的验收脚本（需要一个外国进程的窗口）。
+    QVERIFY2(platform::win::window::isSwitchableWindow(hwnd, true),
+             "a window hidden by the workspace must stay switchable");
+    QVERIFY2(!platform::win::window::isSwitchableWindow(hwnd, false),
+             "without the record, visibility alone decides (and it is hidden)");
+
+    const core::WindowQuery query =
+        core::WindowQuery::make(std::optional<QString>(marker), std::nullopt);
+    QCOMPARE(platform::win::window::find(query, {hwnd}), hwnd);
+    QVERIFY(platform::win::window::find(query) == nullptr);
+
+    // 唤起：先切回空间 1（效果列表里就带着它），再显式激活它。
+    const core::WorkspaceEffects reveal = state.revealWindow(id);
+    QCOMPARE(reveal.show.size(), static_cast<std::size_t>(1));
+    QCOMPARE(state.spaces(monitor)->active, 1u);
+    QVERIFY2(applyWorkspaceEffectsForTest(reveal, &error), qPrintable(error));
+    QVERIFY(IsWindowVisible(hwnd) != 0);
+    QVERIFY(platform::win::window::isSwitchableWindow(hwnd, false));
+
+    // 已经在活动空间里：唤起是无操作（幂等，不重复显隐）。
+    QVERIFY(state.revealWindow(id).isEmpty());
 }
 
 /// 显示器拔插之后的「物归原位」（M7）：`relocateToMonitor()` 把窗口搬到另一块
