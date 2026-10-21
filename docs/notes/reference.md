@@ -141,6 +141,16 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
 > `--check flowkeyd.lua.example` 零警告。工作空间那几条验收脚本项（含“唤起藏在空间 2 的窗口”与
 > “切换器里出现被我们藏起来的**别进程**窗口”）统一留到 M11 与整份脚本一起加。
 
+> **M10（工作空间规则与默认归属）也没跑 acceptance.ps1**（项目所有者指示不做完整冒烟）。只跑了：
+> debug + release 双构建、`ctest` 37 个目标全绿（含新增的
+> `tst_placement::workspaceForNewWindowPrefersTheWinningRule`）、`--check flowkeyd.lua.example`
+> 零警告，外加两次**定向**冒烟（一次性开发实例 `--no-elevate --allow-multi`，每次约 10 s，结束时
+> `--quit` 让窗口恢复）：`new_window = 3` 时记事本一出现就 `window appeared -> 0 shown, 1 hidden` 并
+> 记入 space 3；`window_rule{ process = "charmap", monitor = 2, workspace = 2 }` 时先
+> `window rule 'charmap' -> maximized 3840x2160 at 3840,0` 再 `put "字符映射表" in space 2 -> 0 shown,
+> 1 hidden`，归属记的是摆完之后的 `DISPLAY2`。验收脚本要补的两项（`new_window` / 带
+> `workspace` 的规则下新窗口首次出现即落在指定空间且被隐藏）与 M6/M7/M9 的项一起留到 M11。
+
 ## 手工冒烟清单（脚本覆盖不到的部分）
 
 1. `--check --config tmp/smoke.lua` 通过，`--list` 形状与 README 一致。
