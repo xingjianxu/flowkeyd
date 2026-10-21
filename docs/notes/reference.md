@@ -125,6 +125,12 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
   真机目录约 200 条时，26 个单字母里可能没有一个命中 1..8 个程序，脚本打一条诊断（写进
   `$WorkDir\diag.txt`，UTF-8 无 BOM）**跳过**它们：是跳过，不是失败。
 
+> **M8（工作空间安全与恢复）没跑 acceptance.ps1**：项目所有者指示这一次不做完整冒烟（脚本要抢
+> 前台 / 注入按键，而且 M9/M10 还没接完，工作空间那几条验收项本来就推到 M11）。这一轮只跑了：
+> debug + release 双构建、`ctest` 37 个目标全绿（含新增的 `tst_workspace_log`）、单跑
+> `tst_interactive.exe restoresHiddenWindowsFromTheRecoveryLog`（真机，通过）、
+> `--check flowkeyd.lua.example` 零警告、`--restore-windows`（有实例在跑 / 没有实例两种路径）。
+
 ## 手工冒烟清单（脚本覆盖不到的部分）
 
 1. `--check --config tmp/smoke.lua` 通过，`--list` 形状与 README 一致。
@@ -179,7 +185,19 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
     `workspace: ... moved from \\.\DISPLAYx to \\.\DISPLAYy`，之后在那块屏上切空间，它跟着它新归属的
     那块屏显隐（不再跟着旧屏）。最后改一下分辨率 / 缩放：归属不应发生任何变化（日志里既没有
     `monitors changed` 下的 `moved`，也没有窗口被弹出 / 藏起来）。
-16. **启动权限**（常驻实例是提权的，所以拿它验反而最直接）：
+16. **工作空间的安全与恢复**（M8；脚本不覆盖）：
+    1. 把几个窗口 `workspace("move", 2)` 藏到非活动空间，然后 `taskkill /PID <pid> /F` 强杀守护进程
+       —— `<配置目录>\workspace.json` 应该已经存在（里面是那几条的 `hwnd` / `pid` / `class`）；重新启动
+       flowkeyd（或先跑 `flowkeyd --restore-windows`），窗口全部回来，文件被删掉；日志里是
+       `workspace: restored N window(s) from the recovery log`。
+    2. 同上先把窗口藏起来，然后从托盘菜单点 *恢复全部窗口* —— 立刻全部回来；再试一次 `--restore-windows`
+       （守护进程在跑时它会请那个实例去做，没有实例时自己按日志恢复）。
+    3. 同上先把窗口藏起来，然后**注销 / 关机** —— 注销前那一下窗口已经回来了（日志里
+       `session is ending; restoring the windows hidden by workspaces`）；做完这一条**必须确认没有任何窗口
+       卡在“已被我们藏起来”的状态**（`workspace.json` 应当已经不存在）。
+    4. 手动把 `workspace.json` 改坏（或写一条不存在的 `hwnd`）后重启：只记 warning + 丢掉那几条，
+       其它窗口照常恢复，进程不崩。
+17. **启动权限**（常驻实例是提权的，所以拿它验反而最直接）：
     1. 按一个 `action = run("notepad.exe")` 的快捷键，然后在**任务管理器**里看那个 `notepad.exe`：
        「详细信息」页的 `notepad.exe` 行右键只能看到「结束任务」而**没有** UAC 盾牌图标；命令行最快：
        `& build\dist-release\flowkeyd.exe --list` 里那条摘要应当**没有** `(elevated)`。
