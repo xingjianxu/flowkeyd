@@ -196,6 +196,22 @@ bool windowRulePinsDesktop(const std::vector<WindowRule> &rules,
     return rule != nullptr && rule->desktop.has_value();
 }
 
+std::optional<std::uint32_t> workspaceForNewWindow(const std::vector<WindowRule> &rules,
+                                                   const QString &title,
+                                                   const std::optional<QString> &executableName,
+                                                   const Settings &settings)
+{
+    if (const WindowRule *rule = firstWindowRule(rules, title, executableName);
+        rule != nullptr && rule->workspace.has_value()) {
+        return rule->workspace;
+    }
+    // `0` = `"active"`（那块屏此刻的活动空间，与 `WorkspaceSettings::newWindow` 同一个口径）。
+    if (settings.workspace.newWindow != 0) {
+        return settings.workspace.newWindow;
+    }
+    return std::nullopt;
+}
+
 MonitorRef windowActionMonitor(const std::optional<MonitorRef> &actionMonitor,
                                const WindowRule *rule,
                                const Settings &settings)

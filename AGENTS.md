@@ -237,11 +237,15 @@ UI 只有托盘图标 + 日志窗口、`menu`/`help`/`windows`/`apps`/`update` �
     （已知限制，见第 12 节）。
 36. **工作空间：按显示器独立的一套空间（`settings.workspace` + `workspace` 动作）**。**M2（配置面）/
     M3（图形界面）/ M4（平台后端）/ M5（事件管线）/ M6（动作执行）/ M7（显示器拔插与“拖到别的屏”）/
-    M8（安全与恢复）/ M9（与现有功能的联动）已完成**；只剩 M10（`new_window` 等规则归属的剩余语义）。
-    要点：默认**开启**但没绑定就不会隐藏任何窗口；`count` 1–10（默认 9）；
-    `switch_target` = `"cursor"`（默认）/ `"focus"`；`new_window` = `"active"`（默认）或 1..count（**M10 才接运行时**）；
+    M8（安全与恢复）/ M9（与现有功能的联动）/ M10（规则与默认归属）已完成**；只剩 M11（文档、验收、
+    收尾）。要点：默认**开启**但没绑定就不会隐藏任何窗口；`count` 1–10（默认 9）；
+    `switch_target` = `"cursor"`（默认）/ `"focus"`；`new_window` = `"active"`（默认）或 1..count
+    （**只对 flowkeyd 运行期间新出现的窗口生效**，启动时已在的窗口照旧收编进各自活动空间）；
     `exclude` 空串报错；动作只有 `workspace("switch"|"move", N)`，`index` ≤ `count` 在 `--check` 校验；
-    规则用 `window_rule.workspace` / `app.workspace`（后者是前者的简写）；隐藏方式钉死为
+    规则用 `window_rule.workspace` / `app.workspace`（后者是前者的简写），归属优先级 = 命中窗口的
+    **第一条**规则的 `workspace` → `settings.workspace.new_window` → 那块屏的活动空间（纯函数
+    `core::workspaceForNewWindow()`）；钩子线程**先发 `window_rule` 的摆放、再发工作空间的收编**
+    （规则只能摆看得见的窗口，所以归属必须在摆完之后才决定）；隐藏方式钉死为
     `ShowWindow(SW_HIDE)`（`platform/win/workspace.*` 里唯一一处）；“窗口在不在”只看状态机记录、
     `IsWindowVisible` 不可信。事件管线：钩子线程（只有 `settings.workspace.enabled` 时才装
     `LOCATIONCHANGE` 与 `MINIMIZESTART..END` 两个窄范围监听）只把 `core::WorkspaceEvent` 入队，

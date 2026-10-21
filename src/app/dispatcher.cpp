@@ -1695,9 +1695,19 @@ void Dispatcher::applyWorkspaceEvent(const std::shared_ptr<const core::Compiled>
                               .arg(core::rustDebug(win::window::windowTitle(hwnd))));
             return;
         }
-        // 新窗口默认归入那块屏的**活动**空间（`settings.workspace.new_window` 与规则
-        // 在 M10 落）。
-        applyWorkspaceEffects(m_workspace.windowAppeared(event.window, monitor),
+        // 归属：命中的第一条 `window_rule`（`app.workspace` 展开成它）写了 `workspace`
+        // 就用它，否则看 `settings.workspace.new_window`（`0` = 那块屏的活动空间）。
+        // 有规则时这一步通常已经由 `applyWorkspaceRules()` 在摆放那一遍里做过（钩子
+        // **先**发 `WindowsShown`、**后**发这个事件），那时窗口已被跟踪 → 这里幂等无操作；
+        // 没命中规则、或者压根没写规则的窗口由这里按 `new_window` 收编。
+        // 落到非活动空间 → `windowAppeared()` 的效果列表里就带着「立刻藏起来」，
+        // 而且**不抢焦点**（新窗口出现不是用户要求换窗口的时机）。
+        const std::optional<std::uint32_t> target =
+            core::workspaceForNewWindow(config->windowRules,
+                                        win::window::windowTitle(hwnd),
+                                        win::window::processName(hwnd),
+                                        config->settings);
+        applyWorkspaceEffects(m_workspace.windowAppeared(event.window, monitor, target),
                               QStringLiteral("window appeared"));
         if (const std::optional<core::WindowRecord> record = m_workspace.record(event.window);
             record.has_value()) {
@@ -1832,6 +1842,10 @@ void Dispatcher::adoptExistingWindows(const core::Compiled &config)
             continue;
         }
         // 收编只记账：它们本来就在那块屏的活动空间里，不隐藏也不抢焦点。
+        // **`settings.workspace.new_window` 不在这里生效**：它管的是「flowkeyd 起来之后
+        // 新出现的窗口」。对已经在的窗口套一遍会把用户现有的窗口全部藏起来（重启 /
+        // reload 一次就「全没了」），而「用户自己的安排」本来就靠 `workspace.json`
+        // 恢复可见性、不恢复归属。
         applyWorkspaceEffects(m_workspace.windowAppeared(id, monitor), QStringLiteral("startup"));
         ++adopted;
     }

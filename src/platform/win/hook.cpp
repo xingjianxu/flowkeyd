@@ -511,21 +511,26 @@ void HookThread::handlePlacementTick()
     } else if (!m_pendingWindows.empty()) {
         std::vector<HWND> shown;
         shown.swap(m_pendingWindows);
-        // 先让工作空间把它收编（归入那块屏的活动空间），再交给 `window_rule`
-        // 摆位置 —— 规则真的把窗口搬了屏时，M10 会把归属改过去。
-        if (workspaceOn) {
-            for (HWND hwnd : shown) {
-                emitWorkspaceEvent(core::WorkspaceEvent::Kind::WindowAppeared, hwnd);
-            }
-        }
+        // **先摆位置（`window_rule`），再定工作空间归属**，顺序不能反：
+        // `window_rule` 只能摆看得见的窗口（主窗口判据里有“可见”），而工作空间一旦
+        // 把窗口藏进非活动空间（`new_window = N` / 规则的 `workspace`），规则就再也
+        // 碰不到它了 —— 那个窗口以后被切出来时会是没摆过的几何。反过来错开没有代价：
+        // 归属是在同一个 tick 里紧接着算的，看的还是**摆完之后**的位置（规则把窗口
+        // 搬到另一块屏时，归属按新屏算）。
         if (placementOn) {
             logDebug(QStringLiteral("placement tick: flushing %1 window(s)")
                          .arg(shown.size()));
             PlacementEvent event;
             event.kind = PlacementEvent::Kind::WindowsShown;
-            event.windows = std::move(shown);
+            event.windows = shown;
             if (m_placementSink) {
                 m_placementSink(m_engine->config(), event);
+            }
+        }
+        // 规则把它搬了屏 / 搬了虚拟桌面之后，这里才轮到「这块窗口归哪个空间」。
+        if (workspaceOn) {
+            for (HWND hwnd : shown) {
+                emitWorkspaceEvent(core::WorkspaceEvent::Kind::WindowAppeared, hwnd);
             }
         }
     }

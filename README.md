@@ -890,7 +890,7 @@ end
 | `enabled` | `true` | 总开关。写 `workspace = false` 也能整个关掉 |
 | `count` | `9` | 每块显示器的空间数量，只能 `1`–`10`。改小时超出范围的空间会并入最后一个 |
 | `switch_target` | `"cursor"` | `workspace("switch", N)` 作用在哪块屏上：`"cursor"` = 光标所在的那一块；`"focus"` = 前台窗口所在的那一块 |
-| `new_window` | `"active"` | 新窗口归入哪个空间：`"active"` = 那块屏当前的活动空间，或者写 `1..count`。单个程序优先用 `window_rule` / `app` 的 `workspace` |
+| `new_window` | `"active"` | 新窗口归入哪个空间：`"active"` = 那块屏当前的活动空间，或者写 `1..count`。单个程序优先用 `window_rule` / `app` 的 `workspace`；只对 flowkeyd 运行期间新出现的窗口生效（启动时已经开着的窗口照旧收编进各自的活动空间，不然重启一次所有窗口都会被藏起来） |
 | `exclude` | 空 | 完全不归工作空间管的程序（可执行文件名，大小写无关子串）。空字符串会被 `--check` 拒绝 |
 
 **默认开启，但不开快捷键就什么都不做**：没有任何 `workspace("switch"/"move", N)`
@@ -919,8 +919,11 @@ end
 * 隐藏 / 显示之后窗口的位置、大小、最大化、最小化都不变（`ShowWindow(SW_HIDE)` 那些
   状态都由 Windows 自己保持）；每个空间也记住自己的 Z 序与最近拿到焦点的窗口。
 * 新窗口归入它出现时所在那块屏的**活动空间**，除非命中了 `window_rule` / `app` 的
-  `workspace`（或者 `new_window` 指了别的）。用户自己 `move` 之后镜子不会再被规则拉回去
-  —— 规则只在窗口第一次出现、显示器重新接入、flowkeyd 启动这三个时机生效（与
+  `workspace`（规则优先）或者 `settings.workspace.new_window` 指了别的 —— 那样窗口在
+  出现后**立刻**被藏进对应空间，不会抢焦点（也不影响它自己的几何：`window_rule` 先在
+  看得见的时候把它摆好，再定归属）。`new_window` 只对新出现（含程序自己又开一个窗口）
+  的窗口生效。用户自己 `move` 之后不会再被规则拉回去 —— 规则只在窗口第一次出现、
+  显示器重新接入、flowkeyd 启动这三个时机生效（与
   [`window_rule`](#window_rule-) 一致）。
 * 拖到另一块显示器 → 改归那边的活动空间；**拔掉**一块显示器 → 它的窗口并入剩余显示器
   的活动空间（窗口本身也被摆到那块屏上，最大化 / 最小化 / 藏着的状态不变），**接回来**时

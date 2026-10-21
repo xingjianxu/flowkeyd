@@ -12,8 +12,9 @@
 `workspace("switch"|"move", N)` 已经能真的显隐窗口）、M7 ✅（显示器拔插 + 拖到别的屏：`relocateToMonitor()` +
 `windowIsOffMonitor()` + `WindowMoved` 归属跟随）、**M8 ✅（安全与恢复：`core/workspace_log.*` 预写日志 +
 启动恢复 + 退出/注销前恢复 + 托盘「恢复全部窗口」+ `--restore-windows`）**、**M9 ✅（与现有功能的联动：
-唤起藏在别的空间里的窗口 / 切换器列出来 / 跨屏移动跟着改归属 / `window_rule.workspace` 接进三遍）**。
-下一步：**M10（`new_window` 与规则归属的剩余语义）/ M11（收尾）**。
+唤起藏在别的空间里的窗口 / 切换器列出来 / 跨屏移动跟着改归属 / `window_rule.workspace` 接进三遍）**、
+**M10 ✅（规则与默认归属：`core::workspaceForNewWindow()` + 钩子「先摆位置、再定归属」）**。
+下一步：**M11（收尾）**。
 
 ## 0. 已确认的决策（来自与项目所有者的问答）
 
@@ -523,7 +524,7 @@ M2 之后要用到的语义（**都已有单测钉住**）：
 * **留给 M10**：`settings.workspace.new_window`（规则没写 `workspace` 时的默认归属）。现在没写规则的
   新窗口仍然一律落在它那块屏的活动空间（= `new_window = "active"` 的语义，其余取值还没接）。
 
-### M10　规则与默认归属（依赖 M2、M6、M9）
+### M10　规则与默认归属（依赖 M2、M6、M9）　✅ 已完成（→ 已产出见下）
 
 * `new_window = "active"|N`、`window_rule.workspace`、`app.workspace` 的运行时语义；规则命中顺序沿用
   `window_rule`（先匹配到的规则赢）；规则要求的空间在目标显示器上若不是活动空间 → 新窗口出现后立即隐藏、
@@ -532,6 +533,29 @@ M2 之后要用到的语义（**都已有单测钉住**）：
   触发，与决策 13 一致）。
 * 验证：`tst_config` / `tst_workspace`（规则优先级）+ `acceptance.ps1`（带规则的记事本首次出现即落在指定
   空间且被隐藏）。
+
+**→ 已产出**：
+
+* **归属决策是一条纯函数**：`core::workspaceForNewWindow(rules, title, process, settings)`
+  （`core/placement.*`）—— 命中窗口的**第一条**规则的 `workspace` → `settings.workspace.new_window`
+  → `std::nullopt`（= 那块屏此刻的活动空间）。命中规则但没写 `workspace` 时**不往下看**第二条规则。
+* **接线**：`Dispatcher::applyWorkspaceEvent(WindowAppeared)` 用它算出目标空间再交给
+  `m_workspace.windowAppeared(id, monitor, target)`（落到非活动空间 → 效果列表里就带着 `hide`、不抢焦点）；
+  `adoptExistingWindows()`（启动收编）**不用** `new_window`（否则重启 / reload 一次就把用户现有窗口全藏
+  起来）。
+* **顺序修正（关键）**：`HookThread::handlePlacementTick()` 改成**先发 `PlacementEvent::WindowsShown`、再发
+  `WorkspaceEvent::WindowAppeared`**。`window_rule` 只摆看得见的窗口，先藏再摆会让规则永远摆不到新窗口
+  （而规则只跑三个时机，补不回来）；现在归属看的是摆完之后的位置与显示器。
+* 文档：`README.md`（`new_window` 只对运行期间新出现的窗口生效 + 与规则/几何的先后）、
+  `flowkeyd.lua.example`、`docs/notes/decisions.md` 第 36 条的「规则与默认归属（M10）」段、
+  `docs/notes/pitfalls.md` 的「工作空间规则与默认归属（M10）」小节。
+* 测试：`tst_placement::workspaceForNewWindowPrefersTheWinningRule`（规则赢 / 规则没写时回落 / 先写的
+  规则赢 / 只命中别的程序时不影向）。本机另跑了两次定向冒烟（一次性开发实例，不是全量冒烟清单）：
+  `new_window = 3` → 记事本一出现就 `0 shown, 1 hidden` 并记入 space 3；
+  `window_rule{ process = "charmap", monitor = 2, workspace = 2 }` → 先 `maximized 3840x2160 at 3840,0`
+  再 `put "字符映射表" in space 2 -> 0 shown, 1 hidden`；两次都在 `--quit` 时恢复可见。
+* **推给 M11**：`acceptance.ps1` 的两项检查（`new_window` / 带规则的记事本首次出现即落在指定空间且被
+  隐藏）+ 「唤起藏在空间 2 的窗口」。
 
 ### M11　文档、验收与收尾（依赖全部）
 

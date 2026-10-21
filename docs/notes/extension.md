@@ -153,6 +153,10 @@ Win32/COM 后端就放在 `platform/win/*`，并在 `tst_interactive` 里加一�
    会额外产生一条 `EVENT_OBJECT_SHOW`），否则状态机把自己的操作当成用户操作。纯逻辑部分在
    `tst_workspace_event`，真机管线在 `tst_interactive::hookThreadReportsWorkspaceEventsForForeignWindows`
    （**要“新窗口出现”就别用记事本**，见 `pitfalls.md`）。
+   **新窗口的归属优先级只有一处**：`core::workspaceForNewWindow()`（规则第一条 → `new_window` →
+   活动空间）。要改优先级就改它 + `tst_placement`。另外记住 `handlePlacementTick()` 里
+   **`WindowsShown` 必须在 `WindowAppeared` 之前发**：`window_rule` 只摆看得见的窗口，先藏就再也摆不到
+   （见 `pitfalls.md` 的「工作空间规则与默认归属（M10）」）。
 5. **恢复与退出**：只要新增了任何 hide/show 的路径，就必须想清楚"进程死在中间怎么办"：日志条目在
    `Dispatcher::applyWorkspaceEffects()` 里预写 / 删除；退出（`Runtime::shutdown()`）与关机 / 注销
    （`platform/win/session.*` 的 `WM_QUERYENDSESSION`）都走 `restoreWorkspaceNow(ms)`，**必须有上限**

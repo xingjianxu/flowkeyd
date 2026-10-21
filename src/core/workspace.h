@@ -185,9 +185,10 @@ public:
 
     /// 窗口出现了（`EVENT_OBJECT_SHOW` / 启动时收编 / 规则把新窗口放进某个空间）。
     ///
-    /// `index` 为空 = 落进这块屏的活动空间（默认行为）；给了值（`window_rule` /
-    /// `app` 的 `workspace` 字段，M10）就落进去，**并且如果那不是活动空间就立刻藏
-    /// 起来、不抢焦点**。
+    /// `index` 为空 = 落进这块屏的活动空间（默认行为）；给了值（`settings.workspace.
+    /// new_window`，或者 `window_rule` / `app` 的 `workspace` 字段）就落进去，**并且
+    /// 如果那不是活动空间就立刻藏起来、不抢焦点**（优先级只在
+    /// `core::workspaceForNewWindow()` 一处）。
     ///
     /// 已经被跟踪的窗口再「出现」一次是无操作（幂等；我们自己引起的
     /// `SW_HIDE`→`SW_SHOW` 事件靠 M5 的期望事件表吞掉，这里再兜一层）。

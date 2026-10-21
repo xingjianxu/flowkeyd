@@ -641,8 +641,8 @@ active 后所在的 monitor 上"。
 ## 36. 按显示器独立的工作空间：`settings.workspace` + `workspace` 动作
 
 > 进度：**M2（配置面）/ M3（图形界面）/ M4（平台后端）/ M5（事件管线）/ M6（动作执行）/ M7（显示器拔插
-> 与拖屏）/ M8（安全与恢复）/ M9（与现有功能的联动）已完成**；只剩 M10（`settings.workspace.new_window`
-> 等规则归属的剩余语义）。实施计划在仓库根的 `plan.md`（M11 收尾时删除）。
+> 与拖屏）/ M8（安全与恢复）/ M9（与现有功能的联动）/ M10（规则与默认归属）已完成**；只剩 M11
+> （文档、验收、收尾）。实施计划在仓库根的 `plan.md`（M11 收尾时删除）。
 
 * 术语：这个功能叫「**工作空间**」，配置名 `workspace`；「**工作区**」仍然只指显示器扣掉任务栏后的
   可用区域（`availableGeometry()` / `workArea`）；「虚拟桌面」仍然是 Windows 自己的那个。
@@ -731,6 +731,26 @@ active 后所在的 monitor 上"。
     显示器重新接入 / 启动），用户后来自己 `workspace("move", N)` 搬走的窗口不会被规则拉回去。
     没被跟踪的窗口用 `windowAppeared(..., index)`（落到非活动空间 → 立即隐藏、不抢焦点），已跟踪的用
     `moveWindow()`；两种都把 `focus` 清掉（规则归位从不抢焦点）。
+* **规则与默认归属（M10）**：归属的优先级就是一条纯函数
+  `core::workspaceForNewWindow(rules, title, process, settings)`：命中窗口的**第一条**规则的
+  `workspace`（`app.workspace` 展开成它）→ `settings.workspace.new_window` → `std::nullopt` = 那块屏
+  此刻的活动空间。命中规则但规则没写 `workspace` 时 **不往下看第二条规则**（摆放与归属必须认同一条
+  规则，否则同一个窗口会被两条规则各拉一个方向）。
+  * **钩子线程里先发摆放、再发收编**（`handlePlacementTick()`）：`window_rule` 只能摆看得见的窗口
+    （「主窗口」判据里有“可见”），所以一旦工作空间先把新窗口藏进非活动空间，规则就再也碰不到它 ——
+    那个窗口以后被切出来时是没摆过的几何。反过来没有代价：两者在同一个 tick 里，归属看的仍然是
+    **摆完之后**的位置（规则把窗口搬到另一块屏时，归属按新屏算，实测日志
+    `tracking "…" on DISPLAY2 in space 2`）。
+  * `new_window` **只对运行期间新出现的窗口生效**：`adoptExistingWindows()`（启动收编）一律归入活动
+    空间。否则重启 / reload 一次就会把用户现有窗口全藏起来，而归属本来就不跨重启保存。
+  * 落到非活动空间的窗口**立刻隐藏且不抢焦点**（`windowAppeared(..., index)` 的效果列表里就带着
+    `hide`；新窗口出现不是用户要求换窗口的时机）。
+  * 验证：`tst_placement::workspaceForNewWindowPrefersTheWinningRule`（规则赢 / 规则没写时回落 /
+    先写的规则赢）、`tst_workspace::rulePlacedWindowIsHiddenWithoutFocus`（落到非活动空间 = 立即藏、
+    不抢焦点）；本机还跑过两次定向冒烟（一次性开发实例）：`new_window = 3` 下记事本一出现就
+    `window appeared -> 0 shown, 1 hidden` 并记入 space 3；`window_rule{ process = "charmap", monitor = 2,
+    workspace = 2 }` 下先 `maximized 3840x2160 at 3840,0` 再 `put "字符映射表" in space 2 -> 0 shown,
+    1 hidden`（两次都在 `--quit` 时恢复可见、`workspace.json` 自动删掉）。
 * 验证：`tst_workspace`（状态机 20 条，含 3000 步随机序列、`filterToCurrentDesktop` 的「不知道就保留」
   规则与「同一份显示器集合重发零效果」）、
   `tst_window_match`（可管理窗口与排除名单）、`tst_placement`（`windowIsOffMonitor`）、
@@ -745,6 +765,8 @@ active 后所在的 monitor 上"。
   效果真的把它显示回来）—— 本机实测通过。
   纯逻辑那一半在 `tst_workspace_log`（坏 JSON 容错、64 位整数不丢精度、去重 / 移除）。
 
-> M6/M7/M9 的验收脚本检查（`scripts/acceptance.ps1`）推后到 M11：整个特性还没接完，现在加进去的项会
+> M6/M7/M9/M10 的验收脚本检查（`scripts/acceptance.ps1`）推后到 M11：整个特性还没接完，现在加进去的项会
 > 一直失败。跨进程那一条（切换器列表里真的出现被我们藏起来的**别进程**窗口）也只能进验收脚本 ——
-> 单测进程自己的窗口会被 `listOpenWindows()` 的“不列自己”规则挡掉。
+> 单测进程自己的窗口会被 `listOpenWindows()` 的“不列自己”规则挡掉。M11 要补的：带
+> `workspace` 的规则下记事本首次出现即落在指定空间且被隐藏、`new_window = N` 的同类检查，以及
+> 「唤起藏在空间 2 的窗口」。

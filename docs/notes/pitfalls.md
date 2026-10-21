@@ -543,6 +543,23 @@
   天然对齐），由 `applyWorkspaceRules()` 统一处理；规则归位还要把 `effects.focus` 清掉（启动与显示器
   重接入都不是用户要求换窗口的时机，抢前台很欠）。
 
+### 工作空间规则与默认归属（M10）
+
+* **先藏后摆 = 规则永远摆不到那个窗口**。`window_rule` 的“主窗口”判据里有“可见”一条，而工作空间
+  一旦把新窗口藏进非活动空间（`new_window = N` / 规则的 `workspace`），`placeWindowOnce()` 就直接
+  跳过它了 —— 那个窗口以后被切出来时是**没摆过的几何**，而且 `window_rule` 只在三个时机跑，再也
+  补不上。所以 `handlePlacementTick()` 里必须是**先发 `PlacementEvent::WindowsShown`、再发
+  `WorkspaceEvent::WindowAppeared`**（两个都在同一个 tick、同一个工作线程队列里，先后只差一瞬，
+  但顺序不能反）。顺带的好处：归属看的是摆完之后的显示器，规则把窗口搬到另一块屏时归属自动跟新屏。
+* **同理不能“先把窗口藏起来再看几何”**：`applyPlacement()` / `SetWindowPlacement` 会按 `showCmd` 改
+  显隐，对一个藏着的窗口做几何就是把它弹出来。
+* **`new_window` 不能套在启动收编上**：`adoptExistingWindows()` 如果也按 `new_window` 归属，重启一次
+  （或 reload 一次）就会把用户现有窗口全部藏起来 —— 而归属本来就不跨重启保存。它只管“运行期间新
+  出现的窗口”。
+* **归属必须与摆放认同一条规则**：命中窗口的第一条规则没写 `workspace` 时就回到全局默认，**不要**
+  继续找下一条写了 `workspace` 的规则 —— 否则同一个窗口的几何与归属来自两条不同的规则
+  （`core::workspaceForNewWindow()` 只有这一个口径，单测钉着）。
+
 ## 原生 shell 右键菜单（`platform/win/shell_menu`）
 
 * **`TrackPopupMenuEx` 弹的是 shell 生成的菜单，所以菜单消息必须转给 `IContextMenu2/3`**：`HMENU` 里可能

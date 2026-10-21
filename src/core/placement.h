@@ -127,6 +127,26 @@ bool windowRulePinsDesktop(const std::vector<WindowRule> &rules,
                            const QString &title,
                            const std::optional<QString> &executableName);
 
+/// 新出现的窗口应该归入第几个工作空间。
+///
+/// 优先级（与 `window_rule` 的其它字段一致，先写的规则赢）：
+///   1. 命中这个窗口的第一条 `window_rule` 写了 `workspace`（`app.workspace` 展开成它）
+///      → 用规则里的空间号，**规则赢**；
+///   2. 否则用 `settings.workspace.new_window`（`0` = `"active"`）；
+///   3. 都没写 → `std::nullopt`，也就是那块显示器**此刻的活动空间**（默认行为）。
+///
+/// 命中规则但规则没写 `workspace` 时**不**去看后面的规则：规则按书写顺序匹配，
+/// 先命中的那条就是这个窗口的规则（与 `firstWindowRule()` 的口径一致），它没提
+/// 工作空间就退到全局默认。
+///
+/// 注意它只决定**归属**，不碰几何，也不负责显隐 —— 空间号与目标显示器当前活动
+/// 空间不同时，`core::WorkspaceState::windowAppeared()` 会立刻把窗口藏起来
+/// （`settings.workspace.new_window = N` 与 `window_rule.workspace` 同一个机制）。
+std::optional<std::uint32_t> workspaceForNewWindow(const std::vector<WindowRule> &rules,
+                                                   const QString &title,
+                                                   const std::optional<QString> &executableName,
+                                                   const Settings &settings);
+
 /// `window` 动作的 `op = "activate"` 该把窗口摆到哪一块显示器上。
 ///
 /// 优先级（显式写的赢）：

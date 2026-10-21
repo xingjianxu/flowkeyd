@@ -36,8 +36,10 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、`--ch
 * `app{}`：见 `decisions.md` 第 15 条；声明式写法叫 `apps`；再加一个 `workspace`（= `window.workspace` 的
   简写，只写它时会展开出一条只带归属的规则，见第 36 条）。
 * `settings.workspace`：`enabled`（默认 `true`）、`count`（1–10，默认 9）、`switch_target`（`"cursor"` 默认 /
-  `"focus"`）、`new_window`（`"active"` 默认 / 1..count）、`exclude`（进程名子串，**空串报错**）；
-  写 `workspace = false` 也能整个关。**空串、超出 `count` 的索引都在 `--check` 报错**。
+  `"focus"`）、`new_window`（`"active"` 默认 / 1..count；**只管运行期间新出现的窗口**，启动收编一律归入
+  活动空间）、`exclude`（进程名子串，**空串报错**）；写 `workspace = false` 也能整个关。**空串、超出
+  `count` 的索引都在 `--check` 报错**。归属优先级：命中窗口的第一条规则的 `workspace` → `new_window`
+  → 那块屏的活动空间（`core::workspaceForNewWindow()`）。
 * 和弦语法：`~` 放行原始按键、`*` 忽略额外修饰键；`Numpad*` 与主键盘同名键不同。
   **和弦的结构是 `Modifiers + 一个按键`**：`keys = "NumpadSub+NumpadAdd"` 是语法错（`NumpadSub` 不是
   修饰键），守护进程会直接拒绝启动。
