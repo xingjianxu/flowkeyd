@@ -62,6 +62,13 @@ bool Runtime::start(const QString &configPath,
                 m_dispatcher->submitPlacement(current, event);
             }
         },
+        [this](const std::shared_ptr<const core::Compiled> &current,
+               const core::WorkspaceEvent &event) {
+            if (m_dispatcher != nullptr) {
+                m_dispatcher->submitWorkspace(current, event);
+            }
+        },
+        m_workspaceEvents,
         error);
     if (!started) {
         m_workerThread->quit();
@@ -87,6 +94,11 @@ bool Runtime::start(const QString &configPath,
         win::PlacementEvent event;
         event.kind = win::PlacementEvent::Kind::Startup;
         m_dispatcher->submitPlacement(startupConfig, event);
+        // 工作空间的「收编」排在它后面：规则真的把窗口搬了屏之后，归属才按**实际**
+        // 所在的那块屏来算。窗口列表由工作线程自己枚举（钩子线程不枚举窗口）。
+        core::WorkspaceEvent workspaceEvent;
+        workspaceEvent.kind = core::WorkspaceEvent::Kind::Startup;
+        m_dispatcher->submitWorkspace(startupConfig, workspaceEvent);
     }
 
     // `--quit` 通道：另一个进程（install.ps1）用它请我们走干净退出路径，

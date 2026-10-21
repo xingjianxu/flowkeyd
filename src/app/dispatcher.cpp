@@ -8,6 +8,8 @@
 #include "core/template.h"
 #include "core/window_match.h"
 #include "core/window_monitor_state.h"
+#include "core/workspace.h"
+#include "core/workspace_event.h"
 #include "platform/win/apps.h"
 #include "platform/win/audio.h"
 #include "platform/win/clipboard.h"
@@ -19,6 +21,7 @@
 #include "platform/win/power.h"
 #include "platform/win/process.h"
 #include "platform/win/window.h"
+#include "platform/win/workspace.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -1507,6 +1510,17 @@ void Dispatcher::submitPlacement(std::shared_ptr<const core::Compiled> config,
         Qt::QueuedConnection);
 }
 
+void Dispatcher::submitWorkspace(std::shared_ptr<const core::Compiled> config,
+                                 core::WorkspaceEvent event)
+{
+    QMetaObject::invokeMethod(
+        this,
+        [this, config = std::move(config), event = std::move(event)]() {
+            applyWorkspaceEvent(config, event);
+        },
+        Qt::QueuedConnection);
+}
+
 void Dispatcher::submitCall(std::function<void()> work)
 {
     if (!work) {
@@ -1542,6 +1556,246 @@ void Dispatcher::applyPlacementRules(const std::shared_ptr<const core::Compiled>
         // 启动与显示器重新接入：只重新摆放，不动视图（见 `placeWindowOnce`）。
         placeWindowOnce(monitorMemory(), config, hwnd, false);
     }
+}
+
+// ---------------------------------------------------------------------------
+// 工作空间：事件管线（钩子线程 → 状态机 → 平台后端）
+//
+// 状态机的唯一所有者就是这条线程（`plan.md` 2.2）：钩子线程只把事件入队，
+// `ShowWindow` 这类可能阻塞的外部调用全在这里做（也是硬要求：`SW_HIDE` 是
+// 跨线程 `SendMessage` 语义，目标进程卡死时会把调用线程挂住）。
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// 窗口所在显示器的设备名（已规范化）；拿不到时是空串。
+///
+/// 工作空间用**设备名**做显示器的稳定身份（与 `window_rule` 的 `monitor` 一致），
+/// 不用序号：序号会随排列顺序变化，设备名跟着那块屏走。
+QString monitorKeyOf(HWND hwnd, const std::vector<core::MonitorDescription> &monitors)
+{
+    const std::optional<std::size_t> index = win::monitor::indexForWindow(monitors, hwnd);
+    if (!index.has_value()) {
+        return QString();
+    }
+    return core::normalizeDeviceName(monitors[*index].device);
+}
+
+} // namespace
+
+void Dispatcher::applyWorkspaceEvent(const std::shared_ptr<const core::Compiled> &config,
+                                     const core::WorkspaceEvent &event)
+{
+    if (!config) {
+        return;
+    }
+    const core::WorkspaceSettings &settings = config->settings.workspace;
+    if (!settings.enabled) {
+        // 关掉时当没这回事：已经藏起来的窗口由 M8 的「恢复全部窗口」兜底，
+        // 而默认开启 + 没绑定的情况下这里从来不会藏着任何窗口。
+        return;
+    }
+    syncWorkspaceLayout(*config);
+
+    switch (event.kind) {
+    case core::WorkspaceEvent::Kind::Startup:
+        adoptExistingWindows(*config);
+        return;
+    case core::WorkspaceEvent::Kind::WindowAppeared: {
+        const HWND hwnd = win::workspace::handleOf(event.window);
+        if (!win::workspace::isManageable(hwnd, m_workspace.tracks(event.window),
+                                          settings.exclude)) {
+            return;
+        }
+        refreshWorkspaceDesktop();
+        const QString monitor = monitorKeyOf(hwnd, core::sortedMonitors(win::monitor::list()));
+        if (monitor.isEmpty()) {
+            win::logDebug(QStringLiteral("workspace: cannot tell which monitor %1 is on")
+                              .arg(core::rustDebug(win::window::windowTitle(hwnd))));
+            return;
+        }
+        // 新窗口默认归入那块屏的**活动**空间（`settings.workspace.new_window` 与规则
+        // 在 M10 落）。
+        applyWorkspaceEffects(m_workspace.windowAppeared(event.window, monitor),
+                              QStringLiteral("window appeared"));
+        if (const std::optional<core::WindowRecord> record = m_workspace.record(event.window);
+            record.has_value()) {
+            win::logDebug(QStringLiteral("workspace: tracking %1 on %2 in space %3")
+                              .arg(core::rustDebug(win::window::windowTitle(hwnd)), monitor)
+                              .arg(record->workspace.index));
+        }
+        return;
+    }
+    case core::WorkspaceEvent::Kind::WindowDestroyed:
+        // 永远不产生效果（不能去显示一个已经没了的窗口），它只是防止 `HWND` 复用把
+        // 别人的窗口当成它。
+        m_workspace.windowDestroyed(event.window);
+        return;
+    case core::WorkspaceEvent::Kind::WindowMinimized:
+    case core::WorkspaceEvent::Kind::WindowRestored:
+        m_workspace.windowMinimized(event.window,
+                                    event.kind == core::WorkspaceEvent::Kind::WindowMinimized);
+        return;
+    case core::WorkspaceEvent::Kind::FocusChanged:
+        // 只更新「最近用过」（切回去时聚焦谁），绝不引起显隐。
+        m_workspace.focusChanged(event.window);
+        return;
+    case core::WorkspaceEvent::Kind::MonitorsChanged:
+        // 拔出 / 接入：归并、物归原主、重算显隐全在状态机里。
+        applyWorkspaceEffects(m_workspace.monitorsChanged(event.monitors),
+                              QStringLiteral("monitors changed"));
+        return;
+    case core::WorkspaceEvent::Kind::WindowMoved:
+        // M7：这里要把窗口所在显示器与记录对比，变了就 `windowMovedToMonitor`。
+        // 防抖已经在钩子线程上做完（每块屏每个 tick 最多一条）。
+        return;
+    }
+}
+
+void Dispatcher::adoptExistingWindows(const core::Compiled &config)
+{
+    const core::WorkspaceSettings &settings = config.settings.workspace;
+    std::vector<HWND> tracked;
+    for (const core::WindowId id : m_workspace.trackedWindows()) {
+        tracked.push_back(win::workspace::handleOf(id));
+    }
+    // `enumerateManageable` 不能用 `IsWindowVisible` 当“在不在”的判据（M0），所以把
+    // 已记录的窗口一起传进去。
+    const std::vector<HWND> windows = win::workspace::enumerateManageable(tracked, settings.exclude);
+    refreshWorkspaceDesktop();
+    const std::vector<core::MonitorDescription> monitors = core::sortedMonitors(win::monitor::list());
+
+    int adopted = 0;
+    for (HWND hwnd : windows) {
+        const core::WindowId id = win::workspace::idOf(hwnd);
+        if (m_workspace.tracks(id)) {
+            continue;
+        }
+        const QString monitor = monitorKeyOf(hwnd, monitors);
+        if (monitor.isEmpty()) {
+            continue;
+        }
+        // 收编只记账：它们本来就在那块屏的活动空间里，不隐藏也不抢焦点。
+        applyWorkspaceEffects(m_workspace.windowAppeared(id, monitor), QStringLiteral("startup"));
+        ++adopted;
+    }
+    win::logInfo(QStringLiteral("workspace: tracking %1 window(s) on %2 monitor(s), %3 "
+                                "space(s) each%4")
+                     .arg(adopted)
+                     .arg(monitors.size())
+                     .arg(static_cast<int>(m_workspace.count()))
+                     .arg(m_workspaceDesktop.isEmpty()
+                              ? QStringLiteral(" (the virtual desktop is unknown)")
+                              : QString()));
+}
+
+void Dispatcher::syncWorkspaceLayout(const core::Compiled &config)
+{
+    const std::uint32_t count = config.settings.workspace.count;
+    if (!m_workspaceConfigured) {
+        m_workspace = core::WorkspaceState(count);
+        m_workspaceConfigured = true;
+        return;
+    }
+    if (m_workspace.count() == count) {
+        return;
+    }
+    win::logInfo(QStringLiteral("workspace: %1 space(s) per monitor now").arg(static_cast<int>(count)));
+    // 比新数量大的空间并入最后一个；本来藏着、现在落进活动空间的窗口必须露出来
+    // （否则它们会永久藏在“活动空间”里，而对活动空间切换是幂等无操作）。
+    applyWorkspaceEffects(m_workspace.reconfigure(count), QStringLiteral("workspace count changed"));
+}
+
+void Dispatcher::refreshWorkspaceDesktop()
+{
+    QString error;
+    const std::optional<QString> id = win::desktop::currentDesktopId(&error);
+    if (!id.has_value()) {
+        // 锁屏 / 版本表对不上：保留上一次的键。猜一个比不知道更糟。
+        win::logDebug(QStringLiteral("workspace: could not read the current virtual desktop: %1")
+                          .arg(error));
+        return;
+    }
+    if (*id == m_workspaceDesktop) {
+        return;
+    }
+    m_workspaceDesktop = *id;
+    // 状态机本身不产生效果：虚拟桌面的显隐归 Windows（它按 `WS_VISIBLE` 决定这张
+    // 桌面上露不露面），而我们藏起来的窗口 `WS_VISIBLE` 已经是假的，回来时仍然藏着。
+    m_workspace.setDesktop(*id);
+}
+
+void Dispatcher::applyWorkspaceEffects(const core::WorkspaceEffects &effects, const QString &reason)
+{
+    if (effects.isEmpty()) {
+        return;
+    }
+    const std::shared_ptr<core::ExpectedWorkspaceEvents> expected =
+        m_runtime != nullptr ? m_runtime->workspaceEvents() : nullptr;
+    const std::uint64_t now = win::monotonicMs();
+    // 先登记期望事件再动手：`SW_HIDE` 会额外产生一条 `EVENT_OBJECT_SHOW`（M0 实测），
+    // 不吞掉就等于让状态机把自己的操作当成用户操作（自触发循环）。
+    if (expected != nullptr) {
+        for (const core::WindowId id : effects.show) {
+            expected->expect(core::WorkspaceEvent::Kind::WindowAppeared, id, now);
+        }
+        for (const core::WindowId id : effects.hide) {
+            expected->expect(core::WorkspaceEvent::Kind::WindowAppeared, id, now);
+        }
+    }
+
+    int shown = 0;
+    int hidden = 0;
+    int failed = 0;
+    // 底 → 顶：`insertAfter` 是记录栈里比它低一层的那一个（M4 的 `show()` 语义）。
+    HWND below = nullptr;
+    for (const core::WindowId id : effects.show) {
+        const HWND hwnd = win::workspace::manageTarget(win::workspace::handleOf(id));
+        if (hwnd == nullptr) {
+            ++failed;
+            continue;
+        }
+        QString error;
+        if (!win::workspace::show(hwnd, below, &error)) {
+            ++failed;
+            win::logWarn(QStringLiteral("workspace: cannot show %1: %2")
+                             .arg(core::rustDebug(win::window::windowTitle(hwnd)), error));
+            continue;
+        }
+        below = hwnd;
+        ++shown;
+    }
+    // 顶 → 底：先藏最上面那个，剩下的窗口不会先闪一下。
+    for (const core::WindowId id : effects.hide) {
+        const HWND hwnd = win::workspace::manageTarget(win::workspace::handleOf(id));
+        if (hwnd == nullptr) {
+            ++failed;
+            continue;
+        }
+        QString error;
+        if (!win::workspace::hide(hwnd, &error)) {
+            // 目标进程卡死 / UIPI（Q7：不提权的实例管不了提权窗口）：跳过 + warning。
+            ++failed;
+            win::logWarn(QStringLiteral("workspace: cannot hide %1: %2")
+                             .arg(core::rustDebug(win::window::windowTitle(hwnd)), error));
+            continue;
+        }
+        ++hidden;
+    }
+    // 焦点不可省：M0 实测隐藏前台窗口之后 `GetForegroundWindow()` 仍然指着那个隐藏
+    // 窗口，系统不会自己把前台交给别人。
+    if (effects.focus.has_value()) {
+        const HWND hwnd = win::workspace::manageTarget(win::workspace::handleOf(*effects.focus));
+        if (hwnd != nullptr && !win::window::raiseWindow(hwnd)) {
+            win::logWarn(QStringLiteral("workspace: could not focus %1 after %2")
+                             .arg(core::rustDebug(win::window::windowTitle(hwnd)), reason));
+        }
+    }
+    win::logInfo(QStringLiteral("workspace: %1 -> %2 shown, %3 hidden%4")
+                     .arg(reason)
+                     .arg(shown)
+                     .arg(hidden)
+                     .arg(failed > 0 ? QStringLiteral(", %1 failed").arg(failed) : QString()));
 }
 
 void Dispatcher::execute(const std::shared_ptr<const core::Compiled> &config,

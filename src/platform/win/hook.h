@@ -17,6 +17,7 @@
 
 #include "core/config.h"
 #include "core/engine.h"
+#include "core/workspace_event.h"
 #include "platform/win/ffi.h"
 
 #include <QString>
@@ -72,6 +73,13 @@ public:
     /// 窗口出现 / 显示器重新接入时，钩子线程把事件交给工作线程。
     using PlacementSink = std::function<void(const std::shared_ptr<const core::Compiled> &,
                                              const PlacementEvent &)>;
+    /// 工作空间事件（出现 / 销毁 / 最小化 / 位置变化 / 前台 / 显示器集合）。
+    ///
+    /// 与 `PlacementSink` 分开：两者关心的东西不同（一个要摆位置，一个要维护
+    /// 「哪个窗口在哪块屏的哪个空间」），而且工作空间默认**开启**却没有绑定时，
+    /// 前者与后者各自可能都没事做。
+    using WorkspaceSink = std::function<void(const std::shared_ptr<const core::Compiled> &,
+                                             const core::WorkspaceEvent &)>;
 
     HookThread() = default;
     ~HookThread();
@@ -80,10 +88,15 @@ public:
     HookThread &operator=(const HookThread &) = delete;
 
     /// 起线程、建消息队列、装钩子与窗口/显示器监听、开定时器。
+    ///
+    /// `expectedEvents` 是「我们自己引起的显隐事件」的抑制表，与动作工作线程共享
+    /// （那边在执行效果前登记，这里在事件到达时命中即吞）。可以为空（测试）。
     /// 失败时 `error` 里是英文原因。
     bool start(std::shared_ptr<const core::Compiled> config,
                TriggerSink sink,
                PlacementSink placementSink,
+               WorkspaceSink workspaceSink,
+               std::shared_ptr<core::ExpectedWorkspaceEvents> expectedEvents,
                QString *error);
 
     /// 卸钩子、退消息循环并 `join`。可重复调用。
@@ -105,7 +118,7 @@ public:
 
     /// 只在钩子线程上调用。
     bool processHookEvent(WPARAM message, KBDLLHOOKSTRUCT *info);
-    /// 只在钩子线程上调用：`SetWinEventHook` 的回调（窗口出现 / 销毁）。
+    /// 只在钩子线程上调用：`SetWinEventHook` 的回调（窗口出现 / 销毁 / 显隐 / 位置 / 最小化）。
     void noteWindowEvent(DWORD event, HWND hwnd);
     /// 只在钩子线程上调用：前台窗口变了（`EVENT_SYSTEM_FOREGROUND`）。
     /// 这决定了「键盘现在在不在远程桌面里」（`hwnd` 为 `nullptr` = 没有前台窗口）。
@@ -121,6 +134,20 @@ private:
     /// 按当前配置重新判定“在不在远程桌面里”，变化时通知引擎并写一条日志。
     void updateRemoteDesktop(const std::optional<QString> &executableName);
 
+    // --- 工作空间事件管线 ---------------------------------------------------
+
+    /// `settings.workspace.enabled`（钩子线程自己的缓存：事件回调里不碰锁、不碰配置指针）。
+    bool workspaceEnabled() const;
+    /// 按新配置装上 / 卸下工作空间专用的事件监听。只在钩子线程上调用。
+    void updateWorkspaceHooks(bool enabled);
+    /// 把一个工作空间事件交给工作线程。
+    ///
+    /// 三件事都在这里做：（a）关掉时直接丢；（b）命中期望事件表就吞掉（我们自己
+    /// 显隐引起的 `EVENT_OBJECT_SHOW`）；（c）没装 sink 时直接丢。
+    void emitWorkspaceEvent(core::WorkspaceEvent::Kind kind, HWND hwnd = nullptr);
+    /// 显示器集合变化（拔出 / 接入都由这一个事件表达）。
+    void emitMonitorsChanged();
+
     std::thread m_thread;
     std::atomic<DWORD> m_threadId{0};
     std::atomic<bool> m_running{false};
@@ -131,6 +158,9 @@ private:
     std::shared_ptr<const core::Compiled> m_initialConfig;
     TriggerSink m_sink;
     PlacementSink m_placementSink;
+    WorkspaceSink m_workspaceSink;
+    /// 与动作工作线程共享的期望事件表（见 `core/workspace_event.h`）。
+    std::shared_ptr<core::ExpectedWorkspaceEvents> m_expectedEvents;
 
     // 只在钩子线程上碰：
     std::unique_ptr<core::Engine> m_engine;
@@ -138,6 +168,15 @@ private:
     HWINEVENTHOOK m_winEventHook = nullptr;
     /// 前台窗口监听（`EVENT_SYSTEM_FOREGROUND`）：远程桌面放行的判据就是它。
     HWINEVENTHOOK m_foregroundHook = nullptr;
+    /// 工作空间用的两个**窄范围**监听：位置变化、最小化开始/结束。
+    ///
+    /// 只在 `settings.workspace.enabled` 时装（默认开着但没有绑定时也只是两个
+    /// 空回调）；**不要**合并成一个 `HIDE..LOCATIONCHANGE` 的大范围——那会把
+    /// `SELECTION` / `STATECHANGE` 之类每次 UI 变动都算进去。
+    HWINEVENTHOOK m_locationHook = nullptr;
+    HWINEVENTHOOK m_minimizeHook = nullptr;
+    /// 等你一个防抖周期再报的「位置变了」窗口（拖动一次会有几百条）。
+    std::unordered_set<HWND> m_pendingMoves;
     /// 键盘现在是不是在远程桌面客户端里（钩子线程自己的缓存，见
     /// `updateRemoteDesktop()`）。
     bool m_remoteDesktop = false;

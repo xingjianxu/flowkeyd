@@ -127,6 +127,7 @@ class TestWorkspace : public QObject
 private slots:
     void defaultsAndUnknownQueries();
     void appearedWindowJoinsTheActiveSpace();
+    void trackedWindowsAreListedForTheEnumerateBackend();
     void rulePlacedWindowIsHiddenWithoutFocus();
     void switchingWithinOneMonitor();
     void switchingIsClampedAndIdempotent();
@@ -208,6 +209,28 @@ void TestWorkspace::appearedWindowJoinsTheActiveSpace()
     QVERIFY(state.windowAppeared(11, QString()).isEmpty());
     QVERIFY(!state.tracks(0));
     QVERIFY(!state.tracks(11));
+}
+
+void TestWorkspace::trackedWindowsAreListedForTheEnumerateBackend()
+{
+    core::WorkspaceState state;
+    state.setDesktop(kDeskA);
+    QVERIFY(state.trackedWindows().empty());
+
+    state.windowAppeared(9, kScreen1);
+    state.windowAppeared(3, kScreen2);
+    state.windowAppeared(7, kScreen1, 2);
+    // 句柄升序（`platform::win::workspace::enumerateManageable()` 拿它当
+    // 「已记录的窗口」清单，顺序不重要，但固定了才好断言）。
+    QCOMPARE(listing(state.trackedWindows()), listing({3, 7, 9}));
+
+    state.windowDestroyed(7);
+    QCOMPARE(listing(state.trackedWindows()), listing({3, 9}));
+
+    // `restoreAll()` 与 `reconfigure()` 都不会把记录弄丢。
+    state.restoreAll();
+    state.reconfigure(2);
+    QCOMPARE(listing(state.trackedWindows()), listing({3, 9}));
 }
 
 void TestWorkspace::rulePlacedWindowIsHiddenWithoutFocus()

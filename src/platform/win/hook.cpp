@@ -6,6 +6,7 @@
 #include "platform/win/logging.h"
 #include "platform/win/monitor.h"
 #include "platform/win/window.h"
+#include "platform/win/workspace.h"
 
 #include <QStringList>
 
@@ -67,6 +68,14 @@ void CALLBACK winEventProc(HWINEVENTHOOK,
         self->noteForegroundWindow(hwnd);
         return;
     }
+    if (event == EVENT_SYSTEM_MINIMIZESTART || event == EVENT_SYSTEM_MINIMIZEEND) {
+        // 最小化事件的 `hwnd` 就是那个窗口，`idObject` 也是 `OBJID_WINDOW`；
+        // 但这两条不在 `EVENT_OBJECT_*` 那一族里，所以单独转一次。
+        if (hwnd != nullptr && idObject == OBJID_WINDOW && idChild == CHILDID_SELF) {
+            self->noteWindowEvent(event, hwnd);
+        }
+        return;
+    }
     if (hwnd == nullptr || idObject != OBJID_WINDOW || idChild != CHILDID_SELF) {
         return;
     }
@@ -83,6 +92,8 @@ HookThread::~HookThread()
 bool HookThread::start(std::shared_ptr<const core::Compiled> config,
                        TriggerSink sink,
                        PlacementSink placementSink,
+                       WorkspaceSink workspaceSink,
+                       std::shared_ptr<core::ExpectedWorkspaceEvents> expectedEvents,
                        QString *error)
 {
     if (m_thread.joinable()) {
@@ -94,6 +105,8 @@ bool HookThread::start(std::shared_ptr<const core::Compiled> config,
     m_initialConfig = std::move(config);
     m_sink = std::move(sink);
     m_placementSink = std::move(placementSink);
+    m_workspaceSink = std::move(workspaceSink);
+    m_expectedEvents = std::move(expectedEvents);
     std::promise<QString> ready;
     std::future<QString> future = ready.get_future();
     m_thread = std::thread([this, promise = std::move(ready)]() mutable {
@@ -189,6 +202,9 @@ void HookThread::threadMain(std::promise<QString> ready)
     }
 
     s_active.store(this);
+    // 工作空间的两个监听（位置变化 / 最小化）只在启用时装：默认开启但没有绑定时
+    // 也只是两个空回调，不隐藏任何窗口。
+    updateWorkspaceHooks(workspaceEnabled());
     // `SetTimer(nullptr, …)` 会**忽略** `nIDEvent` 并返回一个新 id，`WM_TIMER`
     // 的 `wParam` 就是那个新 id；必须存返回值，否则比较永远不成立。
     m_tickTimerId = SetTimer(nullptr, kTimerTick, m_initialConfig->settings.tickMs, nullptr);
@@ -232,6 +248,8 @@ void HookThread::threadMain(std::promise<QString> ready)
         UnhookWinEvent(m_foregroundHook);
         m_foregroundHook = nullptr;
     }
+    updateWorkspaceHooks(false);
+    m_pendingMoves.clear();
     if (m_hook != nullptr) {
         UnhookWindowsHookEx(m_hook);
         m_hook = nullptr;
@@ -300,6 +318,37 @@ void HookThread::noteWindowEvent(DWORD event, HWND hwnd)
         m_knownWindows.erase(hwnd);
         m_pendingWindows.erase(std::remove(m_pendingWindows.begin(), m_pendingWindows.end(), hwnd),
                                m_pendingWindows.end());
+        m_pendingMoves.erase(hwnd);
+        emitWorkspaceEvent(core::WorkspaceEvent::Kind::WindowDestroyed, hwnd);
+        return;
+    }
+    if (event == EVENT_SYSTEM_MINIMIZESTART || event == EVENT_SYSTEM_MINIMIZEEND) {
+        emitWorkspaceEvent(event == EVENT_SYSTEM_MINIMIZESTART
+                               ? core::WorkspaceEvent::Kind::WindowMinimized
+                               : core::WorkspaceEvent::Kind::WindowRestored,
+                           hwnd);
+        return;
+    }
+    if (event == EVENT_OBJECT_LOCATIONCHANGE) {
+        // 只有打开工作空间时才跟踪位置：窗口切换器与 `window_rule` 都不关心它。
+        // 这里是回调，所以只做**最便宜**的过滤；真正的判断放到 placement tick 里
+        // （那里会再过一遍 `isMainWindow`）。一次拖动会产生几百条这类事件，
+        // 防抖靠这个集合去重，否则会把状态机淹死。
+        if (!workspaceEnabled()) {
+            return;
+        }
+        if (IsWindowVisible(hwnd) == 0 || GetWindow(hwnd, GW_OWNER) != nullptr) {
+            return;
+        }
+        if ((GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) != 0) {
+            return;
+        }
+        m_pendingMoves.insert(hwnd);
+        return;
+    }
+    if (event == EVENT_OBJECT_HIDE) {
+        // 显隐由工作空间状态机自己记账（M0：不能拿 `IsWindowVisible` 当“在不在”），
+        // 隐藏事件没有要处理的东西。
         return;
     }
     if (m_knownWindows.contains(hwnd)) {
@@ -326,6 +375,84 @@ void HookThread::noteForegroundWindow(HWND hwnd)
         return;
     }
     updateRemoteDesktop(hwnd != nullptr ? window::processName(hwnd) : std::nullopt);
+    // 前台变化同时是工作空间的“最近用过”信号（状态机靠它决定切回去时聚焦谁）。
+    if (hwnd != nullptr) {
+        emitWorkspaceEvent(core::WorkspaceEvent::Kind::FocusChanged, hwnd);
+    }
+}
+
+bool HookThread::workspaceEnabled() const
+{
+    return m_engine != nullptr && m_engine->config()->settings.workspace.enabled;
+}
+
+void HookThread::updateWorkspaceHooks(bool enabled)
+{
+    if (!enabled) {
+        if (m_locationHook != nullptr) {
+            UnhookWinEvent(m_locationHook);
+            m_locationHook = nullptr;
+        }
+        if (m_minimizeHook != nullptr) {
+            UnhookWinEvent(m_minimizeHook);
+            m_minimizeHook = nullptr;
+        }
+        m_pendingMoves.clear();
+        return;
+    }
+    if (m_locationHook == nullptr) {
+        // **窄范围**：只要位置变化这一条。合并成 `HIDE..LOCATIONCHANGE` 那种大范围会
+        // 把 `SELECTION` / `STATECHANGE` 之类每次 UI 变动全算进来。
+        m_locationHook = SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE,
+                                         nullptr, winEventProc, 0, 0,
+                                         WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+        if (m_locationHook == nullptr) {
+            logWarn(QStringLiteral("could not watch window moves (%1); windows dragged to "
+                                   "another monitor will keep their workspace")
+                        .arg(lastErrorMessage("SetWinEventHook")));
+        }
+    }
+    if (m_minimizeHook == nullptr) {
+        m_minimizeHook = SetWinEventHook(EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND,
+                                        nullptr, winEventProc, 0, 0,
+                                        WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+        if (m_minimizeHook == nullptr) {
+            logWarn(QStringLiteral("could not watch minimize events (%1); a minimized window "
+                                   "may be focused when its workspace comes back")
+                        .arg(lastErrorMessage("SetWinEventHook")));
+        }
+    }
+    if (m_locationHook != nullptr && m_minimizeHook != nullptr) {
+        logDebug(QStringLiteral("workspace watchers installed (location, minimize)"));
+    }
+}
+
+void HookThread::emitWorkspaceEvent(core::WorkspaceEvent::Kind kind, HWND hwnd)
+{
+    if (!m_workspaceSink || !m_engine || !workspaceEnabled()) {
+        return;
+    }
+    core::WorkspaceEvent event;
+    event.kind = kind;
+    event.window = workspace::idOf(hwnd);
+    if (hwnd != nullptr && m_expectedEvents != nullptr
+        && m_expectedEvents->consume(kind, event.window, monotonicMs())) {
+        // 我们自己刚把这个窗口显出来 / 藏起来（M0：`SW_HIDE` 会额外产生一条 SHOW，
+        // 分不出是谁干的）。
+        return;
+    }
+    m_workspaceSink(m_engine->config(), event);
+}
+
+void HookThread::emitMonitorsChanged()
+{
+    if (!m_workspaceSink || !m_engine || !workspaceEnabled()) {
+        return;
+    }
+    core::WorkspaceEvent event;
+    event.kind = core::WorkspaceEvent::Kind::MonitorsChanged;
+    event.monitors = m_monitorDevices;
+    m_workspaceSink(m_engine->config(), event);
 }
 
 void HookThread::updateRemoteDesktop(const std::optional<QString> &executableName)
@@ -360,17 +487,46 @@ void HookThread::handlePlacementTick()
     // 兜底：万一 `EVENT_SYSTEM_FOREGROUND` 的监听没装上（或者漏了一次），
     // 这个 tick 也会把状态纠回来。每 350 ms 一次 `OpenProcess`，不值得省。
     noteForegroundWindow(GetForegroundWindow());
-    const bool enabled = !m_engine->config()->windowRules.empty() && !m_suspended.load();
-    if (!enabled) {
+    const bool live = !m_suspended.load();
+    const bool workspaceOn = live && m_engine->config()->settings.workspace.enabled;
+    const bool placementOn = live && !m_engine->config()->windowRules.empty();
+
+    // 防抖后的「位置变了」（`EVENT_OBJECT_LOCATIONCHANGE`）：拖动一次会有几百条
+    // 事件，这里每个窗口每个周期只报一条。拿不到主窗口判据的直接丢掉（拖不动
+    // 也就没什么可归的）。
+    if (!workspaceOn) {
+        m_pendingMoves.clear();
+    } else if (!m_pendingMoves.empty()) {
+        std::unordered_set<HWND> moves;
+        moves.swap(m_pendingMoves);
+        for (HWND hwnd : moves) {
+            if (window::isMainWindow(hwnd)) {
+                emitWorkspaceEvent(core::WorkspaceEvent::Kind::WindowMoved, hwnd);
+            }
+        }
+    }
+
+    if (!placementOn && !workspaceOn) {
         m_pendingWindows.clear();
     } else if (!m_pendingWindows.empty()) {
-        logDebug(QStringLiteral("placement tick: flushing %1 window(s)").arg(m_pendingWindows.size()));
-        PlacementEvent event;
-        event.kind = PlacementEvent::Kind::WindowsShown;
-        event.windows = std::move(m_pendingWindows);
-        m_pendingWindows.clear();
-        if (m_placementSink) {
-            m_placementSink(m_engine->config(), event);
+        std::vector<HWND> shown;
+        shown.swap(m_pendingWindows);
+        // 先让工作空间把它收编（归入那块屏的活动空间），再交给 `window_rule`
+        // 摆位置 —— 规则真的把窗口搬了屏时，M10 会把归属改过去。
+        if (workspaceOn) {
+            for (HWND hwnd : shown) {
+                emitWorkspaceEvent(core::WorkspaceEvent::Kind::WindowAppeared, hwnd);
+            }
+        }
+        if (placementOn) {
+            logDebug(QStringLiteral("placement tick: flushing %1 window(s)")
+                         .arg(shown.size()));
+            PlacementEvent event;
+            event.kind = PlacementEvent::Kind::WindowsShown;
+            event.windows = std::move(shown);
+            if (m_placementSink) {
+                m_placementSink(m_engine->config(), event);
+            }
         }
     }
 
@@ -387,9 +543,27 @@ void HookThread::handlePlacementTick()
         m_monitorDevices = devices;
         return;
     }
+    if (devices == m_monitorDevices) {
+        return;
+    }
     const QStringList added = core::newMonitorDevices(m_monitorDevices, devices);
+    QStringList removed;
+    for (const QString &device : m_monitorDevices) {
+        if (!devices.contains(device)) {
+            removed.append(device);
+        }
+    }
     m_monitorDevices = devices;
-    if (added.isEmpty() || !enabled) {
+    // 拔出与接入合成一条事件（状态机的 `monitorsChanged(present)` 就是这么收的：
+    // 它自己记着上一次的集合，拆成两条反而要它自己再记一份基线）。
+    if (workspaceOn) {
+        if (!removed.isEmpty()) {
+            logInfo(QStringLiteral("monitor disconnected: %1")
+                        .arg(removed.join(QStringLiteral(", "))));
+        }
+        emitMonitorsChanged();
+    }
+    if (added.isEmpty() || !placementOn) {
         return;
     }
     logInfo(QStringLiteral("monitor connected: %1; re-applying window rules")
@@ -456,6 +630,13 @@ void HookThread::handleControlCommand(ControlCmd cmd)
         }
         injectOps(m_engine->setConfig(pending));
         m_suspended.store(m_engine->isSuspended());
+        // 新配置可能改了工作空间的开关：监听跟着装/卸。
+        updateWorkspaceHooks(workspaceEnabled());
+        if (workspaceEnabled()) {
+            // 刚被打开（或换了 `count`）：让工作线程重新收编一遍已有窗口 —— 收编是
+            // 幂等的（已记录的窗口跳过），而换 `count` 时工作线程自己会 `reconfigure`。
+            emitWorkspaceEvent(core::WorkspaceEvent::Kind::Startup);
+        }
         // 新配置可能改了远程桌面的开关或进程名单，重新判一次。
         noteForegroundWindow(GetForegroundWindow());
         logInfo(QStringLiteral("reloaded %1 (%2 hotkey(s), %3 remap(s))")

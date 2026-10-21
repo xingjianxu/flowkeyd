@@ -11,6 +11,8 @@
 #include "core/config.h"
 #include "core/engine.h"
 #include "core/window_monitor_state.h"
+#include "core/workspace.h"
+#include "core/workspace_event.h"
 #include "platform/win/hook.h"
 
 #include <QObject>
@@ -19,6 +21,8 @@
 #include <functional>
 #include <memory>
 #include <vector>
+
+#include <cstdint>
 
 class QTimer;
 
@@ -59,6 +63,14 @@ public:
     void submitPlacement(std::shared_ptr<const core::Compiled> config,
                          platform::win::PlacementEvent event);
 
+    /// 线程安全：把一个工作空间事件（窗口出现 / 销毁 / 最小化 / 位置变化 / 前台 /
+    /// 显示器集合）排入工作线程队列。
+    ///
+    /// 工作空间状态机的**唯一所有者就是这条动作线程**（见 `plan.md` 2.2），
+    /// 所以钩子线程只入队、不碰状态。
+    void submitWorkspace(std::shared_ptr<const core::Compiled> config,
+                         core::WorkspaceEvent event);
+
     /// 线程安全：把一段任意工作排入工作线程队列。
     ///
     /// 窗口切换器用它把「激活用户选中的那个窗口」拿回工作线程执行：弹窗的回调在
@@ -89,6 +101,24 @@ private:
                     const std::vector<core::Action> &actions);
     void applyPlacementRules(const std::shared_ptr<const core::Compiled> &config,
                              const platform::win::PlacementEvent &event);
+
+    // --- 工作空间（状态机 + 平台后端） --------------------------------------
+
+    /// 处理一条工作空间事件（只在动作线程上跑）。
+    void applyWorkspaceEvent(const std::shared_ptr<const core::Compiled> &config,
+                             const core::WorkspaceEvent &event);
+    /// 启动时把已经有窗口的窗口收编进各自的**活动**空间。
+    void adoptExistingWindows(const core::Compiled &config);
+    /// `settings.workspace.count` 变了（`reload`）时重建空间划分，并执行随之而来的
+    /// 显隐（被合并进活动空间的窗口必须露出来）。
+    void syncWorkspaceLayout(const core::Compiled &config);
+    /// 刷新「当前虚拟桌面」这个上下文（按它分开口记，见 `plan.md` 的 Q1）。
+    ///
+    /// 每次都会开一条一次性的 STA 线程（虚拟桌面后端的要求），所以只在真的需要
+    /// 时叫它：启动收编与新窗口出现。
+    void refreshWorkspaceDesktop();
+    /// 把状态机给出的效果交给平台后端执行（只在动作线程上跑）。
+    void applyWorkspaceEffects(const core::WorkspaceEffects &effects, const QString &reason);
     /// `startDesktopWatch()` 与那个 500 ms 的定时器共用的轮询体。
     void pollDesktop();
 
@@ -117,6 +147,16 @@ private:
     /// `monitor = "last"` 那份记忆（`<配置目录>/windows.json`）：**第一次真的
     /// 用到 `"last"` 时才建**（`"cursor"` / `"none"` 完全不碰这个文件）。
     std::unique_ptr<MonitorMemory> m_monitorMemory;
+
+    // --- 工作空间（只在动作线程上碰） ---------------------------------------
+    //
+    // 状态机的**唯一所有者**就是这条线程，所以这里不需要任何锁（与钩子线程共享的
+    // 只有 `Runtime::workspaceEvents()` 那张带锁的期望事件表）。
+    core::WorkspaceState m_workspace;
+    /// 状态机是不是已经按配置里的 `count` 建过了（`WorkspaceState` 的构造参数）。
+    bool m_workspaceConfigured = false;
+    /// 当前虚拟桌面键（`desktop::currentDesktopId()` 的缓存）。空串 = 还不知道。
+    QString m_workspaceDesktop;
 
     /// 上一条记忆的访问器（第一次调用时建出来，并记住配置目录旁边的落盘位置）。
     MonitorMemory *monitorMemory();

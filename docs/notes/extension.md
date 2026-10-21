@@ -141,7 +141,15 @@ Win32/COM 后端就放在 `platform/win/*`，并在 `tst_interactive` 里加一�
    `WindowRuleFields.qml`。再加一项：`settings.workspace` 的嵌套字段要同时改 `settingsToMap/FromMap`、
    `ConfigEditor::setWorkspaceSetting()` 的调用点（`ConfigAdvancedPage.qml` 的工作空间卡片）与 README
    的「工作空间」一章。
-4. 实施计划与剩余任务（事件管线、动作执行、显示器拔插、恢复日志）在仓库根 `plan.md` 的 M5–M11。
+4. **事件管线**：钩子线程（`platform/win/hook.*`）只把 `core::WorkspaceEvent` 入队，动作工作线程
+   （`app/dispatcher.cpp` 的 `applyWorkspaceEvent()`）是**状态机的唯一所有者**，效果由
+   `applyWorkspaceEffects()` 交给平台层。新增一种事件的面积固定是三处：`core/workspace_event.h`
+   的 `Kind`（+`workspaceEventName()`）、钩子里产生它的那一处、`Dispatcher::applyWorkspaceEvent()`
+   的 `switch`。**自己引起的显隐**要在 `applyWorkspaceEffects()` 里先 `expect()` 再动手（`SW_HIDE`
+   会额外产生一条 `EVENT_OBJECT_SHOW`），否则状态机把自己的操作当成用户操作。纯逻辑部分在
+   `tst_workspace_event`，真机管线在 `tst_interactive::hookThreadReportsWorkspaceEventsForForeignWindows`
+   （**要“新窗口出现”就别用记事本**，见 `pitfalls.md`）。
+5. 实施计划与剩余任务（动作执行、显示器拔插、恢复日志）在仓库根 `plan.md` 的 M6–M11。
 
 ## 新的窗口条件 / 跨桌面语义
 

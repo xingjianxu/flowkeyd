@@ -20,6 +20,7 @@
 // 「已记录的窗口」列表（见 `core::isManageableWindow()`）。
 #pragma once
 
+#include "core/workspace.h"
 #include "platform/win/ffi.h"
 
 #include <QString>
@@ -30,6 +31,21 @@
 #include <vector>
 
 namespace flowkeyd::platform::win::workspace {
+
+// --- 句柄与状态机的不透明窗口 id 之间的转换 ---------------------------------
+//
+// 状态机只认 `core::WindowId`（`uint64`，不透明），钩子事件与分发层在这一对
+// 转换函数上往返。放在这里而不是各调用点：两边的形状一旦改了就只改一处。
+
+inline core::WindowId idOf(HWND hwnd)
+{
+    return static_cast<core::WindowId>(reinterpret_cast<quintptr>(hwnd));
+}
+
+inline HWND handleOf(core::WindowId id)
+{
+    return reinterpret_cast<HWND>(static_cast<quintptr>(id));
+}
 
 /// 窗口身份：进程 ID + **进程创建时间** + 窗口类名。
 ///
@@ -97,6 +113,13 @@ bool restack(const std::vector<HWND> &bottomToTop, QString *error);
 /// `--check` 拒绝）。判断本身在 `core::isManageableWindow()`（纯逻辑、可单测）。
 std::vector<HWND> enumerateManageable(const std::vector<HWND> &tracked,
                                       const QStringList &excludedProcesses);
+
+/// 单个窗口版本的 `enumerateManageable()`：「这个窗口归不归工作空间管」。
+///
+/// `tracked` = 它已经在状态机的记录里（于是**不看可见性**：我们藏起来的窗口
+/// `IsWindowVisible` 是假的）。钩子事件（出现/位置变化）要逐窗口判断，不能为
+/// 一个事件枚举全部窗口。
+bool isManageable(HWND hwnd, bool tracked, const QStringList &excludedProcesses);
 
 /// 窗口的类名（取不到时为空串）。
 QString classNameOf(HWND hwnd);

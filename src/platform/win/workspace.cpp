@@ -266,26 +266,31 @@ struct EnumerateContext
     DWORD self = 0;
 };
 
-BOOL CALLBACK enumerateProc(HWND hwnd, LPARAM param)
+/// 把一个窗口的「原始观察值」收集好，交给 `core::isManageableWindow()` 判断。
+/// 单窗口与枚举两条路径共用（判据只有一份）。
+bool manageable(HWND hwnd, bool tracked, const QStringList &excludedProcesses, DWORD self)
 {
-    auto *context = reinterpret_cast<EnumerateContext *>(param);
+    core::ManageableWindowFacts facts;
+    facts.exists = isAlive(hwnd);
+    facts.tracked = tracked;
     DWORD pid = 0;
     GetWindowThreadProcessId(hwnd, &pid);
-
-    const bool tracked = std::find(context->tracked->begin(), context->tracked->end(), hwnd)
-        != context->tracked->end();
-
-    core::ManageableWindowFacts facts;
-    facts.exists = true;
-    facts.tracked = tracked;
-    facts.ownProcess = pid == context->self;
+    facts.ownProcess = pid == self;
     facts.shellWindow = isShellClass(classNameOf(hwnd));
     // 被我们藏起来的窗口仍然算「主窗口」（判据里不要求可见）。
     facts.mainWindow = tracked ? window::isMainWindowIgnoringVisibility(hwnd)
-                               : window::isMainWindow(hwnd);
+                              : window::isMainWindow(hwnd);
 
     const std::optional<QString> process = window::processName(hwnd);
-    if (!core::isManageableWindow(facts, process, *context->excludedProcesses)) {
+    return core::isManageableWindow(facts, process, excludedProcesses);
+}
+
+BOOL CALLBACK enumerateProc(HWND hwnd, LPARAM param)
+{
+    auto *context = reinterpret_cast<EnumerateContext *>(param);
+    const bool tracked = std::find(context->tracked->begin(), context->tracked->end(), hwnd)
+        != context->tracked->end();
+    if (!manageable(hwnd, tracked, *context->excludedProcesses, context->self)) {
         return TRUE;
     }
     context->out->push_back(hwnd);
@@ -293,6 +298,14 @@ BOOL CALLBACK enumerateProc(HWND hwnd, LPARAM param)
 }
 
 } // namespace
+
+bool isManageable(HWND hwnd, bool tracked, const QStringList &excludedProcesses)
+{
+    if (hwnd == nullptr) {
+        return false;
+    }
+    return manageable(hwnd, tracked, excludedProcesses, GetCurrentProcessId());
+}
 
 std::vector<HWND> enumerateManageable(const std::vector<HWND> &tracked,
                                       const QStringList &excludedProcesses)

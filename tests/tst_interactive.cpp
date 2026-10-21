@@ -29,8 +29,10 @@
 
 #include "app/updater.h"
 #include "core/action.h"
+#include "core/config.h"
 #include "core/keys.h"
 #include "core/placement.h"
+#include "core/workspace_event.h"
 #include "platform/win/apps.h"
 #include "platform/win/audio.h"
 #include "platform/win/clipboard.h"
@@ -38,6 +40,7 @@
 #include "platform/win/dwm.h"
 #include "platform/win/elevate.h"
 #include "platform/win/ffi.h"
+#include "platform/win/hook.h"
 #include "platform/win/ime.h"
 #include "platform/win/input.h"
 #include "platform/win/monitor.h"
@@ -368,6 +371,7 @@ private slots:
     void switchesTheInputMethodToEnglish();
     void hidesAndShowsAWindowWithoutTouchingIt();
     void enumeratesManageableWindowsByTheirRecord();
+    void hookThreadReportsWorkspaceEventsForForeignWindows();
     void launchesProgramsWithTheRequestedPrivilege();
     void opensTargetsAsTheLoggedOnUser();
     void reportsALauncherFailureFromTheShellHelper();
@@ -1787,6 +1791,137 @@ void TestInteractive::enumeratesManageableWindowsByTheirRecord()
              "own-process windows must be skipped even when they are tracked");
     QVERIFY2(ws::show(hwnd, nullptr, &error), qPrintable(error));
     QVERIFY(IsWindowVisible(hwnd) != 0);
+}
+
+/// 工作空间的事件管线（M5）：钩子线程把**别的进程**的窗口报成工作空间事件，而且
+/// 命中「期望事件表」的事件会被吞掉。
+///
+/// 这里不起整个守护进程（那要装一份配置、还会抢用户的前台），只装一个
+/// `HookThread` 并收事件 —— 验证的正是「钩子 → 事件表 → 交给工作线程」这一段；
+/// 状态机那一半由 `tst_workspace` / `tst_workspace_event` 盯住。
+void TestInteractive::hookThreadReportsWorkspaceEventsForForeignWindows()
+{
+    if (!interactiveEnabled()) {
+        QSKIP("set FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1 to run the interactive tests");
+    }
+    namespace ws = platform::win::workspace;
+
+    std::mutex mutex;
+    std::vector<core::WorkspaceEvent> events;
+    // 与生产里同一个形状：动作线程执行效果前登记，钩子线程命中即吞。
+    auto expected = std::make_shared<core::ExpectedWorkspaceEvents>();
+    platform::win::HookThread hook;
+    QString error;
+    const bool started = hook.start(
+        std::make_shared<core::Compiled>(),
+        [](const std::shared_ptr<const core::Compiled> &, const core::Trigger &) {},
+        [](const std::shared_ptr<const core::Compiled> &, const platform::win::PlacementEvent &) {},
+        [&mutex, &events](const std::shared_ptr<const core::Compiled> &,
+                          const core::WorkspaceEvent &event) {
+            std::lock_guard<std::mutex> lock(mutex);
+            events.push_back(event);
+        },
+        expected,
+        &error);
+    QVERIFY2(started, qPrintable(error));
+
+    const auto seen = [&mutex, &events](core::WorkspaceEvent::Kind kind, core::WindowId window) {
+        std::lock_guard<std::mutex> lock(mutex);
+        int found = 0;
+        for (const core::WorkspaceEvent &event : events) {
+            if (event.kind == kind && event.window == window) {
+                ++found;
+            }
+        }
+        return found;
+    };
+
+    // 一个**别的进程**的主窗口（钩子带 `WINEVENT_SKIPOWNPROCESS`，自己的窗口收不到）。
+    //
+    // **不用记事本**：本机的记事本是单实例、带标签页的 Store 应用，`notepad file`
+    // 往往只给一个**已经存在**的窗口开一个新标签（测试文件里已有一大段注释说这件事）
+    // —— 那就没有“新窗口出现”，这条用例也就无从断言。字符映射表是普通 Win32
+    // 程序：每个实例自己开窗、`WM_CLOSE` 就退出，而且没人会一直开着它。
+    platform::win::RunCommandSpec spec;
+    spec.program = QStringLiteral("charmap.exe");
+    spec.show = core::ShowMode::Normal;
+    QString detail;
+    QVERIFY2(platform::win::runCommand(spec, &detail, &error), qPrintable(error));
+    const DWORD pid = pidFromDetail(detail);
+
+    const core::WindowQuery query =
+        core::WindowQuery::make(std::nullopt, std::optional<QString>(QStringLiteral("charmap.exe")));
+    HWND hwnd = nullptr;
+    for (int i = 0; i < 120 && hwnd == nullptr; ++i) {
+        hwnd = platform::win::window::find(query);
+        if (hwnd == nullptr) {
+            QThread::msleep(50);
+        }
+    }
+    QVERIFY2(hwnd != nullptr, "the launched Character Map window never appeared");
+    const core::WindowId window = ws::idOf(hwnd);
+
+    // 失败时把收到的每一条事件都打出来（否则只剩一句“没收到”，没法判断是管线
+    // 没接上还是收的是另一个句柄）。
+    const auto dump = [&mutex, &events, hwnd]() {
+        std::lock_guard<std::mutex> lock(mutex);
+        QStringList lines;
+        lines.append(QStringLiteral("waiting for hwnd %1 (title %2), got %3 event(s)")
+                         .arg(reinterpret_cast<quintptr>(hwnd))
+                         .arg(platform::win::window::windowTitle(hwnd))
+                         .arg(events.size()));
+        for (const core::WorkspaceEvent &event : events) {
+            lines.append(QStringLiteral("%1: %2")
+                             .arg(QString::fromLatin1(core::workspaceEventName(event.kind)))
+                             .arg(event.window));
+        }
+        return lines.join(QStringLiteral(" | "));
+    };
+
+    // 1) 窗口出现会被报出来（`EVENT_OBJECT_SHOW` → 350 ms 防抖 → 事件）。
+    {
+        const bool appeared = spinUntil(
+            [&] { return seen(core::WorkspaceEvent::Kind::WindowAppeared, window) > 0; }, 10000);
+        const QString diagnostics = dump();
+        QVERIFY2(appeared, qPrintable(diagnostics));
+    }
+
+    // 2) 命中期望事件表的事件被吞掉：先登记“我要最小化它”，再真的最小化。
+    expected->expect(core::WorkspaceEvent::Kind::WindowMinimized, window,
+                     platform::win::monotonicMs());
+    QVERIFY2(platform::win::window::applyTo(hwnd, core::WindowOp::Minimize, false, &detail, &error),
+             qPrintable(error));
+    // 等一个防抖周期再多给一点余量；没被吞的话足够到货。
+    spinUntil([&] { return seen(core::WorkspaceEvent::Kind::WindowMinimized, window) > 0; }, 1200);
+    QCOMPARE(seen(core::WorkspaceEvent::Kind::WindowMinimized, window), 0);
+
+    // 3) 没登记的最小化照常报（证明第 2 步的“没收到”是吞掉的，不是根本没这事件）。
+    QVERIFY2(platform::win::window::applyTo(hwnd, core::WindowOp::Restore, false, &detail, &error),
+             qPrintable(error));
+    QThread::msleep(300);
+    QVERIFY2(platform::win::window::applyTo(hwnd, core::WindowOp::Minimize, false, &detail, &error),
+             qPrintable(error));
+    QVERIFY2(spinUntil([&] { return seen(core::WorkspaceEvent::Kind::WindowMinimized, window) > 0; },
+                       5000),
+             "minimizing a window was not reported");
+
+    // 4) 销毁也会报（状态机靠它清记录，否则 `HWND` 复用会认错窗口）。
+    (void)platform::win::window::applyTo(hwnd, core::WindowOp::Close, false, &detail, &error);
+    if (!spinUntil([&] { return seen(core::WorkspaceEvent::Kind::WindowDestroyed, window) > 0; },
+                   3000)) {
+        // 本机的记事本是带标签页的 Store 应用，关闭可能先弹确认框：直接收掉进程。
+        if (pid != 0) {
+            terminateProcess(pid);
+        }
+    }
+    QVERIFY2(spinUntil([&] { return seen(core::WorkspaceEvent::Kind::WindowDestroyed, window) > 0; },
+                       10000),
+             "destroying a window was not reported");
+
+    hook.stop();
+    if (pid != 0) {
+        terminateProcess(pid);
+    }
 }
 
 /// `run` 的默认权限：**以当前登录用户的普通权限启动**。

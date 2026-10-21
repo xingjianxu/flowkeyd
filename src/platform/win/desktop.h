@@ -200,6 +200,17 @@ std::optional<bool> isWindowOnCurrentDesktop(HWND hwnd, QString *error);
 /// 移动窗口前后对比它，就能知道未公开的 `MoveViewToDesktop` 到底有没有生效。
 std::optional<QString> windowDesktopId(HWND hwnd, QString *error);
 
+/// **当前**虚拟桌面的 GUID（`{xxxxxxxx-...}`）。
+///
+/// 工作空间按「（虚拟桌面，显示器）」分开记（`plan.md` 的 Q1），于是分发层需要一个
+/// “现在人在哪张桌面”的不透明键。走未公开的 `IVirtualDesktopManagerInternal::
+/// GetCurrentDesktop` + `IVirtualDesktop::GetID`（与 `probe()` 同一条 COM 会话），
+/// 拿不到时返回 `std::nullopt`（锁屏 / 版本表对不上 / 非交互会话）。
+///
+/// **只在动作工作线程上调用**：每次调用都会开一条一次性的 STA 线程（决策：虚拟
+/// 桌面要 STA、音频要 MTA，见不变量 13），不要逐窗口在事件回调里叫它。
+std::optional<QString> currentDesktopId(QString *error);
+
 /// 窗口是不是被钉在**所有**虚拟桌面上（Task View 里的“在所有桌面显示”）。
 ///
 /// 走未公开的 `IVirtualDesktopPinnedApps::IsViewPinned`（`{4CE81583-...}`）：

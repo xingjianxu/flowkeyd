@@ -469,6 +469,27 @@
   `tst_interactive.exe -o tmp\x.txt,txt <用例名>`。**直接跑 exe 时输出会“消失”**（本机 `QTEST_MAIN` 的
   stdout 拿不到），所以总是带 `-o`；不带 PATH 时进程根本起不来（Qt DLL），表现同样是“无输出 + 退出码 1”。
 
+### 工作空间事件管线（M5，`platform/win/hook.*` + `core/workspace_event.*`）
+
+* **`SW_HIDE` 除了 `EVENT_OBJECT_HIDE` 还会产生一条 `EVENT_OBJECT_SHOW`**（M0 就已实测）。所以我们自己的
+  隐显在钩子里**看起来就像“窗口出现了”** → 期望事件表（`core::ExpectedWorkspaceEvents`）必须把两边
+  （`effects.show` 与 `effects.hide`）都登记成 `WindowAppeared`，不然状态机把自己的操作当成用户操作。
+* **事件监听要拆成窄范围，不要用一个 `HIDE..LOCATIONCHANGE` 的大范围**：`EVENT_OBJECT_HIDE`(0x8003) 到
+  `EVENT_OBJECT_LOCATIONCHANGE`(0x800B) 之间夹着 `REORDER`/`FOCUS`/`SELECTION*`/`STATECHANGE`，那是每次
+  UI 变动都会发的噪音。现在是三个：`DESTROY..SHOW`（一直都有，`window_rule` 用）、
+  `LOCATIONCHANGE`（只打开工作空间时装）、`MINIMIZESTART..MINIMIZEEND`。
+* **`EVENT_OBJECT_LOCATIONCHANGE` 在本机是持续不断的**（别的进程那些不可见、无标题的辅助窗口一直在动）。
+  一条用例就能刷出几百条 → 回调里**必须先做最便宜的过滤**（`IsWindowVisible` + 无属主 +
+  非 `WS_EX_TOOLWINDOW`），再把句柄丢进防抖集合；`isMainWindow()` 那种要多问几个 API 的判断放到
+  placement tick 里做（350 ms 一次），**别放在 `SetWinEventHook` 回调里**。
+* **`notepad file` 在本机不会开新窗口**：本机的记事本是单实例、带标签页的 Store 应用，第二次启动往往只是
+  给**已存在**的窗口加一个标签（标题会换成新文件名）—— 于是“一个新窗口出现了”那条 `EVENT_OBJECT_SHOW`
+  **根本不存在**。写“窗口出现”类自动化时不能用记事本当载体
+  （`tst_interactive::hookThreadReportsWorkspaceEventsForForeignWindows` 改用 `charmap.exe`：普通 Win32、
+  每个实例自己开窗、`WM_CLOSE` 就退出）。
+* **钩子带 `WINEVENT_SKIPOWNPROCESS`**：自己进程的窗口不会被报出来，所以这类用例必须用**另一个进程**的
+  窗口；反过来，拿自己的窗口测会看起来像“事件根本不工作”。
+
 ## 原生 shell 右键菜单（`platform/win/shell_menu`）
 
 * **`TrackPopupMenuEx` 弹的是 shell 生成的菜单，所以菜单消息必须转给 `IContextMenu2/3`**：`HMENU` 里可能

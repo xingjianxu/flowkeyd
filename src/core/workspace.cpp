@@ -509,6 +509,17 @@ bool WorkspaceState::tracks(WindowId window) const
     return m_windows.find(window) != m_windows.end();
 }
 
+std::vector<WindowId> WorkspaceState::trackedWindows() const
+{
+    std::vector<WindowId> ids;
+    ids.reserve(m_windows.size());
+    // `m_windows` 本身就是按句柄升序的 map。
+    for (const auto &entry : m_windows) {
+        ids.push_back(entry.first);
+    }
+    return ids;
+}
+
 std::optional<WindowRecord> WorkspaceState::record(WindowId window) const
 {
     const auto it = m_windows.find(window);

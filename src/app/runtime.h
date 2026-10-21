@@ -6,6 +6,7 @@
 
 #include "app/popup_host.h"
 #include "core/config.h"
+#include "core/workspace_event.h"
 
 #include <QObject>
 #include <QString>
@@ -46,6 +47,13 @@ public:
     const QString &configPath() const { return m_configPath; }
     platform::win::HookThread *hook() const { return m_hook.get(); }
     bool isSuspended() const;
+
+    /// 「我们自己引起的显隐事件」的抑制表（钩子线程命中即吞，动作线程执行效果前
+    /// 登记）。两边必须看到**同一张**表，所以由这里拥有并共享出去。
+    std::shared_ptr<core::ExpectedWorkspaceEvents> workspaceEvents() const
+    {
+        return m_workspaceEvents;
+    }
 
     /// 把弹窗宿主交给运行时（GUI 线程、启动时调一次）。
     ///
@@ -92,6 +100,8 @@ private:
     void performShutdown();
 
     QString m_configPath;
+    /// 工作空间的自触发事件抑制表（见 `workspaceEvents()`）。
+    std::shared_ptr<core::ExpectedWorkspaceEvents> m_workspaceEvents = std::make_shared<core::ExpectedWorkspaceEvents>();
     std::unique_ptr<platform::win::HookThread> m_hook;
     PopupHost *m_popupHost = nullptr;
     QThread *m_workerThread = nullptr;

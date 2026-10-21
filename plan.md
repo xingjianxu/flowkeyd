@@ -7,9 +7,10 @@
 > `--check flowkeyd.lua.example` 零警告）。
 
 **当前进度：M0 ✅（结论在下文 M0 节 + `docs/notes/pitfalls.md`）、M1 ✅（`src/core/workspace.*` +
-`tests/tst_workspace.cpp`）、M2 ✅、M3 ✅、M4 ✅（语义在下文各自的「→ 已产出」）。下一步：**M5（事件管线）/
-M6（动作执行）/ M8（安全与恢复）**。注意：在 M5/M6 接线之前，把 `workspace(...)` 绑上去只会得到一条
-`action ... is not implemented yet` 的 warning —— 配置面、界面与平台后端已经就位。**
+`tests/tst_workspace.cpp`）、M2 ✅、M3 ✅、M4 ✅（语义在下文各自的「→ 已产出」）、M5 ✅（事件管线已接线，
+`src/core/workspace_event.*` + `platform/win/hook.*` + `Dispatcher::applyWorkspaceEvent`）。下一步：
+**M6（动作执行）/ M7（显示器拔插与"拖到别的屏"）/ M8（安全与恢复）**。注意：`workspace(...)` 动作仍会得到一条
+`action ... is not implemented yet` 的 warning —— 配置面、界面、平台后端与事件管线都已就位。**
 
 ## 0. 已确认的决策（来自与项目所有者的问答）
 
@@ -293,7 +294,7 @@ M2 之后要用到的语义（**都已有单测钉住**）：
 `tst_interactive::hidesAndShowsAWindowWithoutTouchingIt`（几何 / 最大化 / 最小化 / 身份 / 伪身份）与
 `enumeratesManageableWindowsByTheirRecord`（本机已实跑通过）。
 
-### M5　事件管线：从钩子线程到状态机（依赖 M1、M4）
+### M5　事件管线：从钩子线程到状态机（依赖 M1、M4）　✅ 已完成（→ 已产出见下）
 
 * `platform/win/hook.*`：新增 `WorkspaceEvent`（出现 / 销毁 / 最小化 / 还原 / 移动结束 / 前台变化 / 显示器
   拔出 / 重新接入 / 启动）与 `WorkspaceSink`；仅在配置启用时订阅（避免默认开启后给所有用户加开销时也只有
@@ -304,6 +305,31 @@ M2 之后要用到的语义（**都已有单测钉住**）：
 * 启动时「收编」已有窗口：对 `enumerateManageable()` 的每个窗口按它所在显示器归入当前活动空间。
 * 显示器轮询补「拔出」：沿用 `m_monitorDevices` 的基线对比，差集 = 拔出、新增 = 接入。
 * 验证：`tst_interactive` 起一个窗口 → 收到出现事件 → 归入活动空间；销毁 → 记录被清理（防 HWND 复用）。
+
+→ **已产出**：
+
+* `src/core/workspace_event.{h,cpp}`：`WorkspaceEvent`（`Startup` / `WindowAppeared` / `WindowDestroyed` /
+  `WindowMinimized` / `WindowRestored` / `WindowMoved` / `FocusChanged` / `MonitorsChanged`）+
+  `ExpectedWorkspaceEvents`（（种类，窗口）→ 过期时间，命中一次即吞，自带一把锁 —— 动作线程登记、
+  钩子线程命中）。事件类型放在 `core` 而不是 `hook.h`：这样它能被 `tst_workspace_event` 直接单测。
+* `platform/win/hook.*`：新增 `WorkspaceSink`；**只在 `settings.workspace.enabled` 时**装两个窄范围的
+  监听（`EVENT_OBJECT_LOCATIONCHANGE`、`MINIMIZESTART..MINIMIZEEND`，`reload` 时跟着装/卸）；位置变化
+  放进 `m_pendingMoves`，由 placement tick（350 ms）防抖后再发；显示器轮询补「拔出」（与「接入」合成一条
+  `MonitorsChanged`，带**现存**设备名列表）；前台变化除了远程桌面判定还发 `FocusChanged`。
+* `platform/win/workspace.*`：新增 `idOf()` / `handleOf()`（`HWND` ↔ `core::WindowId`）与单窗口版本的
+  `isManageable(hwnd, tracked, exclude)`（枚举与事件两条路径共用同一份判据）。
+* `platform/win/desktop.*`：新增 `currentDesktopId()`（未公开的 `GetCurrentDesktop` + `IVirtualDesktop::
+  GetID`），状态机按（虚拟桌面，显示器）分组的那个不透明键由它提供。
+* `app/dispatcher.*`：`submitWorkspace()` + `applyWorkspaceEvent()`（启动收编、出现归入活动空间、销毁清
+  记录、最小化/还原、前台、显示器集合、`count` 变化走 `reconfigure`）+ `applyWorkspaceEffects()`
+  （先登记期望事件 → `show` 底→顶 → `hide` 顶→底 → `focus`）。`app/runtime.cpp` 组装 sink、拥有并共享
+  期望事件表、启动时投 `Startup`（排在 `window_rule` 的 Startup 之后，于是归属按规则的落点算）。
+* 测试：`tests/tst_workspace_event.cpp`（事件名、吞一次、过期、键、两线程并发）；`tst_workspace` 补
+  `trackedWindows()`；`tst_interactive::hookThreadReportsWorkspaceEventsForForeignWindows`（启动一个
+  `charmap.exe` → 收到出现事件 → 登记期望后最小化**收不到** → 不登记时收得到 → 关闭收得到销毁事件）。
+  真机手工确认：开发实例启动时 `workspace: tracking 9 window(s) on 2 monitor(s), 9 space(s) each`。
+* **M6 接手的地方**：`WindowMoved` 事件已经在防抖后到达工作线程，`Dispatcher::applyWorkspaceEvent()` 里那
+  一条 `case` 目前是空的（M7 要在那里比较显示器归属）；`workspace(...)` 动作本身仍未实现。
 
 ### M6　核心动作：切换与移动（依赖 M2、M5）
 

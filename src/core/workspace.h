@@ -210,6 +210,13 @@ public:
     /// 这个窗口在跟踪表里吗。
     bool tracks(WindowId window) const;
 
+    /// 全部被跟踪的窗口，按句柄升序。
+    ///
+    /// 两个用途：`platform::win::workspace::enumerateManageable()` 靠它把「被我们
+    /// 藏起来的窗口」纳入枚举（M0：不能拿 `IsWindowVisible` 当判据），以及 M8 的
+    /// 恢复日志。顺序固定只是为了让日志与测试可复现，不代表 Z 序。
+    std::vector<WindowId> trackedWindows() const;
+
     /// 一份记录的快照。
     std::optional<WindowRecord> record(WindowId window) const;
 
