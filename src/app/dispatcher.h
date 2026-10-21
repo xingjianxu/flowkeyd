@@ -87,12 +87,20 @@ public:
 
     /// **只能在动作线程上调用**（`Runtime::start()` 用排队调用投进来）：起一个
     /// 定时器轮询「当前是第几号虚拟桌面」，变化时通知 GUI 线程去换托盘图标。
-    ///
     /// 为什么放在这条线程上：`desktop::currentDesktopIndex()` 要走一次性的 STA
     /// 线程 + shell COM，放在 GUI 线程上会白白阻塞 QML 渲染。动作线程本来就在干
     /// 这类事，而且轮询偶尔被一个长动作拖后几百毫秒无伤大雅（托盘上的数字晚一点
     /// 变而已）。
     void startDesktopWatch();
+
+    /// **只能在动作线程上调用**：执行 `workspace("switch"|"move", N)`。
+    ///
+    /// 目标显示器 = 光标所在（`switch_target = "cursor"`）或前台窗口所在
+    /// （`"focus"`）；`move` 的目标窗口 = 当前前台窗口。效果（先显后藏 → 聚焦）
+    /// 由 `core::WorkspaceState` 算出，这里只负责翻译成 Win32 调用。
+    void executeWorkspaceAction(const core::Compiled &config,
+                                const core::Action &action,
+                                const QString &hotkey);
 
 private:
     void execute(const std::shared_ptr<const core::Compiled> &config, const core::Trigger &trigger);
@@ -121,6 +129,17 @@ private:
     void applyWorkspaceEffects(const core::WorkspaceEffects &effects, const QString &reason);
     /// `startDesktopWatch()` 与那个 500 ms 的定时器共用的轮询体。
     void pollDesktop();
+    /// `workspace("switch")` 要作用在哪块显示器上（设备名，已规范化；空串 = 问不出来）。
+    ///
+    /// `switch_target = "cursor"` 看光标，`"focus"` 看前台窗口（前台是覆盖层时
+    /// 跳过它，与 `window` 动作同一个找法，见决策 19）；`"focus"` 问不出来时退回
+    /// 光标 —— 用户按了快捷键总得有点反应。
+    QString workspaceSwitchMonitor(const core::Compiled &config);
+    /// 把一组窗口过滤成「在当前虚拟桌面上的」（一次批量 COM 查询，见决策 13）。
+    ///
+    /// 问不出来（被我们藏起来的窗口、打包应用宿主、COM 失败）的一律**保留**：
+    /// 「不知道」不等于「在别的桌面上」。
+    std::vector<core::WindowId> windowsOnThisDesktop(const std::vector<core::WindowId> &windows);
 
     /// 重扫开始菜单（只能在动作线程上跑：它会开一条一次性的 STA 线程）。
     void refreshAppCatalog();

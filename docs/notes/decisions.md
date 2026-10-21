@@ -666,7 +666,25 @@ active 后所在的 monitor 上"。
 * 两个 M0 实测约束已写进代码：`show()` 用 `SW_SHOWNOACTIVATE`（最小化的用 `SW_SHOWMINNOACTIVE`）；
   目标进程无响应（`IsHungAppWindow`）时**不隐藏**（`SW_HIDE` 是跨线程 `SendMessage`，卡死会挂住
   调用线程）。全部 hide/show/restack **只允许在工作线程上做**。
-* 验证：`tst_workspace`（状态机 19 条，含 3000 步随机序列）、`tst_window_match`（可管理窗口与排除名单）、
+* **动作执行（M6）**：`Dispatcher::executeWorkspaceAction()`。`switch` 的目标屏 = 光标所在
+  （`switch_target = "cursor"`）或前台窗口所在（`"focus"`，前台是覆盖层时跳过它，与 `window` 动作
+  同一个找法；问不出来就退回光标）；`move` 的目标窗口 = 当前前台窗口（同一个找法），而且必须归工作
+  空间管（`isManageable()`：排除名单 / 非主窗口 / flowkeyd 自己的窗口一律拒绝；还没收编的先记账再搬）。
+* **动作前刷新「当前虚拟桌面」**：切虚拟桌面用的是 DWM cloak（不是显隐），钩子收不到事件，所以
+  `executeWorkspaceAction()` 每次都先 `refreshWorkspaceDesktop()` —— 否则人在桌面 B 时会去显隐桌面 A
+  的窗口。显隐前还会把 `hide` 列表用**一次批量 COM 查询**（`desktop::windowsOnCurrentDesktop()`，
+  一条一次性 STA 线程）过滤掉「已经不在当前桌面」的窗口（记录可能过时：`Win+Ctrl+Shift+←/→` 把窗口
+  送到别处）；问不出来（被我们藏起来的、打包应用宿主、COM 失败）的一律**保留** —— 「不知道」不等于
+  「在别的桌面」。启动收编（`adoptExistingWindows()`）用同一个批量查询，不把别的桌面上的窗口收进来。
+* **Z 序还原用 `restack()`**：`show` 按记录栈底 → 顶逐个露出来，**再**用一条 `restack()` 重排。
+  不要用 `show()` 的 `insertAfter`：`SetWindowPos(hwnd, 前一个)` 会把 `hwnd` 摆在前一个**下面**，
+  方向正好反（M0 探针记录的是顶 → 底）。
+* 验证：`tst_workspace`（状态机 20 条，含 3000 步随机序列与 `filterToCurrentDesktop` 的「不知道就保留」规则）、
+  `tst_window_match`（可管理窗口与排除名单）、
   `tst_config`/`tst_lua`/`tst_config_writer`/`tst_config_editor`（配置面三处往返：真 Lua 读回逐字段
   对比）、`tst_interactive::hidesAndShowsAWindowWithoutTouchingIt`（隐藏/显示后几何、最大化、最小化
-  都不变）与 `enumeratesManageableWindowsByTheirRecord`（本机实测通过）。
+  都不变）、`enumeratesManageableWindowsByTheirRecord`、`switchesWorkspacesWithRealWindows`（两个真窗口
+  在两个空间之间来回切：显隐、几何、Z 序与「空空间不抢焦点」）—— 本机实测通过。
+
+> M6 的验收脚本检查（`scripts/acceptance.ps1`）推后到 M9/M11：整个特性还没接完
+> （M7/M8/M9），现在加进去的项会在 M9 之前一直失败。

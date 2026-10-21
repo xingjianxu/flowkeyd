@@ -27,6 +27,7 @@
 #include <QString>
 
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace flowkeyd::platform::win::desktop {
@@ -193,6 +194,23 @@ bool switchToWindowDesktop(HWND hwnd, QString *detail, QString *error);
 /// 宿主窗口、刚创建还没被 shell 登记的窗口都会这样，返回 FALSE 且 GUID 全零；
 /// 调用方应当按“不知道”处理，不要把她当成“跑到别的桌面去了”。
 std::optional<bool> isWindowOnCurrentDesktop(HWND hwnd, QString *error);
+
+/// 一批窗口的「在当前虚拟桌面上吗」，**一次 STA 会话、一次 `CoCreateInstance`**。
+///
+/// 返回值与 `windows` 一一对应：`true` / `false`，`std::nullopt` = **问不出来**
+/// （句柄已经没了、COM 失败、或者窗口不属于任何虚拟桌面）。
+///
+/// 为什么要批量：工作空间每次执行显隐前都要确认“这些窗口真的在当前桌面上”
+/// （记录可能过时：窗口被 `Win+Ctrl+Shift+←/→` 送到别处去了），而本文件的每次调用
+/// 都会开一条一次性的 STA 线程（决策 13），逐窗口调用等于把这条线程开 N 次。
+///
+/// 被我们 `SW_HIDE` 藏起来的窗口 `GetWindowDesktopId` 会失败（M0 实测
+/// `0x8002802B`），所以那种情况也是 `std::nullopt` —— 调用方必须把「不知道」当成
+/// 「在当前桌面」处理，绝不能当成「在别的桌面」。
+///
+/// **只在动作工作线程上调用**。
+std::vector<std::optional<bool>> windowsOnCurrentDesktop(const std::vector<HWND> &windows,
+                                                         QString *error);
 
 /// 窗口所在虚拟桌面的 GUID（`{xxxxxxxx-...}`）。
 ///

@@ -219,6 +219,60 @@ void TestWindow::pump()
     }
 }
 
+/// 一个句柄在顶层窗口 Z 序里的位置（0 = 最上面）；不在链上时返回 -1。
+///
+/// 隐藏的窗口**仍然**在链上（`GetWindow(GW_HWNDNEXT)` 不看可见性），所以同一套
+/// 断言在藏起来前后都能用。
+int zIndexOf(HWND hwnd)
+{
+    int index = 0;
+    for (HWND current = GetTopWindow(nullptr); current != nullptr;
+         current = GetWindow(current, GW_HWNDNEXT)) {
+        if (current == hwnd) {
+            return index;
+        }
+        ++index;
+    }
+    return -1;
+}
+
+/// 按 `Dispatcher::applyWorkspaceEffects()` 的同一顺序执行效果：
+/// `show`（底 → 顶）→ `restack` → `hide`（顶 → 底）。
+///
+/// 不自己写第二套顺序：工作空间的 Z 序就是靠这两步保住的，测试走错路就等于
+/// 什么也没验。
+bool applyWorkspaceEffectsForTest(const core::WorkspaceEffects &effects, QString *error)
+{
+    namespace ws = platform::win::workspace;
+    std::vector<HWND> shown;
+    shown.reserve(effects.show.size());
+    for (const core::WindowId id : effects.show) {
+        const HWND hwnd = ws::manageTarget(ws::handleOf(id));
+        if (hwnd == nullptr) {
+            *error = QStringLiteral("a window that should be shown is gone");
+            return false;
+        }
+        if (!ws::show(hwnd, nullptr, error)) {
+            return false;
+        }
+        shown.push_back(hwnd);
+    }
+    if (!ws::restack(shown, error)) {
+        return false;
+    }
+    for (const core::WindowId id : effects.hide) {
+        const HWND hwnd = ws::manageTarget(ws::handleOf(id));
+        if (hwnd == nullptr) {
+            *error = QStringLiteral("a window that should be hidden is gone");
+            return false;
+        }
+        if (!ws::hide(hwnd, error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 /// 测试自己把窗口 cloaked 掉：`DwmSetWindowAttribute(hwnd, DWMWA_CLOAK, …)`。
 ///
 /// 生产代码不需要改这个属性（`platform/win/dwm` 里只有只读的 `isCloaked`），
@@ -371,6 +425,7 @@ private slots:
     void switchesTheInputMethodToEnglish();
     void hidesAndShowsAWindowWithoutTouchingIt();
     void enumeratesManageableWindowsByTheirRecord();
+    void switchesWorkspacesWithRealWindows();
     void hookThreadReportsWorkspaceEventsForForeignWindows();
     void launchesProgramsWithTheRequestedPrivilege();
     void opensTargetsAsTheLoggedOnUser();
@@ -1791,6 +1846,102 @@ void TestInteractive::enumeratesManageableWindowsByTheirRecord()
              "own-process windows must be skipped even when they are tracked");
     QVERIFY2(ws::show(hwnd, nullptr, &error), qPrintable(error));
     QVERIFY(IsWindowVisible(hwnd) != 0);
+}
+
+/// 工作空间的**核心动作**（M6）：两个窗口在同一块屏的两个空间之间来回切，显隐、
+/// 几何与 Z 序都要保持不变。
+///
+/// 这里走的是 `Dispatcher::applyWorkspaceEffects()` 的同一条路（状态机出效果 →
+/// `show` 底→顶 → `restack` → `hide` 顶→底 → 聚焦），只是不经过整台守护进程 ——
+/// 那需要一份真配置、还会抢用户的前台（见上面那条钩子用例的同一段说明）。
+void TestInteractive::switchesWorkspacesWithRealWindows()
+{
+    if (!interactiveEnabled()) {
+        QSKIP("set FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1 to run the interactive tests");
+    }
+    namespace ws = platform::win::workspace;
+    const QString marker =
+        QStringLiteral("flowkeyd-spaces-%1").arg(QCoreApplication::applicationPid());
+    TestWindow lower(marker + QStringLiteral("-lower"));
+    TestWindow upper(marker + QStringLiteral("-upper"));
+    HWND a = lower.hwnd();
+    HWND b = upper.hwnd();
+    QVERIFY2(a != nullptr && b != nullptr, "the test windows were not created");
+
+    // 两个确定的几何（后面要比对它们有没有被动过），并让 `b` 在 Z 序上压着 `a`。
+    QVERIFY(SetWindowPos(a, nullptr, 120, 120, 640, 420, SWP_NOZORDER | SWP_NOACTIVATE) != 0);
+    QVERIFY(SetWindowPos(b, nullptr, 260, 240, 700, 460, SWP_NOZORDER | SWP_NOACTIVATE) != 0);
+    QVERIFY(SetWindowPos(b, a, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE) != 0);
+    RECT aBefore{};
+    RECT bBefore{};
+    QVERIFY(GetWindowRect(a, &aBefore) != 0);
+    QVERIFY(GetWindowRect(b, &bBefore) != 0);
+    QVERIFY2(zIndexOf(a) < zIndexOf(b), "the test windows are not in the expected Z order");
+
+    // 批量问「在不在当前虚拟桌面」：一次 STA 会话问完。不存在的句柄得到的是
+    // `std::nullopt`（“不知道”），不能当成“在别的桌面上”。
+    {
+        QString error;
+        const std::vector<std::optional<bool>> onCurrent =
+            platform::win::desktop::windowsOnCurrentDesktop({a, nullptr, b}, &error);
+        QCOMPARE(onCurrent.size(), static_cast<std::size_t>(3));
+        QVERIFY2(onCurrent.at(0).value_or(false), qPrintable(error));
+        QVERIFY(!onCurrent.at(1).has_value());
+        QVERIFY2(onCurrent.at(2).value_or(false), qPrintable(error));
+    }
+
+    // 状态机：两个窗口都在空间 1，`a` 是最近用过的（先出现 `a`，再由 `b` 压在上面）。
+    const core::MonitorKey monitor = QStringLiteral("test-monitor");
+    core::WorkspaceState state(2);
+    state.windowAppeared(ws::idOf(a), monitor);
+    state.windowAppeared(ws::idOf(b), monitor);
+    state.focusChanged(ws::idOf(a));
+
+    // 1) 空间 2 是空的：两个窗口都藏起来，而且**不抢焦点**。
+    {
+        const core::WorkspaceEffects effects = state.switchTo(monitor, 2);
+        QCOMPARE(effects.show.size(), static_cast<std::size_t>(0));
+        QCOMPARE(effects.hide.size(), static_cast<std::size_t>(2));
+        QVERIFY2(!effects.focus.has_value(), "an empty space must not steal the focus");
+        QString error;
+        QVERIFY2(applyWorkspaceEffectsForTest(effects, &error), qPrintable(error));
+        QVERIFY(IsWindowVisible(a) == 0);
+        QVERIFY(IsWindowVisible(b) == 0);
+        QVERIFY(IsWindow(a) != 0 && IsWindow(b) != 0);
+    }
+
+    // 2) 切回空间 1：两个窗口回来，几何与 Z 序不变，焦点回到最近用过的 `a`。
+    {
+        const core::WorkspaceEffects effects = state.switchTo(monitor, 1);
+        QCOMPARE(effects.show.size(), static_cast<std::size_t>(2));
+        QCOMPARE(effects.hide.size(), static_cast<std::size_t>(0));
+        // 记录栈是底 → 顶：`b` 先出现，`a` 后出现，所以 `a` 在最上面。
+        QCOMPARE(effects.show.front(), ws::idOf(b));
+        QCOMPARE(effects.show.back(), ws::idOf(a));
+        QVERIFY2(effects.focus.has_value(), "a non-empty space must hand the focus back");
+        QCOMPARE(*effects.focus, ws::idOf(a));
+
+        QString error;
+        QVERIFY2(applyWorkspaceEffectsForTest(effects, &error), qPrintable(error));
+        QVERIFY(IsWindowVisible(a) != 0);
+        QVERIFY(IsWindowVisible(b) != 0);
+
+        RECT aAfter{};
+        RECT bAfter{};
+        QVERIFY(GetWindowRect(a, &aAfter) != 0);
+        QVERIFY(GetWindowRect(b, &bAfter) != 0);
+        QCOMPARE(aAfter.left, aBefore.left);
+        QCOMPARE(aAfter.top, aBefore.top);
+        QCOMPARE(aAfter.right, aBefore.right);
+        QCOMPARE(aAfter.bottom, aBefore.bottom);
+        QCOMPARE(bAfter.left, bBefore.left);
+        QCOMPARE(bAfter.top, bBefore.top);
+        QCOMPARE(bAfter.right, bBefore.right);
+        QCOMPARE(bAfter.bottom, bBefore.bottom);
+
+        // Z 序：`b` 仍然压在 `a` 上面（`restack()` 拼错了方向会立刻在这里露出来）。
+        QVERIFY2(zIndexOf(a) < zIndexOf(b), "the Z order of the space was not restored");
+    }
 }
 
 /// 工作空间的事件管线（M5）：钩子线程把**别的进程**的窗口报成工作空间事件，而且

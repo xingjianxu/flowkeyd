@@ -17,6 +17,23 @@ std::uint64_t zOrderOf(const std::map<WindowId, WindowRecord> &windows, WindowId
 
 } // namespace
 
+std::vector<WindowId> filterToCurrentDesktop(const std::vector<WindowId> &windows,
+                                             const std::vector<std::optional<bool>> &onCurrent)
+{
+    if (onCurrent.size() != windows.size()) {
+        return windows;
+    }
+    std::vector<WindowId> out;
+    out.reserve(windows.size());
+    for (std::size_t i = 0; i < windows.size(); ++i) {
+        // `std::nullopt`（问不出来）与 `true` 都留下，只去掉确定在别处的。
+        if (onCurrent[i].value_or(true)) {
+            out.push_back(windows[i]);
+        }
+    }
+    return out;
+}
+
 WorkspaceState::WorkspaceState(std::uint32_t count)
     : m_count(std::clamp(count, kMinWorkspaceCount, kMaxWorkspaceCount))
 {

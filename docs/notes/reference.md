@@ -46,7 +46,9 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、`--ch
   README 的动作表。简写字符串：`"run:…"`、`"send:…"`、`"type:…"`、`"open:…"`、`"notify:t|b"`、
   `"volume:up"`、`"media:next"`、`"clipboard:get"`、`"window:minimize"`、`"desktop:1"`、`"power:sleep"`、
   裸关键字 `reload`/`quit`/`help`/`windows`/`apps`/`none`。`workspace` **没有简写**（要两个参数：
-  `workspace("switch", 2)`）；它不算危险动作，但**运行时尚未接线**（见 `decisions.md` 第 36 条）。
+  `workspace("switch", 2)`）；它不算危险动作。`switch` 作用在**哪块屏**由
+  `settings.workspace.switch_target` 决定（`"cursor"` 默认 / `"focus"`），`move` 的目标是**当前前台窗口**
+  （前台是覆盖层时跳过它）。显隐只对**当前虚拟桌面**上的窗口做（记录过时的窗口会被跳过）。
 * **启动权限**：`run` 与 `launch`（`window` 的 / `app{}` 的，共用一份字段块）都有 `elevated`，**默认
   `false` = 当前登录用户的普通权限**；`open` 与程序启动器没有这个字段（它们总是普通权限）。
 * **完全没有动作**的快捷键就是一个按键屏蔽器（会吞掉它匹配到的按键）。

@@ -100,6 +100,20 @@ struct WorkspaceEffects
     bool isEmpty() const { return show.empty() && hide.empty() && !focus.has_value(); }
 };
 
+/// 把一批窗口过滤成「只留下**当前虚拟桌面上的**」之后的结果。
+///
+/// `onCurrent` 与 `windows` 一一对应（就是 `platform::win::desktop::
+/// windowsOnCurrentDesktop()` 的返回值）。规则：
+///   * `true` → 留下；
+///   * `false` → 去掉（确定在别的虚拟桌面上）；
+///   * `std::nullopt` → **留下**（问不出来）。M0 实测被我们 `SW_HIDE` 藏起来的窗口
+///     `GetWindowDesktopId` 会失败，「不知道它在哪」不等于「它在别的桌面上」，当成
+///     别处就会在回切时把它漏掉。
+///
+/// 长度不一致时**原样返回全部窗口**：宁可不藏，也不要藏错。
+std::vector<WindowId> filterToCurrentDesktop(const std::vector<WindowId> &windows,
+                                             const std::vector<std::optional<bool>> &onCurrent);
+
 /// 每显示器独立的工作空间状态机。所有命令都返回「要做的事」，不改任何窗口。
 ///
 /// 不变量（`tst_workspace` 的随机序列测试逐条检查）：

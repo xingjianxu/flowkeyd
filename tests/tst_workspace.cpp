@@ -142,6 +142,7 @@ private slots:
     void movedToAnotherMonitorJoinsItsActiveSpace();
     void perDesktopSpacesAreIndependent();
     void restoreAllShowsEverything();
+    void filterToCurrentDesktopKeepsUnknownWindows();
     void randomOperationsKeepInvariants();
 };
 
@@ -633,6 +634,27 @@ void TestWorkspace::restoreAllShowsEverything()
     }
     // 已经全部可见：再恢复一次无操作。
     QVERIFY(state.restoreAll().isEmpty());
+}
+
+void TestWorkspace::filterToCurrentDesktopKeepsUnknownWindows()
+{
+    // 只去掉**确定**在别的虚拟桌面上的窗口。`std::nullopt`（问不出来：被我们藏起来的
+    // 窗口 `GetWindowDesktopId` 会失败，M0 实测）必须保留 —— 否则回切时那个窗口就
+    // 会永久藏在活动空间里。
+    const std::vector<core::WindowId> windows{1, 2, 3, 4};
+    const std::vector<std::optional<bool>> onCurrent{true, false, std::nullopt, false};
+    QCOMPARE(listing(core::filterToCurrentDesktop(windows, onCurrent)), listing({1, 3}));
+
+    // 全部在当前桌面 / 全部问不出来：一个都不掉。
+    QCOMPARE(listing(core::filterToCurrentDesktop(windows, {true, true, true, true})),
+             listing(windows));
+    QCOMPARE(listing(core::filterToCurrentDesktop(
+                 windows, {std::nullopt, std::nullopt, std::nullopt, std::nullopt})),
+             listing(windows));
+
+    // 长度对不上（后端的契约是“一一对应”）：**不过滤**，宁可不藏也不要藏错。
+    QCOMPARE(listing(core::filterToCurrentDesktop(windows, {false})), listing(windows));
+    QCOMPARE(listing(core::filterToCurrentDesktop({}, {})), QStringList{});
 }
 
 void TestWorkspace::randomOperationsKeepInvariants()

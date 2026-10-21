@@ -8,9 +8,10 @@
 
 **当前进度：M0 ✅（结论在下文 M0 节 + `docs/notes/pitfalls.md`）、M1 ✅（`src/core/workspace.*` +
 `tests/tst_workspace.cpp`）、M2 ✅、M3 ✅、M4 ✅（语义在下文各自的「→ 已产出」）、M5 ✅（事件管线已接线，
-`src/core/workspace_event.*` + `platform/win/hook.*` + `Dispatcher::applyWorkspaceEvent`）。下一步：
-**M6（动作执行）/ M7（显示器拔插与"拖到别的屏"）/ M8（安全与恢复）**。注意：`workspace(...)` 动作仍会得到一条
-`action ... is not implemented yet` 的 warning —— 配置面、界面、平台后端与事件管线都已就位。**
+`src/core/workspace_event.*` + `platform/win/hook.*` + `Dispatcher::applyWorkspaceEvent`）、**M6 ✅（动作执行：
+`workspace("switch"|"move", N)` 已经能真的显隐窗口）**。下一步：**M7（显示器拔插与"拖到别的屏"）/ M8（安全与
+恢复）/ M9-M10（联动）**。注意：动作里已没有 `is not implemented yet` 那条 warning；显示器拔插后的迁移、
+「拖到别的屏」的归属变化、恢复日志都**还没有**。**
 
 ## 0. 已确认的决策（来自与项目所有者的问答）
 
@@ -329,9 +330,9 @@ M2 之后要用到的语义（**都已有单测钉住**）：
   `charmap.exe` → 收到出现事件 → 登记期望后最小化**收不到** → 不登记时收得到 → 关闭收得到销毁事件）。
   真机手工确认：开发实例启动时 `workspace: tracking 9 window(s) on 2 monitor(s), 9 space(s) each`。
 * **M6 接手的地方**：`WindowMoved` 事件已经在防抖后到达工作线程，`Dispatcher::applyWorkspaceEvent()` 里那
-  一条 `case` 目前是空的（M7 要在那里比较显示器归属）；`workspace(...)` 动作本身仍未实现。
+  一条 `case` 目前是空的（M7 要在那里比较显示器归属）。`workspace(...)` 动作已在 M6 接上。
 
-### M6　核心动作：切换与移动（依赖 M2、M5）
+### M6　核心动作：切换与移动（依赖 M2、M5）　✅ 已完成
 
 * `app/dispatcher.*`：执行 `workspace` 动作。
   * 目标显示器 = 光标所在（`monitor::indexForCursor`）或前台窗口所在（`switch_target = "focus"`）；
@@ -343,6 +344,30 @@ M2 之后要用到的语义（**都已有单测钉住**）：
 * 记录「最近焦点」：前台变化事件更新 `lastFocusSeq`。
 * 验证：`tst_interactive`（两窗口、两空间）；`scripts/acceptance.ps1` 新增检查（开若干记事本 → 切换 →
   断言可见集合 → 移动 → 再切回 → 位置/最大化/最小化保持）。
+
+→ **已产出**：
+
+* `app/dispatcher.*`：`executeWorkspaceAction()`（动作线程上跑）+ `workspaceSwitchMonitor()` +
+  `windowsOnThisDesktop()`。`switch` 的目标屏按 `settings.workspace.switch_target` 取（`"focus"` 用
+  「前台窗口、覆盖层跳过」那个找法，问不出来就退回光标）；`move` 的目标 = 当前前台窗口（同一找法），
+  先过 `isManageable()`（排除名单 / 非主窗口 / flowkeyd 自己的窗口一律拒绝），没收编的先按它现在所在的
+  显示器记账再搬。动作里已没有 `is not implemented yet`。
+* **当前虚拟桌面**：`executeWorkspaceAction()` 每次先 `refreshWorkspaceDesktop()`（切虚拟桌面是 DWM
+  cloak，钩子收不到事件）；显隐前把 `hide` 列表过一次新的批量查询
+  `desktop::windowsOnCurrentDesktop()`（一条 STA 线程 + 一次 `CoCreateInstance`，向量与入参一一对应，
+  `std::nullopt` = 问不出来 = 当成“在当前桌面”），把记录过时的窗口（`Win+Ctrl+Shift+←/→` 送走的）
+  跳过去。`adoptExistingWindows()` 用同一个查询，不再把别的桌面上的窗口收编进来。
+* **Z 序修好了一处方向错误**：`applyWorkspaceEffects()` 原来把 `effects.show`（底 → 顶）的每个窗口用
+  `show(hwnd, 前一个)` 摆位置，而 `SetWindowPos(hwnd, 前一个)` 是把 `hwnd` 摆在它**下面** —— 顺序会整个
+  反过来。现在改成 `show(hwnd, nullptr)` 逐个露出来 + 一条 `restack(shownWindows)`（底 → 顶逐对，
+  M4 那个函数的方向是对的）。
+* 测试：`tst_interactive::switchesWorkspacesWithRealWindows`（两个真窗口 → 空空间 `hide` 两个且不抢焦点
+  → 切回 `show` 两个（底 `b`、顶 `a`，焦点 = 最近用过的 `a`）→ 几何、`IsWindowVisible` 与 Z 序全部不变）；
+  顺带在那里验了 `windowsOnCurrentDesktop()`（包括 `nullptr` 句柄得到 `std::nullopt`）。纯逻辑那一半拆成了
+  `core::filterToCurrentDesktop()`（“问不出来就保留”、长度不一致不过滤），由
+  `tst_workspace::filterToCurrentDesktopKeepsUnknownWindows` 钉住。本机实跑通过。
+* **`scripts/acceptance.ps1` 的检查推后到 M9/M11**：整个特性还没接完（M7/M8/M9），现在加进去的项在 M9
+  之前会一直失败（也说明了 `--check` 以外的验收要等动作链闭环）。
 
 ### M7　多显示器变化（依赖 M5、M6）
 

@@ -1337,6 +1337,9 @@ void executeAction(Runtime *runtime,
     case core::Action::Kind::Apps:
         openAppsAction(runtime, dispatcher, dispatcher->appCatalog(), hotkey, action);
         break;
+    case core::Action::Kind::Workspace:
+        dispatcher->executeWorkspaceAction(*config, action, hotkey);
+        break;
     default:
         win::logWarn(QStringLiteral("`%1`: action `%2` is not implemented yet")
                          .arg(hotkey, action.summary()));
@@ -1665,12 +1668,21 @@ void Dispatcher::adoptExistingWindows(const core::Compiled &config)
     refreshWorkspaceDesktop();
     const std::vector<core::MonitorDescription> monitors = core::sortedMonitors(win::monitor::list());
 
-    int adopted = 0;
+    // 只收编**当前虚拟桌面**上的窗口：`EnumWindows` 会连别的桌面上的窗口一起列出来
+    // （虚拟桌面用 DWM cloak 藏窗口，`IsWindowVisible` 仍然是真）。收编错了会在切空间
+    // 时把一个别的桌面上的窗口藏掉。逐个问 COM 太贵，一次批量问完（决策 13）。
+    std::vector<core::WindowId> candidates;
+    candidates.reserve(windows.size());
     for (HWND hwnd : windows) {
         const core::WindowId id = win::workspace::idOf(hwnd);
-        if (m_workspace.tracks(id)) {
-            continue;
+        if (!m_workspace.tracks(id)) {
+            candidates.push_back(id);
         }
+    }
+
+    int adopted = 0;
+    for (const core::WindowId id : windowsOnThisDesktop(candidates)) {
+        const HWND hwnd = win::workspace::handleOf(id);
         const QString monitor = monitorKeyOf(hwnd, monitors);
         if (monitor.isEmpty()) {
             continue;
@@ -1727,7 +1739,11 @@ void Dispatcher::refreshWorkspaceDesktop()
 
 void Dispatcher::applyWorkspaceEffects(const core::WorkspaceEffects &effects, const QString &reason)
 {
-    if (effects.isEmpty()) {
+    // 只处理**当前虚拟桌面**上的窗口：记录可能已经过时（窗口被 `Win+Ctrl+Shift+←/→` 送到
+    // 别的桌面去了），藏错窗口会让用户回到那张桌面时「窗口不见了」。要藏的窗口此刻都是
+    // 可见的、问得出来；要显示的是我们自己藏起来的、问不出来（M0）—— 所以只过滤 `hide`。
+    const std::vector<core::WindowId> hide = windowsOnThisDesktop(effects.hide);
+    if (effects.show.empty() && hide.empty() && !effects.focus.has_value()) {
         return;
     }
     const std::shared_ptr<core::ExpectedWorkspaceEvents> expected =
@@ -1739,7 +1755,7 @@ void Dispatcher::applyWorkspaceEffects(const core::WorkspaceEffects &effects, co
         for (const core::WindowId id : effects.show) {
             expected->expect(core::WorkspaceEvent::Kind::WindowAppeared, id, now);
         }
-        for (const core::WindowId id : effects.hide) {
+        for (const core::WindowId id : hide) {
             expected->expect(core::WorkspaceEvent::Kind::WindowAppeared, id, now);
         }
     }
@@ -1747,8 +1763,13 @@ void Dispatcher::applyWorkspaceEffects(const core::WorkspaceEffects &effects, co
     int shown = 0;
     int hidden = 0;
     int failed = 0;
-    // 底 → 顶：`insertAfter` 是记录栈里比它低一层的那一个（M4 的 `show()` 语义）。
-    HWND below = nullptr;
+    // 底 → 顶显示，然后按同一份记录栈还原 Z 序。
+    //
+    // **不用 `show()` 的 `insertAfter`**：`SetWindowPos(hwnd, 前一个)` 把 `hwnd` 摆在
+    // 前一个**下面**，而这里要的是上面（M0 的探针是「顶 → 底」记录的，方向正好反）；
+    // 一条 `restack()` 比逐对摆位置更不容易错。
+    std::vector<HWND> shownWindows;
+    shownWindows.reserve(effects.show.size());
     for (const core::WindowId id : effects.show) {
         const HWND hwnd = win::workspace::manageTarget(win::workspace::handleOf(id));
         if (hwnd == nullptr) {
@@ -1756,17 +1777,24 @@ void Dispatcher::applyWorkspaceEffects(const core::WorkspaceEffects &effects, co
             continue;
         }
         QString error;
-        if (!win::workspace::show(hwnd, below, &error)) {
+        if (!win::workspace::show(hwnd, nullptr, &error)) {
             ++failed;
             win::logWarn(QStringLiteral("workspace: cannot show %1: %2")
                              .arg(core::rustDebug(win::window::windowTitle(hwnd)), error));
             continue;
         }
-        below = hwnd;
+        shownWindows.push_back(hwnd);
         ++shown;
     }
+    if (shownWindows.size() > 1) {
+        QString error;
+        if (!win::workspace::restack(shownWindows, &error)) {
+            win::logWarn(QStringLiteral("workspace: could not restore the Z order after %1: %2")
+                             .arg(reason, error));
+        }
+    }
     // 顶 → 底：先藏最上面那个，剩下的窗口不会先闪一下。
-    for (const core::WindowId id : effects.hide) {
+    for (const core::WindowId id : hide) {
         const HWND hwnd = win::workspace::manageTarget(win::workspace::handleOf(id));
         if (hwnd == nullptr) {
             ++failed;
@@ -1796,6 +1824,162 @@ void Dispatcher::applyWorkspaceEffects(const core::WorkspaceEffects &effects, co
                      .arg(shown)
                      .arg(hidden)
                      .arg(failed > 0 ? QStringLiteral(", %1 failed").arg(failed) : QString()));
+}
+
+std::vector<core::WindowId> Dispatcher::windowsOnThisDesktop(const std::vector<core::WindowId> &windows)
+{
+    if (windows.empty()) {
+        return windows;
+    }
+    std::vector<HWND> handles;
+    handles.reserve(windows.size());
+    for (const core::WindowId id : windows) {
+        // UWP 要问的是宿主窗口（`ApplicationFrameWindow`）—— 与显隐用的是同一个句柄。
+        handles.push_back(win::workspace::manageTarget(win::workspace::handleOf(id)));
+    }
+    QString error;
+    const std::vector<std::optional<bool>> onCurrent =
+        win::desktop::windowsOnCurrentDesktop(handles, &error);
+    if (onCurrent.size() != windows.size()) {
+        // 后端的契约是“一一对应”。真出了偏差就**不过滤**：宁可不藏，也不要藏错。
+        win::logDebug(QStringLiteral("workspace: cannot check which virtual desktop %1 window(s) "
+                                     "are on: %2")
+                          .arg(windows.size())
+                          .arg(error.isEmpty() ? QStringLiteral("unexpected result") : error));
+        return windows;
+    }
+    // `std::nullopt`（问不出来：被我们藏起来的窗口、打包应用宿主、COM 失败）当成“在当前
+    // 桌面”（M0：不然回切时会把该显示的窗口漏掉）。
+    std::vector<core::WindowId> out = core::filterToCurrentDesktop(windows, onCurrent);
+    if (out.size() != windows.size()) {
+        win::logDebug(QStringLiteral("workspace: skipping %1 window(s) on another virtual desktop")
+                          .arg(windows.size() - out.size()));
+    }
+    return out;
+}
+
+QString Dispatcher::workspaceSwitchMonitor(const core::Compiled &config)
+{
+    const std::vector<core::MonitorDescription> monitors =
+        core::sortedMonitors(win::monitor::list());
+    const auto deviceAt = [&monitors](const std::optional<std::size_t> index) {
+        if (!index.has_value() || *index >= monitors.size()) {
+            return QString();
+        }
+        return core::normalizeDeviceName(monitors[*index].device);
+    };
+    if (config.settings.workspace.switchTarget == core::WorkspaceSwitchTarget::Focus) {
+        // 「焦点窗口所在的那块屏」：与 `window` 动作同一个找法 —— 前台是覆盖层
+        // （例如 PowerToys 的「快捷键指南」）时跳过它（决策 19）。
+        const HWND hwnd = win::window::find(core::WindowQuery::make(std::nullopt, std::nullopt));
+        if (hwnd == nullptr) {
+            win::logDebug(QStringLiteral("workspace: there is no foreground window; "
+                                         "switching on the cursor's monitor instead"));
+        } else {
+            const QString device = deviceAt(win::monitor::indexForWindow(monitors, hwnd));
+            if (!device.isEmpty()) {
+                return device;
+            }
+            win::logDebug(QStringLiteral("workspace: cannot tell which monitor %1 is on; "
+                                         "switching on the cursor's monitor instead")
+                              .arg(core::rustDebug(win::window::windowTitle(hwnd))));
+        }
+    }
+    const QString device = deviceAt(win::monitor::indexForCursor(monitors));
+    if (device.isEmpty()) {
+        win::logDebug(QStringLiteral("workspace: cannot tell which monitor the cursor is on"));
+    }
+    return device;
+}
+
+void Dispatcher::executeWorkspaceAction(const core::Compiled &config,
+                                       const core::Action &action,
+                                       const QString &hotkey)
+{
+    const core::WorkspaceSettings &settings = config.settings.workspace;
+    if (!settings.enabled) {
+        win::logWarn(QStringLiteral("`%1` workspace %2: the feature is disabled "
+                                    "(settings.workspace.enabled = false)")
+                         .arg(hotkey, core::workspaceOpName(action.workspaceOp)));
+        return;
+    }
+    syncWorkspaceLayout(config);
+    // 只处理**当前虚拟桌面**上的窗口（Q1）：切虚拟桌面不会给工作空间发事件（Windows
+    // 用的是 DWM cloak，不是显隐），所以每次动作前都刷新一次上下文 —— 否则人在桌面 B
+    // 时会把桌面 A 的窗口藏掉。
+    refreshWorkspaceDesktop();
+    const std::vector<core::MonitorDescription> monitors =
+        core::sortedMonitors(win::monitor::list());
+    if (monitors.empty()) {
+        win::logWarn(QStringLiteral("`%1` workspace %2: no monitors")
+                         .arg(hotkey, core::workspaceOpName(action.workspaceOp)));
+        return;
+    }
+
+    if (action.workspaceOp == core::WorkspaceOp::Move) {
+        // 目标 = **当前前台窗口**（决策 19 的「跳过覆盖层」找法）。
+        const HWND hwnd = win::window::find(core::WindowQuery::make(std::nullopt, std::nullopt));
+        if (hwnd == nullptr) {
+            win::logWarn(QStringLiteral("`%1` workspace move: there is no foreground window")
+                             .arg(hotkey));
+            return;
+        }
+        const core::WindowId id = win::workspace::idOf(hwnd);
+        const QString title = win::window::windowTitle(hwnd);
+        const bool tracked = m_workspace.tracks(id);
+        if (!win::workspace::isManageable(hwnd, tracked, settings.exclude)) {
+            win::logWarn(QStringLiteral("`%1` workspace move: %2 is not managed by the workspace "
+                                        "feature (not a main window, an excluded program, or one "
+                                        "of flowkeyd's own windows)")
+                             .arg(hotkey, core::rustDebug(title)));
+            return;
+        }
+        if (!tracked) {
+            // 还没收编（工作空间关着时启动、或者事件漏了）：先按它现在所在的显示器记账，
+            // 否则 `moveWindow()` 会把「不认识的窗口」直接忽略。
+            const QString monitor = monitorKeyOf(hwnd, monitors);
+            if (monitor.isEmpty()) {
+                win::logWarn(QStringLiteral("`%1` workspace move: cannot tell which monitor %2 is on")
+                                 .arg(hotkey, core::rustDebug(title)));
+                return;
+            }
+            applyWorkspaceEffects(m_workspace.windowAppeared(id, monitor),
+                                  QStringLiteral("window appeared"));
+        }
+        const core::WorkspaceEffects effects = m_workspace.moveWindow(id, action.workspaceIndex);
+        const std::optional<core::WindowRecord> record = m_workspace.record(id);
+        const std::uint32_t space =
+            record.has_value() ? record->workspace.index : action.workspaceIndex;
+        applyWorkspaceEffects(effects,
+                             QStringLiteral("moving %1 to space %2")
+                                 .arg(core::rustDebug(title))
+                                 .arg(space));
+        win::logInfo(QStringLiteral("`%1` -> workspace move %2 (%3 on %4, %5)")
+                         .arg(hotkey)
+                         .arg(space)
+                         .arg(core::rustDebug(title),
+                              record.has_value() ? record->workspace.monitor : QString())
+                         .arg(m_workspace.isVisible(id) ? QStringLiteral("visible")
+                                                        : QStringLiteral("hidden")));
+        return;
+    }
+
+    const QString monitor = workspaceSwitchMonitor(config);
+    if (monitor.isEmpty()) {
+        win::logWarn(QStringLiteral("`%1` workspace switch %2: cannot tell which monitor to use")
+                         .arg(hotkey)
+                         .arg(action.workspaceIndex));
+        return;
+    }
+    const core::WorkspaceEffects effects = m_workspace.switchTo(monitor, action.workspaceIndex);
+    const std::optional<core::MonitorSpaces> spaces = m_workspace.spaces(monitor);
+    const std::uint32_t space = spaces.has_value() ? spaces->active : action.workspaceIndex;
+    applyWorkspaceEffects(effects, QStringLiteral("switching %1 to space %2").arg(monitor).arg(space));
+    win::logInfo(QStringLiteral("`%1` -> workspace switch %2 on %3%4")
+                     .arg(hotkey)
+                     .arg(space)
+                     .arg(monitor)
+                     .arg(effects.isEmpty() ? QStringLiteral(" (already there)") : QString()));
 }
 
 void Dispatcher::execute(const std::shared_ptr<const core::Compiled> &config,
