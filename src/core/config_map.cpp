@@ -93,6 +93,12 @@ constexpr EnumName<WorkspaceSwitchTarget> kWorkspaceSwitchTargets[] = {
     {WorkspaceSwitchTarget::Focus, "focus"},
 };
 
+constexpr EnumName<TrayBadgeMode> kTrayBadgeModes[] = {
+    {TrayBadgeMode::Both, "both"},
+    {TrayBadgeMode::Desktop, "desktop"},
+    {TrayBadgeMode::Workspace, "workspace"},
+};
+
 constexpr EnumName<RemapMode> kRemapModes[] = {
     {RemapMode::Hold, "hold"},
     {RemapMode::Tap, "tap"},
@@ -507,6 +513,8 @@ QVariantMap settingsToMap(const Settings &settings)
                    stringListVariant(settings.remoteDesktopProcesses));
     }
     out.insert(QStringLiteral("window_monitor"), monitorRefValue(settings.windowMonitor));
+    // 托盘徽标显示哪几个号（`1/2` / 只有虚拟桌面号 / 只有工作空间号）。
+    out.insert(QStringLiteral("tray_badge"), enumName(kTrayBadgeModes, settings.trayBadge));
     // `settings.workspace`：嵌套一层表（与配置文件里的形状一致）。
     // `exclude` 为空时不写（与 remote_desktop_processes 一样：赘余的默认值写进文件
     // 只会让以后改默认值时不生效）。
@@ -550,6 +558,10 @@ Settings settingsFromMap(const QVariantMap &map)
     }
     if (auto ref = monitorRefFromText(stringOr(map, "window_monitor"))) {
         settings.windowMonitor = *ref;
+    }
+    if (has(map, "tray_badge")) {
+        settings.trayBadge = trayBadgeModeFromName(stringOr(map, "tray_badge"))
+                                 .value_or(settings.trayBadge);
     }
     if (has(map, "workspace")) {
         const QVariant value = map.value(QStringLiteral("workspace"));

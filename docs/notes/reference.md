@@ -20,8 +20,9 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、`--ch
 
 * `settings{}`：`log_level`、`swallow`、`exact_modifiers`、`release_modifiers`、`repeat_interval_ms`、
   `repeat_delay_ms`、`tick_ms`、`input_backend`、`single_instance`、`elevate`、`remote_desktop`、
-  `window_monitor`、`workspace`。**未知键报错。** `window_monitor`（默认 `"cursor"`）= 没写明 `monitor` 时
-  摆到哪块屏。
+  `window_monitor`、`tray_badge`、`workspace`。**未知键报错。** `window_monitor`（默认 `"cursor"`）=
+  没写明 `monitor` 时摆到哪块屏；`tray_badge`（默认 `"both"`）= 托盘徽标显示`"both"`（左上工作空间
+  号、右下虚拟桌面号）/ `"desktop"` / `"workspace"`，详见 `decisions.md` 第 20 条。
 * `hotkey{}`：`keys`（单个和弦或一组）、`name`、`trigger`（`press`/`release`/`repeat`）、`action`
   （别名 `press`、`on_press`）、`on_release`、`swallow`、`repeatable`（`true` 或
   `{ interval_ms, delay_ms }`；也认 `["repeat"]`）、`enabled`、`comment`、`remote_desktop`。
@@ -132,9 +133,10 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
   “先切空间再激活”）、预写恢复日志 → 强杀 → `--restore-windows` 按日志恢复、`new_window` 与规则的
   新窗口归属、`quit` 前恢复可见。脚本里**不断言“隐藏前台窗口之后前台没变”**（Windows 自己会把前台
   交给别的窗口），那条保证在 `tst_workspace` 里。
-* 最近一次实跑：`checks: 189, failures: 0`（release 产物，M11 收尾）。比 192 少的 3 条就是上面那组数字键
-  检查 —— 真机目录约 200 条时，26 个单字母里可能没有一个命中 1..8 个程序，脚本打一条诊断（写进
-  `$WorkDir\diag.txt`，UTF-8 无 BOM）**跳过**它们：是跳过，不是失败。
+* 最近一次实跑：`checks: 189, failures: 0`（release 产物，托盘徽标改成两个角那一轮）。比 192 少的 3 条
+  就是上面那组数字键检查 —— 真机目录约 200 条时，26 个单字母里可能没有一个命中 1..8 个程序，脚本打
+  一条诊断（写进 `$WorkDir\diag.txt`，UTF-8 无 BOM）**跳过**它们：是跳过，不是失败。
+* 再往前一次：`checks: 189, failures: 0`（M11 收尾）。
 
 > **M8 / M9 / M10 当时都只跑了双构建 + `ctest` + 定向冒烟，没跑 acceptance.ps1**（项目所有者指示不做
 > 完整冒烟；工作空间那几条验收项统一推到 M11）。M11 已把那些项全部补进脚本，并用一次完整实跑收尾
@@ -240,3 +242,15 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
     3. 空空间不抢焦点（前景窗口不变）；非空空间回到最近用过的那个窗口；Z 序还原。
     4. `move` 到非活动空间：窗口立即消失、用户留在原空间；日志里那条以 `hidden)` 结尾。
     5. 远程桌面前台（`mstsc.exe` / Windows App）时按工作空间快捷键：**放行、什么都不切**。
+
+20. **托盘徽标（工作空间号 / 虚拟桌面号）**：脚本只能验 `--check` 通过，样式要人眼看。
+    1. 默认（`tray_badge = "both"`）：徽标**左上角是工作空间号（绿）、右下角是虚拟桌面号（蓝）**，
+       两个角之间一条 `/` 方向的白色对角线；切一次工作空间，**左上的号立即变**（不用等 500 ms）；
+       切一次虚拟桌面，右下的号半秒内变。
+    2. 双屏 + `switch_target = "cursor"`：徽标的工作空间号跟着**光标所在那块屏**走；改成 `"focus"`
+       之后跟着前台窗口。
+    3. `tray_badge = "desktop"` / `"workspace"`：徽标整块蓝 / 整块绿，一个号居中，没有对角线；
+       `workspace = false` 时前者只剩蓝底桌面号、后者退回应用图标。
+    4. 悬停提示里能看到 `（工作空间 1/9，桌面 2/4）`（缺哪个就少哪一个）。
+    5. 16 px（100% 缩放）与 32 px（200%，本机就是）两种尺寸都看过：两个角的数字都**看得清**、
+       不碰对角线、不越界，两位数显示 `9+`。

@@ -743,7 +743,7 @@ core::Settings convertSettings(lua_State *L, int index)
                 {"log_level", "swallow", "exact_modifiers", "release_modifiers",
                  "repeat_interval_ms", "repeat_delay_ms", "tick_ms", "input_backend",
                  "single_instance", "elevate", "remote_desktop", "window_monitor",
-                 "workspace"});
+                 "tray_badge", "workspace"});
     core::Settings settings;
     if (auto value = optString(L, index, "log_level")) {
         settings.logLevel = *value;
@@ -782,6 +782,13 @@ core::Settings convertSettings(lua_State *L, int index)
     if (pushField(L, index, "window_monitor", &windowMonitor)) {
         settings.windowMonitor = convertMonitorRef(L, windowMonitor);
         lua_pop(L, 1);
+    }
+    // 托盘图标上的数字徽标显示什么（默认 `1/2`：工作空间号 / 虚拟桌面号）。
+    if (hasField(L, index, "tray_badge")) {
+        const QString name = enumName(L, index, "tray_badge",
+                                      {"both", "desktop", "workspace"},
+                                      QStringLiteral("both"));
+        settings.trayBadge = *core::trayBadgeModeFromName(name);
     }
     // 按显示器独立的工作空间（`settings.workspace`）。
     //

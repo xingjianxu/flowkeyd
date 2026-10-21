@@ -320,6 +320,11 @@ QStringList ConfigEditor::workspaceSwitchTargets() const
     return core::workspaceSwitchTargetNames();
 }
 
+QStringList ConfigEditor::trayBadgeModes() const
+{
+    return core::trayBadgeModeNames();
+}
+
 QStringList ConfigEditor::monitorPresets() const
 {
     return {QStringLiteral("cursor"), QStringLiteral("last"),  QStringLiteral("none"),

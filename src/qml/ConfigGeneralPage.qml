@@ -32,6 +32,23 @@ ColumnLayout {
 
     SettingCard {
         Layout.fillWidth: true
+        title: qsTr("托盘图标")
+        subtitle: qsTr("托盘通知区域里的数字徽标。改完立即生效（保存后重载配置就会换掉）。")
+
+        ChoiceRow {
+            Layout.fillWidth: true
+            label: qsTr("显示什么")
+            hint: qsTr("两个号时分画在两个角：左上工作空间号（绿）、右下虚拟桌面号（蓝），中间一条 `/` 方向的白线")
+            options: page.editor ? page.editor.trayBadgeModes : []
+            labels: ConfigText.labels("trayBadge", options)
+            value: page.editor && page.editor.settings.tray_badge !== undefined
+                ? String(page.editor.settings.tray_badge) : "both"
+            onPicked: function (value) { page.editor.setSetting("tray_badge", value) }
+        }
+    }
+
+    SettingCard {
+        Layout.fillWidth: true
         title: qsTr("按键行为")
         subtitle: qsTr("这些是单条快捷键没有显式写 `swallow` 时用的缺省值。")
 

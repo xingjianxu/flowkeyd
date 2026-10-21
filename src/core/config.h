@@ -10,6 +10,7 @@
 #pragma once
 
 #include "core/action.h"
+#include "core/desktop_badge.h"
 #include "core/keys.h"
 #include "core/monitor_ref.h"
 #include "core/remote_desktop.h"
@@ -153,6 +154,9 @@ struct Settings
     /// —— flowkeyd 完全不碰窗口的位置。`window_rule` 与 `window` 动作上写了
     /// `monitor` 的条目不受它影响（显式写的优先）。
     MonitorRef windowMonitor{MonitorRef::Kind::Cursor, 1, QString()};
+    /// 托盘图标上的数字徽标显示哪几个号：`1/2`（工作空间号 / 虚拟桌面号，默认）、
+    /// 只显示虚拟桌面号（蓝底）、只显示工作空间号（绿底）。见 `core/desktop_badge.h`。
+    TrayBadgeMode trayBadge = TrayBadgeMode::Both;
     /// 按显示器独立的工作空间（`settings.workspace`）。
     WorkspaceSettings workspace;
 };

@@ -833,6 +833,25 @@ void TestLua::windowRulesAreConverted()
     const QString unknownSetting = failure(R"(settings{ window_monitors = 1 })");
     QVERIFY2(unknownSetting.contains(QStringLiteral("unknown field")), qPrintable(unknownSetting));
 
+    // `settings.tray_badge`：托盘徽标显示哪几个号（默认 `"both"` = 工作空间号 / 桌面号）。
+    // 取值是公开接口，写错要在 `--check` 里报出来，而且要把 `expected one of` 列全。
+    for (const auto &[text, expected] : {
+             std::pair{QStringLiteral("both"), core::TrayBadgeMode::Both},
+             std::pair{QStringLiteral("desktop"), core::TrayBadgeMode::Desktop},
+             std::pair{QStringLiteral("workspace"), core::TrayBadgeMode::Workspace},
+         }) {
+        const auto parsed = parse(QStringLiteral("settings{ tray_badge = \"%1\" }").arg(text));
+        QVERIFY2(parsed.has_value(), qPrintable(text));
+        QCOMPARE(parsed->settings.trayBadge, expected);
+    }
+    const auto trayDefault = parse(QString());
+    QVERIFY(trayDefault.has_value());
+    QCOMPARE(trayDefault->settings.trayBadge, core::TrayBadgeMode::Both);
+    const QString badTrayBadge = failure(R"(settings{ tray_badge = "vertigo" })");
+    QVERIFY2(badTrayBadge.contains(QStringLiteral("unknown variant `vertigo`")),
+             qPrintable(badTrayBadge));
+    QVERIFY2(badTrayBadge.contains(QStringLiteral("expected one of")), qPrintable(badTrayBadge));
+
     // 写了 monitor 但没写位置/大小：默认最大化（在 compile() 里定）。
     const auto maximizeDefault = parse(R"(window_rule{ process = "a", monitor = "primary" })");
     QVERIFY(maximizeDefault.has_value());

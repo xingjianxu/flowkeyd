@@ -734,12 +734,13 @@ int main(int argc, char *argv[])
                      &platform::win::Tray::showMessage);
     QObject::connect(&runtime, &app::Runtime::suspendedChanged, &tray,
                      &platform::win::Tray::setSuspended);
-    // 托盘图标上的数字 = 当前虚拟桌面号（工作线程 500 ms 轮询一次，见 Runtime）。
-    // 图标在 GUI 线程上现画（一次改号只画 9 张位图，几百微秒）；读不到桌面时
-    // `desktopIcon()` 返回空 QIcon，托盘自己退回应用图标。
+    // 托盘图标上的数字 = 当前工作空间号 / 虚拟桌面号（工作线程 500 ms 轮询一次，
+    // 见 Runtime）。显示哪几个号由 `settings.tray_badge` 决定；图标在 GUI 线程上
+    // 现画（一次只画 9 张位图，几百微秒）；一个号都拿不到时 `trayBadgeIcon()` 返回
+    // 空 QIcon，托盘自己退回应用图标。
     QObject::connect(&runtime, &app::Runtime::desktopChanged, &tray,
-                     [&tray](int number, int count) {
-                         tray.setDesktop(number, count, app::desktopIcon(number));
+                     [&tray](const core::TrayBadge &badge) {
+                         tray.setDesktop(badge, app::trayBadgeIcon(badge));
                      });
     QObject::connect(&runtime, &app::Runtime::finished, &application, &QApplication::quit);
 

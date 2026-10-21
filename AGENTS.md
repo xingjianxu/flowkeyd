@@ -167,9 +167,15 @@ UI 只有托盘图标 + 日志窗口、`menu`/`help`/`windows`/`apps`/`update` �
 19. **前台是覆盖层时跳过它**：不写 `target`/`process` 的 `window` 动作沿 Z 序往下找第一个“主窗口”（否则会
     去操控 PowerToys 的「快捷键指南」）。`windowDesktopId()` 可重试；`moveWindowToAdjacent()` 搬完**等
     桌面 GUID 真的变了再返回**。
-20. **托盘图标主体 = 当前虚拟桌面号**：蓝渐变圆角方块 + 白粗体数字（按字形墨迹居中），两位数一律 `9+`；
-    查不到时**退回应用图标**（不画 0）；来源是动作线程上 500 ms 轮询（`QTimer` 必须在它那条线程建），
-    结果投回 GUI 线程换图标，**绝不在 GUI 线程做 COM**。
+20. **托盘图标主体 = 当前的工作空间号 / 虚拟桌面号**：默认是**两个号各占一个角** —— 左上工作空间号
+    （绿底）、右下虚拟桌面号（蓝底），底色沿对角线分开、中间一条 `/` 方向的白线（字号能到图标边长的
+    一半，因为不再把 `1/2` 挤成一行）；由 `settings.tray_badge` 选 `"both"`（默认）/ `"desktop"`
+    （只有虚拟桌面号，蓝底居中）/ `"workspace"`（只有工作空间号，绿底居中）；两个号都按字形墨迹居中、
+    两位数一律 `9+`（再降一档字号并往角里挪）；一个号都查不到时**退回应用图标**（不画 0），
+    `both` 只剩一个号时不画对角线。工作空间号取 `switch_target` 那块屏的活动空间。来源是动作线程上
+    500 ms 的轮询（`QTimer` 必须在它那条线程建，轮询要的配置由每个进来的任务顺手记住），结果（整份
+    `core::TrayBadge`）投回 GUI 线程换图标，**绝不在 GUI 线程做 COM**；`workspace("switch")` 执行完
+    立刻补一次轮询。
 21. **窗口切换器 `windows()` 与「轻碰 Win」**：按**进程名前缀**筛选，剩一个窗口直接激活；只列 shell 真会
     显示的窗口。**「轻碰 Win」= 单个修饰键 + `trigger = "release"`**：按下时放行、期间有别的键就作废、单独
     松开才触发并注入 `VK_UNASSIGNED` 挡开始菜单；单修饰键 + `press` 保持老行为。
@@ -328,7 +334,8 @@ Qt 侧齐备：`Qt6::Quick`、`QuickControls2`、`Qt6QuickControls2FluentWinUI3S
 | `core/monitor_ref.*` / `core/window_monitor_state.*` | “摆到哪块屏”的取值与判据 / `monitor = "last"` 的记忆 |
 | `core/config_map.*` / `core/config_writer.*` | 结构体 ↔ QVariant 字典（界面用）/ 结构体 → Lua 源码（含生成标记、`.bak`） |
 | `core/workspace.*` | 工作空间**纯逻辑状态机**（命令 → 显隐/焦点效果列表，含 M9 的 `revealWindow` / `windowReboundToMonitor`）+ `core/workspace_event.*`（钩子线程 → 工作线程的事件 + 「自己引起的事件」抑制表）+ `core/workspace_log.*`（恢复日志 `workspace.json` 的解析 / 序列化：64 位整数写成字符串）；M1–M11 已全部接线（`workspace(...)` 动作能真的显隐窗口、拔插会迁移与复位、崩溃与注销后能恢复、藏在别的空间里的窗口能被唤起、规则与 `new_window` 决定新窗口的归属） |
-| `core/log_tail.*` / `core/update_check.*` / `core/version.*` / `core/desktop_badge.*` | 日志增量尾随 / 更新纯逻辑 / 版本号 / 徽标文字与字号 |
+| `core/log_tail.*` / `core/update_check.*` / `core/version.*` / `core/desktop_badge.*` | 日志增量尾随 /
+    更新纯逻辑 / 版本号 / 徽标文字与字号（含 `settings.tray_badge` 的三种写法）|
 | `src/lua/lua_config.*` + `lua_prelude.lua` | **Lua 与 C++ 的唯一边界**（转成 `core::Config`，逐条目带上下文报错）；DSL 编进 qrc |
 | `src/platform/win/` | 一个文件一件事：`ffi`（全部声明 + `currentExecutablePath()`）、`nt`、`process`（run 三条路 / open / `--shell-*` 代理）、`dwm`、`monitor`、`input`（`SendInput`、验收后门、`copySelection`）、`ime`、`hook`（回调 + 消息循环 + 定时器 + `window_rule` / 工作空间事件监听 + 显示器轮询 + 前台事件）、`apps`（扫描 + 启动 + 图标 + `StaThread`）、`shell_menu`、`audio`（MTA，高风险）、`clipboard`、`window`、`workspace`（工作空间的 hide/show/restack/身份/枚举/恢复日志读写，`SW_HIDE` 只在这里）、`session`（`WM_QUERYENDSESSION` 的隐藏窗口）、`desktop`（版本表）、`power`、`tray`、`logging`/`single_instance`（退出与「恢复全部窗口」两条事件通道）、`elevate`/`autostart`/`update` |
 | `src/app/dispatcher.*` | **动作工作线程**：执行动作、`window` 的先启动再激活与默认 `toggle`、摆显示器、四张卡片的请求、`window_rule` 三遍、桌面轮询、启动器状态文件路径 |
@@ -336,7 +343,7 @@ Qt 侧齐备：`Qt6::Quick`、`QuickControls2`、`Qt6QuickControls2FluentWinUI3S
 | `src/app/{menu,help,window_list,app_list}_model.*` / `log_model.*` | 卡片与日志窗口的**纯逻辑**（`QAbstractListModel`，只用 QtCore）；行几何与鼠标命中不归它们管 |
 | `src/app/popup_layout.*` / `popup_host.*` | 弹窗几何与 `centrePopup()`/`popupPixelSizeIsStale()`；挂模型、抢前台、建/复用窗口、`helpRun()`（**先藏窗口再执行**）、`preload()`、缩放变化丢窗口 |
 | `src/app/config_editor.*` / `config_window.*` | 配置界面的模型层（在 `flowkeyd_models`，纯 QtCore，`save()` 先序列化再用真 Lua 校验）/ 宿主（在 exe，`loadFromModule`） |
-| `src/app/app_icons.*` / `app_icon.*` | 启动器异步图标（STA 线程 + 缓存）/ qrc 多尺寸 `QIcon` + `desktopIcon()` |
+| `src/app/app_icons.*` / `app_icon.*` | 启动器异步图标（STA 线程 + 缓存）/ qrc 多尺寸 `QIcon` + `trayBadgeIcon()` |
 | `src/app/{update_model,update_archive,updater}.*` | 更新卡片状态机 / 取新 exe / 联网编排（sha256、mtime 对齐） |
 | `src/qml/` | 六个窗口 + 配置界面共用控件（`SettingCard`/各 `*Row`/`ChordsEditor`/`ActionEditor`/`ActionListEditor`/`LaunchFieldsEditor`/`WindowRuleFields`/`HotkeyFields`/`OverlayCard`/`ConfigText` 单例与四个弹层）。全部 `pragma ComponentBehavior: Bound`；五个弹窗 `flags` 带 `Qt.Tool`；配色用 `palette`；中文 `Microsoft YaHei` |
 | `tests/` | 每个模块一个 `tst_*`（清单见 `CMakeLists.txt`），含需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1` 的 `tst_interactive`（联网用例还要 `FLOWKEYD_ALLOW_NETWORK_TESTS=1`） |
@@ -409,7 +416,7 @@ debug 看不到的警告）+ `FLOWKEYD_BUILD_TESTS=OFF`。
 也不提权，`--remove-autostart` 要管理员。开发实例与常驻的单实例锁按**配置文件路径**分开。
 
 **桌面行为验证**：`scripts/acceptance.ps1`（192 项 / 实跑 189，约四分半，会持续注入按键/抢焦点 —— 先按
-工作约定第 6 条提醒用户）。覆盖范围、跳过项、已知 flake 与**手工冒烟清单（19 项）**在
+工作约定第 6 条提醒用户）。覆盖范围、跳过项、已知 flake 与**手工冒烟清单（20 项）**在
 `docs/notes/reference.md`。
 
 ---

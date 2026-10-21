@@ -1522,6 +1522,9 @@ void Dispatcher::startDesktopWatch()
 
 void Dispatcher::pollDesktop()
 {
+    core::TrayBadge badge = m_badge;
+    badge.mode = m_config != nullptr ? m_config->settings.trayBadge : core::TrayBadgeMode::Both;
+
     std::uint32_t index = 0;
     std::uint32_t count = 0;
     QString error;
@@ -1533,32 +1536,87 @@ void Dispatcher::pollDesktop()
             win::logDebug(QStringLiteral("cannot read the current virtual desktop: %1")
                               .arg(error));
         }
+    } else {
+        if (m_desktopWatchFailed) {
+            m_desktopWatchFailed = false;
+            win::logDebug(QStringLiteral("the current virtual desktop is readable again"));
+        }
+        const int number = static_cast<int>(index);
+        const int total = static_cast<int>(count);
+        if (number != m_badge.desktop || total != m_badge.desktopCount) {
+            // 换了虚拟桌面：工作空间状态机是**按虚拟桌面分开记**的（Q1），不刷新
+            // 上下文就会把上一张桌面的活动空间当成现在的。虚拟桌面切换不会给我们
+            // 发事件，所以这个轮询是唯一能及时跟上的地方。
+            if (m_config != nullptr && m_config->settings.workspace.enabled) {
+                refreshWorkspaceDesktop();
+            }
+        }
+        badge.desktop = number;
+        badge.desktopCount = total;
+    }
+
+    if (const std::optional<core::MonitorSpaces> spaces = workspaceSpacesForBadge();
+        spaces.has_value()) {
+        badge.workspace = static_cast<int>(spaces->active);
+        badge.workspaceCount = static_cast<int>(spaces->count);
+    } else {
+        badge.workspace = 0;
+        badge.workspaceCount = 0;
+    }
+
+    if (badge == m_badge) {
         return;
     }
-    if (m_desktopWatchFailed) {
-        m_desktopWatchFailed = false;
-        win::logDebug(QStringLiteral("the current virtual desktop is readable again"));
-    }
-    const int number = static_cast<int>(index);
-    const int total = static_cast<int>(count);
-    if (number == m_desktopNumber && total == m_desktopCount) {
-        return;
-    }
-    m_desktopNumber = number;
-    m_desktopCount = total;
-    win::logDebug(QStringLiteral("virtual desktop %1/%2; updating the tray icon")
-                      .arg(number)
-                      .arg(total));
+    m_badge = badge;
+    const QString label = core::trayBadgeText(badge);
+    win::logDebug(QStringLiteral("tray badge: %1 (workspace %2/%3, desktop %4/%5, %6)")
+                      .arg(label.isEmpty() ? QStringLiteral("-") : label)
+                      .arg(badge.workspace)
+                      .arg(badge.workspaceCount)
+                      .arg(badge.desktop)
+                      .arg(badge.desktopCount)
+                      .arg(core::trayBadgeModeName(badge.mode)));
     if (m_runtime != nullptr) {
-        m_runtime->reportDesktop(number, total);
+        m_runtime->reportDesktop(badge);
     }
+}
+
+void Dispatcher::rememberConfig(const std::shared_ptr<const core::Compiled> &config)
+{
+    if (config != nullptr) {
+        m_config = config;
+    }
+}
+
+std::optional<core::MonitorSpaces> Dispatcher::workspaceSpacesForBadge()
+{
+    if (m_config == nullptr || !m_config->settings.workspace.enabled) {
+        return std::nullopt; // 工作空间关着：没有“第几个空间”可言
+    }
+    const QString monitor = workspaceSwitchMonitor(*m_config, /*logFailures=*/false);
+    if (monitor.isEmpty()) {
+        return std::nullopt;
+    }
+    if (std::optional<core::MonitorSpaces> spaces = m_workspace.spaces(monitor);
+        spaces.has_value()) {
+        return spaces;
+    }
+    // 这块屏还没被任何一条命令碰过（没有窗口、也没切过）：活动空间的定义就是 1
+    // （`WorkspaceState` 懒创建空间表时的默认值），照实报出来，别让托盘一直空着。
+    core::MonitorSpaces fresh;
+    fresh.count = m_config->settings.workspace.count;
+    fresh.active = core::kMinWorkspaceCount;
+    return fresh;
 }
 
 void Dispatcher::submit(std::shared_ptr<const core::Compiled> config, core::Trigger trigger)
 {
     QMetaObject::invokeMethod(
         this,
-        [this, config = std::move(config), trigger]() { execute(config, trigger); },
+        [this, config = std::move(config), trigger]() {
+            rememberConfig(config);
+            execute(config, trigger);
+        },
         Qt::QueuedConnection);
 }
 
@@ -1569,6 +1627,7 @@ void Dispatcher::submitActions(std::shared_ptr<const core::Compiled> config,
     QMetaObject::invokeMethod(
         this,
         [this, config = std::move(config), name = std::move(name), actions = std::move(actions)]() {
+            rememberConfig(config);
             runActions(config, name, actions);
         },
         Qt::QueuedConnection);
@@ -1580,6 +1639,7 @@ void Dispatcher::submitPlacement(std::shared_ptr<const core::Compiled> config,
     QMetaObject::invokeMethod(
         this,
         [this, config = std::move(config), event = std::move(event)]() {
+            rememberConfig(config);
             applyPlacementRules(config, event);
         },
         Qt::QueuedConnection);
@@ -1591,6 +1651,7 @@ void Dispatcher::submitWorkspace(std::shared_ptr<const core::Compiled> config,
     QMetaObject::invokeMethod(
         this,
         [this, config = std::move(config), event = std::move(event)]() {
+            rememberConfig(config);
             applyWorkspaceEvent(config, event);
         },
         Qt::QueuedConnection);
@@ -2231,7 +2292,7 @@ std::vector<core::WindowId> Dispatcher::windowsOnThisDesktop(const std::vector<c
     return out;
 }
 
-QString Dispatcher::workspaceSwitchMonitor(const core::Compiled &config)
+QString Dispatcher::workspaceSwitchMonitor(const core::Compiled &config, bool logFailures)
 {
     const std::vector<core::MonitorDescription> monitors =
         core::sortedMonitors(win::monitor::list());
@@ -2246,20 +2307,24 @@ QString Dispatcher::workspaceSwitchMonitor(const core::Compiled &config)
         // （例如 PowerToys 的「快捷键指南」）时跳过它（决策 19）。
         const HWND hwnd = win::window::find(core::WindowQuery::make(std::nullopt, std::nullopt));
         if (hwnd == nullptr) {
-            win::logDebug(QStringLiteral("workspace: there is no foreground window; "
-                                         "switching on the cursor's monitor instead"));
+            if (logFailures) {
+                win::logDebug(QStringLiteral("workspace: there is no foreground window; "
+                                             "switching on the cursor's monitor instead"));
+            }
         } else {
             const QString device = deviceAt(win::monitor::indexForWindow(monitors, hwnd));
             if (!device.isEmpty()) {
                 return device;
             }
-            win::logDebug(QStringLiteral("workspace: cannot tell which monitor %1 is on; "
-                                         "switching on the cursor's monitor instead")
-                              .arg(core::rustDebug(win::window::windowTitle(hwnd))));
+            if (logFailures) {
+                win::logDebug(QStringLiteral("workspace: cannot tell which monitor %1 is on; "
+                                             "switching on the cursor's monitor instead")
+                                  .arg(core::rustDebug(win::window::windowTitle(hwnd))));
+            }
         }
     }
     const QString device = deviceAt(win::monitor::indexForCursor(monitors));
-    if (device.isEmpty()) {
+    if (device.isEmpty() && logFailures) {
         win::logDebug(QStringLiteral("workspace: cannot tell which monitor the cursor is on"));
     }
     return device;
@@ -2538,6 +2603,9 @@ void Dispatcher::executeWorkspaceAction(const core::Compiled &config,
                      .arg(space)
                      .arg(monitor)
                      .arg(effects.isEmpty() ? QStringLiteral(" (already there)") : QString()));
+    // 托盘上的徽标现在就该变成新的空间号（不等下一次 500 ms 轮询）：用户刚按完
+    // 快捷键，数字化晚半秒会让人怀疑到底切没切。
+    pollDesktop();
 }
 
 void Dispatcher::execute(const std::shared_ptr<const core::Compiled> &config,

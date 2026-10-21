@@ -76,13 +76,13 @@ void Tray::setSuspended(bool suspended)
     updateToolTip();
 }
 
-void Tray::setDesktop(int number, int count, const QIcon &badgeIcon)
+void Tray::setDesktop(const core::TrayBadge &badge, const QIcon &badgeIcon)
 {
-    m_desktopNumber = number;
-    m_desktopCount = count;
-    // 读不到当前桌面（或调用方没做徽标）时退回应用图标：宁可看不出是第几号，
+    m_badge = badge;
+    // 没有号可画（或调用方没做徽标）时退回应用图标：宁可看不出是第几号，
     // 也不要画一个误导性的 `0`，更不要留一个空白图标。
-    m_icon->setIcon(number > 0 && !badgeIcon.isNull() ? badgeIcon : m_appIcon);
+    const bool hasNumber = badge.desktop > 0 || badge.workspace > 0;
+    m_icon->setIcon(hasNumber && !badgeIcon.isNull() ? badgeIcon : m_appIcon);
     updateToolTip();
 }
 
@@ -96,8 +96,19 @@ void Tray::setBuildVersion(const QString &version)
 void Tray::updateToolTip()
 {
     QString tip = QStringLiteral("flowkeyd %1").arg(m_buildVersion);
-    if (m_desktopNumber > 0 && m_desktopCount > 0) {
-        tip += QStringLiteral("（桌面 %1/%2）").arg(m_desktopNumber).arg(m_desktopCount);
+    QStringList parts;
+    if (m_badge.workspace > 0 && m_badge.workspaceCount > 0) {
+        parts.append(QStringLiteral("工作空间 %1/%2")
+                         .arg(m_badge.workspace)
+                         .arg(m_badge.workspaceCount));
+    }
+    if (m_badge.desktop > 0 && m_badge.desktopCount > 0) {
+        parts.append(QStringLiteral("桌面 %1/%2")
+                         .arg(m_badge.desktop)
+                         .arg(m_badge.desktopCount));
+    }
+    if (!parts.isEmpty()) {
+        tip += QStringLiteral("（%1）").arg(parts.join(QStringLiteral("，")));
     }
     if (m_suspended) {
         tip += QStringLiteral("（已挂起）");

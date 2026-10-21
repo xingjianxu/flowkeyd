@@ -260,13 +260,11 @@ void Runtime::reportSuspended(bool suspended)
         this, [this, suspended]() { emit suspendedChanged(suspended); }, Qt::QueuedConnection);
 }
 
-void Runtime::reportDesktop(int number, int count)
+void Runtime::reportDesktop(const core::TrayBadge &badge)
 {
     // 与 `reportSuspended` 同一个道理：工作线程只负责“说话”，换图标由 GUI 线程做。
     QMetaObject::invokeMethod(
-        this,
-        [this, number, count]() { emit desktopChanged(number, count); },
-        Qt::QueuedConnection);
+        this, [this, badge]() { emit desktopChanged(badge); }, Qt::QueuedConnection);
 }
 
 void Runtime::showMenuFromAnyThread(MenuRequest request)

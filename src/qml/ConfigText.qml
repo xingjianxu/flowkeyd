@@ -97,6 +97,11 @@ QtObject {
             "cursor": qsTr("光标所在的那块屏"),
             "focus": qsTr("前台窗口所在的那块屏")
         },
+        trayBadge: {
+            "both": qsTr("左上工作空间号 + 右下虚拟桌面号（绿 / 蓝）"),
+            "desktop": qsTr("只显示虚拟桌面号（蓝底）"),
+            "workspace": qsTr("只显示工作空间号（绿底）")
+        },
         trigger: {
             "press": qsTr("按下时"),
             "release": qsTr("松开时"),

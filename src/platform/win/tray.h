@@ -5,10 +5,13 @@
 //
 // 菜单项：查看日志 / 挂起·恢复 / 恢复全部窗口 / 重载配置 / **配置...** / 打开配置文件 /
 // 检查更新 / 版本 / 退出，
-// 悬停提示显示构建版本、当前虚拟桌面与挂起状态，气泡提示用于 `notify` 动作与错误报告。
-// 图标本身平时是应用图标，但守护进程读到当前桌面后会换成**数字徽标**（第几号桌面，
-// 项目所有者 2026-09 要求），见 `setDesktop` 与 `app::desktopIcon`。
+// 悬停提示显示构建版本、当前工作空间 / 虚拟桌面与挂起状态，气泡提示用于 `notify` 动作与错误报告。
+// 图标本身平时是应用图标，但守护进程读到当前桌面 / 工作空间后会换成**数字徽标**
+// （默认 `1/2` 的写法：工作空间号 / 虚拟桌面号，项目所有者 2026-09 与 2026-10 要求），
+// 见 `setDesktop` 与 `app::trayBadgeIcon`。
 #pragma once
+
+#include "core/desktop_badge.h"
 
 #include <QIcon>
 #include <QObject>
@@ -32,14 +35,16 @@ public:
     void show();
     /// 悬停提示与「挂起/恢复」菜单项跟着引擎状态走。
     void setSuspended(bool suspended);
-    /// 托盘图标改成「当前是第几号虚拟桌面」（项目所有者 2026-09 要求）。
+    /// 托盘图标改成带数字的徽标（第几号虚拟桌面 / 第几个工作空间，项目所有者
+    /// 2026-09 与 2026-10 的要求）。
     ///
-    /// `number >= 1` 时用 `badgeIcon`（由 `app::desktopIcon()` 画出来的数字徽标），
-    /// 悬停提示里多一段 `（桌面 N/M）`；`number <= 0`（读不到当前桌面）时退回
-    /// 启动时传进来的应用图标。`badgeIcon` 为空也退回应用图标（调用方没做徽标）。
+    /// `badge` 里带着**该显示哪几个号**（`settings.tray_badge`）与两个号本身；
+    /// 图标由调用方用 `app::trayBadgeIcon()` 现画好传进来（GUI 线程上画）。
+    /// 悬停提示里多一段 `（工作空间 W/N，桌面 D/M）`；没有号可画（`badge` 里两个
+    /// 号都是 `0`）或 `badgeIcon` 为空时退回启动时传进来的应用图标。
     ///
     /// **只在 GUI 线程调用**（它改 `QSystemTrayIcon`）。
-    void setDesktop(int number, int count, const QIcon &badgeIcon);
+    void setDesktop(const core::TrayBadge &badge, const QIcon &badgeIcon);
     /// 设置菜单与悬停提示里显示的构建版本（`core::buildVersion()` 的结果）。
     void setBuildVersion(const QString &version);
     /// 弹一个气泡提示（`notify` 动作与错误报告都用它）。
@@ -72,9 +77,8 @@ private:
     QSystemTrayIcon *m_icon = nullptr;
     /// 启动时传进来的应用图标：读不到虚拟桌面时用它。
     QIcon m_appIcon;
-    /// 当前是第几号虚拟桌面（`0` = 不知道）与桌面的总数，只用于悬停提示。
-    int m_desktopNumber = 0;
-    int m_desktopCount = 0;
+    /// 当前徽标的内容（显示模式 + 两个号与它们的总数），悬停提示用。
+    core::TrayBadge m_badge;
     QMenu *m_menu = nullptr;
     QAction *m_logAction = nullptr;
     QAction *m_suspendAction = nullptr;

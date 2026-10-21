@@ -77,6 +77,7 @@ private slots:
     void refusesToSaveAnInvalidConfig();
     void saveWritesParseableLuaAndBacksUp();
     void saveRemembersMonitorIndexAsANumber();
+    void saveRemembersTrayBadgeMode();
     void saveRemembersNestedWorkspaceSettings();
     void pickFreeChordAvoidsUsedOnes();
     void startFromDefaultsSurvivesBrokenFile();
@@ -328,6 +329,26 @@ void TestConfigEditor::saveRemembersMonitorIndexAsANumber()
     QCOMPARE(compiled.settings.windowMonitor.index, 2u);
     QCOMPARE(compiled.windowRules.at(0).monitor->kind, MonitorRef::Kind::Index);
     QCOMPARE(compiled.windowRules.at(0).monitor->index, 3u);
+}
+
+void TestConfigEditor::saveRemembersTrayBadgeMode()
+{
+    // 托盘徽标的显示方式也是普通设置项：界面改一次就该原样存回文件
+    // （`settings.tray_badge`，默认 `"both"` = 工作空间号 / 虚拟桌面号）。
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    auto editor = makeEditor(dir, QString());
+    const QString path = QDir(dir.path()).filePath(QStringLiteral("config.lua"));
+    QVERIFY(editor->load(path));
+    QCOMPARE(editor->settings().value(QStringLiteral("tray_badge")).toString(),
+             QStringLiteral("both"));
+
+    editor->setSetting(QStringLiteral("tray_badge"), QStringLiteral("workspace"));
+    QVERIFY2(editor->save(), qPrintable(editor->saveError()));
+
+    Compiled compiled;
+    QVERIFY(!loadConfig(lua::makeLuaEvaluator(), path, &compiled).has_value());
+    QCOMPARE(compiled.settings.trayBadge, TrayBadgeMode::Workspace);
 }
 
 void TestConfigEditor::saveRemembersNestedWorkspaceSettings()

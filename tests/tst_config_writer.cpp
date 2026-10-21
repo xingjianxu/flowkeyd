@@ -226,6 +226,7 @@ Config sampleConfig()
     config.settings.remoteDesktopProcesses = {QStringLiteral("mstsc.exe"),
                                               QStringLiteral("my rdp.exe")};
     config.settings.windowMonitor = MonitorRef{MonitorRef::Kind::Last, 1, QString()};
+    config.settings.trayBadge = TrayBadgeMode::Workspace;
     // 工作空间：故意把每一格都写成非默认值（默认是开 / 9 个 / 光标 / active / 空名单）。
     config.settings.workspace.enabled = true;
     config.settings.workspace.count = 6;
@@ -427,6 +428,7 @@ private slots:
     void escapesStringsThatNeedIt();
     void backsUpAnExistingFile();
     void writesMonitorIndexAsANumber();
+    void writesTrayBadgeAsAString();
     void writesWorkspaceAsANestedTable();
 };
 
@@ -567,9 +569,27 @@ void TestConfigWriter::writesMonitorIndexAsANumber()
     QCOMPARE(evaluated.config.windowRules.at(0).monitor->index, 3u);
 }
 
-void TestConfigWriter::writesWorkspaceAsANestedTable()
+void TestConfigWriter::writesTrayBadgeAsAString()
 {
-    // `settings.workspace` 在配置里是**一张嵌套的表**（不是扁平键），里面每一项
+    // `settings.tray_badge` 是字符串枚举（`both` / `desktop` / `workspace`），
+    // 写回文件时不能被当成布尔或数字。
+    Config config;
+    config.settings.trayBadge = TrayBadgeMode::Desktop;
+    const QString text = configToLua(config);
+    QVERIFY(text.contains(QStringLiteral("tray_badge = \"desktop\"")));
+
+    EvalResult evaluated;
+    const auto failure = lua::makeLuaEvaluator()(text, QStringLiteral("mem"), &evaluated);
+    QVERIFY2(!failure.has_value(), failure.has_value() ? qPrintable(failure->toString()) : "");
+    QCOMPARE(evaluated.config.settings.trayBadge, TrayBadgeMode::Desktop);
+
+    // 默认值（`both` = 1/2 的写法）也要写出来：界面保存一次就固定下来，
+    // 以后改默认值不会让老文件“漂移”（与其他枚举设置一致）。
+    QVERIFY(configToLua(Config()).contains(QStringLiteral("tray_badge = \"both\"")));
+}
+
+void TestConfigWriter::writesWorkspaceAsANestedTable()
+{    // `settings.workspace` 在配置里是**一张嵌套的表**（不是扁平键），里面每一项
     // 都要能被 Lua 层读回原值：`new_window` 尤其容易写错（`"active"` 是字符串，
     // 空间号是数字）。
     Config config;

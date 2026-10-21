@@ -136,7 +136,8 @@ end
 -- 注册一组全局设置。可以多次调用，后写的键覆盖先写的。
 -- 字段：log_level / swallow / exact_modifiers / release_modifiers /
 --       repeat_interval_ms / repeat_delay_ms / tick_ms / input_backend /
---       single_instance / elevate / remote_desktop / window_monitor / workspace。
+--       single_instance / elevate / remote_desktop / window_monitor /
+--       tray_badge / workspace。
 --
 -- window_monitor（默认 "cursor"）：窗口**没写明 monitor** 时摆到哪一块显示器上。
 --   "cursor" 光标所在的那一块（默认：唤起一个程序时它出现在你正在看的那块屏上）；
@@ -150,6 +151,12 @@ end
 --   remote_desktop = false 就完全关掉这项检测；写成表可以换名单：
 --     remote_desktop = { enabled = true, processes = { "mstsc.exe", "ToDesk.exe" } }
 --   （processes 写了就是整体替换内置的微软 RDP 客户端名单；空表 = 谁都不算。）
+--
+-- tray_badge（默认 "both"）：托盘图标上的数字徽标显示什么。
+--   "both"      两个号各占一个角：左上工作空间号（绿）、右下虚拟桌面号（蓝），
+--               中间一条 `/` 方向的白线；
+--   "desktop"   只显示虚拟桌面号（蓝底居中）；
+--   "workspace" 只显示工作空间号（绿底居中）——工作空间关着时就没有可画的号。
 --
 -- workspace（默认开启）：按显示器独立的工作空间（Hyprland 风格）。
 --   workspace = false                                   -- 整个关掉

@@ -39,7 +39,10 @@
 * **`$ErrorActionPreference = 'Stop'` 下原生命令往 stderr 写一个字就被包成终止性异常** → 调 cmake/git/gh
   时用 helper 临时切回 `Continue`、只看退出码。
 * **PowerShell 接原生命令的 UTF-8 stdout 会按控制台代码页（本机 GBK）解码** → 按字节重定向到文件再看；
-  **`Tee-Object` 写出的是 UTF-16**。
+  **`Tee-Object` 写出的是 UTF-16**。典型骗局：`git log --format='%s' | Out-File -Encoding utf8` 看上去
+  中文烂掉了，于是你去“修”一个其实好好的提交 —— 先 `[Console]::OutputEncoding =
+  [Text.Encoding]::UTF8` 再调 git，或者直接把 `git cat-file commit HEAD` 的**字节**写到文件用
+  read 工具看。（提交信息本身用 `git commit -F <utf8 无 BOM 的文件>` 写进去是安全的。）
 * **`Get-Content` 不带 `-Encoding UTF8` 会把无 BOM 的 UTF-8 数错行数** → 用
   `[System.IO.File]::ReadAllLines`。
 * **守护进程一直开着日志文件**，`ReadAllLines` 报"正由另一进程使用" → 用 `FileShare.ReadWrite` 的
