@@ -13,6 +13,7 @@
 #include "core/window_monitor_state.h"
 #include "core/workspace.h"
 #include "core/workspace_event.h"
+#include "core/workspace_log.h"
 #include "platform/win/hook.h"
 
 #include <QObject>
@@ -102,6 +103,20 @@ public:
                                 const core::Action &action,
                                 const QString &hotkey);
 
+    /// 线程安全：请动作线程把**全部被工作空间藏起来的窗口**放回可见
+    /// （托盘菜单「恢复全部窗口」）。
+    ///
+    /// 异步：托盘要立刻消失，不能等动作线程。真正干活的是
+    /// `restoreWorkspaceWindows()`。
+    void submitWorkspaceRestore();
+
+    /// 线程安全：现在就恢复，**最多等 `timeoutMs`**（退出 / 注销 / 关机用）。
+    ///
+    /// 为什么要有上限：这些都在系统的关键路径上（注销时 Windows 只等几秒），
+    /// 而动作线程可能正卡在一个 `run` 动作里。超时了就返回 false 并继续 —— 恢复
+    /// 日志（`workspace.json`）里还留着记录，下次启动会再恢复一次。
+    bool restoreWorkspaceNow(int timeoutMs);
+
 private:
     void execute(const std::shared_ptr<const core::Compiled> &config, const core::Trigger &trigger);
     void runActions(const std::shared_ptr<const core::Compiled> &config,
@@ -149,6 +164,18 @@ private:
     ///   * 重新接入：状态机已经物归原主，窗口却不在那儿 → 搬回去。
     void relocateDisplacedWindows();
 
+    // --- 恢复日志（M8，只在动作线程上碰） ----------------------------------
+
+    /// 第一次真的需要读写日志时把 `<配置目录>/workspace.json` 读进来。
+    ///
+    /// 启动恢复（`main.cpp`）已经把它清过一遍了；**这里读到的东西是它没能恢复
+    /// 的那些**（进程卡住之类），所以要接着用，不能直接覆盖。
+    void ensureWorkspaceLogLoaded();
+    /// 把当前内存里的日志写回磁盘（空日志 = 删文件）。
+    bool persistWorkspaceLog(const QString &reason);
+    /// 把全部被藏起来的窗口放回可见（状态机 + 日志里剩下的那些）。只在动作线程上跑。
+    void restoreWorkspaceWindows(const QString &reason);
+
     /// 重扫开始菜单（只能在动作线程上跑：它会开一条一次性的 STA 线程）。
     void refreshAppCatalog();
 
@@ -184,6 +211,14 @@ private:
     bool m_workspaceConfigured = false;
     /// 当前虚拟桌面键（`desktop::currentDesktopId()` 的缓存）。空串 = 还不知道。
     QString m_workspaceDesktop;
+    /// 恢复日志（M8）：此刻被我们藏起来的窗口。
+    ///
+    /// **先写日志再隐藏**（写不进去就不藏），显示成功之后才把条目去掉。
+    core::WorkspaceLog m_workspaceLog;
+    /// 配置文件路径（日志就放在它旁边：`workspace.json`）；空串表示没地方可写
+    /// （没有配置路径 = 测试环境）。
+    QString m_workspaceConfigPath;
+    bool m_workspaceLogLoaded = false;
 
     /// 上一条记忆的访问器（第一次调用时建出来，并记住配置目录旁边的落盘位置）。
     MonitorMemory *monitorMemory();

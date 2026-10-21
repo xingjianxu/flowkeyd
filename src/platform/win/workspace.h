@@ -22,6 +22,7 @@
 
 #include "core/placement.h"
 #include "core/workspace.h"
+#include "core/workspace_log.h"
 #include "platform/win/ffi.h"
 
 #include <QString>
@@ -54,16 +55,10 @@ inline HWND handleOf(core::WindowId id)
 /// 窗口自己的创建时间没有公开 API，所以用属主**进程**的创建时间：
 /// 进程一换（PID 复用）就对不上；同一个进程里 `HWND` 复用的情况由状态机在
 /// `EVENT_OBJECT_DESTROY` 上的记录清理兜住（`core::WorkspaceState::windowDestroyed`）。
-struct Identity
-{
-    bool valid = false;
-    unsigned long pid = 0;
-    /// 属主进程的创建时间（`FILETIME`，100 ns 自 1601 起）。
-    std::uint64_t processStarted = 0;
-    QString className;
-
-    bool operator==(const Identity &) const = default;
-};
+///
+/// 定义在 `core::WindowIdentity`（`core/workspace_log.h`）：恢复日志要把它写进
+/// `workspace.json`，而 `core` 不能反过来依赖平台层。
+using Identity = core::WindowIdentity;
 
 /// 读出窗口身份；窗口已经不在时 `valid` 为 false。
 Identity identityOf(HWND hwnd);
@@ -140,5 +135,54 @@ bool isManageable(HWND hwnd, bool tracked, const QStringList &excludedProcesses)
 
 /// 窗口的类名（取不到时为空串）。
 QString classNameOf(HWND hwnd);
+
+// --- 恢复日志（M8：安全与恢复） -------------------------------------------
+//
+// 「先写日志再隐藏」的写盘在动作线程上做（见 `Dispatcher`），而**崩溃恢复**是
+// 启动最早期的一次性动作：那时动作线程还不存在（`main.cpp` 在读配置之前就做），
+// 所以读写与恢复都放在这里，让三条入口共用同一份实现：
+//   * 启动恢复（`main.cpp`）；
+//   * `--restore-windows`（没有实例在跑时的离线恢复）；
+//   * `Dispatcher` 的「恢复全部窗口」（托盘菜单 / 退出 / 注销）。
+
+/// 读 `<配置目录>\workspace.json`。文件不存在 = 空日志；坏文件只记 warning，
+/// 当作空的重来（不能因为这个文件坏掉就让窗口永远回不来）。
+core::WorkspaceLog loadWorkspaceLog(const QString &configPath, QString *error = nullptr);
+
+/// 写恢复日志（`QSaveFile` 原子替换）。空日志 = 删掉文件（不留一个空壳）。
+bool saveWorkspaceLog(const QString &configPath, const core::WorkspaceLog &log, QString *error);
+
+/// 把日志里记着的窗口**放回可见**，返回**还没有恢复成功**的那几条
+/// （已经不在 / 身份对不上 / 显示失败的分别计数见 `RestoreReport`）。
+///
+/// 身份对不上（`HWND` 被复用）或窗口已经没了的条目**不返回**：它们已经无从恢复，
+/// 留着只会每次启动都白试一次。显示失败的条目要留着（下次 / 手动恢复再试）。
+struct RestoreReport
+{
+    /// 日志里有几条。
+    int entries = 0;
+    /// 真的放回可见的窗口数。
+    int restored = 0;
+    /// 窗口已经不在 / 身份对不上（从日志里丢掉）。
+    int dropped = 0;
+    /// 试了但失败（留在日志里，下次再试）。
+    int failed = 0;
+};
+
+/// `restoreFromLog()` 的结果：报告 + 还没恢复成功的那些条目。
+struct RestoreResult
+{
+    RestoreReport report;
+    core::WorkspaceLog remaining;
+};
+
+/// 把一份日志里的窗口逐个恢复；返回剩下的（调用方负责写回）。
+RestoreResult restoreHiddenWindows(const core::WorkspaceLog &log);
+
+/// 完整的一条恢复路径：读日志 → 恢复 → 把剩下的写回（全恢复就删文件）。
+///
+/// 崩溃恢复与 `--restore-windows` 都走它。**不依赖配置**：日志里的路径信息足够
+/// 找到窗口，所以配置坏掉时窗口也能回来。
+RestoreResult restoreFromLog(const QString &configPath);
 
 } // namespace flowkeyd::platform::win::workspace

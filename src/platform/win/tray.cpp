@@ -27,6 +27,10 @@ Tray::Tray(const QIcon &icon, QObject *parent) : QObject(parent)
     m_logAction = m_menu->addAction(QStringLiteral("查看日志(&V)"));
     m_menu->addSeparator();
     m_suspendAction = m_menu->addAction(QStringLiteral("挂起快捷键(&S)"));
+    // 安全兜底：工作空间把窗口藏起来时，用户随时可以用这一条把它们全部拿出来
+    // （正常退出 / 注销 / 下次启动也会自动恢复，见 M8）。放在「挂起」下面，因为
+    // 它同样是一个“马上生效、不需要配置”的开关。
+    m_restoreAction = m_menu->addAction(QStringLiteral("恢复全部窗口(&W)"));
     m_reloadAction = m_menu->addAction(QStringLiteral("重载配置(&L)"));
     // 图形化配置界面（项目所有者 2026-10 要求）：不用自己写 Lua 也能改配置。
     // 放在「打开配置文件」上面：它是常规入口，手写文件是它旁边那条退路。
@@ -46,6 +50,7 @@ Tray::Tray(const QIcon &icon, QObject *parent) : QObject(parent)
 
     connect(m_logAction, &QAction::triggered, this, &Tray::logWindowRequested);
     connect(m_suspendAction, &QAction::triggered, this, &Tray::suspendToggleRequested);
+    connect(m_restoreAction, &QAction::triggered, this, &Tray::restoreWindowsRequested);
     connect(m_reloadAction, &QAction::triggered, this, &Tray::reloadRequested);
     connect(m_configureAction, &QAction::triggered, this, &Tray::configureRequested);
     connect(m_openConfigAction, &QAction::triggered, this, &Tray::openConfigRequested);

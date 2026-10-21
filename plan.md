@@ -9,9 +9,10 @@
 **当前进度：M0 ✅（结论在下文 M0 节 + `docs/notes/pitfalls.md`）、M1 ✅（`src/core/workspace.*` +
 `tests/tst_workspace.cpp`）、M2 ✅、M3 ✅、M4 ✅（语义在下文各自的「→ 已产出」）、M5 ✅（事件管线已接线，
 `src/core/workspace_event.*` + `platform/win/hook.*` + `Dispatcher::applyWorkspaceEvent`）、M6 ✅（动作执行：
-`workspace("switch"|"move", N)` 已经能真的显隐窗口）、**M7 ✅（显示器拔插 + 拖到别的屏：`relocateToMonitor()` +
-`windowIsOffMonitor()` + `WindowMoved` 归属跟随）**。下一步：**M8（安全与恢复）/ M9-M10（联动）**。注意：
-显示器拔插后的迁移、拖屏的归属变化都已经接线；**恢复日志（M8）与 `windows()`/`window("activate")` 的联动
+`workspace("switch"|"move", N)` 已经能真的显隐窗口）、M7 ✅（显示器拔插 + 拖到别的屏：`relocateToMonitor()` +
+`windowIsOffMonitor()` + `WindowMoved` 归属跟随）、**M8 ✅（安全与恢复：`core/workspace_log.*` 预写日志 +
+启动恢复 + 退出/注销前恢复 + 托盘「恢复全部窗口」+ `--restore-windows`）**。下一步：**M9-M10（联动）/ M11（收尾）**。
+注意：显示器拔插后的迁移、拖屏的归属变化、崩溃恢复都已经接线；**`windows()`/`window("activate")` 的联动
 （M9/M10）还没有**。**
 
 ## 0. 已确认的决策（来自与项目所有者的问答）
@@ -48,7 +49,8 @@
 | 层 | 新文件 | 职责 |
 | -- | ------ | ---- |
 | `core`（纯逻辑，无 Win32/GUI） | `core/workspace.*` | 工作空间**状态机**：显示器 → 工作空间 → 窗口记录；每个操作返回「效果列表」（要隐藏 / 要显示 / 要重排 Z 序 / 要聚焦哪些窗口），不直接做事 |
-| | `core/workspace_state.*` | 隐藏日志（落盘格式）的序列化 / 反序列化 / 校验 |
+| | `core/workspace_log.*` | 隐藏日志（落盘格式）的序列化 / 反序列化 / 校验（不要叫 `workspace_state`：
+和 `core::WorkspaceState` 撞车） |
 | | `core/workspace_match.*`（或并入 `window_match`） | 「这个窗口归不归我管」的纯判据（含排除名单） |
 | `lua` / `config` | `core/config.*`、`lua/lua_config.cpp`、`lua_prelude.lua` | `settings.workspace`、动作 `workspace`、`window_rule`/`app` 的 `workspace` 字段 |
 | `platform/win` | `platform/win/workspace.*` | 隐藏 / 显示 / 重排 Z 序 / 窗口身份校验 / 枚举可管理窗口；封装「隐藏方式」 |
@@ -415,7 +417,7 @@ M2 之后要用到的语义（**都已有单测钉住**）：
 * **待人眼过一遍**（两块屏在本机就能做）：拔掉 / 禁用一块屏 → 那上面的窗口出现在剩下那块屏上；接回 →
   物归原主；`Win+Shift+←/→` 搬屏后归属跟着变。
 
-### M8　安全与恢复（依赖 M4；与 M6 并行，**必须在发布前完成**）
+### M8　安全与恢复（依赖 M4；与 M6 并行，**必须在发布前完成**）　✅ 已完成
 
 * **预写日志**：`<配置目录>\workspace.json`（与 `launcher.json`/`windows.json` 同目录同风格），记录
   「当前被我们隐藏的窗口」的身份（M4 的 `identityOf`）与所属空间；**先写日志再隐藏**，显示后移除。
@@ -430,6 +432,40 @@ M2 之后要用到的语义（**都已有单测钉住**）：
 * 验证：`tst_workspace_state`（日志序列化 / 损坏容忍）；`tst_interactive`（隐藏后模拟「异常退出」= 直接
   丢弃状态机对象，再走启动恢复路径，窗口全部可见）；`acceptance.ps1` 增加「`taskkill /F` 后重启 → 窗口
   恢复」检查（先按工作约定第 6 条提醒用户，且只拿测试窗口，不动用户真实窗口）。
+
+→ **已产出**（命名偏离一处：日志核心层叫 `core/workspace_log.*`，**不叫** `workspace_state` ——
+那个名字会和 `core/workspace.h` 里的 `WorkspaceState` 撞车；测试相应地叫 `tst_workspace_log`）：
+
+* `src/core/workspace_log.{h,cpp}`：`WindowIdentity` / `HiddenWindow` / `WorkspaceLog` +
+  `workspaceLogPath()` / `parseWorkspaceLog()` / `serializeWorkspaceLog()` / `addHiddenWindow()` /
+  `removeHiddenWindow()` / `hasHiddenWindow()`。JSON 里 `hwnd` 与 `process_started` 写**字符串**
+  （`QJsonValue` 的数字是 `double`，超过 2^53 会静默丢精度）；身份缺一半时 `valid = false`（恢复时不校验；
+  宁可多试一次，也别漏掉该放的窗口）。坏 JSON / 坏条目一律只是丢掉那一条。
+* `platform/win/workspace.*`：`Identity` 改成 `core::WindowIdentity` 的别名（恢复日志要序列化它，而
+  `core` 不能依赖平台层）；新增 `loadWorkspaceLog()` / `saveWorkspaceLog()`（`QSaveFile` 原子替换，
+  空日志 = 删文件）/ `restoreHiddenWindows()`（逐条 `isAlive` + `stillSame` 校验，卡死的窗口不碰，
+  失败的留着）/ `restoreFromLog()`（读 → 恢复 → 写回剩下 + 报告；空/坏文件顺手删掉）。
+* `Dispatcher`（动作线程，唯一的日志写者）：`ensureWorkspaceLogLoaded()`（启动恢复剩下的那些接着用，
+  **不覆盖**成空）、`applyWorkspaceEffects()` 里**预写日志**（写不进去就整个 hide 都不做）、
+  显示成功后删条目、hide 失败/窗口消失时撤掉预写条目（否则下次启动会去 show 一个本来就可见的窗口）、
+  `windowDestroyed` 时也清日志、`submitWorkspaceRestore()` / `restoreWorkspaceNow(ms)`（异步 / 有上限的
+  阻塞版）、`restoreWorkspaceWindows()`（状态机 `restoreAll()` + 日志里剩下的那些）。
+* `platform/win/single_instance.*`：新增 `-restore` 请求事件（与 `-quit` 同一套 Low 完整性描述符，
+  抽出 `createAskEvent()` / `signalAskEvent()` 两个共用实现）：`requestRestore()` 让 `--restore-windows`
+  能请正在跑的实例干活。`Runtime` 拥有它并在 `QWinEventNotifier` 上回投。
+* `platform/win/session.{h,cpp}`：一个隐藏的 `WS_POPUP` 顶层窗口，收 `WM_QUERYENDSESSION`（先恢复再返回
+  `TRUE`）与 `WM_ENDSESSION`（第二次机会）。为什么不用 `QAbstractNativeEventFilter`：那要先假设“此刻恰好
+  有一个 Qt 窗口活着”，而关机这条路径必须确定。
+* `Runtime`：`shutdown()` 在**卸完钩子、退线程之前**调 `restoreWorkspaceNow(3000)`；`requestWorkspaceRestore()`
+  给托盘 / `-restore` 事件用。`main.cpp`：启动最早期（读配置之前）`recoverWorkspaceWindows()`（已有实例在跑
+  就跳过，判据 = `-quit` 事件对象还在）、`--restore-windows` 分支、`SessionEndWatcher`（2 s 上限）、
+  托盘信号连线。`platform/win/tray.*`：新增「恢复全部窗口(&W)」。`cli.*`：`--restore-windows` 与中文帮助。
+* 测试：`tst_workspace_log`（9 条：路径、空/缺文件、坏 JSON / 坏条目、64 位整数往返、去重、
+  `addHiddenWindow` 替换语义）；`tst_interactive::restoresHiddenWindowsFromTheRecoveryLog`（真机：藏两个窗口
+  → 写日志（其中一条身份对不上）→ 丢掉内存状态 → `restoreFromLog()`：对的那个回来、错的那个仍是藏着的、
+  日志被删掉；再跑一次是空操作；坏文件被清掉）—— 本机已实跑通过（`ctest` 里默认 skip）。
+* **`scripts/acceptance.ps1` 的 `taskkill /F` 检查推到 M11**：它要起一个真实实例 + 真的杀进程，靠工作
+  约定第 6 条的提醒守着，留给验收脚本整体串起来时加。
 
 ### M9　与现有功能的联动（依赖 M6、M8）
 

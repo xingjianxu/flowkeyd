@@ -17,6 +17,7 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QFileInfo>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QThread>
@@ -33,6 +34,7 @@
 #include "core/keys.h"
 #include "core/placement.h"
 #include "core/workspace_event.h"
+#include "core/workspace_log.h"
 #include "platform/win/apps.h"
 #include "platform/win/audio.h"
 #include "platform/win/clipboard.h"
@@ -427,6 +429,7 @@ private slots:
     void enumeratesManageableWindowsByTheirRecord();
     void switchesWorkspacesWithRealWindows();
     void relocatesDisplacedWindowsWithoutChangingState();
+    void restoresHiddenWindowsFromTheRecoveryLog();
     void hookThreadReportsWorkspaceEventsForForeignWindows();
     void launchesProgramsWithTheRequestedPrivilege();
     void opensTargetsAsTheLoggedOnUser();
@@ -2030,6 +2033,96 @@ void TestInteractive::relocatesDisplacedWindowsWithoutChangingState()
     // 边界：窗口已经没了 / 目标屏不存在时直接失败，不报错也不崩。
     QVERIFY(!ws::relocateToMonitor(nullptr, monitors[other], &error));
     QVERIFY(!error.isEmpty());
+}
+
+/// 崩溃恢复（M8）：恢复日志里记着的窗口，重启后第一件事就是被放回来。
+///
+/// 这里模拟「进程被 `taskkill /F` 杀掉」：先把窗口藏起来、再把恢复日志写好，然后
+/// **丢掉所有内存状态**（本用例里根本没有状态机），只留一个配置目录 —— 再走一遍
+/// `ws::restoreFromLog()`。顺带钉住两条容错：句柄已经没了的条目、身份对不上的条目
+/// （`HWND` 被复用）只从日志里丢掉，**不碰**那个窗口，也不会挡住其他条目的恢复。
+void TestInteractive::restoresHiddenWindowsFromTheRecoveryLog()
+{
+    if (!interactiveEnabled()) {
+        QSKIP("set FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1 to run the interactive tests");
+    }
+    namespace ws = platform::win::workspace;
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString configPath = dir.filePath(QStringLiteral("config.lua"));
+    const QString logPath = core::workspaceLogPath(configPath);
+    QVERIFY(!QFileInfo::exists(logPath));
+
+    const QString marker =
+        QStringLiteral("flowkeyd-restore-%1").arg(QCoreApplication::applicationPid());
+    TestWindow window(marker + QStringLiteral("-logged"));
+    TestWindow stranger(marker + QStringLiteral("-impostor"));
+    HWND hwnd = window.hwnd();
+    HWND other = stranger.hwnd();
+    QVERIFY2(hwnd != nullptr && other != nullptr, "the test windows were not created");
+
+    QString error;
+    QVERIFY2(ws::hide(hwnd, &error), qPrintable(error));
+    QVERIFY2(ws::hide(other, &error), qPrintable(error));
+    QVERIFY(IsWindowVisible(hwnd) == 0);
+    QVERIFY(IsWindowVisible(other) == 0);
+
+    // 「先写日志再隐藏」的那份日志：一条真记录 + 一条身份对不上的（模拟 `HWND` 被
+    // 复用：同一个句柄，但类名 / 进程号已经不是当年那个窗口）。
+    core::WorkspaceLog log;
+    core::HiddenWindow entry;
+    entry.window = ws::idOf(hwnd);
+    entry.identity = ws::identityOf(hwnd);
+    entry.workspace.desktop = QStringLiteral("{00000000-0000-0000-0000-000000000000}");
+    entry.workspace.monitor = QStringLiteral("\\\\.\\DISPLAY1");
+    entry.workspace.index = 2;
+    entry.title = QStringLiteral("the window we hid");
+    core::addHiddenWindow(log, entry);
+
+    core::HiddenWindow impostor = entry;
+    impostor.window = ws::idOf(other);
+    impostor.identity.pid = 0xFFFF;  // 想错了：这是个不存在的进程号
+    impostor.identity.className = QStringLiteral("NotTheWindowWeHid");
+    core::addHiddenWindow(log, impostor);
+
+    // 另一条：窗口早就不在了（`HWND` 1 从来不是有效窗口）。
+    core::HiddenWindow gone = entry;
+    gone.window = 1;
+    gone.title = QStringLiteral("gone");
+    core::addHiddenWindow(log, gone);
+
+    QVERIFY2(ws::saveWorkspaceLog(configPath, log, &error), qPrintable(error));
+    QVERIFY(QFileInfo::exists(logPath));
+
+    // 重启之后：只凭日志（没有状态机、没有配置）恢复。
+    const ws::RestoreResult result = ws::restoreFromLog(configPath);
+    QCOMPARE(result.report.entries, 3);
+    QCOMPARE(result.report.restored, 1);
+    QCOMPARE(result.report.dropped, 2);
+    QCOMPARE(result.report.failed, 0);
+    QVERIFY2(IsWindowVisible(hwnd) != 0, "the logged window was not restored");
+    // 身份对不上的那个窗口不能被碰：它仍然是藏着的。
+    QVERIFY2(IsWindowVisible(other) == 0, "a handle whose identity does not match was touched");
+    // 全部处理完（恢复 / 丢掉）：日志文件被删掉，下次启动不会再白试一次。
+    QVERIFY(!QFileInfo::exists(logPath));
+
+    // 再跑一次是空操作：退出 / 注销 / 托盘菜单会重复触发恢复。
+    const ws::RestoreResult again = ws::restoreFromLog(configPath);
+    QCOMPARE(again.report.entries, 0);
+    QVERIFY(IsWindowVisible(hwnd) != 0);
+
+    // 坏掉的日志文件：不崩、不报错、并且被清掉（否则每次启动都会警告一次）。
+    QFile broken(logPath);
+    QVERIFY(broken.open(QIODevice::WriteOnly));
+    broken.write("{ this is not json");
+    broken.close();
+    const ws::RestoreResult damaged = ws::restoreFromLog(configPath);
+    QCOMPARE(damaged.report.entries, 0);
+    QVERIFY(!QFileInfo::exists(logPath));
+
+    // 收尾：把本用例藏起来的第二个窗口放回来（测试不能给别人留下“消失”的窗口）。
+    QVERIFY2(ws::show(other, nullptr, &error), qPrintable(error));
+    QVERIFY(IsWindowVisible(other) != 0);
 }
 
 /// 工作空间的事件管线（M5）：钩子线程把**别的进程**的窗口报成工作空间事件，而且

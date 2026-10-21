@@ -117,6 +117,23 @@ bool Runtime::start(const QString &configPath,
         });
         m_quitNotifier = notifier;
     }
+
+    // `--restore-windows` 通道（M8）：另一个进程请我们把被工作空间藏起来的窗口
+    // 全部放回来（没有实例在跑时，那个进程会自己按恢复日志做）。
+    QString restoreError;
+    m_restoreEvent = win::createRestoreEvent(win::instanceKey(configPath), &restoreError);
+    if (m_restoreEvent == nullptr) {
+        win::logWarn(QStringLiteral("no restore channel (%1); `--restore-windows` cannot reach "
+                                    "this instance")
+                         .arg(restoreError));
+    } else {
+        auto *notifier = new QWinEventNotifier(static_cast<HANDLE>(m_restoreEvent), this);
+        connect(notifier, &QWinEventNotifier::activated, this, [this]() {
+            win::logInfo(QStringLiteral("restore requested by another process"));
+            requestWorkspaceRestore();
+        });
+        m_restoreNotifier = notifier;
+    }
     return true;
 }
 
@@ -136,6 +153,12 @@ void Runtime::shutdown()
         m_hook->stop();
         m_hook.reset();
     }
+    if (m_dispatcher != nullptr) {
+        // 退出前把被工作空间藏起来的窗口**全部放回来**（M8）：不先停钩子的话，
+        // 一次“切换工作空间”会跟在恢复后面再次藏掉窗口。有上限 —— 动作线程可能
+        // 卡在某个长动作里，那时日志会先留着，下次启动再恢复。
+        m_dispatcher->restoreWorkspaceNow(3000);
+    }
     if (m_workerThread != nullptr) {
         m_workerThread->quit();
         m_workerThread->wait();
@@ -153,6 +176,15 @@ void Runtime::shutdown()
     if (m_quitEvent != nullptr) {
         CloseHandle(static_cast<HANDLE>(m_quitEvent));
         m_quitEvent = nullptr;
+    }
+    if (m_restoreNotifier != nullptr) {
+        m_restoreNotifier->setEnabled(false);
+        delete m_restoreNotifier;
+        m_restoreNotifier = nullptr;
+    }
+    if (m_restoreEvent != nullptr) {
+        CloseHandle(static_cast<HANDLE>(m_restoreEvent));
+        m_restoreEvent = nullptr;
     }
 }
 
@@ -198,6 +230,21 @@ void Runtime::reloadFromAnyThread()
 void Runtime::requestShutdownFromAnyThread()
 {
     QMetaObject::invokeMethod(this, &Runtime::performShutdown, Qt::QueuedConnection);
+}
+
+void Runtime::requestWorkspaceRestore()
+{
+    if (m_dispatcher != nullptr) {
+        m_dispatcher->submitWorkspaceRestore();
+    }
+}
+
+bool Runtime::restoreWorkspaceNow(int timeoutMs)
+{
+    if (m_dispatcher == nullptr) {
+        return true;
+    }
+    return m_dispatcher->restoreWorkspaceNow(timeoutMs);
 }
 
 void Runtime::notifyFromAnyThread(const QString &title, const QString &body)

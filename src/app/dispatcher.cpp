@@ -27,6 +27,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QSemaphore>
 #include <QThread>
 #include <QTimer>
 
@@ -1629,11 +1630,23 @@ void Dispatcher::applyWorkspaceEvent(const std::shared_ptr<const core::Compiled>
         }
         return;
     }
-    case core::WorkspaceEvent::Kind::WindowDestroyed:
+    case core::WorkspaceEvent::Kind::WindowDestroyed: {
         // 永远不产生效果（不能去显示一个已经没了的窗口），它只是防止 `HWND` 复用把
         // 别人的窗口当成它。
         m_workspace.windowDestroyed(event.window);
+        // 恢复日志里的那一份也要去掉：窗口没了，留着只会在下次恢复时白试一次。
+        ensureWorkspaceLogLoaded();
+        bool removed = core::removeHiddenWindow(m_workspaceLog, event.window);
+        const core::WindowId target = win::workspace::idOf(
+            win::workspace::manageTarget(win::workspace::handleOf(event.window)));
+        if (target != event.window) {
+            removed = core::removeHiddenWindow(m_workspaceLog, target) || removed;
+        }
+        if (removed) {
+            persistWorkspaceLog(QStringLiteral("window destroyed"));
+        }
         return;
+    }
     case core::WorkspaceEvent::Kind::WindowMinimized:
     case core::WorkspaceEvent::Kind::WindowRestored:
         m_workspace.windowMinimized(event.window,
@@ -1841,6 +1854,59 @@ void Dispatcher::applyWorkspaceEffects(const core::WorkspaceEffects &effects, co
     if (effects.show.empty() && hide.empty() && !effects.focus.has_value()) {
         return;
     }
+    ensureWorkspaceLogLoaded();
+    // 日志里的键 = **真正要藏 / 显的那个句柄**（UWP 是宿主窗口 `ApplicationFrameWindow`），
+    // 与 `manageTarget()` 处处保持同一个口径。
+    const auto logKey = [](core::WindowId id) {
+        return win::workspace::idOf(win::workspace::manageTarget(win::workspace::handleOf(id)));
+    };
+
+    // --- 预写日志（M8）-----------------------------------------------------
+    //
+    // **先写日志再隐藏**：进程要是死在这之后（或是被 `taskkill /F` 杀掉），下次启动
+    // 能靠它把窗口全部放回来。所以写不进去就干脆不藏 —— 宁可让“切换工作空间”这件事
+    // 失败，也不要造出一批永远消失的窗口。
+    std::vector<core::WindowId> hideKeys;
+    hideKeys.reserve(hide.size());
+    bool mayHide = true;
+    bool logChanged = false;
+    if (!hide.empty()) {
+        core::WorkspaceLog pending = m_workspaceLog;
+        bool added = false;
+        for (const core::WindowId id : hide) {
+            const core::WindowId key = logKey(id);
+            hideKeys.push_back(key);
+            if (key == 0 || core::hasHiddenWindow(pending, key)) {
+                continue;
+            }
+            core::HiddenWindow entry;
+            entry.window = key;
+            entry.identity = win::workspace::identityOf(win::workspace::handleOf(key));
+            if (const std::optional<core::WindowRecord> record = m_workspace.record(id);
+                record.has_value()) {
+                entry.workspace = record->workspace;
+            }
+            entry.title = win::window::windowTitle(win::workspace::handleOf(key));
+            core::addHiddenWindow(pending, entry);
+            added = true;
+        }
+        if (added) {
+            QString error;
+            if (m_workspaceConfigPath.isEmpty()
+                || win::workspace::saveWorkspaceLog(m_workspaceConfigPath, pending, &error)) {
+                m_workspaceLog = std::move(pending);
+            } else {
+                mayHide = false;
+                win::logWarn(QStringLiteral(
+                                "workspace: cannot write the recovery log for %1: %2")
+                                .arg(reason, error));
+                win::logWarn(QStringLiteral("workspace: leaving %1 window(s) visible: without "
+                                            "the recovery log a crash would hide them for good")
+                                .arg(hide.size()));
+            }
+        }
+    }
+
     const std::shared_ptr<core::ExpectedWorkspaceEvents> expected =
         m_runtime != nullptr ? m_runtime->workspaceEvents() : nullptr;
     const std::uint64_t now = win::monotonicMs();
@@ -1880,6 +1946,10 @@ void Dispatcher::applyWorkspaceEffects(const core::WorkspaceEffects &effects, co
         }
         shownWindows.push_back(hwnd);
         ++shown;
+        // 真的露出来了才从日志里去掉（显示失败的那条留着，下次 / 手动恢复再试）。
+        if (core::removeHiddenWindow(m_workspaceLog, win::workspace::idOf(hwnd))) {
+            logChanged = true;
+        }
     }
     if (shownWindows.size() > 1) {
         QString error;
@@ -1889,21 +1959,39 @@ void Dispatcher::applyWorkspaceEffects(const core::WorkspaceEffects &effects, co
         }
     }
     // 顶 → 底：先藏最上面那个，剩下的窗口不会先闪一下。
-    for (const core::WindowId id : hide) {
-        const HWND hwnd = win::workspace::manageTarget(win::workspace::handleOf(id));
-        if (hwnd == nullptr) {
+    for (std::size_t i = 0; i < hide.size(); ++i) {
+        if (!mayHide) {
+            // 日志写不进去：整个 hide 都不会发生（上面已经 warning 过，不再逐窗口刷屏）。
             ++failed;
+            continue;
+        }
+        const core::WindowId id = hide.at(i);
+        const core::WindowId key = i < hideKeys.size() ? hideKeys.at(i) : logKey(id);
+        const HWND hwnd = win::workspace::manageTarget(win::workspace::handleOf(id));
+        const auto dropLogEntry = [this, key, &logChanged]() {
+            if (core::removeHiddenWindow(m_workspaceLog, key)) {
+                logChanged = true;
+            }
+        };
+        if (hwnd == nullptr) {
+            // 预写的时候还在、现在没了：把那条记下来就永远放不回去了。
+            ++failed;
+            dropLogEntry();
             continue;
         }
         QString error;
         if (!win::workspace::hide(hwnd, &error)) {
             // 目标进程卡死 / UIPI（Q7：不提权的实例管不了提权窗口）：跳过 + warning。
             ++failed;
+            dropLogEntry();
             win::logWarn(QStringLiteral("workspace: cannot hide %1: %2")
                              .arg(core::rustDebug(win::window::windowTitle(hwnd)), error));
             continue;
         }
         ++hidden;
+    }
+    if (logChanged) {
+        persistWorkspaceLog(reason);
     }
     // 焦点不可省：M0 实测隐藏前台窗口之后 `GetForegroundWindow()` 仍然指着那个隐藏
     // 窗口，系统不会自己把前台交给别人。
@@ -1919,6 +2007,95 @@ void Dispatcher::applyWorkspaceEffects(const core::WorkspaceEffects &effects, co
                      .arg(shown)
                      .arg(hidden)
                      .arg(failed > 0 ? QStringLiteral(", %1 failed").arg(failed) : QString()));
+}
+
+void Dispatcher::submitWorkspaceRestore()
+{
+    QMetaObject::invokeMethod(
+        this,
+        [this]() { restoreWorkspaceWindows(QStringLiteral("restore requested")); },
+        Qt::QueuedConnection);
+}
+
+bool Dispatcher::restoreWorkspaceNow(int timeoutMs)
+{
+    auto done = std::make_shared<QSemaphore>();
+    QMetaObject::invokeMethod(
+        this,
+        [this, done]() {
+            restoreWorkspaceWindows(QStringLiteral("shutting down"));
+            done->release();
+        },
+        Qt::QueuedConnection);
+    if (timeoutMs <= 0) {
+        return true;
+    }
+    if (done->tryAcquire(1, timeoutMs)) {
+        return true;
+    }
+    // 动作线程正卡在某个长动作里（`run` / `wait`）。继续退出：日志里还留着记录，
+    // 下次启动会再恢复一次。
+    win::logWarn(QStringLiteral("workspace: the action thread did not restore the hidden windows "
+                                "within %1 ms; the recovery log keeps them for the next start")
+                     .arg(timeoutMs));
+    return false;
+}
+
+void Dispatcher::ensureWorkspaceLogLoaded()
+{
+    if (m_workspaceLogLoaded) {
+        return;
+    }
+    m_workspaceLogLoaded = true;
+    const QString configPath = m_runtime != nullptr ? m_runtime->configPath() : QString();
+    if (configPath.isEmpty()) {
+        // 没有配置路径（单测 / 嵌入式用法）：不落盘，只在内存里记。
+        win::logDebug(QStringLiteral("workspace: no configuration path; the recovery log is off"));
+        return;
+    }
+    m_workspaceConfigPath = configPath;
+    m_workspaceLog = win::workspace::loadWorkspaceLog(configPath);
+    if (!m_workspaceLog.isEmpty()) {
+        // 启动恢复（`main.cpp`）已经跑过一遍：剩下的那些它没能恢复（进程卡住之类），
+        // 接着用它们，而不是直接覆盖成空。
+        win::logWarn(QStringLiteral("workspace: %1 window(s) are still marked as hidden; they "
+                                    "will be restored")
+                         .arg(m_workspaceLog.windows.size()));
+    }
+}
+
+bool Dispatcher::persistWorkspaceLog(const QString &reason)
+{
+    if (m_workspaceConfigPath.isEmpty()) {
+        return true;
+    }
+    QString error;
+    if (!win::workspace::saveWorkspaceLog(m_workspaceConfigPath, m_workspaceLog, &error)) {
+        win::logWarn(QStringLiteral("workspace: cannot update the recovery log after %1: %2")
+                         .arg(reason, error));
+        return false;
+    }
+    return true;
+}
+
+void Dispatcher::restoreWorkspaceWindows(const QString &reason)
+{
+    ensureWorkspaceLogLoaded();
+    // 状态机里的窗口：全部落回各自显示器的活动空间并显示出来（`restoreAll()`）。
+    applyWorkspaceEffects(m_workspace.restoreAll(), reason);
+    // 日志里可能还有状态机不认识的窗口（上一轮留下的、启动时没能恢复的）：也试一次，
+    // 能放回来的就从日志里去掉，剩下的是真的还失败的。
+    if (!m_workspaceLog.isEmpty()) {
+        const win::workspace::RestoreResult result =
+            win::workspace::restoreHiddenWindows(m_workspaceLog);
+        m_workspaceLog = result.remaining;
+        persistWorkspaceLog(reason);
+        win::logInfo(QStringLiteral("workspace: recovery log -> %1 restored, %2 gone, %3 still "
+                                    "failing")
+                         .arg(result.report.restored)
+                         .arg(result.report.dropped)
+                         .arg(result.report.failed));
+    }
 }
 
 std::vector<core::WindowId> Dispatcher::windowsOnThisDesktop(const std::vector<core::WindowId> &windows)

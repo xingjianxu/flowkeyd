@@ -236,8 +236,8 @@ UI 只有托盘图标 + 日志窗口、`menu`/`help`/`windows`/`apps`/`update` �
     提权/不读配置/不装钩子）。拿不到令牌就退回继承令牌 + warning。**启动器右键菜单里的命令仍然提权**
     （已知限制，见第 12 节）。
 36. **工作空间：按显示器独立的一套空间（`settings.workspace` + `workspace` 动作）**。**M2（配置面）/
-    M3（图形界面）/ M4（平台后端）/ M5（事件管线）/ M6（动作执行）/ M7（显示器拔插与“拖到别的屏”）已完成**；
-    恢复日志（M8）、与 `windows()`/`window("activate")` 的联动（M9/M10）还**没接线**。
+    M3（图形界面）/ M4（平台后端）/ M5（事件管线）/ M6（动作执行）/ M7（显示器拔插与“拖到别的屏”）/
+    M8（安全与恢复）已完成**；与 `windows()`/`window("activate")` 的联动（M9/M10）还**没接线**。
     要点：默认**开启**但没绑定就不会隐藏任何窗口；`count` 1–10（默认 9）；
     `switch_target` = `"cursor"`（默认）/ `"focus"`；`new_window` = `"active"`（默认）或 1..count；
     `exclude` 空串报错；动作只有 `workspace("switch"|"move", N)`，`index` ≤ `count` 在 `--check` 校验；
@@ -252,8 +252,12 @@ UI 只有托盘图标 + 日志窗口、`menu`/`help`/`windows`/`apps`/`update` �
     `homeMonitor`）+ `relocateDisplacedWindows()` 把窗口物理上搬回**记录里那块屏**（判据
     `core::windowIsOffMonitor()`；搬用 `workspace::relocateToMonitor()`，**不能用**
     `monitor::moveToMonitor()`，它会把藏着的窗口弹出来）；拖屏靠 `LOCATIONCHANGE` + 防抖，但
-    **记录里那块屏不在时要跳过**（否则丢掉 `homeMonitor`）。完整理由见 `decisions.md` 第 36 条，
-    实施计划见根目录 `plan.md`。
+    **记录里那块屏不在时要跳过**（否则丢掉 `homeMonitor`）。**安全兜底（M8）**：藏窗口前先把
+    「窗口身份 + 归属」写进 `<配置目录>\workspace.json`（`core/workspace_log.*`，写不进去就**不藏**），
+    显示成功后才删条目；启动最早期（读配置之前）按日志恢复，正常退出 / 注销 / 关机（`SessionEndWatcher`
+    的 `WM_QUERYENDSESSION`）前也恢复，恢复失败最多等 2–3 s，日志留着下次再恢复。手动入口：托盘
+    「恢复全部窗口」与 `--restore-windows`（有实例在跑就通过 `-restore` 事件请它做，没有就自己按日志
+    恢复；不读配置、不提权）。完整理由见 `decisions.md` 第 36 条，实施计划见根目录 `plan.md`。
 
 ---
 
@@ -313,10 +317,10 @@ Qt 侧齐备：`Qt6::Quick`、`QuickControls2`、`Qt6QuickControls2FluentWinUI3S
 | `core/pinyin.*` / `core/pinyin_data.*` | 汉字读音查询 / 生成的读音表 |
 | `core/monitor_ref.*` / `core/window_monitor_state.*` | “摆到哪块屏”的取值与判据 / `monitor = "last"` 的记忆 |
 | `core/config_map.*` / `core/config_writer.*` | 结构体 ↔ QVariant 字典（界面用）/ 结构体 → Lua 源码（含生成标记、`.bak`） |
-| `core/workspace.*` | 工作空间**纯逻辑状态机**（命令 → 显隐/焦点效果列表）+ `core/workspace_event.*`（钩子线程 → 工作线程的事件 + 「自己引起的事件」抑制表）；M1/M5/M6/M7 已接线（`workspace(...)` 动作能真的显隐窗口，显示器拔插会迁移与复位），**恢复日志还没接线**（M8） |
+| `core/workspace.*` | 工作空间**纯逻辑状态机**（命令 → 显隐/焦点效果列表）+ `core/workspace_event.*`（钩子线程 → 工作线程的事件 + 「自己引起的事件」抑制表）+ `core/workspace_log.*`（恢复日志 `workspace.json` 的解析 / 序列化：64 位整数写成字符串）；M1/M5/M6/M7/M8 已接线（`workspace(...)` 动作能真的显隐窗口、拔插会迁移与复位、崩溃与注销后能恢复） |
 | `core/log_tail.*` / `core/update_check.*` / `core/version.*` / `core/desktop_badge.*` | 日志增量尾随 / 更新纯逻辑 / 版本号 / 徽标文字与字号 |
 | `src/lua/lua_config.*` + `lua_prelude.lua` | **Lua 与 C++ 的唯一边界**（转成 `core::Config`，逐条目带上下文报错）；DSL 编进 qrc |
-| `src/platform/win/` | 一个文件一件事：`ffi`（全部声明 + `currentExecutablePath()`）、`nt`、`process`（run 三条路 / open / `--shell-*` 代理）、`dwm`、`monitor`、`input`（`SendInput`、验收后门、`copySelection`）、`ime`、`hook`（回调 + 消息循环 + 定时器 + `window_rule` / 工作空间事件监听 + 显示器轮询 + 前台事件）、`apps`（扫描 + 启动 + 图标 + `StaThread`）、`shell_menu`、`audio`（MTA，高风险）、`clipboard`、`window`、`workspace`（工作空间的 hide/show/restack/身份/枚举，`SW_HIDE` 只在这里）、`desktop`（版本表）、`power`、`tray`、`logging`/`single_instance`、`elevate`/`autostart`/`update` |
+| `src/platform/win/` | 一个文件一件事：`ffi`（全部声明 + `currentExecutablePath()`）、`nt`、`process`（run 三条路 / open / `--shell-*` 代理）、`dwm`、`monitor`、`input`（`SendInput`、验收后门、`copySelection`）、`ime`、`hook`（回调 + 消息循环 + 定时器 + `window_rule` / 工作空间事件监听 + 显示器轮询 + 前台事件）、`apps`（扫描 + 启动 + 图标 + `StaThread`）、`shell_menu`、`audio`（MTA，高风险）、`clipboard`、`window`、`workspace`（工作空间的 hide/show/restack/身份/枚举/恢复日志读写，`SW_HIDE` 只在这里）、`session`（`WM_QUERYENDSESSION` 的隐藏窗口）、`desktop`（版本表）、`power`、`tray`、`logging`/`single_instance`（退出与「恢复全部窗口」两条事件通道）、`elevate`/`autostart`/`update` |
 | `src/app/dispatcher.*` | **动作工作线程**：执行动作、`window` 的先启动再激活与默认 `toggle`、摆显示器、四张卡片的请求、`window_rule` 三遍、桌面轮询、启动器状态文件路径 |
 | `src/app/runtime.*` | 引擎 + 钩子 + 分发 + 托盘 + 弹窗总装；`ControlCmd` 通道；`--quit` 事件句柄 |
 | `src/app/{menu,help,window_list,app_list}_model.*` / `log_model.*` | 卡片与日志窗口的**纯逻辑**（`QAbstractListModel`，只用 QtCore）；行几何与鼠标命中不归它们管 |
@@ -599,6 +603,7 @@ debug 看不到的警告）+ `FLOWKEYD_BUILD_TESTS=OFF`。
 | 项 | 值 |
 | -- | -- |
 | 配置目录 / 日志文件 | `%USERPROFILE%\.config\flowkeyd\config.lua` / `…\flowkeyd.log` |
+| 工作空间恢复日志 | `<配置目录>\workspace.json`（藏着窗口时才有；全部恢复后自动删掉） |
 | DSL 全局表 | `flowkeyd.*`（挂在脚本全局） |
 | 条目 | `settings{}` / `hotkey{}` / `remap{}` / `window_rule{}` / `app{}`（声明式写法 `apps`） |
 | 动作 | `run`/`send`/`type`/`open`/`volume`/`media`/`clipboard`/`window`/`notify`/`menu`/`help`/`windows`/`apps`/`workspace`/`power`/`desktop`/`caps_lock`/`suspend`/`reload`/`quit`/`none` |
@@ -606,8 +611,8 @@ debug 看不到的警告）+ `FLOWKEYD_BUILD_TESTS=OFF`。
 | 启动权限 | `run`/`launch` 有 `elevated`（默认 `false` = 普通用户）；`open` 与启动器总是普通权限 |
 
 CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、`--check`、`--list`、`--list-keys`、
-`--quit`、`--no-autostart`、`--remove-autostart`、`--log-window`、`--log-level`、`--log-file`、
-`--no-color`、`--allow-multi`、`--no-prompt`、`--updated-from`、`-h/--help`、`-V/--version`。
+`--quit`、`--restore-windows`、`--no-autostart`、`--remove-autostart`、`--log-window`、`--log-level`、
+`--log-file`、`--no-color`、`--allow-multi`、`--no-prompt`、`--updated-from`、`-h/--help`、`-V/--version`。
 
 **本机真实配置不进仓库**：不要记录某台机器真实使用的配置内容（绑定清单、`--check` 计数、路径，以及“本机
 现在跑的是哪一个 exe”）。**改真实配置不需要同步 README 或本文件。**

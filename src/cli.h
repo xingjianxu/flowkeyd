@@ -21,6 +21,9 @@ struct CliOptions
     bool listKeys = false;
     /// 请正在运行的实例干净退出（按配置文件路径匹配）。
     bool quit = false;
+    /// 把工作空间藏起来的窗口全部放回来：有实例在跑就请它做（与 `--quit` 同一套
+    /// 事件通道），没有就自己按恢复日志（`workspace.json`）恢复。
+    bool restoreWindows = false;
     /// 不自动注册 / 刷新「登录时以最高权限启动」的计划任务。
     bool noAutostart = false;
     /// 删除那个计划任务后退出（需要管理员权限）。
@@ -67,7 +70,9 @@ struct CliOptions
     /// 这些命令**绝不允许**提权，也绝不安装钩子。
     ///
     /// `--quit` 不在其中：它不装钩子、不提权，但确实要去碰另一个正在跑的实例
-    /// （所以由 main 单独处理，见 AGENTS.md 第 10 节）。
+    /// （所以由 main 单独处理，见 AGENTS.md 第 10 节）。`--restore-windows` 同样：
+    /// 它也要先问一句“有没有实例在跑”，但**绝不读配置、不提权**（恢复日志里的信息
+    /// 就够了 —— 配置坏掉时窗口也得能回来）。
     /// `--remove-autostart` 也不在：它要管理员权限才能删任务。
     bool isOfflineCommand() const
     {

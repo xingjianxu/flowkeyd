@@ -70,6 +70,8 @@ std::optional<QString> parseCli(const QStringList &args, CliOptions *out)
             cli.listKeys = true;
         } else if (name == QLatin1String("--quit")) {
             cli.quit = true;
+        } else if (name == QLatin1String("--restore-windows")) {
+            cli.restoreWindows = true;
         } else if (name == QLatin1String("--no-autostart")) {
             cli.noAutostart = true;
         } else if (name == QLatin1String("--remove-autostart")) {
@@ -177,6 +179,9 @@ QString helpText(const QString &buildVersion)
         --list-keys         打印所有可接受的按键名并退出
         --quit              请正在运行的实例干净退出（按配置文件路径匹配，
                             最多等 10 秒；没找到在跑的实例时返回 1）
+        --restore-windows   把工作空间藏起来的窗口全部放回来：有实例在跑就请它做，
+                            没有就自己按恢复日志（workspace.json）恢复；不读配置、
+                            也不提权，所以配置坏掉时也能用
         --no-autostart      不要注册 / 刷新「登录时以最高权限启动」的计划任务
                             （开发实例与 --allow-multi / --no-elevate 本来就跳过）
         --remove-autostart  删除那个计划任务后退出（需要管理员权限）
@@ -202,6 +207,7 @@ QString helpText(const QString &buildVersion)
     flowkeyd --config C:\tools\config.lua
     flowkeyd --check
     flowkeyd --quit
+    flowkeyd --restore-windows
     flowkeyd --no-elevate --allow-multi --console
 )")
         .arg(buildVersion);

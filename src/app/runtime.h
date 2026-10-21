@@ -42,6 +42,9 @@ public:
                QString *error);
 
     /// 停动作线程与钩子线程（幂等）。只在 GUI 线程调用。
+    ///
+    /// 退出前会先请动作线程把**被工作空间藏起来的窗口全部放回来**（M8）：不先
+    /// 停钩子的话，一次“切换工作空间”会跟在恢复后面再次藏掉窗口。
     void shutdown();
 
     const QString &configPath() const { return m_configPath; }
@@ -70,6 +73,12 @@ public:
     void reloadFromAnyThread();
     /// 请求干净退出（投递到 GUI 线程执行）。
     void requestShutdownFromAnyThread();
+
+    /// 线程安全：请动作线程把被工作空间藏起来的窗口全部放回来（异步）。
+    /// 托盘菜单「恢复全部窗口」与 `--restore-windows` 通道都走它。
+    void requestWorkspaceRestore();
+    /// 线程安全：现在就恢复，**最多等 `timeoutMs`**（注销 / 关机 / 退出用）。
+    bool restoreWorkspaceNow(int timeoutMs);
     /// 弹一个托盘气泡（投递到 GUI 线程）。
     void notifyFromAnyThread(const QString &title, const QString &body);
     /// 工作线程调用：把动作触发的挂起状态变化广播给 GUI 线程（托盘提示用）。
@@ -109,6 +118,9 @@ private:
     /// `--quit` 的退出事件（`HANDLE`；这里不引入 `windows.h`，见 runtime.cpp）。
     void *m_quitEvent = nullptr;
     QWinEventNotifier *m_quitNotifier = nullptr;
+    /// `--restore-windows` 的请求事件（与退出事件同一套做法）。
+    void *m_restoreEvent = nullptr;
+    QWinEventNotifier *m_restoreNotifier = nullptr;
     bool m_shuttingDown = false;
     bool m_started = false;
 };

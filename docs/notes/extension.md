@@ -132,8 +132,10 @@ Win32/COM 后端就放在 `platform/win/*`，并在 `tst_interactive` 里加一�
 1. **纯逻辑**：`core/workspace.*`（`WorkspaceState` 的命令 → `WorkspaceEffects`）。新语义加在这里，并在
    `tst_workspace` 加一条用例（那里已经有 3000 步随机序列 + 不变量检查）。
 2. **平台层**：`platform/win/workspace.*`。隐藏方式只在这一个文件里（目前唯一可用的是
-   `ShowWindow(SW_HIDE)`）；**新增任何 hide/show 路径都要保持“先写恢复日志、再隐藏”**（M8），而且
-   只能在工作线程上做。枚举可管理窗口的判据在 `core::isManageableWindow()`（纯，`tst_window_match`）。
+   `ShowWindow(SW_HIDE)`）；**新增任何 hide/show 路径都要保持“先写恢复日志、再隐藏”**（M8：日志核心在
+   `core/workspace_log.*`，写盘与恢复在 `platform/win/workspace.*` 的
+   `saveWorkspaceLog()`/`restoreFromLog()`；显示成功后才删条目），而且只能在工作线程上做。枚举可管理窗口
+   的判据在 `core::isManageableWindow()`（纯，`tst_window_match`）。
    **跨显示器搬窗口用 `relocateToMonitor()`**（保持显隐 / 最大化 / 最小化），不要用
    `monitor::moveToMonitor()` —— 后者会把藏起来的窗口弹出来。
 3. **动作与规则**：`Action::Kind::Workspace`（`workspaceOp` + `workspaceIndex`）/ `WindowRuleDef.workspace` /
@@ -151,8 +153,12 @@ Win32/COM 后端就放在 `platform/win/*`，并在 `tst_interactive` 里加一�
    会额外产生一条 `EVENT_OBJECT_SHOW`），否则状态机把自己的操作当成用户操作。纯逻辑部分在
    `tst_workspace_event`，真机管线在 `tst_interactive::hookThreadReportsWorkspaceEventsForForeignWindows`
    （**要“新窗口出现”就别用记事本**，见 `pitfalls.md`）。
-5. 实施计划与剩余任务（恢复日志、与 `windows()`/`window("activate")` 的联动）在仓库根 `plan.md` 的
-   M8–M11。
+5. **恢复与退出**：只要新增了任何 hide/show 的路径，就必须想清楚"进程死在中间怎么办"：日志条目在
+   `Dispatcher::applyWorkspaceEffects()` 里预写 / 删除；退出（`Runtime::shutdown()`）与关机 / 注销
+   （`platform/win/session.*` 的 `WM_QUERYENDSESSION`）都走 `restoreWorkspaceNow(ms)`，**必须有上限**
+   （动作线程可能卡在长动作里；日志会留着下次恢复）。手动入口是托盘「恢复全部窗口」与
+   `--restore-windows`（事件通道在 `single_instance.*`）。
+6. 实施计划与剩余任务（与 `windows()`/`window("activate")` 的联动）在仓库根 `plan.md` 的 M9–M11。
 
 ## 新的窗口条件 / 跨桌面语义
 

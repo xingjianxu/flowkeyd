@@ -641,7 +641,7 @@ active 后所在的 monitor 上"。
 ## 36. 按显示器独立的工作空间：`settings.workspace` + `workspace` 动作
 
 > 进度：**M2（配置面）/ M3（图形界面）/ M4（平台后端）/ M5（事件管线）/ M6（动作执行）/ M7（显示器拔插
-> 与拖屏）已完成**；M8（安全与恢复）/ M9-M10（与现有功能联动）**还没接线**。
+> 与拖屏）/ M8（安全与恢复）已完成**；M9-M10（与现有功能联动）**还没接线**。
 > 实施计划在仓库根的 `plan.md`（M11 收尾时删除）。
 
 * 术语：这个功能叫「**工作空间**」，配置名 `workspace`；「**工作区**」仍然只指显示器扣掉任务栏后的
@@ -692,6 +692,23 @@ active 后所在的 monitor 上"。
     跟着 `LOCATIONCHANGE` 再跟过去（规则优先）。
   * 分辨率 / 缩放 / 排列变化不动归属：归属键是**设备名**，钩子盘点的也是设备名集合；同一份集合重发
     一次必须零效果（否则改一次分辨率就会把藏着的窗口弹出来）。
+* **安全与恢复（M8）**：`ShowWindow(SW_HIDE)` 意味着“程序死了窗口就没了”，所以隐藏是**先写日志再
+  动手**：
+  * 预写日志 `<配置目录>\workspace.json`（`core/workspace_log.*`，与 `launcher.json` 同一套路）。
+    记录窗口身份（`PID` + 属主进程创建时间 + 类名）与归属；**写不进去就干脆不隐藏**（宁可这一次
+    切换失败，也不要造出一批永远消失的窗口）。显示**成功之后**才删条目，失败的那条留着下次再试。
+    64 位整数（`HWND` / `FILETIME`）一律写成字符串：`QJsonValue` 的数字是 `double`，超过 2^53 会
+    静默丢精度。
+  * 启动最早期（`main.cpp`，**读配置之前**）按日志恢复：`stillSame()` 校验身份后全部 `show`，
+    已经不在 / 身份对不上（`HWND` 被复用）的条目直接丢掉，坏掉的文件当作空的重来（配置坏掉时窗口
+    也能回来）。**已有实例在跑时跳过**（判据 = `--quit` 那个事件对象还在，实例一死就消失）。
+  * 正常退出（`quit` / 托盘退出 / `--quit` / `aboutToQuit`）与**注销 / 关机** 
+    （`platform/win/session.*` 那个隐藏顶层窗口的 `WM_QUERYENDSESSION` / `WM_ENDSESSION`）前都恢复：
+    `Runtime::shutdown()` 与关机回调都走 `Dispatcher::restoreWorkspaceNow(ms)`，**有上限**
+    （退出 3 s、关机 2 s）——动作线程可能卡在长动作里，真超时就继续退出，日志留着下次恢复。
+  * 手动兜底：托盘菜单「恢复全部窗口（&W）」与 `--restore-windows`（有实例在跑就通过 `-restore`
+    事件请它做，没有就自己按日志恢复；**不读配置、不提权、不装钩子**，所以配置坏掉时也能用）。
+  * `reload` 失败不动状态机（失败时保留旧配置），所以也不会丢已藏窗口的账。
 * 验证：`tst_workspace`（状态机 20 条，含 3000 步随机序列、`filterToCurrentDesktop` 的「不知道就保留」
   规则与「同一份显示器集合重发零效果」）、
   `tst_window_match`（可管理窗口与排除名单）、`tst_placement`（`windowIsOffMonitor`）、
@@ -700,7 +717,9 @@ active 后所在的 monitor 上"。
   都不变）、`enumeratesManageableWindowsByTheirRecord`、`switchesWorkspacesWithRealWindows`（两个真窗口
   在两个空间之间来回切：显隐、几何、Z 序与「空空间不抢焦点」）、
   `relocatesDisplacedWindowsWithoutChangingState`（两块屏：藏着的 / 最大化的 / 最小化的窗口搬屏时状态
-  都不变）—— 本机实测通过。
+  都不变）、`restoresHiddenWindowsFromTheRecoveryLog`（藏窗口 → 写日志 → 丢掉内存状态 → 只凭日志恢复：
+  窗口回来、日志被删掉；身份对不上 / 已经不存在的条目只被丢掉、不碰那个窗口）—— 本机实测通过。
+  纯逻辑那一半在 `tst_workspace_log`（坏 JSON 容错、64 位整数不丢精度、去重 / 移除）。
 
 > M6/M7 的验收脚本检查（`scripts/acceptance.ps1`）推后到 M9/M11：整个特性还没接完
 > （M8/M9），现在加进去的项会在 M9 之前一直失败。

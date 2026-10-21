@@ -8,12 +8,13 @@
 | 项 | 值 |
 | -- | -- |
 | 配置目录 / 日志文件 | `%USERPROFILE%\.config\flowkeyd\config.lua` / `…\flowkeyd.log` |
+| 工作空间恢复日志 | `<配置目录>\workspace.json`（只有藏着窗口时存在；全部恢复后自动删） |
 | DSL 全局表 | `flowkeyd.*`（挂在脚本全局） |
 | 示例配置 | `flowkeyd.lua.example` |
 
 CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、`--check`、`--list`、`--list-keys`、
-`--quit`、`--no-autostart`、`--remove-autostart`、`--log-window`、`--log-level`、`--log-file`、
-`--no-color`、`--allow-multi`、`--no-prompt`、`--updated-from`、`-h/--help`、`-V/--version`。
+`--quit`、`--restore-windows`、`--no-autostart`、`--remove-autostart`、`--log-window`、`--log-level`、
+`--log-file`、`--no-color`、`--allow-multi`、`--no-prompt`、`--updated-from`、`-h/--help`、`-V/--version`。
 
 ### 容易做漏的语义
 

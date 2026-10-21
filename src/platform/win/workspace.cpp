@@ -1,12 +1,17 @@
 // 工作空间的平台后端。隐藏方式的选型与 M0 实测结论见头文件里的说明。
 #include "platform/win/workspace.h"
 
+#include "core/action.h"
 #include "core/window_match.h"
 #include "platform/win/logging.h"
 #include "platform/win/monitor.h"
 #include "platform/win/window.h"
 
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QHash>
+#include <QSaveFile>
 
 #include <algorithm>
 #include <map>
@@ -402,6 +407,163 @@ std::vector<HWND> enumerateManageable(const std::vector<HWND> &tracked,
     EnumerateContext context{&tracked, &excludedProcesses, &out, GetCurrentProcessId()};
     EnumWindows(enumerateProc, reinterpret_cast<LPARAM>(&context));
     return out;
+}
+
+// ---------------------------------------------------------------------------
+// 恢复日志（M8）：读 / 写 / 把窗口放回来
+// ---------------------------------------------------------------------------
+
+core::WorkspaceLog loadWorkspaceLog(const QString &configPath, QString *error)
+{
+    if (error != nullptr) {
+        error->clear();
+    }
+    const QString path = core::workspaceLogPath(configPath);
+    QFile file(path);
+    if (!file.exists()) {
+        // 没有文件 = 没有窗口被藏着（正常情况下我们恢复完就把它删掉）。
+        return {};
+    }
+    if (!file.open(QIODevice::ReadOnly)) {
+        if (error != nullptr) {
+            *error = file.errorString();
+        }
+        logWarn(QStringLiteral("workspace: cannot read the recovery log %1: %2")
+                    .arg(QDir::toNativeSeparators(path), file.errorString()));
+        return {};
+    }
+    const QByteArray json = file.readAll();
+    file.close();
+    QString parseError;
+    const core::WorkspaceLog log = core::parseWorkspaceLog(json, &parseError);
+    if (!parseError.isEmpty()) {
+        // 坏文件只记一条 warning，能读出来的条目照旧用：这个文件坏掉时最合理的
+        // 反应是尽量把窗口放回来，而不是让它们永远藏着。
+        logWarn(QStringLiteral("workspace: the recovery log %1 is damaged (%2); using what could be read")
+                    .arg(QDir::toNativeSeparators(path), parseError));
+        if (error != nullptr) {
+            *error = parseError;
+        }
+    }
+    return log;
+}
+
+bool saveWorkspaceLog(const QString &configPath, const core::WorkspaceLog &log, QString *error)
+{
+    if (error != nullptr) {
+        error->clear();
+    }
+    const QString path = core::workspaceLogPath(configPath);
+    if (log.isEmpty()) {
+        // 没有藏着任何窗口：删掉文件，不留一个空壳。删不掉（被占用）就往下走，
+        // 写一份空日志覆盖旧内容 —— 留着过时的条目比多一个文件危险得多。
+        if (!QFile::exists(path) || QFile::remove(path)) {
+            return true;
+        }
+    }
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        if (error != nullptr) {
+            *error = file.errorString();
+        }
+        return false;
+    }
+    const QByteArray json = core::serializeWorkspaceLog(log);
+    if (file.write(json) != json.size()) {
+        if (error != nullptr) {
+            *error = file.errorString();
+        }
+        file.cancelWriting();
+        return false;
+    }
+    if (!file.commit()) {
+        if (error != nullptr) {
+            *error = file.errorString();
+        }
+        return false;
+    }
+    return true;
+}
+
+RestoreResult restoreHiddenWindows(const core::WorkspaceLog &log)
+{
+    RestoreResult result;
+    result.report.entries = static_cast<int>(log.windows.size());
+    for (const core::HiddenWindow &entry : log.windows) {
+        const HWND hwnd = handleOf(entry.window);
+        if (!isAlive(hwnd)) {
+            ++result.report.dropped;
+            logDebug(QStringLiteral("workspace: dropping %1 from the recovery log: the window "
+                                    "is gone")
+                         .arg(core::rustDebug(entry.title)));
+            continue;
+        }
+        // `HWND` 会被复用：身份对不上就说明这个句柄现在是别人的窗口，不能去动它。
+        if (entry.identity.valid && !stillSame(hwnd, entry.identity)) {
+            ++result.report.dropped;
+            logWarn(QStringLiteral("workspace: dropping %1 from the recovery log: the handle "
+                                   "now belongs to another window")
+                        .arg(core::rustDebug(entry.title)));
+            continue;
+        }
+        const HWND target = manageTarget(hwnd);
+        if (target == nullptr) {
+            ++result.report.dropped;
+            continue;
+        }
+        // 与 `hide()` 同一个顾虑：目标进程卡死时 `ShowWindow` 会把调用线程挂住，
+        // 而恢复这条路常常跑在启动 / 注销的关键路径上，不能无限等。
+        if (IsHungAppWindow(target) != 0) {
+            ++result.report.failed;
+            result.remaining.windows.push_back(entry);
+            logWarn(QStringLiteral("workspace: cannot restore %1: the window is not responding")
+                        .arg(core::rustDebug(entry.title)));
+            continue;
+        }
+        QString error;
+        if (!show(target, nullptr, &error)) {
+            ++result.report.failed;
+            result.remaining.windows.push_back(entry);
+            logWarn(QStringLiteral("workspace: cannot restore %1: %2")
+                        .arg(core::rustDebug(entry.title), error));
+            continue;
+        }
+        ++result.report.restored;
+        logDebug(QStringLiteral("workspace: restored %1 from the recovery log")
+                     .arg(core::rustDebug(entry.title)));
+    }
+    return result;
+}
+
+RestoreResult restoreFromLog(const QString &configPath)
+{
+    const QString path = core::workspaceLogPath(configPath);
+    const core::WorkspaceLog log = loadWorkspaceLog(configPath);
+    if (log.isEmpty()) {
+        // 没有文件 / 空文件 / 坏文件：没有可恢复的东西。留下来只会让每次启动都
+        // 报一条 warning，所以顺手清掉（这个文件是我们自己写的，内容已经没用了）。
+        if (QFileInfo::exists(path)) {
+            QFile::remove(path);
+        }
+        return {};
+    }
+    RestoreResult result = restoreHiddenWindows(log);
+    // 剩下的写回：恢复成功的 / 已经没了的条目都要出日志，否则下次启动会白试。
+    const bool changed = result.remaining.windows.size() != log.windows.size();
+    if (changed) {
+        QString error;
+        if (!saveWorkspaceLog(configPath, result.remaining, &error)) {
+            logWarn(QStringLiteral("workspace: cannot update the recovery log: %1").arg(error));
+        }
+    }
+    if (result.report.restored > 0 || result.report.dropped > 0) {
+        logInfo(QStringLiteral("workspace: restored %1 window(s) from the recovery log "
+                               "(%2 gone, %3 still failing)")
+                    .arg(result.report.restored)
+                    .arg(result.report.dropped)
+                    .arg(result.report.failed));
+    }
+    return result;
 }
 
 } // namespace flowkeyd::platform::win::workspace

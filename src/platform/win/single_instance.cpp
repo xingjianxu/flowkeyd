@@ -69,15 +69,24 @@ QString quitEventName(const QString &key)
     return key + QStringLiteral("-quit");
 }
 
-HANDLE createQuitEvent(const QString &key, QString *error)
+QString restoreEventName(const QString &key)
 {
-    const std::wstring name = quitEventName(key).toStdWString();
+    return key + QStringLiteral("-restore");
+}
+
+namespace {
+
+/// 创建 / 置位一个「自动重置的命名事件」：退出与「恢复全部窗口」两条通道
+/// 只差一个名字，代码没有差别，所以只写一遍。
+HANDLE createAskEvent(const QString &name, QString *error)
+{
+    const std::wstring wide = name.toStdWString();
 
     PSECURITY_DESCRIPTOR descriptor = nullptr;
     SECURITY_ATTRIBUTES attributes = makeObjectAttributes(&descriptor);
 
     SetLastError(ERROR_SUCCESS);
-    HANDLE handle = CreateEventW(&attributes, FALSE, FALSE, name.c_str());
+    HANDLE handle = CreateEventW(&attributes, FALSE, FALSE, wide.c_str());
     const DWORD last = GetLastError();
     if (descriptor != nullptr) {
         LocalFree(descriptor);
@@ -91,14 +100,14 @@ HANDLE createQuitEvent(const QString &key, QString *error)
     return handle;
 }
 
-bool requestQuit(const QString &key, bool *running, QString *error)
+bool signalAskEvent(const QString &name, bool *running, QString *error)
 {
     if (running != nullptr) {
         *running = false;
     }
-    const std::wstring name = quitEventName(key).toStdWString();
+    const std::wstring wide = name.toStdWString();
     SetLastError(ERROR_SUCCESS);
-    HANDLE handle = OpenEventW(EVENT_MODIFY_STATE, FALSE, name.c_str());
+    HANDLE handle = OpenEventW(EVENT_MODIFY_STATE, FALSE, wide.c_str());
     if (handle == nullptr) {
         const DWORD last = GetLastError();
         if (last == ERROR_FILE_NOT_FOUND) {
@@ -119,6 +128,28 @@ bool requestQuit(const QString &key, bool *running, QString *error)
         *error = failure;
     }
     return ok;
+}
+
+} // namespace
+
+HANDLE createQuitEvent(const QString &key, QString *error)
+{
+    return createAskEvent(quitEventName(key), error);
+}
+
+HANDLE createRestoreEvent(const QString &key, QString *error)
+{
+    return createAskEvent(restoreEventName(key), error);
+}
+
+bool requestQuit(const QString &key, bool *running, QString *error)
+{
+    return signalAskEvent(quitEventName(key), running, error);
+}
+
+bool requestRestore(const QString &key, bool *running, QString *error)
+{
+    return signalAskEvent(restoreEventName(key), running, error);
 }
 
 bool quitEventExists(const QString &key)

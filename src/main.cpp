@@ -24,6 +24,7 @@
 #include "core/config.h"
 #include "core/keys.h"
 #include "core/version.h"
+#include "core/workspace_log.h"
 #include "lua/lua_config.h"
 #include "platform/win/autostart.h"
 #include "platform/win/console.h"
@@ -33,9 +34,11 @@
 #include "platform/win/input.h"
 #include "platform/win/logging.h"
 #include "platform/win/process.h"
+#include "platform/win/session.h"
 #include "platform/win/single_instance.h"
 #include "platform/win/tray.h"
 #include "platform/win/update.h"
+#include "platform/win/workspace.h"
 
 #include <memory>
 #include <optional>
@@ -187,6 +190,29 @@ void promptAlreadyRunning(const QString &configPath)
                 MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND | MB_TOPMOST);
 }
 
+/// 「会话即将结束」那段回调的等待上限（毫秒）。
+///
+/// 注销 / 关机时 Windows 只等几秒（`HungAppTimeout` / `WaitToKillAppTimeout`），
+/// 所以恢复不能无限等。真超时了日志会留着，下次登录 / 启动自己会再恢复一次。
+constexpr int kSessionEndRestoreTimeoutMs = 2000;
+
+/// 启动时的崩溃恢复（M8）：上一次跑的时候被工作空间藏起来的窗口，全部放回来。
+///
+/// 放在**读配置之前**：配置坏掉时窗口也不能永远消失，而恢复日志
+/// （`<配置目录>\workspace.json`）里记着每个窗口的身份，恢复不需要任何配置。
+///
+/// 已经有实例在管这份配置时**跳过**：那条实例手上的状态才是真的，我们去“恢复”会把
+/// 它藏在一个非活动空间里的窗口拽出来。判据用与 `--quit` 同一个事件对象 —— 实例活着
+/// 时它一直存在，进程一死（哪怕是被 `taskkill /F`）就消失。
+void recoverWorkspaceWindows(const QString &configPath)
+{
+    if (win::quitEventExists(win::instanceKey(configPath))) {
+        return;
+    }
+    // 恢复过程自己会写日志（恢复了几个 / 丢了几个）。
+    win::workspace::restoreFromLog(configPath);
+}
+
 /// 询问用户是否注册 / 刷新开机自启的计划任务。返回 true 表示同意。
 ///
 /// 同样用原生 `MessageBoxW`（这一段跑在 `QApplication` 构造之前）。
@@ -325,6 +351,59 @@ int main(int argc, char *argv[])
                 .arg(shown)));
         return 1;
     }
+    // `--restore-windows`：把被工作空间藏起来的窗口全部放回来（M8 的手动兜底）。
+    // 有实例在跑就请它做（与 `--quit` 同一套事件通道 —— 动作得在它的动作线程上跑），
+    // 没有就自己按恢复日志（`workspace.json`）恢复。**不读配置、不提权、不装钩子**
+    // （恢复日志里已经有恢复所需的一切，所以配置坏掉时也能用）。
+    if (options.restoreWindows) {
+        const QString path = options.config.value_or(core::defaultConfigPath());
+        const QString key = win::instanceKey(path);
+        const QString shown = QDir::toNativeSeparators(path);
+        bool running = false;
+        QString restoreError;
+        if (!win::requestRestore(key, &running, &restoreError)) {
+            win::writeStderr(toConsole(
+                QStringLiteral("flowkeyd: could not ask %1 to restore its hidden windows: %2\n")
+                    .arg(shown, restoreError)));
+            return 1;
+        }
+        if (running) {
+            // 等它把日志清空（最多 5 秒）：敲完这一条应该就看到窗口回来了。
+            const QString logPath = core::workspaceLogPath(path);
+            bool done = false;
+            for (int attempt = 0; attempt < 50; ++attempt) {
+                if (!QFileInfo::exists(logPath)) {
+                    done = true;
+                    break;
+                }
+                Sleep(100);
+            }
+            if (done) {
+                win::writeStdout(toConsole(
+                    QStringLiteral("flowkeyd: %1 restored its hidden windows\n").arg(shown)));
+                return 0;
+            }
+            win::writeStderr(toConsole(
+                QStringLiteral("flowkeyd: asked %1 to restore its hidden windows, but some are "
+                               "still hidden\n")
+                    .arg(shown)));
+            return 1;
+        }
+        // 没有实例在跑：直接按日志恢复（也是崩溃后、重启守护进程之前的那条退路）。
+        const win::workspace::RestoreResult result = win::workspace::restoreFromLog(path);
+        if (result.report.entries == 0) {
+            win::writeStdout(toConsole(
+                QStringLiteral("flowkeyd: no hidden windows recorded for %1\n").arg(shown)));
+            return 0;
+        }
+        win::writeStdout(toConsole(
+            QStringLiteral("flowkeyd: restored %1 window(s) for %2 (%3 gone, %4 still failing)\n")
+                .arg(result.report.restored)
+                .arg(shown)
+                .arg(result.report.dropped)
+                .arg(result.report.failed)));
+        return result.report.failed > 0 ? 1 : 0;
+    }
     // 内部命令：普通权限的 shell 代理进程（见 `platform/win/process.h`）。提权实例
     // 把 `open` 动作与程序启动器的 shell 调用交给它，这样开出来的程序不会跟着
     // flowkeyd 一起提权。和其它离线命令一样：不提权、不读配置、不装钩子。
@@ -397,6 +476,9 @@ int main(int argc, char *argv[])
     // 先把配置读出来：日志级别、提权开关、单实例开关都看它。
     const bool usingDefault = !options.config.has_value();
     const QString configPath = options.config.value_or(core::defaultConfigPath());
+    // 崩溃恢复（M8）排在最前面：读配置**之前**就把上次藏起来的窗口放回来，这样
+    // 配置坏掉时窗口也不会永远消失（恢复日志里已经有恢复所需的一切）。
+    recoverWorkspaceWindows(configPath);
     if (usingDefault && !QFileInfo::exists(configPath)) {
         if (const auto legacy = core::staleTomlConfig(); legacy.has_value()) {
             return reportConfigFailure(
@@ -645,6 +727,9 @@ int main(int argc, char *argv[])
     });
     QObject::connect(&tray, &platform::win::Tray::quitRequested, &runtime,
                      &app::Runtime::requestShutdownFromAnyThread);
+    // 托盘菜单「恢复全部窗口」（M8）：GUI 线程只回投，真正干活的是动作线程。
+    QObject::connect(&tray, &platform::win::Tray::restoreWindowsRequested, &runtime,
+                     &app::Runtime::requestWorkspaceRestore);
     QObject::connect(&runtime, &app::Runtime::notificationRequested, &tray,
                      &platform::win::Tray::showMessage);
     QObject::connect(&runtime, &app::Runtime::suspendedChanged, &tray,
@@ -657,6 +742,18 @@ int main(int argc, char *argv[])
                          tray.setDesktop(number, count, app::desktopIcon(number));
                      });
     QObject::connect(&runtime, &app::Runtime::finished, &application, &QApplication::quit);
+
+    // 会话结束（关机 / 注销 / 重启）前把被工作空间藏起来的窗口放回来（M8）。
+    // 必须建在 GUI 线程上（窗口创建），而且要等 `QApplication` 存在之后（DPI 感知）。
+    // 等待有上限（见 `kSessionEndRestoreTimeoutMs`）；真超时了日志会留着，下次启动
+    // 的崩溃恢复再放回来。
+    platform::win::SessionEndWatcher sessionWatcher;
+    QString sessionError;
+    if (!sessionWatcher.start(
+            [&runtime]() { runtime.restoreWorkspaceNow(kSessionEndRestoreTimeoutMs); },
+            &sessionError)) {
+        win::logWarn(QStringLiteral("could not watch for session end: %1").arg(sessionError));
+    }
 
     // ---- 在线更新（托盘菜单「检查更新」） ----
     // 关掉窗口、中止下载、重试、打开发布页都只是把活儿转交给 `Updater`；
