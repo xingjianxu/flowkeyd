@@ -141,6 +141,14 @@ private:
     /// 「不知道」不等于「在别的桌面上」。
     std::vector<core::WindowId> windowsOnThisDesktop(const std::vector<core::WindowId> &windows);
 
+    /// 显示器拔插之后，把「记录说它在某块屏上、实际却不在那块屏上」的窗口物理上
+    /// 搬回去（M7）。只在动作线程上跑。
+    ///
+    /// 两头的纷歧都由这一条规则盖住：
+    ///   * 拔出：Windows 把窗口留在已经不存在的坐标上 → 搬到剩下的那块屏；
+    ///   * 重新接入：状态机已经物归原主，窗口却不在那儿 → 搬回去。
+    void relocateDisplacedWindows();
+
     /// 重扫开始菜单（只能在动作线程上跑：它会开一条一次性的 STA 线程）。
     void refreshAppCatalog();
 

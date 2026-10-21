@@ -86,6 +86,21 @@ Rect placementRect(const Rect &current,
                    std::optional<std::uint32_t> width,
                    std::optional<std::uint32_t> height);
 
+/// 窗口是否**不在** `monitor` 这块屏上（显示器拔插之后要不要把它物理上搬回去）。
+///
+/// `normalPosition` 是窗口的**还原矩形**（`WINDOWPLACEMENT::rcNormalPosition`，
+/// 最大化 / 最小化 / 被我们藏起来的窗口都看它）：
+///   * 显示器被拔出：Windows 会把窗口留在已经不存在的坐标上（窗口的属主那块屏
+///     从 `EnumDisplayMonitors` 里消失了，`rcNormalPosition` 还指着它）→ 必须搬到
+///     剩下的屏上，否则用户再也看不见它；
+///   * 显示器重新接入：`WorkspaceState` 已经把窗口物归原主，窗口本人却还留在
+///     刚才那块屏上 → 搬回去；
+///   * 本来就好端端地压在那块屏上（含跨屏的情况）→ 不动它。
+///
+/// 「在这块屏上」= 与它的**边界**有非空重叠。用 `bounds` 而不是 `work`：任务栏
+/// 挡住的窗口不需要重新居中。
+bool windowIsOffMonitor(const Rect &normalPosition, const MonitorDescription &monitor);
+
 /// 窗口是否命中这条规则：`title` 与 `process` 都要满足（与 `window` 动作同一套
 /// 子串匹配；`process` 拿不到时不算匹配）。
 bool windowMatchesRule(const WindowRule &rule,

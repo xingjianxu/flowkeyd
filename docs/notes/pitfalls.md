@@ -490,6 +490,31 @@
 * **钩子带 `WINEVENT_SKIPOWNPROCESS`**：自己进程的窗口不会被报出来，所以这类用例必须用**另一个进程**的
   窗口；反过来，拿自己的窗口测会看起来像“事件根本不工作”。
 
+### 工作空间显示器拔插与拖屏（M7）
+
+* **拔掉一块屏之后，窗口的坐标还留在那块不存在的屏上**：`MonitorFromWindow` 依旧会回答“最近的那块屏”，
+  所以**不能只比“显示器归属”**（记录 vs 实际）—— 会得出“什么都不用改”的错误结论，窗口就永远停在用户
+  看不见的坐标上。判据得看几何：`core::windowIsOffMonitor(还原矩形, 那块屏的 bounds)`（与这块屏的
+  **非空重叠**才算在它上面；用 `bounds` 不用 `work`，任务栏挡住的窗口不需要重新居中）。
+* **拔屏时那条 `LOCATIONCHANGE` 比 `MonitorsChanged` 先到**（同一个 placement tick 里先发防抖后的位置
+  事件、最后才盘点显示器）。如果照它记账（`windowMovedToMonitor` → 剩下那块屏），`homeMonitor` 就丢了，
+  **重新接入时窗口再也回不到原屏**。做法：位置事件里“记录里那块屏已经不在就跳过”，归属交给
+  `monitorsChanged()`。
+* **`SetWindowPlacement` 会按 `showCmd` 改显隐**：用它搬一个**被我们藏起来**的窗口，`showCmd` 写成
+  `SW_SHOWNORMAL`/`SW_SHOWMAXIMIZED` 就把窗口弹出来了（`monitor::moveToMonitor()` 就是这么写的，所以它
+  不能用于拔插）。藏着的窗口要 `showCmd = SW_HIDE`，完事再查一次 `IsWindowVisible` 兜底。
+* **已经最大化的窗口只改 `rcNormalPosition` 不会重新最大化到新屏上**（它会留着原来那块屏的最大化矩形）：
+  必须 `ShowWindow(SW_RESTORE)` → 设 `rcNormalPosition` + `showCmd = SW_SHOWMAXIMIZED`（与
+  `monitor::applyPlacement()` 同一条路）。藏着的窗口不能这么干（`SW_RESTORE` 会露出来）→ 另走 `SW_HIDE`
+  那条，并且要把 `savedPlacements()` 里的 `rcNormalPosition` 一起改，否则 `show()` 的兜底会把它摆回旧屏。
+* **分辨率 / 缩放 / 排列变化不是拔插**：钩子比的是**规范化后的设备名集合**（`core::MonitorKey` 就是设备名），
+  `bounds`/`work` 怎么变都不影响；反过来，同一份集合重发一次必须**零效果** —— 否则每改一次分辨率就会把
+  藏着的窗口弹出来一次、还会把别处的前台拽回来（`tst_workspace::monitorChurnWithTheSameSetChangesNothing`）。
+* **刚创建、shell 还没登记的窗口不属于任何虚拟桌面**：`IsWindowOnCurrentVirtualDesktop` 返回 FALSE、
+  `GetWindowDesktopId` 给全零 GUID，于是批量查询回 `std::nullopt`。写“刚开窗口马上查桌面”的用例时要允许
+  重试（`switchesWorkspacesWithRealWindows` 现在重试一秒）；产品代码那边必须把 `nullopt` 当成“不知道”
+  而不是“在别的桌面上”。
+
 ## 原生 shell 右键菜单（`platform/win/shell_menu`）
 
 * **`TrackPopupMenuEx` 弹的是 shell 生成的菜单，所以菜单消息必须转给 `IContextMenu2/3`**：`HMENU` 里可能

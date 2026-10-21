@@ -139,6 +139,7 @@ private slots:
     void monitorsAreIndependent();
     void reconfigureMergesOutOfRangeSpaces();
     void monitorRemovalRehomesAndReattachRestores();
+    void monitorChurnWithTheSameSetChangesNothing();
     void movedToAnotherMonitorJoinsItsActiveSpace();
     void perDesktopSpacesAreIndependent();
     void restoreAllShowsEverything();
@@ -551,6 +552,35 @@ void TestWorkspace::monitorRemovalRehomesAndReattachRestores()
     QVERIFY(state.monitorsChanged({}).isEmpty());
     QCOMPARE(state.monitors(), (QStringList{kScreen1, kScreen2}));
     QVERIFY(!state.isVisible(11));
+}
+
+void TestWorkspace::monitorChurnWithTheSameSetChangesNothing()
+{
+    // 分辨率 / 缩放变化不会改变**设备名**（工作空间就是按设备名分组的），所以钩子
+    // 线程不会发 `MonitorsChanged`；这里钉住它的另一半：即使因为某种原因重发了
+    // 一份一模一样的集合，状态机也必须**什么都不做**（幂等）——否则每改一次分辨率
+    // 就会把藏着的窗口弹出来一次、还会把前台拽走。
+    core::WorkspaceState state;
+    state.setDesktop(kDeskA);
+    state.monitorsChanged({kScreen1, kScreen2});
+    state.windowAppeared(1, kScreen1);    // 可见
+    state.windowAppeared(2, kScreen1, 2); // 藏着
+    state.windowAppeared(3, kScreen2);    // 可见
+    state.focusChanged(1);
+
+    const core::WorkspaceEffects quiet = state.monitorsChanged({kScreen1, kScreen2});
+    QVERIFY(quiet.isEmpty());
+    QCOMPARE(listing(state.windowsInSpace(kScreen1, 2)), listing({2}));
+    QVERIFY(!state.isVisible(2));
+    QVERIFY(state.isVisible(1));
+
+    // 顺序变了（同一个集合）不算拔插：设备名才是身份，排列顺序不参与。
+    QVERIFY(state.monitorsChanged({kScreen2, kScreen1}).isEmpty());
+    QVERIFY(!state.isVisible(2));
+
+    // 重复项 / 空串也容忍（钩子线程已经规范化过，这里是兜底）。
+    QVERIFY(state.monitorsChanged({kScreen1, kScreen1, QString(), kScreen2}).isEmpty());
+    QVERIFY(!state.isVisible(2));
 }
 
 void TestWorkspace::movedToAnotherMonitorJoinsItsActiveSpace()

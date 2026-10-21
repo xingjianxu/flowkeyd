@@ -169,7 +169,16 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
     屏；把那块屏的显示器断开（或把 `windows.json` 里的设备名改错）后按一次：只记一条 warning（`the
     remembered monitor … is not connected`）、窗口留在原处。靠 `settings{ window_monitor = "none" }` 把
     整项关掉后重载，再按一次应当**完全不动窗口**。
-15. **启动权限**（常驻实例是提权的，所以拿它验反而最直接）：
+15. **工作空间的显示器拔插与拖屏**（两块 1920x1080@200% 就能做；脚本完全不覆盖）：把某块屏上的几个窗口
+    拖好（含一个最大化、一个最小化），用 `DisplaySwitch.exe /internal` 或断线把它们那块屏禁掉 —— 那些
+    窗口应当出现在剩下的那块屏上（最大化仍是最大化、最小化仍然最小化，日志里是
+    `workspace: moved N window(s) back onto their monitor`）；把屏接回来 —— 它们应当**回到原来那块屏**
+    （非活动空间里的仍然藏着）。然后把一个窗口用鼠标（或 `Win+Shift+←/→`，**后者没有
+    `EVENT_SYSTEM_MOVESIZEEND`**，只能靠 `LOCATIONCHANGE` + 防抖）拖到另一块屏 —— 日志里应当有
+    `workspace: ... moved from \\.\DISPLAYx to \\.\DISPLAYy`，之后在那块屏上切空间，它跟着它新归属的
+    那块屏显隐（不再跟着旧屏）。最后改一下分辨率 / 缩放：归属不应发生任何变化（日志里既没有
+    `monitors changed` 下的 `moved`，也没有窗口被弹出 / 藏起来）。
+16. **启动权限**（常驻实例是提权的，所以拿它验反而最直接）：
     1. 按一个 `action = run("notepad.exe")` 的快捷键，然后在**任务管理器**里看那个 `notepad.exe`：
        「详细信息」页的 `notepad.exe` 行右键只能看到「结束任务」而**没有** UAC 盾牌图标；命令行最快：
        `& build\dist-release\flowkeyd.exe --list` 里那条摘要应当**没有** `(elevated)`。

@@ -640,9 +640,8 @@ active 后所在的 monitor 上"。
 
 ## 36. 按显示器独立的工作空间：`settings.workspace` + `workspace` 动作
 
-> 进度：**M2（配置面）/ M3（图形界面）/ M4（平台后端）已完成**；M5（事件管线）/ M6（动作执行）/ M7
-> （显示器拔插）/ M8（安全与恢复）/ M9-M10（与现有功能联动）**还没接线**。所以目前把
-> `workspace("switch", N)` 绑上去，执行时只会得到一条 `action ... is not implemented yet` 的 warning。
+> 进度：**M2（配置面）/ M3（图形界面）/ M4（平台后端）/ M5（事件管线）/ M6（动作执行）/ M7（显示器拔插
+> 与拖屏）已完成**；M8（安全与恢复）/ M9-M10（与现有功能联动）**还没接线**。
 > 实施计划在仓库根的 `plan.md`（M11 收尾时删除）。
 
 * 术语：这个功能叫「**工作空间**」，配置名 `workspace`；「**工作区**」仍然只指显示器扣掉任务栏后的
@@ -679,12 +678,29 @@ active 后所在的 monitor 上"。
 * **Z 序还原用 `restack()`**：`show` 按记录栈底 → 顶逐个露出来，**再**用一条 `restack()` 重排。
   不要用 `show()` 的 `insertAfter`：`SetWindowPos(hwnd, 前一个)` 会把 `hwnd` 摆在前一个**下面**，
   方向正好反（M0 探针记录的是顶 → 底）。
-* 验证：`tst_workspace`（状态机 20 条，含 3000 步随机序列与 `filterToCurrentDesktop` 的「不知道就保留」规则）、
-  `tst_window_match`（可管理窗口与排除名单）、
+* **显示器拔插与拖屏（M7）**：
+  * 拖到另一块屏、`Win+Shift+←/→` 搬屏 = 顶层窗口的 `EVENT_OBJECT_LOCATIONCHANGE` + 350 ms 防抖
+    （真机实测：`Win+Shift+←/→` **没有** `EVENT_SYSTEM_MOVESIZEEND`，只有 LOCATIONCHANGE），归属改到
+    目标屏的**活动空间**。**记录里那块屏已经不在时跳过**：拔屏之后 Windows 会替我们把窗口搬走，那条
+    事件比 `MonitorsChanged` 先入队，照它记账会把 `homeMonitor` 丢掉（重新接入时就回不到原屏）。
+  * 物理位置向记录看齐：`core::windowIsOffMonitor()`（还原矩形与那块屏的 `bounds` 有没有非空重叠）+ 
+    `platform/win/workspace::relocateToMonitor()`。**不能用 `monitor::moveToMonitor()`**：它靠
+    `SetWindowPlacement` 的 `showCmd` 收 / 放窗口，会把被我们藏起来的窗口弹出来；新函数保持显隐 /
+    最大化 / 最小化（藏着的用 `SW_HIDE` 收尾，最大化的先 `SW_RESTORE` 再重新最大化）。
+  * 顺序：`MonitorsChanged` → 状态机改归属（含 `homeMonitor`）→ `relocateDisplacedWindows()` → 执行
+    显隐效果；`window_rule` 的重新归位（决定 13）在同一个 tick 里排在后面，规则真把窗口另放时归属会
+    跟着 `LOCATIONCHANGE` 再跟过去（规则优先）。
+  * 分辨率 / 缩放 / 排列变化不动归属：归属键是**设备名**，钩子盘点的也是设备名集合；同一份集合重发
+    一次必须零效果（否则改一次分辨率就会把藏着的窗口弹出来）。
+* 验证：`tst_workspace`（状态机 20 条，含 3000 步随机序列、`filterToCurrentDesktop` 的「不知道就保留」
+  规则与「同一份显示器集合重发零效果」）、
+  `tst_window_match`（可管理窗口与排除名单）、`tst_placement`（`windowIsOffMonitor`）、
   `tst_config`/`tst_lua`/`tst_config_writer`/`tst_config_editor`（配置面三处往返：真 Lua 读回逐字段
   对比）、`tst_interactive::hidesAndShowsAWindowWithoutTouchingIt`（隐藏/显示后几何、最大化、最小化
   都不变）、`enumeratesManageableWindowsByTheirRecord`、`switchesWorkspacesWithRealWindows`（两个真窗口
-  在两个空间之间来回切：显隐、几何、Z 序与「空空间不抢焦点」）—— 本机实测通过。
+  在两个空间之间来回切：显隐、几何、Z 序与「空空间不抢焦点」）、
+  `relocatesDisplacedWindowsWithoutChangingState`（两块屏：藏着的 / 最大化的 / 最小化的窗口搬屏时状态
+  都不变）—— 本机实测通过。
 
-> M6 的验收脚本检查（`scripts/acceptance.ps1`）推后到 M9/M11：整个特性还没接完
-> （M7/M8/M9），现在加进去的项会在 M9 之前一直失败。
+> M6/M7 的验收脚本检查（`scripts/acceptance.ps1`）推后到 M9/M11：整个特性还没接完
+> （M8/M9），现在加进去的项会在 M9 之前一直失败。

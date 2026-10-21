@@ -532,6 +532,10 @@ void HookThread::handlePlacementTick()
 
     // 显示器基线无论有没有规则都要跟：否则刚 reload 上一条规则就会把“当前这批
     // 显示器”误报成刚刚接入。
+    //
+    // 比的是**规范化后的设备名集合**，不是几何：分辘率 / 缩放 / 排列位置变化都只改
+    // `bounds`/`work`，设备名不变 → 不会误报成「拔出 / 接入」。工作空间的归属键也
+    // 就是设备名（`core::MonitorKey`），所以那些变化不会动到空间划分。
     const std::vector<core::MonitorDescription> monitors = core::sortedMonitors(monitor::list());
     QStringList devices;
     devices.reserve(static_cast<int>(monitors.size()));

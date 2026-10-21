@@ -3,6 +3,7 @@
 
 #include "core/window_match.h"
 #include "platform/win/logging.h"
+#include "platform/win/monitor.h"
 #include "platform/win/window.h"
 
 #include <QHash>
@@ -251,6 +252,93 @@ bool restack(const std::vector<HWND> &bottomToTop, QString *error)
                 *error = lastErrorMessage("SetWindowPos(restack)");
             }
             return false;
+        }
+    }
+    return true;
+}
+
+bool relocateToMonitor(HWND hwnd, const core::MonitorDescription &destination, QString *error)
+{
+    const auto fail = [&](const QString &message) {
+        if (error != nullptr) {
+            *error = message;
+        }
+        return false;
+    };
+    if (!isAlive(hwnd)) {
+        return fail(QStringLiteral("the window is gone"));
+    }
+    // 与 `hide()` 同一个顾虑：`SetWindowPlacement` / `SetWindowPos` 都是跨线程
+    // `SendMessage` 语义，目标进程卡死时会把我们这条线程（= 动作线程，也是工作
+    // 空间状态的唯一所有者）挂住。
+    if (IsHungAppWindow(hwnd) != 0) {
+        return fail(QStringLiteral("the window is not responding"));
+    }
+
+    const bool visible = IsWindowVisible(hwnd) != 0;
+    const bool minimized = IsIconic(hwnd) != 0;
+    const bool maximized = !minimized && IsZoomed(hwnd) != 0;
+    // `windowRect()` 给的是**还原矩形**（`rcNormalPosition`）：最大化 / 最小化 /
+    // 被我们藏起来的窗口都能拿到有意义的值，正好是要摆的目标。
+    const std::optional<core::Rect> current = monitor::windowRect(hwnd);
+    const core::Rect rect = core::placementRect(current.value_or(core::Rect{0, 0, 800, 600}),
+                                                destination, maximized, std::nullopt,
+                                                std::nullopt, std::nullopt, std::nullopt);
+
+    // 最大化窗口只改 `rcNormalPosition` 不会重新最大化到新屏上（它会留着原来的
+    // 最大化矩形）：先还原，摆好位置再重新最大化（与 `monitor::applyPlacement()`
+    // 同一条路）。**藏着的窗口不能这么做** —— `SW_RESTORE` 会把它露出来。
+    if (visible && maximized) {
+        ShowWindow(hwnd, SW_RESTORE);
+    }
+
+    WINDOWPLACEMENT placement = placementOf(hwnd);
+    if (placement.length == 0) {
+        return fail(QStringLiteral("could not read the window placement"));
+    }
+    placement.rcNormalPosition =
+        RECT{static_cast<LONG>(rect.x),
+             static_cast<LONG>(rect.y),
+             static_cast<LONG>(rect.x + rect.width),
+             static_cast<LONG>(rect.y + rect.height)};
+    // **显隐照原样**：藏着就用 `SW_HIDE`（`showCmd` 直接决定显隐状态，写成
+    // `SW_SHOWNORMAL` 会把这个窗口弹出来 —— 那正是不能用 `moveToMonitor()` 的原因）。
+    if (!visible) {
+        placement.showCmd = SW_HIDE;
+    } else if (minimized) {
+        placement.showCmd = SW_SHOWMINNOACTIVE;
+    } else if (maximized) {
+        placement.showCmd = SW_SHOWMAXIMIZED;
+    } else {
+        placement.showCmd = SW_SHOWNOACTIVATE;
+    }
+    if (SetWindowPlacement(hwnd, &placement) == 0) {
+        return fail(lastErrorMessage("SetWindowPlacement(relocate)"));
+    }
+    // `SetWindowPlacement` 的坐标历史上有过“工作区坐标”的差异（见
+    // `monitor::applyPlacement()`），非最大化时再用 `SetWindowPos` 钉一次；
+    // 最大化没生效的窗口退化成“铺满目标工作区”，至少位置是对的。
+    if (!minimized && !maximized) {
+        SetWindowPos(hwnd, nullptr, rect.x, rect.y, rect.width, rect.height,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+    } else if (visible && maximized && IsZoomed(hwnd) == 0) {
+        SetWindowPos(hwnd, nullptr, rect.x, rect.y, rect.width, rect.height,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+    // 藏着的窗口要做两件事收尾：
+    //  1. `show()` 的兜底用的是 `hide()` 记下的那份 `WINDOWPLACEMENT`，它的
+    //     `rcNormalPosition` 也得跟着挪，否则重新露出来时会又跑回旧屏；
+    //  2. `SetWindowPlacement` 可能按 `showCmd` 把藏着的窗口露出来。
+    if (!visible) {
+        const auto saved = savedPlacements().find(hwnd);
+        if (saved != savedPlacements().end()) {
+            saved->second.rcNormalPosition = placement.rcNormalPosition;
+        }
+        if (IsWindowVisible(hwnd) != 0) {
+            ShowWindow(hwnd, SW_HIDE);
+            if (IsWindowVisible(hwnd) != 0) {
+                return fail(lastErrorMessage("ShowWindow(SW_HIDE) after moving"));
+            }
         }
     }
     return true;

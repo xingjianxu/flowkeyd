@@ -8,10 +8,11 @@
 
 **当前进度：M0 ✅（结论在下文 M0 节 + `docs/notes/pitfalls.md`）、M1 ✅（`src/core/workspace.*` +
 `tests/tst_workspace.cpp`）、M2 ✅、M3 ✅、M4 ✅（语义在下文各自的「→ 已产出」）、M5 ✅（事件管线已接线，
-`src/core/workspace_event.*` + `platform/win/hook.*` + `Dispatcher::applyWorkspaceEvent`）、**M6 ✅（动作执行：
-`workspace("switch"|"move", N)` 已经能真的显隐窗口）**。下一步：**M7（显示器拔插与"拖到别的屏"）/ M8（安全与
-恢复）/ M9-M10（联动）**。注意：动作里已没有 `is not implemented yet` 那条 warning；显示器拔插后的迁移、
-「拖到别的屏」的归属变化、恢复日志都**还没有**。**
+`src/core/workspace_event.*` + `platform/win/hook.*` + `Dispatcher::applyWorkspaceEvent`）、M6 ✅（动作执行：
+`workspace("switch"|"move", N)` 已经能真的显隐窗口）、**M7 ✅（显示器拔插 + 拖到别的屏：`relocateToMonitor()` +
+`windowIsOffMonitor()` + `WindowMoved` 归属跟随）**。下一步：**M8（安全与恢复）/ M9-M10（联动）**。注意：
+显示器拔插后的迁移、拖屏的归属变化都已经接线；**恢复日志（M8）与 `windows()`/`window("activate")` 的联动
+（M9/M10）还没有**。**
 
 ## 0. 已确认的决策（来自与项目所有者的问答）
 
@@ -369,10 +370,12 @@ M2 之后要用到的语义（**都已有单测钉住**）：
 * **`scripts/acceptance.ps1` 的检查推后到 M9/M11**：整个特性还没接完（M7/M8/M9），现在加进去的项在 M9
   之前会一直失败（也说明了 `--check` 以外的验收要等动作链闭环）。
 
-### M7　多显示器变化（依赖 M5、M6）
+### M7　多显示器变化（依赖 M5、M6）　✅ 已完成
 
-* 拔出：窗口迁入剩余显示器的活动空间（物理上也需要摆到那块屏上：复用 `monitor::moveToMonitor`，保留最大
-  化）；重新接入：按「原归属」恢复空间划分，并接 `window_rule` 的重新归位（决策 13）顺序。
+* 拔出：窗口迁入剩余显示器的活动空间（物理上也需要摆到那块屏上；**实际做法**：没用
+  `monitor::moveToMonitor`，它按 `SetWindowPlacement` 的 `showCmd` 收放窗口，会把被我们藏起来的窗口
+  弹出来，改用新的 `workspace::relocateToMonitor`，见下文「→ 已产出」）；重新接入：按「原归属」恢复
+  空间划分，并接 `window_rule` 的重新归位（决策 13）顺序。
 * 分辨率/缩放变化：归属键用设备名，**不受影响**；只在 `QScreen` 变化时确认没有误触发「拔出/接入」。
 * 拖窗口到另一块显示器：**统一用顶层窗口的 `EVENT_OBJECT_LOCATIONCHANGE` + 防抖检测**（真机实测：
   `Win+Shift+←/→` 搬屏**只有 LOCATIONCHANGE、没有 `EVENT_SYSTEM_MOVESIZEEND`**；鼠标拖动两种都有）→
@@ -380,6 +383,37 @@ M2 之后要用到的语义（**都已有单测钉住**）：
   状态则不可能发生，因为只有可见窗口能被拖）。
 * 测试：`tst_workspace` 补「拔/插」序列；真机多显示器不可自动化部分写进 `reference.md` 手工冒烟清单
   （两块 1920x1080@200% 的本机可以做）。
+
+→ **已产出**：
+
+* **拖到另一块屏**：`Dispatcher::applyWorkspaceEvent()` 的 `WindowMoved` 分支不再是空的 —— 拿记录里的
+  显示器跟窗口现在所在的比，变了就 `windowMovedToMonitor()`（归入目标屏的**活动空间**）。
+  关键的一条：**记录里那块屏已经不在时直接跳过**（拔屏之后 Windows 会替我们把窗口搬走，那条事件
+  （`LOCATIONCHANGE`）比 `MonitorsChanged` 先入队（同一个 tick 里先发 pending moves、最后才盘点显示器），
+  照它记账就会把 `homeMonitor` 丢掉，重新接入时窗口再也回不到原屏）。
+* **物理位置向记录看齐**：新纯函数 `core::windowIsOffMonitor(rect, monitor)`（`core/placement.*`，判据 =
+  「还原矩形与那块屏的 `bounds` 没有非空重叠」）+ `platform/win/workspace::relocateToMonitor(hwnd, monitor)`
+  （**保持显隐 / 最大化 / 最小化**：藏着的窗口用 `SW_HIDE` 收尾，最大化的先 `SW_RESTORE` 再重新最大化，
+  并把 `savedPlacements()` 里的 `rcNormalPosition` 一起挪过去）+ `Dispatcher::relocateDisplacedWindows()`
+  （只在 `MonitorsChanged` 里跑，逐个被跟踪的窗口比对）。拔屏与重新接入两头是**同一条规则**：记录说它
+  在 A 屏、它其实不在 → 搬回 A 屏。
+* **顺序**：`MonitorsChanged` → 状态机改归属 → `relocateDisplacedWindows()` → 执行显隐效果（被并进活动
+  空间的窗口要在**新位置**上露出来）；`window_rule` 的重新归位（决策 13）在同一个 tick 里**排在后面**
+  （钩子先发 `MonitorsChanged`、再发 `PlacementEvent::MonitorConnected`），规则真把窗口另放了时，随之
+  而来的 `LOCATIONCHANGE` 会把归属再跟过去 —— 规则优先。
+* **分辨率 / 缩放变化**：归属键就是设备名，钩子盘点的也是「规范化后的设备名集合」，所以这类变化
+  不会误报成拔出 / 接入（已在 `hook.cpp` 写死注释）。`tst_workspace::monitorChurnWithTheSameSetChangesNothing`
+  钉住另一半：**同一份集合重发一次（含换序 / 重复 / 空串）必须零效果**，否则改一次分辨率就会把藏着的
+  窗口弹出来、还会把前台拽走。
+* 测试：`tst_interactive::relocatesDisplacedWindowsWithoutChangingState`（真机两块屏：藏着的窗口搬过去
+  仍然藏着、显回来落在那块屏上；最大化窗口搬回去仍然最大化；最小化窗口搬过去仍然最小化）、
+  `tst_placement::windowIsOffMonitorComparesTheRestoreRectWithTheBounds`、
+  `tst_workspace::monitorChurnWithTheSameSetChangesNothing` —— 本机实跑通过。
+  顺带修掉了一条真的会让用例闪失败的老问题：`switchesWorkspacesWithRealWindows` 里那个批量虚拟桌面
+  查询在「窗口刚创建、shell 还没把它登记到任何虚拟桌面」（`GetWindowDesktopId` 给全零 GUID）时会得到
+  `std::nullopt`，现在允许重试一秒。
+* **待人眼过一遍**（两块屏在本机就能做）：拔掉 / 禁用一块屏 → 那上面的窗口出现在剩下那块屏上；接回 →
+  物归原主；`Win+Shift+←/→` 搬屏后归属跟着变。
 
 ### M8　安全与恢复（依赖 M4；与 M6 并行，**必须在发布前完成**）
 

@@ -20,6 +20,7 @@
 // 「已记录的窗口」列表（见 `core::isManageableWindow()`）。
 #pragma once
 
+#include "core/placement.h"
 #include "core/workspace.h"
 #include "platform/win/ffi.h"
 
@@ -104,6 +105,22 @@ bool show(HWND hwnd, HWND insertAfter, QString *error);
 /// M0 实测：`SW_HIDE` 本来就不丢 Z 槽位，窗口显示回来会原地归位；这个函数是
 /// 给“还原之后顺序确实乱了”的兜底（也用于跨显示器 / 跨空间的成批还原）。
 bool restack(const std::vector<HWND> &bottomToTop, QString *error);
+
+/// 把窗口搬回 `destination` 这块屏上，**同时保持它现在的显隐 / 最大化 / 最小化
+/// 状态**。
+///
+/// 显示器拔插专用（M7）。为什么不直接用 `monitor::moveToMonitor()`：它靠
+/// `SetWindowPlacement` 的 `showCmd` 收起 / 恢复窗口，对**被我们藏起来的窗口**
+/// 会把它们弹出来；而拔插那一刻窗口正处在不受我们控制的状态（藏着的、最大化的、
+/// 最小化的都有）。这里只改 `rcNormalPosition` 与坐标：
+///   * 几何由 `core::placementRect()` 算（最大化时就是目标屏的工作区，普通窗口
+///     保持大小并居中）；
+///   * 收尾按进来时的可见性：本来藏着就再 `SW_HIDE` 一次（`SetWindowPlacement`
+///     会按 `showCmd` 改显隐，所以这一步不可省）。
+///
+/// 只在动作工作线程上调用（与 `hide()` / `show()` 同一条理由：这些调用都是跨线程
+/// `SendMessage` 语义，目标进程卡死时会把调用线程挂住）。
+bool relocateToMonitor(HWND hwnd, const core::MonitorDescription &destination, QString *error);
 
 /// 枚举「归工作空间管」的窗口，按 `EnumWindows` 的 Z 序（最近用过的在前）。
 ///

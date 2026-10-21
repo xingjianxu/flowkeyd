@@ -142,6 +142,24 @@ Rect placementRect(const Rect &current,
     return Rect{px, py, w, h};
 }
 
+bool windowIsOffMonitor(const Rect &normalPosition, const MonitorDescription &monitor)
+{
+    const Rect &bounds = monitor.bounds;
+    // 退化矩形（宽 / 高非正）当成“哪儿都不在”：宁可把它搬一次，也不要让它留在
+    // 屏幕外面。
+    if (normalPosition.width <= 0 || normalPosition.height <= 0 || bounds.width <= 0
+        || bounds.height <= 0) {
+        return true;
+    }
+    // 只要有**非空**重叠就算它还在这块屏上：跨两块屏的窗口本来就有半边在外面，
+    // 那不是需要搬的理由。
+    const bool overlaps = normalPosition.x < bounds.x + bounds.width
+        && bounds.x < normalPosition.x + normalPosition.width
+        && normalPosition.y < bounds.y + bounds.height
+        && bounds.y < normalPosition.y + normalPosition.height;
+    return !overlaps;
+}
+
 bool windowMatchesRule(const WindowRule &rule,
                        const QString &title,
                        const std::optional<QString> &executableName)

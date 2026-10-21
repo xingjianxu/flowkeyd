@@ -426,6 +426,7 @@ private slots:
     void hidesAndShowsAWindowWithoutTouchingIt();
     void enumeratesManageableWindowsByTheirRecord();
     void switchesWorkspacesWithRealWindows();
+    void relocatesDisplacedWindowsWithoutChangingState();
     void hookThreadReportsWorkspaceEventsForForeignWindows();
     void launchesProgramsWithTheRequestedPrivilege();
     void opensTargetsAsTheLoggedOnUser();
@@ -1880,14 +1881,23 @@ void TestInteractive::switchesWorkspacesWithRealWindows()
 
     // 批量问「在不在当前虚拟桌面」：一次 STA 会话问完。不存在的句柄得到的是
     // `std::nullopt`（“不知道”），不能当成“在别的桌面上”。
+    // 刚创建的窗口可能还没被 shell 登记到任何虚拟桌面（`GetWindowDesktopId` 给全零
+    // GUID → `std::nullopt`），这是系统那边的竞态，所以这里允许重试一秒。
     {
-        QString error;
-        const std::vector<std::optional<bool>> onCurrent =
-            platform::win::desktop::windowsOnCurrentDesktop({a, nullptr, b}, &error);
+        std::vector<std::optional<bool>> onCurrent;
+        for (int attempt = 0; attempt < 20; ++attempt) {
+            QString error;
+            onCurrent = platform::win::desktop::windowsOnCurrentDesktop({a, nullptr, b}, &error);
+            if (onCurrent.size() == 3 && onCurrent.at(0).value_or(false)
+                && onCurrent.at(2).value_or(false)) {
+                break;
+            }
+            QThread::msleep(50);
+        }
         QCOMPARE(onCurrent.size(), static_cast<std::size_t>(3));
-        QVERIFY2(onCurrent.at(0).value_or(false), qPrintable(error));
+        QVERIFY2(onCurrent.at(0).value_or(false), "the window is not on the current desktop");
         QVERIFY(!onCurrent.at(1).has_value());
-        QVERIFY2(onCurrent.at(2).value_or(false), qPrintable(error));
+        QVERIFY2(onCurrent.at(2).value_or(false), "the window is not on the current desktop");
     }
 
     // 状态机：两个窗口都在空间 1，`a` 是最近用过的（先出现 `a`，再由 `b` 压在上面）。
@@ -1942,6 +1952,84 @@ void TestInteractive::switchesWorkspacesWithRealWindows()
         // Z 序：`b` 仍然压在 `a` 上面（`restack()` 拼错了方向会立刻在这里露出来）。
         QVERIFY2(zIndexOf(a) < zIndexOf(b), "the Z order of the space was not restored");
     }
+}
+
+/// 显示器拔插之后的「物归原位」（M7）：`relocateToMonitor()` 把窗口搬到另一块
+/// 屏上，而且**不改变它现在的显隐 / 最大化 / 最小化状态**。
+///
+/// 为什么不能用 `monitor::moveToMonitor()`：它靠 `SetWindowPlacement` 的
+/// `showCmd` 收 / 放窗口，会把被我们藏起来的窗口弹出来（那正是 M7 的新函数存在
+/// 的理由）。本用例需要两块屏。
+void TestInteractive::relocatesDisplacedWindowsWithoutChangingState()
+{
+    if (!interactiveEnabled()) {
+        QSKIP("set FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1 to run the interactive tests");
+    }
+    namespace ws = platform::win::workspace;
+    const std::vector<core::MonitorDescription> monitors =
+        core::sortedMonitors(platform::win::monitor::list());
+    if (monitors.size() < 2) {
+        QSKIP("only one monitor is connected; nothing to move a window to");
+    }
+
+    const QString marker =
+        QStringLiteral("flowkeyd-relocate-%1").arg(QCoreApplication::applicationPid());
+    TestWindow window(marker);
+    HWND hwnd = window.hwnd();
+    QVERIFY2(hwnd != nullptr, "the test window was not created");
+
+    const std::optional<std::size_t> startIndex =
+        platform::win::monitor::indexForWindow(monitors, hwnd);
+    QVERIFY(startIndex.has_value());
+    const std::size_t other = *startIndex == 0 ? monitors.size() - 1 : 0;
+
+    const auto rectOf = [hwnd]() {
+        return platform::win::monitor::windowRect(hwnd).value_or(core::Rect{0, 0, 0, 0});
+    };
+    // 有的程序（以及最大化 / 最小化的窗口）要等一个消息回合才把几何落定，与
+    // `movesAWindowToTheAdjacentMonitor` 同一个等待套路。
+    const auto waitForMonitor = [&monitors, hwnd](std::size_t target) {
+        for (int i = 0; i < 60; ++i) {
+            if (platform::win::monitor::indexForWindow(monitors, hwnd)
+                == std::optional<std::size_t>(target)) {
+                return true;
+            }
+            QThread::msleep(50);
+        }
+        return false;
+    };
+
+    QString error;
+    // 1) **藏起来的窗口**：搬完仍然藏着（不能把用户“藏起来”的窗口弹出来），但
+    //    位置已经在新屏上 —— 这是拔掉显示器之后它还能被看见的前提。
+    QVERIFY2(ws::hide(hwnd, &error), qPrintable(error));
+    QVERIFY(IsWindowVisible(hwnd) == 0);
+    QVERIFY2(ws::relocateToMonitor(hwnd, monitors[other], &error), qPrintable(error));
+    QVERIFY2(IsWindowVisible(hwnd) == 0, "relocating a hidden window must not reveal it");
+    QVERIFY(IsWindow(hwnd) != 0);
+    QVERIFY2(!core::windowIsOffMonitor(rectOf(), monitors[other]),
+             "a hidden window was not moved onto the target monitor");
+
+    QVERIFY2(ws::show(hwnd, nullptr, &error), qPrintable(error));
+    QVERIFY(IsWindowVisible(hwnd) != 0);
+    QVERIFY2(waitForMonitor(other), "the window did not come back on the target monitor");
+
+    // 2) **最大化的窗口**：搬回去之后仍然最大化，而且落在原来那块屏上。
+    ShowWindow(hwnd, SW_MAXIMIZE);
+    QVERIFY(IsZoomed(hwnd) != 0);
+    QVERIFY2(ws::relocateToMonitor(hwnd, monitors[*startIndex], &error), qPrintable(error));
+    QVERIFY2(IsZoomed(hwnd) != 0, "relocating a maximized window must keep it maximized");
+    QVERIFY2(waitForMonitor(*startIndex), "the maximized window did not move back");
+
+    // 3) **最小化的窗口**：搬过去之后仍然最小化（不被弹出来）。
+    ShowWindow(hwnd, SW_MINIMIZE);
+    QVERIFY(IsIconic(hwnd) != 0);
+    QVERIFY2(ws::relocateToMonitor(hwnd, monitors[other], &error), qPrintable(error));
+    QVERIFY2(IsIconic(hwnd) != 0, "relocating a minimized window must keep it minimized");
+
+    // 边界：窗口已经没了 / 目标屏不存在时直接失败，不报错也不崩。
+    QVERIFY(!ws::relocateToMonitor(nullptr, monitors[other], &error));
+    QVERIFY(!error.isEmpty());
 }
 
 /// 工作空间的事件管线（M5）：钩子线程把**别的进程**的窗口报成工作空间事件，而且

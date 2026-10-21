@@ -236,8 +236,8 @@ UI 只有托盘图标 + 日志窗口、`menu`/`help`/`windows`/`apps`/`update` �
     提权/不读配置/不装钩子）。拿不到令牌就退回继承令牌 + warning。**启动器右键菜单里的命令仍然提权**
     （已知限制，见第 12 节）。
 36. **工作空间：按显示器独立的一套空间（`settings.workspace` + `workspace` 动作）**。**M2（配置面）/
-    M3（图形界面）/ M4（平台后端）/ M5（事件管线）/ M6（动作执行）已完成**；显示器拔插与“拖到别的屏”
-    （M7）、恢复日志（M8）、与 `windows()`/`window("activate")` 的联动（M9/M10）还**没接线**。
+    M3（图形界面）/ M4（平台后端）/ M5（事件管线）/ M6（动作执行）/ M7（显示器拔插与“拖到别的屏”）已完成**；
+    恢复日志（M8）、与 `windows()`/`window("activate")` 的联动（M9/M10）还**没接线**。
     要点：默认**开启**但没绑定就不会隐藏任何窗口；`count` 1–10（默认 9）；
     `switch_target` = `"cursor"`（默认）/ `"focus"`；`new_window` = `"active"`（默认）或 1..count；
     `exclude` 空串报错；动作只有 `workspace("switch"|"move", N)`，`index` ≤ `count` 在 `--check` 校验；
@@ -248,7 +248,11 @@ UI 只有托盘图标 + 日志窗口、`menu`/`help`/`windows`/`apps`/`update` �
     状态机的**唯一所有者是动作工作线程**，我们自己引起的显隐靠 `core::ExpectedWorkspaceEvents` 吞掉
     （`SW_HIDE` 会额外产生一条 `EVENT_OBJECT_SHOW`）。动作执行每次都先刷新「当前虚拟桌面」
     （只有**当前桌面**上的窗口才显隐，`hide` 列表用**一次批量 COM 查询**过滤），Z 序用 `restack()` 还原
-    （不要用 `show()` 的 `insertAfter`，方向是反的）。完整理由见 `decisions.md` 第 36 条，
+    （不要用 `show()` 的 `insertAfter`，方向是反的）。显示器拔插 = `MonitorsChanged` 改归属（含
+    `homeMonitor`）+ `relocateDisplacedWindows()` 把窗口物理上搬回**记录里那块屏**（判据
+    `core::windowIsOffMonitor()`；搬用 `workspace::relocateToMonitor()`，**不能用**
+    `monitor::moveToMonitor()`，它会把藏着的窗口弹出来）；拖屏靠 `LOCATIONCHANGE` + 防抖，但
+    **记录里那块屏不在时要跳过**（否则丢掉 `homeMonitor`）。完整理由见 `decisions.md` 第 36 条，
     实施计划见根目录 `plan.md`。
 
 ---
@@ -309,7 +313,7 @@ Qt 侧齐备：`Qt6::Quick`、`QuickControls2`、`Qt6QuickControls2FluentWinUI3S
 | `core/pinyin.*` / `core/pinyin_data.*` | 汉字读音查询 / 生成的读音表 |
 | `core/monitor_ref.*` / `core/window_monitor_state.*` | “摆到哪块屏”的取值与判据 / `monitor = "last"` 的记忆 |
 | `core/config_map.*` / `core/config_writer.*` | 结构体 ↔ QVariant 字典（界面用）/ 结构体 → Lua 源码（含生成标记、`.bak`） |
-| `core/workspace.*` | 工作空间**纯逻辑状态机**（命令 → 显隐/焦点效果列表）+ `core/workspace_event.*`（钩子线程 → 工作线程的事件 + 「自己引起的事件」抑制表）；M1/M5/M6 已接线（`workspace(...)` 动作能真的显隐窗口），**显示器拔插与恢复日志还没接线**（M7/M8） |
+| `core/workspace.*` | 工作空间**纯逻辑状态机**（命令 → 显隐/焦点效果列表）+ `core/workspace_event.*`（钩子线程 → 工作线程的事件 + 「自己引起的事件」抑制表）；M1/M5/M6/M7 已接线（`workspace(...)` 动作能真的显隐窗口，显示器拔插会迁移与复位），**恢复日志还没接线**（M8） |
 | `core/log_tail.*` / `core/update_check.*` / `core/version.*` / `core/desktop_badge.*` | 日志增量尾随 / 更新纯逻辑 / 版本号 / 徽标文字与字号 |
 | `src/lua/lua_config.*` + `lua_prelude.lua` | **Lua 与 C++ 的唯一边界**（转成 `core::Config`，逐条目带上下文报错）；DSL 编进 qrc |
 | `src/platform/win/` | 一个文件一件事：`ffi`（全部声明 + `currentExecutablePath()`）、`nt`、`process`（run 三条路 / open / `--shell-*` 代理）、`dwm`、`monitor`、`input`（`SendInput`、验收后门、`copySelection`）、`ime`、`hook`（回调 + 消息循环 + 定时器 + `window_rule` / 工作空间事件监听 + 显示器轮询 + 前台事件）、`apps`（扫描 + 启动 + 图标 + `StaThread`）、`shell_menu`、`audio`（MTA，高风险）、`clipboard`、`window`、`workspace`（工作空间的 hide/show/restack/身份/枚举，`SW_HIDE` 只在这里）、`desktop`（版本表）、`power`、`tray`、`logging`/`single_instance`、`elevate`/`autostart`/`update` |
@@ -519,6 +523,8 @@ debug 看不到的警告）+ `FLOWKEYD_BUILD_TESTS=OFF`。
 * **QML 布局/模型**（`Q_PROPERTY` 自定义结构体静默失效、`Row`+锚点崩溃、`contentHeight` 抖动、
   `ItemDelegate` 内边距、角色名撞名）
 * **注入与测量**（锁屏时注入是假的、像素指纹、进程内预览）
+* **工作空间（显隐 / 显示器拔插 / 拖屏）**（`SW_HIDE` 的显隐语义、`SetWindowPlacement` 会改显隐、
+  最大化的窗口要先还原再重新最大化、`LOCATIONCHANGE` 比 `MonitorsChanged` 先到）
 * **提权 / 代理进程 / 启动权限**（`CreateProcessAsUser` 不可用、环境块丢失）
 
 ---

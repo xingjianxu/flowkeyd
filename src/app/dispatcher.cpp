@@ -1643,15 +1643,59 @@ void Dispatcher::applyWorkspaceEvent(const std::shared_ptr<const core::Compiled>
         // 只更新「最近用过」（切回去时聚焦谁），绝不引起显隐。
         m_workspace.focusChanged(event.window);
         return;
-    case core::WorkspaceEvent::Kind::MonitorsChanged:
+    case core::WorkspaceEvent::Kind::MonitorsChanged: {
         // 拔出 / 接入：归并、物归原主、重算显隐全在状态机里。
-        applyWorkspaceEffects(m_workspace.monitorsChanged(event.monitors),
-                              QStringLiteral("monitors changed"));
+        const core::WorkspaceEffects effects = m_workspace.monitorsChanged(event.monitors);
+        // 先把物理位置向记录看齐，再执行显隐：被并进活动空间的窗口要在**新位置**上
+        // 露出来，而不是先出现在旧坐标、再被搬一次。
+        // `window_rule` 的重新归位（决策 13）排在后面（钩子线程先发这一条、再发
+        // `PlacementEvent::MonitorConnected`），因此规则真的把窗口另放了时，规则赢。
+        relocateDisplacedWindows();
+        applyWorkspaceEffects(effects, QStringLiteral("monitors changed"));
         return;
-    case core::WorkspaceEvent::Kind::WindowMoved:
-        // M7：这里要把窗口所在显示器与记录对比，变了就 `windowMovedToMonitor`。
-        // 防抖已经在钩子线程上做完（每块屏每个 tick 最多一条）。
+    }
+    case core::WorkspaceEvent::Kind::WindowMoved: {
+        // 位置变化（已由钩子线程按 350 ms 防抖，每个窗口每个 tick 最多一条）。
+        // 这里只回答一个问题：它是不是换了一块屏？
+        //
+        // 为什么不拿 `IsWindowVisible` 筛：被我们藏起来的窗口不会动，而拖得动的
+        // 本来就是可见的。
+        const std::optional<core::WindowRecord> record = m_workspace.record(event.window);
+        if (!record.has_value()) {
+            return; // 还没收编的窗口：等 `WindowAppeared` 先记账
+        }
+        const std::vector<core::MonitorDescription> monitors =
+            core::sortedMonitors(win::monitor::list());
+        if (monitors.empty()) {
+            return;
+        }
+        QStringList present;
+        present.reserve(static_cast<int>(monitors.size()));
+        for (const core::MonitorDescription &description : monitors) {
+            present.append(core::normalizeDeviceName(description.device));
+        }
+        // 记录里那块屏已经不在了：这一条事件是 Windows 替我们把窗口搬走的，归属交给
+        // `monitorsChanged()`（它会记下 `homeMonitor`，重新接入时才能物归原主）。
+        // 不跳过的话，窗口在重接之后就会留在剩下的那块屏上。
+        if (!present.contains(core::normalizeDeviceName(record->workspace.monitor))) {
+            return;
+        }
+        const HWND hwnd = win::workspace::handleOf(event.window);
+        if (!win::workspace::isAlive(hwnd)) {
+            return;
+        }
+        const QString monitor = monitorKeyOf(hwnd, monitors);
+        if (monitor.isEmpty() || monitor == record->workspace.monitor) {
+            return; // 没换屏（或者问不出来）：归属不动
+        }
+        applyWorkspaceEffects(m_workspace.windowMovedToMonitor(event.window, monitor),
+                              QStringLiteral("window moved to %1").arg(monitor));
+        win::logDebug(QStringLiteral("workspace: %1 moved from %2 to %3")
+                          .arg(core::rustDebug(win::window::windowTitle(hwnd)),
+                               record->workspace.monitor,
+                               monitor));
         return;
+    }
     }
 }
 
@@ -1716,6 +1760,57 @@ void Dispatcher::syncWorkspaceLayout(const core::Compiled &config)
     // 比新数量大的空间并入最后一个；本来藏着、现在落进活动空间的窗口必须露出来
     // （否则它们会永久藏在“活动空间”里，而对活动空间切换是幂等无操作）。
     applyWorkspaceEffects(m_workspace.reconfigure(count), QStringLiteral("workspace count changed"));
+}
+
+void Dispatcher::relocateDisplacedWindows()
+{
+    // 只在显示器集合真的变了的时候叫（`MonitorsChanged`）：这里会逐个窗口问注意
+    // 「它在哪儿」，没必要在每次事件上都做。
+    const std::vector<core::MonitorDescription> monitors = core::sortedMonitors(win::monitor::list());
+    if (monitors.empty()) {
+        return;
+    }
+    QStringList present;
+    present.reserve(static_cast<int>(monitors.size()));
+    for (const core::MonitorDescription &description : monitors) {
+        present.append(core::normalizeDeviceName(description.device));
+    }
+
+    int moved = 0;
+    for (const core::WindowId id : m_workspace.trackedWindows()) {
+        const std::optional<core::WindowRecord> record = m_workspace.record(id);
+        const HWND hwnd = win::workspace::handleOf(id);
+        if (!record.has_value() || !win::workspace::isAlive(hwnd)) {
+            continue;
+        }
+        // 显隐与归属以**记录**为准，所以目标是记录里那块屏。
+        const int index = present.indexOf(core::normalizeDeviceName(record->workspace.monitor));
+        if (index < 0) {
+            // 记录里那块屏已经不在了，本来应该由 `monitorsChanged()` 先把归属改掉。
+            // 真走到这里（例如状态机还没听说过那块屏）就什么都别动：宁可不动窗口，
+            // 也不要按一个猜出来的目标搬。
+            continue;
+        }
+        const core::MonitorDescription &target = monitors[static_cast<std::size_t>(index)];
+        const std::optional<core::Rect> rect = win::monitor::windowRect(hwnd);
+        if (!rect.has_value() || !core::windowIsOffMonitor(*rect, target)) {
+            continue; // 它就好端端地在那块屏上（含跨屏的窗口）：不动
+        }
+        const QString title = win::window::windowTitle(hwnd);
+        QString error;
+        if (!win::workspace::relocateToMonitor(hwnd, target, &error)) {
+            win::logWarn(QStringLiteral("workspace: cannot move %1 back to %2: %3")
+                             .arg(core::rustDebug(title), record->workspace.monitor, error));
+            continue;
+        }
+        ++moved;
+        win::logDebug(QStringLiteral("workspace: moved %1 back to %2 (it was elsewhere)")
+                          .arg(core::rustDebug(title), record->workspace.monitor));
+    }
+    if (moved > 0) {
+        win::logInfo(QStringLiteral("workspace: moved %1 window(s) back onto their monitor")
+                         .arg(moved));
+    }
 }
 
 void Dispatcher::refreshWorkspaceDesktop()

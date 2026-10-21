@@ -134,6 +134,8 @@ Win32/COM 后端就放在 `platform/win/*`，并在 `tst_interactive` 里加一�
 2. **平台层**：`platform/win/workspace.*`。隐藏方式只在这一个文件里（目前唯一可用的是
    `ShowWindow(SW_HIDE)`）；**新增任何 hide/show 路径都要保持“先写恢复日志、再隐藏”**（M8），而且
    只能在工作线程上做。枚举可管理窗口的判据在 `core::isManageableWindow()`（纯，`tst_window_match`）。
+   **跨显示器搬窗口用 `relocateToMonitor()`**（保持显隐 / 最大化 / 最小化），不要用
+   `monitor::moveToMonitor()` —— 后者会把藏起来的窗口弹出来。
 3. **动作与规则**：`Action::Kind::Workspace`（`workspaceOp` + `workspaceIndex`）/ `WindowRuleDef.workspace` /
    `AppDef.workspace`。动作要同时改 `actionToMap`/`actionFromMap`、`actionKindNames()`、
    `defaultActionMap()`、`ActionEditor.qml` 的 `visible: root.type === "workspace"` 分支、`ConfigText.qml`
@@ -149,7 +151,8 @@ Win32/COM 后端就放在 `platform/win/*`，并在 `tst_interactive` 里加一�
    会额外产生一条 `EVENT_OBJECT_SHOW`），否则状态机把自己的操作当成用户操作。纯逻辑部分在
    `tst_workspace_event`，真机管线在 `tst_interactive::hookThreadReportsWorkspaceEventsForForeignWindows`
    （**要“新窗口出现”就别用记事本**，见 `pitfalls.md`）。
-5. 实施计划与剩余任务（动作执行、显示器拔插、恢复日志）在仓库根 `plan.md` 的 M6–M11。
+5. 实施计划与剩余任务（恢复日志、与 `windows()`/`window("activate")` 的联动）在仓库根 `plan.md` 的
+   M8–M11。
 
 ## 新的窗口条件 / 跨桌面语义
 

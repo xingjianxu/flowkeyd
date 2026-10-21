@@ -56,6 +56,7 @@ private slots:
     void placementRectHonoursPositionAndSize();
     void placementRectClampsIntoTheWorkArea();
     void placementRectAlignsTopLeftWhenLargerThanTheWorkArea();
+    void windowIsOffMonitorComparesTheRestoreRectWithTheBounds();
     void windowMatchesRuleRequiresEveryCondition();
     void windowRuleSummaryIsReadable();
     void firstWindowRulePicksTheFirstMatch();
@@ -240,6 +241,32 @@ void TestPlacement::placementRectAlignsTopLeftWhenLargerThanTheWorkArea()
     QCOMPARE(rect.y, 0);
     QCOMPARE(rect.width, 4000);
     QCOMPARE(rect.height, 3000);
+}
+
+void TestPlacement::windowIsOffMonitorComparesTheRestoreRectWithTheBounds()
+{
+    // 两块并排的 1920x1080（显示器拔插之后「窗口该不该搬回去」的判据，M7）。
+    const core::MonitorDescription left = monitor(QStringLiteral("\\\\.\\DISPLAY1"), 0, 0, 1920, 1080);
+    const core::MonitorDescription right = monitor(QStringLiteral("\\\\.\\DISPLAY2"), 1920, 0, 1920, 1080);
+
+    // 在里面 / 压跨两块屏（部分出去也算在里面）→ 不用搬。
+    QVERIFY(!core::windowIsOffMonitor(core::Rect{100, 100, 800, 600}, left));
+    QVERIFY(!core::windowIsOffMonitor(core::Rect{-100, -50, 800, 600}, left));
+    QVERIFY(!core::windowIsOffMonitor(core::Rect{1500, 100, 800, 600}, right));
+
+    // 拔掉右屏之后，它上面的窗口坐标还在右屏那块已经不存在的范围里 → 要搬。
+    QVERIFY(core::windowIsOffMonitor(core::Rect{2200, 200, 800, 600}, left));
+    // 接回右屏之后，窗口还留在左屏上 → 也要搬（物归原主）。
+    QVERIFY(core::windowIsOffMonitor(core::Rect{100, 100, 800, 600}, right));
+
+    // 贴边：右边界正好相等时算没有重叠（半开区间），左边界相等时有重叠。
+    QVERIFY(core::windowIsOffMonitor(core::Rect{1920, 0, 100, 100}, left));
+    QVERIFY(!core::windowIsOffMonitor(core::Rect{1919, 0, 100, 100}, left));
+
+    // 退化矩形（读不到几何时的兜底）：当成“哪儿都不在”，宁可搬一次也不要
+    // 让窗口留在屏幕外面。
+    QVERIFY(core::windowIsOffMonitor(core::Rect{0, 0, 0, 0}, left));
+    QVERIFY(core::windowIsOffMonitor(core::Rect{100, 100, 800, 600}, core::MonitorDescription{}));
 }
 
 void TestPlacement::windowMatchesRuleRequiresEveryCondition()
