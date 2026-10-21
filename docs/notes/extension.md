@@ -162,7 +162,9 @@ Win32/COM 后端就放在 `platform/win/*`，并在 `tst_interactive` 里加一�
    （`platform/win/session.*` 的 `WM_QUERYENDSESSION`）都走 `restoreWorkspaceNow(ms)`，**必须有上限**
    （动作线程可能卡在长动作里；日志会留着下次恢复）。手动入口是托盘「恢复全部窗口」与
    `--restore-windows`（事件通道在 `single_instance.*`）。
-6. 实施计划与剩余任务（与 `windows()`/`window("activate")` 的联动）在仓库根 `plan.md` 的 M9–M11。
+6. 验收：这个特性的行为大多在 `scripts/acceptance.ps1` 的「工作空间」那三段里（协议：三个一次性实例、
+   `charmap.exe` 当载体、配置里排掉测试自己的进程），纯逻辑在 `tst_workspace` / `tst_workspace_event` /
+   `tst_workspace_log` / `tst_placement` / `tst_window_match`；显示器拔插与拖屏这类只能手工。
 
 ## 新的窗口条件 / 跨桌面语义
 

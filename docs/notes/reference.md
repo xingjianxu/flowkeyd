@@ -123,35 +123,27 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
 * 往脚本里插诊断时：把脚本复制到 `tmp/`，用 `[System.IO.File]::ReadAllText/WriteAllText(...,
   UTF8Encoding($true))` 做替换（**必须保 BOM**），再加一条只含 ASCII 的探针把失败的检查名写进 diag。
   **把临时脚本的中文检查名打到控制台会被代码页弄成乱码，很容易误判成另一条检查挂了。**
-* 最近一次实跑：`checks: 163, failures: 0`（release 产物）。比 166 少的 3 条就是上面那组数字键检查 ——
-  真机目录约 200 条时，26 个单字母里可能没有一个命中 1..8 个程序，脚本打一条诊断（写进
+* **工作空间那一段（M11 新增，约 15 秒，26 项）会真的藏窗口**：三个一次性实例（交互 / `new_window =`
+  3 / `window_rule{ workspace = 2 }`），载体是 `charmap.exe`（普通 Win32、每个实例自己开窗；**别换成
+  记事本** —— 本机那个是单实例带标签页的 Store 应用），配置里 `exclude` 排掉了捕捉窗口自己的
+  `powershell` 与控制台（否则一切空间就把测试自己藏了）、并把 `remote_desktop` 关掉（不关的话真机上
+  一个远程桌面客户端窗口抢到前台就会把所有绑定放行）。覆盖：`workspace("switch"|"move", N)` 的
+  显隐与日志、`window("activate")` 唤起藏在别的工作空间的窗口、**切换器里的别进程窗口**（筛到它就
+  “先切空间再激活”）、预写恢复日志 → 强杀 → `--restore-windows` 按日志恢复、`new_window` 与规则的
+  新窗口归属、`quit` 前恢复可见。脚本里**不断言“隐藏前台窗口之后前台没变”**（Windows 自己会把前台
+  交给别的窗口），那条保证在 `tst_workspace` 里。
+* 最近一次实跑：`checks: 189, failures: 0`（release 产物，M11 收尾）。比 192 少的 3 条就是上面那组数字键
+  检查 —— 真机目录约 200 条时，26 个单字母里可能没有一个命中 1..8 个程序，脚本打一条诊断（写进
   `$WorkDir\diag.txt`，UTF-8 无 BOM）**跳过**它们：是跳过，不是失败。
 
-> **M8（工作空间安全与恢复）没跑 acceptance.ps1**：项目所有者指示这一次不做完整冒烟（脚本要抢
-> 前台 / 注入按键，而且 M9/M10 还没接完，工作空间那几条验收项本来就推到 M11）。这一轮只跑了：
-> debug + release 双构建、`ctest` 37 个目标全绿（含新增的 `tst_workspace_log`）、单跑
-> `tst_interactive.exe restoresHiddenWindowsFromTheRecoveryLog`（真机，通过）、
-> `--check flowkeyd.lua.example` 零警告、`--restore-windows`（有实例在跑 / 没有实例两种路径）。
-
-> **M9（工作空间与其它功能的联动）同样没跑 acceptance.ps1**（同一个理由）。只跑了：debug + release
-> 双构建、`ctest` 37 个目标全绿、单跑 `tst_interactive.exe` 的
-> `revealsAWindowHiddenInAnotherWorkspace` / `switchesWorkspacesWithRealWindows` /
-> `relocatesDisplacedWindowsWithoutChangingState` / `enumeratesManageableWindowsByTheirRecord` /
-> `listsMainWindowsButSkipsOurOwn` / `cloakedWindowsAreHiddenFromTheSwitcher`（均通过）、
-> `--check flowkeyd.lua.example` 零警告。工作空间那几条验收脚本项（含“唤起藏在空间 2 的窗口”与
-> “切换器里出现被我们藏起来的**别进程**窗口”）统一留到 M11 与整份脚本一起加。
-
-> **M10（工作空间规则与默认归属）也没跑 acceptance.ps1**（项目所有者指示不做完整冒烟）。只跑了：
-> debug + release 双构建、`ctest` 37 个目标全绿（含新增的
-> `tst_placement::workspaceForNewWindowPrefersTheWinningRule`）、`--check flowkeyd.lua.example`
-> 零警告，外加两次**定向**冒烟（一次性开发实例 `--no-elevate --allow-multi`，每次约 10 s，结束时
-> `--quit` 让窗口恢复）：`new_window = 3` 时记事本一出现就 `window appeared -> 0 shown, 1 hidden` 并
-> 记入 space 3；`window_rule{ process = "charmap", monitor = 2, workspace = 2 }` 时先
-> `window rule 'charmap' -> maximized 3840x2160 at 3840,0` 再 `put "字符映射表" in space 2 -> 0 shown,
-> 1 hidden`，归属记的是摆完之后的 `DISPLAY2`。验收脚本要补的两项（`new_window` / 带
-> `workspace` 的规则下新窗口首次出现即落在指定空间且被隐藏）与 M6/M7/M9 的项一起留到 M11。
+> **M8 / M9 / M10 当时都只跑了双构建 + `ctest` + 定向冒烟，没跑 acceptance.ps1**（项目所有者指示不做
+> 完整冒烟；工作空间那几条验收项统一推到 M11）。M11 已把那些项全部补进脚本，并用一次完整实跑收尾
+> （上面那行 `checks: 189, failures: 0`）。
 
 ## 手工冒烟清单（脚本覆盖不到的部分）
+
+> 验收脚本里**故意不做**的两件事：显示器拔插 / 拖屏（要真断一块屏）与“空空间不抢焦点”的肉眼确认
+> （隐藏前台窗口之后 Windows 会把前台交给别的窗口，外面分不出是谁干的）。它们在下面第 15–19 条里。
 
 1. `--check --config tmp/smoke.lua` 通过，`--list` 形状与 README 一致。
 2. 被吞掉的 `Win+…` 和弦：按完之后 Windows **不能**弹出开始菜单/搜索；按住 Windows 键超过自动重复延迟
@@ -240,3 +232,11 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
     5. 把一个窗口藏到非活动空间，再对同一个程序按 `move_right_monitor` / `minimize` 的快捷键 ——
        应该**什么都不发生**，只多一条 warning（`is hidden in another workspace`）；窗口没有被弹出来、
        也没有卡在一种“看得见却被记录当藏着”的状态。
+19. **工作空间的切换与移动**（M6/M10 的基本手感，脚本只验单屏、普通窗口）：
+    1. 双屏：A 屏切到空间 2，B 屏的窗口一个不动；把鼠标移到 B 屏再切，只动 B 屏。`switch_target =
+       "focus"` 时，鼠标在 A、焦点在 B 就作用于 B。
+    2. 最大化 / 最小化 / 普通窗口各一个，来回切几次之后位置、大小、最大化、最小化都不变（最小化的
+       切回来仍是最小化）。
+    3. 空空间不抢焦点（前景窗口不变）；非空空间回到最近用过的那个窗口；Z 序还原。
+    4. `move` 到非活动空间：窗口立即消失、用户留在原空间；日志里那条以 `hidden)` 结尾。
+    5. 远程桌面前台（`mstsc.exe` / Windows App）时按工作空间快捷键：**放行、什么都不切**。

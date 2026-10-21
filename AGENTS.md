@@ -113,7 +113,7 @@ UI 只有托盘图标 + 日志窗口、`menu`/`help`/`windows`/`apps`/`update` �
 | 配置/日志 | `%USERPROFILE%\.config\flowkeyd\config.lua` / `…\flowkeyd.log` |
 | 注入标记 / 互斥体 | `dwExtraInfo` 里的 `"FLOW"` / `Local\flowkeyd-<配置路径散列>` |
 | 开机自启 / 在线更新 | 计划任务 `flowkeyd` → **当前运行 exe** / 托盘菜单手动查 GitHub `releases/latest` |
-| 自动化测试 | Qt Test + `scripts/acceptance.ps1`（166 项，实跑 163；需交互式桌面） |
+| 自动化测试 | Qt Test + `scripts/acceptance.ps1`（192 项，实跑 189；需交互式桌面） |
 
 ---
 
@@ -235,10 +235,8 @@ UI 只有托盘图标 + 日志窗口、`menu`/`help`/`windows`/`apps`/`update` �
     令牌参数，所以 `open` 与 `shell:AppsFolder` 走**普通权限的代理进程**（自己的隐藏副本 `--shell-*`，不
     提权/不读配置/不装钩子）。拿不到令牌就退回继承令牌 + warning。**启动器右键菜单里的命令仍然提权**
     （已知限制，见第 12 节）。
-36. **工作空间：按显示器独立的一套空间（`settings.workspace` + `workspace` 动作）**。**M2（配置面）/
-    M3（图形界面）/ M4（平台后端）/ M5（事件管线）/ M6（动作执行）/ M7（显示器拔插与“拖到别的屏”）/
-    M8（安全与恢复）/ M9（与现有功能的联动）/ M10（规则与默认归属）已完成**；只剩 M11（文档、验收、
-    收尾）。要点：默认**开启**但没绑定就不会隐藏任何窗口；`count` 1–10（默认 9）；
+36. **工作空间：按显示器独立的一套空间（`settings.workspace` + `workspace` 动作）**。**M0（真机验证）到
+    M11（文档、验收、收尾）全部完成**。要点：默认**开启**但没绑定就不会隐藏任何窗口；`count` 1–10（默认 9）；
     `switch_target` = `"cursor"`（默认）/ `"focus"`；`new_window` = `"active"`（默认）或 1..count
     （**只对 flowkeyd 运行期间新出现的窗口生效**，启动时已在的窗口照旧收编进各自活动空间）；
     `exclude` 空串报错；动作只有 `workspace("switch"|"move", N)`，`index` ≤ `count` 在 `--check` 校验；
@@ -269,7 +267,7 @@ UI 只有托盘图标 + 日志窗口、`menu`/`help`/`windows`/`apps`/`update` �
     `SetWindowPlacement` 改显隐）；换屏后的归属：看得见的并入目标屏活动空间（`windowMovedToMonitor()`），
     藏着的**保留空间号**（`windowReboundToMonitor()`）；`window_rule.workspace` 在 `applyPlacementRules()`
     里生效，于是与 `window_rule` 的三个时机完全一致（首次出现 / 显示器重接入 / 启动），用户手动 `move`
-    之后不会被拉回去。完整理由见 `decisions.md` 第 36 条，实施计划见根目录 `plan.md`。
+    之后不会被拉回去。完整理由见 `decisions.md` 第 36 条。
 
 ---
 
@@ -329,7 +327,7 @@ Qt 侧齐备：`Qt6::Quick`、`QuickControls2`、`Qt6QuickControls2FluentWinUI3S
 | `core/pinyin.*` / `core/pinyin_data.*` | 汉字读音查询 / 生成的读音表 |
 | `core/monitor_ref.*` / `core/window_monitor_state.*` | “摆到哪块屏”的取值与判据 / `monitor = "last"` 的记忆 |
 | `core/config_map.*` / `core/config_writer.*` | 结构体 ↔ QVariant 字典（界面用）/ 结构体 → Lua 源码（含生成标记、`.bak`） |
-| `core/workspace.*` | 工作空间**纯逻辑状态机**（命令 → 显隐/焦点效果列表，含 M9 的 `revealWindow` / `windowReboundToMonitor`）+ `core/workspace_event.*`（钩子线程 → 工作线程的事件 + 「自己引起的事件」抑制表）+ `core/workspace_log.*`（恢复日志 `workspace.json` 的解析 / 序列化：64 位整数写成字符串）；M1/M5/M6/M7/M8/M9 已接线（`workspace(...)` 动作能真的显隐窗口、拔插会迁移与复位、崩溃与注销后能恢复、藏在别的空间里的窗口能被唤起） |
+| `core/workspace.*` | 工作空间**纯逻辑状态机**（命令 → 显隐/焦点效果列表，含 M9 的 `revealWindow` / `windowReboundToMonitor`）+ `core/workspace_event.*`（钩子线程 → 工作线程的事件 + 「自己引起的事件」抑制表）+ `core/workspace_log.*`（恢复日志 `workspace.json` 的解析 / 序列化：64 位整数写成字符串）；M1–M11 已全部接线（`workspace(...)` 动作能真的显隐窗口、拔插会迁移与复位、崩溃与注销后能恢复、藏在别的空间里的窗口能被唤起、规则与 `new_window` 决定新窗口的归属） |
 | `core/log_tail.*` / `core/update_check.*` / `core/version.*` / `core/desktop_badge.*` | 日志增量尾随 / 更新纯逻辑 / 版本号 / 徽标文字与字号 |
 | `src/lua/lua_config.*` + `lua_prelude.lua` | **Lua 与 C++ 的唯一边界**（转成 `core::Config`，逐条目带上下文报错）；DSL 编进 qrc |
 | `src/platform/win/` | 一个文件一件事：`ffi`（全部声明 + `currentExecutablePath()`）、`nt`、`process`（run 三条路 / open / `--shell-*` 代理）、`dwm`、`monitor`、`input`（`SendInput`、验收后门、`copySelection`）、`ime`、`hook`（回调 + 消息循环 + 定时器 + `window_rule` / 工作空间事件监听 + 显示器轮询 + 前台事件）、`apps`（扫描 + 启动 + 图标 + `StaThread`）、`shell_menu`、`audio`（MTA，高风险）、`clipboard`、`window`、`workspace`（工作空间的 hide/show/restack/身份/枚举/恢复日志读写，`SW_HIDE` 只在这里）、`session`（`WM_QUERYENDSESSION` 的隐藏窗口）、`desktop`（版本表）、`power`、`tray`、`logging`/`single_instance`（退出与「恢复全部窗口」两条事件通道）、`elevate`/`autostart`/`update` |
@@ -342,7 +340,7 @@ Qt 侧齐备：`Qt6::Quick`、`QuickControls2`、`Qt6QuickControls2FluentWinUI3S
 | `src/app/{update_model,update_archive,updater}.*` | 更新卡片状态机 / 取新 exe / 联网编排（sha256、mtime 对齐） |
 | `src/qml/` | 六个窗口 + 配置界面共用控件（`SettingCard`/各 `*Row`/`ChordsEditor`/`ActionEditor`/`ActionListEditor`/`LaunchFieldsEditor`/`WindowRuleFields`/`HotkeyFields`/`OverlayCard`/`ConfigText` 单例与四个弹层）。全部 `pragma ComponentBehavior: Bound`；五个弹窗 `flags` 带 `Qt.Tool`；配色用 `palette`；中文 `Microsoft YaHei` |
 | `tests/` | 每个模块一个 `tst_*`（清单见 `CMakeLists.txt`），含需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1` 的 `tst_interactive`（联网用例还要 `FLOWKEYD_ALLOW_NETWORK_TESTS=1`） |
-| `scripts/acceptance.ps1` | 桌面行为验收（166 项 / 实跑 163）。需交互式桌面，**不属于 `ctest`**；覆盖见 `reference.md` |
+| `scripts/acceptance.ps1` | 桌面行为验收（192 项 / 实跑 189）。需交互式桌面，**不属于 `ctest`**；覆盖见 `reference.md` |
 | `scripts/release.ps1` | 构建 + 打包（完整包 + 精简升级包 + `.sha256`）+ `gh` 上传；**发布说明脚本自己写**（按提交前缀分类）；工作区脏或 HEAD 没推会拒绝（`-AllowDirty`/`-Push`） |
 
 > `scripts/install.ps1` / `uninstall.ps1` **已删除**：自启的注册、刷新与删除全在
@@ -410,8 +408,8 @@ debug 看不到的警告）+ `FLOWKEYD_BUILD_TESTS=OFF`。
 **离线命令（绝不允许提权）**：`--check`/`--list`/`--list-keys`，提权判断必须在它们 `return` 之后；`--quit`
 也不提权，`--remove-autostart` 要管理员。开发实例与常驻的单实例锁按**配置文件路径**分开。
 
-**桌面行为验证**：`scripts/acceptance.ps1`（166 项 / 实跑 163，约三分钟，会持续注入按键/抢焦点 —— 先按
-工作约定第 6 条提醒用户）。覆盖范围、跳过项、已知 flake 与**手工冒烟清单（15 项）**在
+**桌面行为验证**：`scripts/acceptance.ps1`（192 项 / 实跑 189，约四分半，会持续注入按键/抢焦点 —— 先按
+工作约定第 6 条提醒用户）。覆盖范围、跳过项、已知 flake 与**手工冒烟清单（19 项）**在
 `docs/notes/reference.md`。
 
 ---
@@ -523,7 +521,7 @@ debug 看不到的警告）+ `FLOWKEYD_BUILD_TESTS=OFF`。
   键名小写、托盘数字徽标、窗口切换器（+数字选择 + IME）、弹窗不进任务栏 + 预热、发布包精简、精简升级包、
   `scripts/release.ps1`、在线更新、`install.ps1`、FreeType、程序启动器（+异步图标 / `shell:AppsFolder` /
   拼音 / 固定·最近·全部 / 控制面板与设置页）、弹窗缩放过期自愈、跨桌面唤起、`settings.window_monitor`、
-  图形化配置界面、启动权限。
+  图形化配置界面、启动权限、**工作空间（M0–M11，含拔插 / 拖屏 / 恢复日志 / 规则与 `new_window`）**。
 
 ---
 

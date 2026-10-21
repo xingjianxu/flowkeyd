@@ -47,6 +47,14 @@
 #   * 远程桌面放行（名单里写的是捕捉窗口自己那个进程）：前台在名单里时，没写例外的
 #     绑定被放行（键到达前台、动作不跑）、`remote_desktop = true` 的例外照常拦下来
 #     并执行；换掉名单重载之后，绑定又回到正常行为，而且 quit 例外能停掉它
+#   * 工作空间（三个一次性实例，`charmap.exe` 当载体）：`workspace("switch"|"move", N)`
+#     真的显隐窗口（切换后焦点回到那个空间最近的窗口、空空间不抢焦点）、
+#     `window("activate")` / `windows()` 切换器能把藏在别的工作空间里的**别进程**
+#     窗口唤起（先切空间再激活）、隐藏前先写恢复日志、强杀之后 `--restore-windows`
+#     按日志把窗口放回来，以及 `new_window = N` / `window_rule{ workspace = N }`
+#     让新窗口首次出现就落在指定空间并直接隐藏。**它真的会隐藏这个桌面上的窗口**
+#     （只排除了捕捉窗口自己的 powershell 与控制台），所以这一段要短、并且退出时
+#     一定把窗口放回来
 #
 # 需要交互式桌面会话，而且会真的注入按键、抢焦点（约两分钟）。按 AGENTS.md
 # 工作约定第 6 条先提醒用户再跑。
@@ -127,6 +135,7 @@ $VK_F12 = 0x7B
 $VK_F13 = 0x7C
 $VK_F14 = 0x7D
 $VK_F15 = 0x7E
+$VK_F16 = 0x7F
 $VK_Q = 0x51
 $VK_Z = 0x5A
 $VK_D = 0x44
@@ -136,6 +145,7 @@ $VK_F17 = 0x80
 $VK_F18 = 0x81
 $VK_F19 = 0x82
 $VK_F20 = 0x83
+$VK_F21 = 0x84
 $VK_F22 = 0x85
 $VK_F24 = 0x87
 $VK_CAPSLOCK = 0x14
@@ -154,12 +164,30 @@ Remove-Item (Join-Path $WorkDir 'launcher.json') -ErrorAction SilentlyContinue
 # 窗口摆放的 `monitor = "last"` 记忆（`windows.json`）也在配置文件旁边：同样清掉，
 # 这样下面那条检查一定是「第一次还没有记忆」的路径。
 Remove-Item (Join-Path $WorkDir 'windows.json') -ErrorAction SilentlyContinue
+# 工作空间的恢复日志（`workspace.json`）：上一次跑剩下的条目会让这一次的检查从
+# 一个奇怪的状态开始（而且那些窗口已经不是我们这一轮的）；先清掉。
+Remove-Item (Join-Path $WorkDir 'workspace.json') -ErrorAction SilentlyContinue
 $config = Join-Path $WorkDir 'accept.lua'
 $daemonLog = Join-Path $WorkDir 'daemon.log'
 $daemonOut = Join-Path $WorkDir 'daemon.out'
 $rdLog = Join-Path $WorkDir 'remote-desktop.log'
 $rdOut = Join-Path $WorkDir 'remote-desktop.out'
 $onceLog = Join-Path $WorkDir 'once.log'
+# 工作空间那一段用的三个一次性实例（各自的配置 / 日志 / 输出）。
+$ws1Config = Join-Path $WorkDir 'workspace-1.lua'
+$ws2Config = Join-Path $WorkDir 'workspace-2.lua'
+$ws3Config = Join-Path $WorkDir 'workspace-3.lua'
+$ws1Log = Join-Path $WorkDir 'workspace-1.log'
+$ws1Out = Join-Path $WorkDir 'workspace-1.out'
+$ws2Log = Join-Path $WorkDir 'workspace-2.log'
+$ws2Out = Join-Path $WorkDir 'workspace-2.out'
+$ws3Log = Join-Path $WorkDir 'workspace-3.log'
+$ws3Out = Join-Path $WorkDir 'workspace-3.out'
+$wsLogFile = Join-Path $WorkDir 'workspace.json'
+$wsCarriers = @()
+$ws1 = $null
+$ws2 = $null
+$ws3 = $null
 $targetTitle = 'flowkeyd-accept-target'
 $targetScript = Join-Path $WorkDir 'target-window.ps1'
 
@@ -240,6 +268,27 @@ public static class FlowInject {
     }
 
     public static bool IsWindowMinimized(IntPtr h) { return IsIconic(h); }
+
+    // 工作空间那一段的外面判据：被工作空间藏起来的窗口 `IsWindowVisible` 是假的，
+    // 而 `Get-Process` 的 `MainWindowHandle` 也会跟着变成 0 —— 所以**先拿到句柄**，
+    // 之后只用句柄问可见性。
+    // 「空空间不抢焦点」这类判断靠手柄比不可靠：隐藏前台窗口之后 Windows 自己会
+    // 把前台交给另一个窗口（M0 那个“还指在隐藏窗口上”的行为不稳定）——那条硬
+    // 保证在 `tst_workspace` 里。
+    public static bool IsVisible(IntPtr h) { return h != IntPtr.Zero && IsWindowVisible(h); }
+    public static string TitleOfHwnd(IntPtr h) {
+        if (h == IntPtr.Zero) { return ""; }
+        int n = GetWindowTextLengthW(h);
+        if (n <= 0) { return ""; }
+        StringBuilder sb = new StringBuilder(n + 2);
+        GetWindowTextW(h, sb, sb.Capacity);
+        return sb.ToString();
+    }
+
+    // 把被测窗口摆到**光标所在那块屏**上的固定位置（`switch_target = "cursor"`
+    // 要的就是这一致性；窗口自己被系统摆到另一块屏上时，切换空间根本不会碰它）。
+    [DllImport("user32.dll", SetLastError = true)] private static extern bool MoveWindow(IntPtr h, int x, int y, int w, int ht, bool repaint);
+    public static bool Move(IntPtr h, int x, int y, int w, int ht) { return MoveWindow(h, x, y, w, ht, true); }
 
     private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
     [DllImport("user32.dll")] private static extern bool EnumWindows(EnumWindowsProc cb, IntPtr p);
@@ -702,6 +751,29 @@ hotkey { name = "accept-rd-quit", comment = "rd quit", keys = "Ctrl+Alt+F10",
     Set-Content -Path $rdConfig -Value $text -Encoding UTF8
 }
 
+# 工作空间那一段的一次性配置（三个实例：交互、`new_window`、`window_rule`）。
+# `exclude` 里排掉了**捕捉窗口自己那个进程**与承载本脚本的控制台：工作空间真的会
+# 隐藏这个桌面上的窗口，把 powershell 藏起来后面所有按键检查就都没了。
+function Write-WsConfig([string]$path, [string]$newWindow, [string]$body) {
+    $windowLine = ''
+    if ($newWindow -ne '') { $windowLine = ", new_window = $newWindow" }
+    $text = @"
+settings {
+  log_level = "debug",
+  tick_ms = 15,
+  -- 远程桌面放行夹一下：真机上“Windows App / 远程桌面客户端”窗口随时可能
+  -- 抢到前台，那时全部绑定都会放行 —— 这一段测的是工作空间，不该被它连坐。
+  remote_desktop = false,
+  workspace = {
+    count = 4$windowLine,
+    exclude = { "powershell", "pwsh", "conhost", "OpenConsole", "WindowsTerminal" },
+  },
+}
+$body
+"@
+    Set-Content -Path $path -Value $text -Encoding UTF8
+}
+
 Set-Content -Path $targetScript -Value $targetScriptBody -Encoding UTF8
 Write-Config 'MARKER-1'
 
@@ -849,6 +921,35 @@ function RdText {
     $b = ''
     if (Test-Path $rdOut) { $b = (Get-Content $rdOut -Raw -ErrorAction SilentlyContinue) }
     return "$a$b"
+}
+function WsText([string]$logPath, [string]$outPath) {
+    # 工作空间那三个实例也各有自己的日志与 stdout。
+    $a = ''
+    if (Test-Path $logPath) { $a = (Get-Content $logPath -Raw -ErrorAction SilentlyContinue) }
+    $b = ''
+    if (Test-Path $outPath) { $b = (Get-Content $outPath -Raw -ErrorAction SilentlyContinue) }
+    return "$a$b"
+}
+function WsStart([string]$configPath, [string]$logPath, [string]$outPath) {
+    Remove-Item $logPath, $outPath, "$outPath.err" -ErrorAction SilentlyContinue
+    return Start-Process -FilePath $Exe `
+        -ArgumentList @('--config', $configPath, '--no-elevate', '--console', '--allow-multi',
+                        '--no-prompt', '--log-file', $logPath) `
+        -RedirectStandardOutput $outPath -RedirectStandardError "$outPath.err" `
+        -PassThru -NoNewWindow
+}
+function WaitForMainWindow([int]$procId, [int]$timeoutMs) {
+    # 窗口一出现就抓住句柄：被工作空间藏起来之后 `MainWindowHandle` 会变成 0，
+    # 之后想拿句柄就没门了。
+    $deadline = (Get-Date).AddMilliseconds($timeoutMs)
+    while ((Get-Date) -lt $deadline) {
+        $p = Get-Process -Id $procId -ErrorAction SilentlyContinue
+        if ($null -eq $p) { return [IntPtr]::Zero }
+        $p.Refresh()
+        if ($p.MainWindowHandle -ne [IntPtr]::Zero) { return $p.MainWindowHandle }
+        Start-Sleep -Milliseconds 120
+    }
+    return [IntPtr]::Zero
 }
 # 诊断信息写进 UTF-8 文件：控制台的代码页会把中文窗口标题糟蹋掉，
 # 而这个文件是给人（或 agent）事后看的。
@@ -1744,6 +1845,204 @@ try {
     Check '远程桌面里的 quit 例外能停掉第二个实例' ($rd.WaitForExit(6000))
     if (-not $rd.HasExited) { $rd.Kill() }
     FocusCatcher
+
+    # --- 工作空间（M6 / M8 / M9 / M10）--------------------------------------
+    # 这一段与前面所有组都不一样：它真的会**隐藏这个桌面上的窗口**，所以两端都
+    # 要守住：
+    #   * 配置里 `exclude` 排掉了捕捉窗口自己那个进程（powershell）与控制台；
+    #   * 被测窗口用 `charmap.exe` 当载体（普通 Win32、每个实例自己开一个窗口；
+    #     本机的记事本是单实例带标签页的 Store 应用，不适合当“新窗口”）；
+    #   * 退出路径（quit / `--restore-windows` / `finally` 里的兜底）一定会把
+    #     窗口放回来 —— 卡片上“藏着的窗口”不能留给用户。
+    Write-Host '--- 工作空间 ---'
+    function Start-Carrier {
+        $p = Start-Process -FilePath 'C:\Windows\System32\charmap.exe' -PassThru
+        $script:wsCarriers += $p
+        $hwnd = WaitForMainWindow $p.Id 15000
+        return @{ Proc = $p; Hwnd = $hwnd }
+    }
+    # 注入的按键偶而被吞（夹在“刚抢完前台 / 刚藏过一串窗口”之后），一次丢一个就
+    # 让整组检查白白失败太可惜：同一个和弦最多按三次，每次最多等三秒。
+    function ChordUntil([int]$vk, [scriptblock]$condition, [int]$tries) {
+        for ($attempt = 1; $attempt -le $tries; $attempt++) {
+            CtrlAlt $vk
+            if (WaitUntil $condition 4000) { return $true }
+            if ($attempt -lt $tries) {
+                Diag "workspace: chord 0x$('{0:x2}' -f $vk) had no effect on attempt $attempt; retrying"
+                FocusCatcher
+            }
+        }
+        return $false
+    }
+    Write-WsConfig $ws1Config '' @'
+hotkey { name = "accept-ws-switch-2", keys = "Ctrl+Alt+F15", action = workspace("switch", 2) }
+hotkey { name = "accept-ws-switch-1", keys = "Ctrl+Alt+F16", action = workspace("switch", 1) }
+hotkey { name = "accept-ws-move-2", keys = "Ctrl+Alt+F20", action = workspace("move", 2) }
+hotkey { name = "accept-ws-reveal", keys = "Ctrl+Alt+F21",
+  action = window("activate", { process = "charmap", toggle = false }) }
+hotkey { name = "accept-ws-switch", keys = "LWin", trigger = "release", action = windows() }
+hotkey { name = "accept-ws-quit", keys = "Ctrl+Alt+F10", action = quit() }
+'@
+    $ws1 = WsStart $ws1Config $ws1Log $ws1Out
+    Pump 1800
+    if ($ws1.HasExited) { throw "工作空间实例立刻退出了：`n$(Get-Content $ws1Out -Raw)" }
+    Check '工作空间实例启动时就开始跟踪窗口' (
+        WaitUntil { (WsText $ws1Log $ws1Out) -match 'workspace: tracking' } 8000)
+
+    $carrier = Start-Carrier
+    $wsHwnd = $carrier.Hwnd
+    if ($wsHwnd -eq [IntPtr]::Zero) { throw '字符映射表的窗口没出现（工作空间）' }
+    $wsTitle = [FlowInject]::TitleOfHwnd($wsHwnd)
+    Write-Host "         carrier: $wsTitle"
+    # 摆到光标那块屏上的固定位置：`switch_target` 默认是 `"cursor"`，窗口要是被
+    # 系统搁到另一块屏上，切空间根本不会碰它。
+    [FlowInject]::Move($wsHwnd, 120, 120, 420, 320) | Out-Null
+    [FlowInject]::Cursor(200, 200)
+    Pump 1200
+    Check '新窗口默认就在活动空间里（还看得见）' (
+        WaitUntil { [FlowInject]::IsVisible($wsHwnd) } 4000)
+
+    # `workspace("move", N)`：只动前台窗口，用户留在原空间。
+    [FlowInject]::ForceForeground($wsHwnd) | Out-Null
+    if (-not (WaitUntil { [FlowInject]::ForegroundTitle() -eq $wsTitle } 5000)) {
+        Diag "workspace: could not focus the carrier: $(FgInfo)"
+    }
+    CtrlAlt $VK_F20
+    Check 'workspace("move", 2) 把前台窗口藏起来了' (
+        WaitUntil { -not [FlowInject]::IsVisible($wsHwnd) } 8000)
+    Check 'move 的日志里写着它是被藏起来的（空间没跟着切）' (
+        (WsText $ws1Log $ws1Out) -match 'accept-ws-move-2[^\r\n]*workspace move 2[^\r\n]*hidden')
+
+    # `workspace("switch", N)`：旧空间的窗口隐藏、新空间的窗口显示，焦点回到
+    # 新空间最近用过的窗口。
+    [FlowInject]::Cursor(200, 200)
+    Check 'workspace("switch", 2) 把那个空间里的窗口显示回来' (
+        ChordUntil $VK_F15 { [FlowInject]::IsVisible($wsHwnd) } 3)
+    Check 'switch 写进了日志（作用在光标那块屏上）' (
+        (WsText $ws1Log $ws1Out) -match 'accept-ws-switch-2[^\r\n]*workspace switch 2 on')
+    Check '切到有窗口的空间会把焦点交给它（不是空切）' (
+        WaitUntil { [FlowInject]::ForegroundTitle() -eq $wsTitle } 6000)
+
+    # 空空间：窗口藏起来。
+    #
+    # **不断言“前台没变”**：隐藏一个前台窗口之后，Windows 自己会把前台交给
+    # 另一个窗户（M0 测到“还指在隐藏窗口上”那个行为并不稳定，尤其是同一批
+    # 里还显示了新空间的窗口）——那是外壳的决定、不是 flowkeyd 在抢前台。
+    # “空空间不抢焦点”的硬保证在 `tst_workspace`（`switchTo` 空空间 → `focus`
+    # 为空）与 `reference.md` 的手工冒烟第 4 条里。
+    FocusCatcher
+    Check 'workspace("switch", 1) 把它又藏起来了' (
+        ChordUntil $VK_F16 { -not [FlowInject]::IsVisible($wsHwnd) } 3)
+
+    # `window("activate")`：藏在别的工作空间里的窗口要先切空间再激活。
+    Check 'window("activate") 唤起了藏在别的工作空间里的窗口' (
+        ChordUntil $VK_F21 { [FlowInject]::IsVisible($wsHwnd) } 3)
+    Check '唤起之后它拿到了前台' (
+        WaitUntil { [FlowInject]::ForegroundTitle() -eq $wsTitle } 6000)
+    Check '唤起的日志里带着它所在的工作空间' (
+        (WsText $ws1Log $ws1Out) -match 'accept-ws-reveal[^\r\n]*workspace 2 on')
+
+    # 窗口切换器：被工作空间藏起来的**别进程**窗口也要列出来（`SW_HIDE` 之后
+    # `IsWindowVisible` 是假的，只能靠状态机的记录）；筛到只剩一个就直接激活它
+    # （决策 21），而“先切空间再激活”的顺序就在那一步里。
+    FocusCatcher
+    $null = ChordUntil $VK_F16 { -not [FlowInject]::IsVisible($wsHwnd) } 3
+    Dismiss-ShellUi
+    TapWinAlone
+    $wsSwitchUp = WaitUntil { [FlowInject]::HasWindowTitled($ws1.Id, $SWITCH_TITLE) } 6000
+    if (-not $wsSwitchUp) { Diag "workspace: the switcher did not open: $(FgInfo)" }
+    Check '轻碰 Win 弹出了切换器（工作空间实例）' $wsSwitchUp
+    # 按进程名筛：只剩它一个，卡片会直接激活（不会停在卡片上等 `Enter`）。
+    foreach ($ch in @(0x43, 0x48, 0x41, 0x52, 0x4D, 0x41, 0x50)) { TapKey $ch }   # charmap
+    Check '切换器筛到被工作空间藏起来的别进程窗口就直接激活它（窗口回来了）' (
+        $wsSwitchUp -and (WaitUntil { [FlowInject]::IsVisible($wsHwnd) } 8000))
+    Check '切换器选中之后它在前台' (
+        WaitUntil { [FlowInject]::ForegroundTitle() -eq $wsTitle } 6000)
+    Check '切换器的日志里带着它所在的工作空间' (
+        (WsText $ws1Log $ws1Out) -match 'from the window switcher, workspace 2')
+
+    # 安全沟槽（M8）：藏窗口之前先把身份写进 `workspace.json`；进程被强杀之后
+    # 只能靠它把窗口放回来（相当于 `taskkill /PID <pid> /F`，不给它清理的机会）。
+    FocusCatcher
+    $null = ChordUntil $VK_F16 { -not [FlowInject]::IsVisible($wsHwnd) } 3
+    $logged = Test-Path $wsLogFile
+    if (-not $logged) { Diag 'workspace: no workspace.json after hiding a window' }
+    Check '藏窗口之前先写了恢复日志（workspace.json）' (
+        $logged -and ([System.IO.File]::ReadAllText($wsLogFile) -match '"hwnd"'))
+    Stop-Process -Id $ws1.Id -Force
+    Start-Sleep -Milliseconds 800
+    Check '强杀之后窗口仍然是藏着的（这就是恢复日志存在的理由）' (
+        -not [FlowInject]::IsVisible($wsHwnd))
+    $restoreOut = Join-Path $WorkDir 'restore.out'
+    $restoreProc = Start-Process -FilePath $Exe `
+        -ArgumentList @('--restore-windows', '--config', $ws1Config, '--no-elevate', '--console') `
+        -RedirectStandardOutput $restoreOut -RedirectStandardError "$restoreOut.err" `
+        -Wait -PassThru -NoNewWindow
+    $restoreText = (Get-Content $restoreOut -Raw -ErrorAction SilentlyContinue) + (Get-Content "$restoreOut.err" -Raw -ErrorAction SilentlyContinue)
+    Check '--restore-windows 按日志把窗口放回来了' (
+        WaitUntil { [FlowInject]::IsVisible($wsHwnd) } 6000)
+    Check '--restore-windows 报告它恢复了那个窗口' (
+        $restoreProc.ExitCode -eq 0 -and $restoreText -match 'restored 1 window')
+    Check '恢复之后 workspace.json 被删掉了' (-not (Test-Path $wsLogFile))
+    $carrier.Proc.Kill()
+
+    # `settings.workspace.new_window`：只管 flowkeyd 运行期间新出现的窗口。
+    Write-Host '--- 工作空间：new_window ---'
+    Write-WsConfig $ws2Config '3' @'
+hotkey { name = "accept-ws-quit", keys = "Ctrl+Alt+F10", action = quit() }
+'@
+    $ws2 = WsStart $ws2Config $ws2Log $ws2Out
+    Pump 1800
+    if ($ws2.HasExited) { throw "工作空间实例（new_window）立刻退出了：`n$(Get-Content $ws2Out -Raw)" }
+    $carrier2 = Start-Carrier
+    $ws2Hwnd = $carrier2.Hwnd
+    if ($ws2Hwnd -eq [IntPtr]::Zero) { throw '字符映射表的窗口没出现（new_window）' }
+    Check 'new_window：新窗口出现在非活动空间就立刻隐藏' (
+        WaitUntil { -not [FlowInject]::IsVisible($ws2Hwnd) } 12000)
+    Check 'new_window 的日志里写着它落在 space 3' (
+        (WsText $ws2Log $ws2Out) -match 'in space 3')
+    FocusCatcher
+    CtrlAlt $VK_F10
+    $ws2Quit = $ws2.WaitForExit(8000)
+    Check 'quit 之前把 new_window 藏起来的窗口放回来了' (
+        $ws2Quit -and (WaitUntil { [FlowInject]::IsVisible($ws2Hwnd) } 4000))
+    $carrier2.Proc.Kill()
+
+    # `window_rule{ workspace = N }` / `app{ workspace = N }`：规则赢过
+    # `new_window`，新窗口首次出现就落在指定空间并直接隐藏。
+    Write-Host '--- 工作空间：窗口规则的归属 ---'
+    Write-WsConfig $ws3Config '' @'
+window_rule { process = "charmap", workspace = 2 }
+
+hotkey { name = "accept-ws-quit", keys = "Ctrl+Alt+F10", action = quit() }
+'@
+    # 顺带让 `--check` 走一遍带 `workspace` 的规则配置（范围校验 + 零警告）。
+    $ws3CheckOut = Join-Path $WorkDir 'workspace-3.check'
+    $ws3Check = Start-Process -FilePath $Exe -ArgumentList @('--check', '--config', $ws3Config) `
+        -RedirectStandardOutput $ws3CheckOut -RedirectStandardError "$ws3CheckOut.err" `
+        -Wait -PassThru -NoNewWindow
+    $ws3CheckText = (Get-Content $ws3CheckOut -Raw -ErrorAction SilentlyContinue) + (Get-Content "$ws3CheckOut.err" -Raw -ErrorAction SilentlyContinue)
+    Check '--check 接受带 workspace 的窗口规则（零警告）' (
+        $ws3Check.ExitCode -eq 0 -and $ws3CheckText -match '1 window rule' -and
+        $ws3CheckText -notmatch 'warning:')
+    $ws3 = WsStart $ws3Config $ws3Log $ws3Out
+    Pump 1800
+    if ($ws3.HasExited) { throw "工作空间实例（规则）立刻退出了：`n$(Get-Content $ws3Out -Raw)" }
+    $carrier3 = Start-Carrier
+    $ws3Hwnd = $carrier3.Hwnd
+    if ($ws3Hwnd -eq [IntPtr]::Zero) { throw '字符映射表的窗口没出现（规则）' }
+    Check '窗口规则：指定空间的新窗口出现即被隐藏' (
+        WaitUntil { -not [FlowInject]::IsVisible($ws3Hwnd) } 12000)
+    Check '规则的日志里写着它把窗口放进了 space 2' (
+        (WsText $ws3Log $ws3Out) -match 'window rule put[^\r\n]*space 2')
+    FocusCatcher
+    CtrlAlt $VK_F10
+    $ws3Quit = $ws3.WaitForExit(8000)
+    if (-not $ws3Quit -or -not (WaitUntil { [FlowInject]::IsVisible($ws3Hwnd) } 4000)) {
+        Diag 'workspace rule instance: the window did not come back before quitting'
+    }
+    $carrier3.Proc.Kill()
+    FocusCatcher
 }
 catch {
     Write-Host "EXCEPTION: $_"
@@ -1752,6 +2051,21 @@ catch {
 finally {
     if (-not $daemon.HasExited) { $daemon.Kill() }
     if ($null -ne $rd -and -not $rd.HasExited) { $rd.Kill() }
+    foreach ($wsProc in @($ws1, $ws2, $ws3)) {
+        if ($null -ne $wsProc -and -not $wsProc.HasExited) { $wsProc.Kill() }
+    }
+    # 工作空间那一段真会藏窗口：兜底按恢复日志放回来（正常路径已经恢复过，这里
+    # 只在失败 / 抛异常时才有东西可恢复；没有实例在跑时它自己读日志）。
+    if (Test-Path $wsLogFile) {
+        $safetyOut = Join-Path $WorkDir 'restore-finally.out'
+        $null = Start-Process -FilePath $Exe `
+            -ArgumentList @('--restore-windows', '--config', $ws1Config, '--no-elevate', '--console') `
+            -RedirectStandardOutput $safetyOut -RedirectStandardError "$safetyOut.err" `
+            -Wait -PassThru -NoNewWindow
+    }
+    foreach ($carrierProc in $wsCarriers) {
+        if ($null -ne $carrierProc -and -not $carrierProc.HasExited) { $carrierProc.Kill() }
+    }
     foreach ($proc in @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -eq $targetTitle })) {
         $proc.Kill()
     }

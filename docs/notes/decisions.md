@@ -640,9 +640,8 @@ active 后所在的 monitor 上"。
 
 ## 36. 按显示器独立的工作空间：`settings.workspace` + `workspace` 动作
 
-> 进度：**M2（配置面）/ M3（图形界面）/ M4（平台后端）/ M5（事件管线）/ M6（动作执行）/ M7（显示器拔插
-> 与拖屏）/ M8（安全与恢复）/ M9（与现有功能的联动）/ M10（规则与默认归属）已完成**；只剩 M11
-> （文档、验收、收尾）。实施计划在仓库根的 `plan.md`（M11 收尾时删除）。
+> 进度：**M0（真机验证）到 M11（文档、验收、收尾）全部完成**。下面按实现顺序记录关键决定；验收脚本的
+> 覆盖见 `reference.md`。
 
 * 术语：这个功能叫「**工作空间**」，配置名 `workspace`；「**工作区**」仍然只指显示器扣掉任务栏后的
   可用区域（`availableGeometry()` / `workArea`）；「虚拟桌面」仍然是 Windows 自己的那个。
@@ -657,8 +656,19 @@ active 后所在的 monitor 上"。
 * 规则落点：不新增条目类型，而是给 `window_rule` 加 `workspace`（决策 13 的做法），`app{}` 也能写
   `workspace = N`（= `window.workspace` 的简写，两处都写时 `window` 优先）；只写它而没有 `window`
   时也会展开出一条只带归属的规则。
-* **隐藏方式已由 M0 钉死为 `ShowWindow(SW_HIDE)`**（cloak 跨进程无权限、`SWP_HIDEWINDOW` 隐藏后
-  抢不到前台，实测见 `pitfalls.md`）。它封装在 `platform/win/workspace.*` 后面，以后要换方案只改那一处。
+* **隐藏方式已由 M0 钉死为 `ShowWindow(SW_HIDE)`**，它封装在 `platform/win/workspace.*` 后面，以后要换
+  方案只改那一处。三条候选的实测结论（探针与数据见 `pitfalls.md`）：
+  * **DWM cloak 不可用**：`DwmSetWindowAttribute(DWMWA_CLOAK)` 对**别的进程**的窗口返回
+    `E_ACCESSDENIED`（提权窗口 `E_HANDLE`）——「像虚拟桌面那样 cloak 别人的窗口」是 shell 内部
+    能力，外部进程拿不到。同进程 cloak 本身很好（不发消息、67–90 µs），但与本功能无关。
+  * **`SetWindowPos(SWP_HIDEWINDOW)` 也不行**：它更快（0.6–1.1 ms）并且不发 `WM_SHOWWINDOW`，但隐藏之后
+    `AttachThreadInput` + `SetForegroundWindow` **抢不到前台**（返回 FALSE，前台还停在隐藏窗口上）。
+    工作空间必须能把焦点交给新空间里最近用过的窗口，所以它出局。
+  * **`SW_HIDE` 是唯一同时满足“状态完全保持 + 抢得到前台”的做法**：现代化窗口（Chrome / VSCode / WezTerm /
+    UWP / Directory Opus）隐藏再显示后几何、最大化、最小化一字不差，截图像素差 0.00%。代价是跨线程
+    `SendMessage` 语义（0.6–2.2 ms/窗口，目标进程卡死会挂住调用线程 → 只在工作线程做 + 先写恢复日志）、
+    任务栏与 Alt+Tab 里会消失（这正是想要的），以及**隐藏之后 `IVirtualDesktopManager::GetWindowDesktopId`
+    会失败**（归属必须先查后缓存）。
 * 「窗口在不在」**只看状态机自己的记录，不看 `IsWindowVisible`**：被我们藏起来的窗口全都变成不可见的。
   所以 `enumerateManageable()` 要接受一份「已记录的窗口」列表，并且 `isMainWindowIgnoringVisibility()`
   是另一条判据（纯逻辑在 `core::isManageableWindow()`，可单测）。
@@ -765,8 +775,14 @@ active 后所在的 monitor 上"。
   效果真的把它显示回来）—— 本机实测通过。
   纯逻辑那一半在 `tst_workspace_log`（坏 JSON 容错、64 位整数不丢精度、去重 / 移除）。
 
-> M6/M7/M9/M10 的验收脚本检查（`scripts/acceptance.ps1`）推后到 M11：整个特性还没接完，现在加进去的项会
-> 一直失败。跨进程那一条（切换器列表里真的出现被我们藏起来的**别进程**窗口）也只能进验收脚本 ——
-> 单测进程自己的窗口会被 `listOpenWindows()` 的“不列自己”规则挡掉。M11 要补的：带
-> `workspace` 的规则下记事本首次出现即落在指定空间且被隐藏、`new_window = N` 的同类检查，以及
-> 「唤起藏在空间 2 的窗口」。
+> 验收脚本（`scripts/acceptance.ps1`）在 M11 补齐：三个一次性实例（交互 / `new_window` / `window_rule`），
+> 用 `charmap.exe` 当载体（普通 Win32、每个实例自己开窗；**记事本在本机是单实例带标签页的 Store 应用**，
+> 不适合当“新窗口”），配置里把捕捉窗口自己那个进程与控制台从工作空间里排除掉（否则切换空间会把测试
+> 自己的载体也藏起来）。覆盖：`switch` / `move` 的显隐与日志、唤起藏在别的工作空间里的窗口、**切换器里
+> 的别进程窗口**（筛到它就“先切空间再激活”）、预写恢复日志 → 强杀 → `--restore-windows` 按日志恢复、
+> `new_window = N` 与 `window_rule{ workspace = N }` 让新窗口首次出现就落在指定空间并直接隐藏、
+> `quit` 之前把藏起来的窗口放回来。
+>
+> 两条**没有**进脚本、只留手工：显示器拔插 / 拖屏（要真的断开一块屏）与“切到空空间不抢焦点”的肉眼
+> 确认（隐藏一个前台窗口之后 Windows 自己会把前台交给别的窗口，外面分不出是外壳还是 flowkeyd 干的；
+> 硬保证在 `tst_workspace` 的 `switchTo` 空空间 → `focus` 为空）。

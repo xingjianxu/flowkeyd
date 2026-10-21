@@ -560,6 +560,28 @@
   继续找下一条写了 `workspace` 的规则 —— 否则同一个窗口的几何与归属来自两条不同的规则
   （`core::workspaceForNewWindow()` 只有这一个口径，单测钉着）。
 
+### 工作空间：动作执行与安全恢复（M6 / M8）
+
+* **`show(hwnd, insertAfter)` 的方向是反的**：`SetWindowPos` 的 `hWndInsertAfter` 是“把窗口摆在它**下面**”
+  （探针记录的是顶 → 底），而状态机的 `effects.show` 是**底 → 顶**。按“逐个摆到前一个后面”写，Z 序会
+  整个反过来。现在先 `show(hwnd, nullptr)` 逐个露出来，再用一条 `restack(shown)`（底 → 顶逐对）重排。
+* **预写日志要三面都有出口**：hide 之前写盘（写不进去就**不隐藏**）、show **成功之后**才删条目、
+  hide 失败 / 窗口已经消失时把刚写的那条**撤掉**。少最后一个退出时，下次启动会去 show 一个本来就
+  可见的窗口（白忙一场）；少第一/第二个就是“窗口永远消失”。
+* **`reload` 失败不要动状态机**：失败时保留旧配置，已藏窗口的账也就不会丢。
+* **启动恢复要排在“读配置”之前**（`main.cpp` 的 `recoverWorkspaceWindows()`）：配置本身坏掉时窗口也得回来。
+  它还得**先判断有没有别的实例在跑**（判据 = `--quit` 那个事件对象还在），否则会和别人正在管理的窗口抢。
+* **`--restore-windows` 有两条路**：有实例在跑就通过 `-restore` 事件请它做（动作得在它的动作线程上跑），
+  没有就直接按日志恢复；**不读配置、不提权、不装钩子**，所以配置坏掉时仍然能用。
+* **关机 / 注销那条路不要用 `QAbstractNativeEventFilter`**：它要先假设“此刻恰好有一个 Qt 窗口活着”。
+  用 `platform/win/session.*` 里那个专门的隐藏 `WS_POPUP` 窗口收 `WM_QUERYENDSESSION` / `WM_ENDSESSION`，
+  恢复再返回 TRUE，并且**有上限**（2 s）——动作线程可能卡在长动作里。
+* **卡死的窗口直接不隐藏**：`SW_HIDE` 是跨线程 `SendMessage`，目标进程不泵消息时会把工作线程挂住
+  （钩子线程更不行）。`workspace::hide()` 先问 `IsHungAppWindow`，卡死就失败 + 一条 warning，靠日志下次再恢复。
+* **验收脚本里不要断言“隐藏前台窗口之后前台没变”**：真机上 Windows 会把前台交给另一个窗口（尤其是同
+  一批里还 `SW_SHOWNOACTIVATE` 显示了新空间的窗口时）。外面分不出这是外壳的决定还是 flowkeyd 在抢
+  前台，所以那条保证只留在 `tst_workspace`（`switchTo` 空空间 → `focus` 为空）与手工冒烟里。
+
 ## 原生 shell 右键菜单（`platform/win/shell_menu`）
 
 * **`TrackPopupMenuEx` 弹的是 shell 生成的菜单，所以菜单消息必须转给 `IContextMenu2/3`**：`HMENU` 里可能
