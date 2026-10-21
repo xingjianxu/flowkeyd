@@ -6,7 +6,8 @@
 > 每个子任务结束都要满足 `AGENTS.md` 第 11 节 DoD（debug + release 双构建、debug 上 `ctest` 全绿、
 > `--check flowkeyd.lua.example` 零警告）。
 
-**当前进度：M0 ✅（结论在下文 M0 节 + `docs/notes/pitfalls.md`）。下一步：M1（纯逻辑状态机）可与 M2 并行开工；
+**当前进度：M0 ✅（结论在下文 M0 节 + `docs/notes/pitfalls.md`）、M1 ✅（`src/core/workspace.*` +
+`tests/tst_workspace.cpp`，语义在下文 M1 节末尾）。下一步：M2（配置面）/M4（平台后端）可与 M3 并行开工；
 M4 的隐藏方式已钉死为 `SW_HIDE`。门禁：M2 开工前需要项目所有者把第 3 节的 Q2/Q3/Q4/Q6/Q8 拍一下。**
 
 ## 0. 已确认的决策（来自与项目所有者的问答）
@@ -150,7 +151,7 @@ GUI 线程：只负责托盘菜单项「恢复全部窗口」→ 回投给工作
 → **已产出**：结论表见本节顶部；方案 = `SW_HIDE`（`SWP_HIDEWINDOW` 与 cloak 均被实测否决）；UWP 处理策略
 = 藏/显 `ApplicationFrameWindow`；实现落点见 M4（后端封装成单一 `hide`/`show`，以后要换方案只改那一处）。
 
-### M1　纯逻辑：工作空间状态机（无依赖，可与 M0 并行）
+### M1　纯逻辑：工作空间状态机　✅ 已完成（2026-10-21）
 
 **目标**：`core/workspace.*`，对外是「输入事件 / 命令 → 效果列表」的纯函数式接口。
 
@@ -176,6 +177,29 @@ GUI 线程：只负责托盘菜单项「恢复全部窗口」→ 回投给工作
 * 测试：`tst_workspace`（新增，加进 `CMakeLists.txt` 的测试清单）。覆盖上面每条规则 + 多显示器独立性
   （A 屏切换不影响 B 屏）+ 随机操作序列的不变量检查（每个窗口恰属一个空间；每个显示器恰一个活动空间；
   活动空间的窗口集 = 应显示集）。
+
+→ **已产出**：`src/core/workspace.h` / `src/core/workspace.cpp` + `tests/tst_workspace.cpp`
+（19 个用例，含 3000 步随机序列 + 不变量检查）。状态机叫 `core::WorkspaceState`（**不叫** `Workspace`：那个
+名字留给 M2 的动作类型），配套类型是 `WorkspaceId` / `WindowRecord` / `MonitorSpaces` / `WorkspaceEffects`。
+M2 之后要用到的语义（**都已有单测钉住**）：
+
+* 效果结构是 `show`（**底 → 顶**，就是还原用的 Z 序栈）/ `hide`（**顶 → 底**）/ `focus`（`std::optional`，
+  空 = 不抢焦点）。平台层按 `show` → `hide` → `focus` 的顺序做；
+* `switchTo` / `moveWindow` / `windowAppeared` 的 `index` **一律夹到 `[1, count]`**（不报错：M2 的校验负责
+  报错，这里只保证不丢窗口）；`switchTo` 目标 = 活动空间时**恒为空效果**（幂等，自触发事件不会打成环）；
+* **「可见」= 「在它那块屏的活动空间里」**，是唯一判据（决不能用 `IsWindowVisible`）。因此凡是会改变归属的
+  操作（`reconfigure` / 显示器拔出 / 物归原主）都必须顺手算出「本来不可见、现在在活动空间」的窗口并
+  `show` 出来，否则它们会永久藏在活动空间里（而对活动空间切换是幂等无操作，救不回来）；
+* `reconfigure` 要先快照**旧**活动空间再夹新值，否则夹活动空间会把本来藏着的窗口误判成「本来可见」；
+* 焦点候选 = 该空间里**没最小化**、`lastFocusSeq` 最大的那个；都没有焦点记录（刚出现的一批）取 Z 序最上面
+  的；全都最小化 → `focus` 为空。`moveWindow` 只有搬走的正是「最近拿到焦点的那一个」时才交接焦点
+  （`m_lastFocused`，由 `focusChanged` 维护）；
+* 显示器拔出后的**并入目标** = `monitorsChanged()` 收到的列表里的**第一块**（调用方决定优先级，传
+  `sortedMonitors()` 的顺序即可）；重新接入按 `homeMonitor`/`homeIndex` 物归原主；拔插**永远不抢焦点**；
+  空列表（一块屏都没有）= 整条命令无操作；
+* 状态按 **（虚拟桌面，显示器）** 分开记，`setDesktop()` 本身不产生效果（虚拟桌面的显隐归 Windows）；
+* 命令全部**幂等**（重复的 `windowAppeared` / `switchTo` / `focusChanged` / `restoreAll` 都是空效果），
+  不认识的窗口一律忽略；`windowDestroyed` / `focusChanged` / `windowMinimized` **恒为空效果**。
 
 ### M2　配置面（依赖 M1 的类型；只做 core + lua + 文档）
 
