@@ -222,16 +222,21 @@ HWND firstMainWindowBelow(HWND hwnd)
 /// 便宜的检查（可见性 / 属主 / 工具窗口）先做，真正跨进程的调用（读标题、
 /// 读矩形）只对活得下来的窗口做；`cloaked` 不在这里读 —— 调用方先确认它
 /// “看起来像主窗口”再问 DWM（见 `isSwitchableWindow`）。
-core::TopLevelWindowFacts windowFacts(HWND hwnd)
+core::TopLevelWindowFacts windowFacts(HWND hwnd, bool requireVisible = true)
 {
     core::TopLevelWindowFacts facts;
     if (hwnd == nullptr || IsWindow(hwnd) == 0) {
         return facts;
     }
     if (IsWindowVisible(hwnd) == 0) {
-        return facts;
+        // `requireVisible = false` 是给工作空间用的：被我们 `SW_HIDE` 藏起来的
+        // 窗口也得能判断“它本来是不是一个主窗口”。
+        if (requireVisible) {
+            return facts;
+        }
+    } else {
+        facts.visible = true;
     }
-    facts.visible = true;
     // 外壳自己的「Program Manager」（`Progman`）不是用户想切换到的程序窗口。
     if (hwnd == GetShellWindow()) {
         facts.isShellWindow = true;
@@ -342,6 +347,14 @@ std::vector<HWND> topLevelWindows()
 bool isMainWindow(HWND hwnd)
 {
     return core::isMainWindow(windowFacts(hwnd));
+}
+
+bool isMainWindowIgnoringVisibility(HWND hwnd)
+{
+    core::TopLevelWindowFacts facts = windowFacts(hwnd, false);
+    // 不要求可见，但其余判据（无属主 / 非工具窗口 / 有标题 / 有尺寸）一个不少。
+    facts.visible = true;
+    return core::isMainWindow(facts);
 }
 
 bool isSwitchableWindow(HWND hwnd)

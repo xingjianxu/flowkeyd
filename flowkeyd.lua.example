@@ -107,6 +107,25 @@ settings{
   -- 单个 `window_rule` / `window()` 动作上写了 `monitor` 的条目不受这里影响
   -- （显式写的优先；写 `monitor = "none"` 就是那一项不跟缺省走）。
   window_monitor = "cursor",
+
+  -- 工作空间（按显示器独立的一组空间，Hyprland 风格）。**默认开启**，但没有任何
+  -- `workspace("switch", N)` / `workspace("move", N)` 绑定时它只是跟着记窗口归属，
+  -- 不会隐藏任何窗口。`workspace = false` 是整个关掉。
+  --   count         每块屏有几个空间（1–10，默认 9）；改小之后超出范围的空间并入最后一个。
+  --   switch_target `workspace("switch", N)` 作用在哪块屏上：
+  --                   "cursor"（默认）光标所在的那一块
+  --                   "focus"          前台窗口所在的那一块
+  --   new_window    新窗口归入哪个空间："active"（默认 = 那块屏当前的活动空间）或 1..count。
+  --                 单个程序用 window_rule / app 的 `workspace` 指定更好。
+  --   exclude       完全不归工作空间管的程序（进程名子串，大小写无关）：它们的窗口
+  --                 永远不会被隐藏（游戏、录屏、虚拟机的窗口通常写在这里）。
+  workspace = {
+    enabled = true,
+    count = 9,
+    switch_target = "cursor",
+    new_window = "active",
+    -- exclude = { "game.exe", "obs64.exe" },
+  },
 }
 
 -- =============================================================================
@@ -462,6 +481,24 @@ for i = 1, 3 do
   }
 end
 
+-- 工作空间：按显示器独立的一组空间（Hyprland 风格）。
+--
+-- 与**虚拟桌面**是两回事：虚拟桌面是 Windows 自己的、整屏切换；工作空间是每块
+-- 显示器各自一套（默认 9 个），切换只影响一块屏。`settings.workspace` 决定
+-- 数量与切换目标（见上面）。
+--
+--   workspace("switch", 2)  —— 把那块屏切到空间 2（旧空间的窗口藏起来，新空间的窗口显示出来）
+--   workspace("move", 2)    —— 把当前窗口发到它自己那块屏的空间 2（非活动空间则立即隐藏）
+--
+-- 下面这组是最常见的绑法，但**默认注释掉**：启动器的快速启动键用的就是
+-- `Alt` + 数字（`Alt+1`..`Alt+9`、`Alt+0`，见上面 apps 那一节），两者会抢。
+-- 要用就在这里换一组不冲突的和弦，或者接受“启动器开着时优先给启动器”。
+--
+-- for i = 1, 9 do
+--   hotkey{ keys = "Alt+" .. i, action = workspace("switch", i) }
+--   hotkey{ keys = "Alt+Shift+" .. i, action = workspace("move", i) }
+-- end
+
 -- 剪贴板辅助。
 hotkey{
   name = "copy-path",
@@ -683,6 +720,9 @@ hotkey{
 --                   即铺满目标显示器的工作区（扣掉任务栏）。
 -- x / y             可选，相对目标显示器工作区左上角的偏移（像素）。
 -- width / height    可选，像素。maximize = true 不能与它们同时写。
+-- workspace         可选，这个程序的新窗口归入第几个工作空间（1 起，不能超过
+--                   settings.workspace.count）；不写就看 settings.workspace.new_window
+--                   （默认 = 那块屏当前的活动空间）。与虚拟桌面互不干扰。
 -- enabled           可选，false 表示忽略这条。
 --
 -- 只写 desktop 时窗口的大小 / 位置保持不动（不会因为“默认最大化”而突然变大）。
@@ -755,6 +795,8 @@ window_rule{
 --                快捷键换等待时间就写 window("activate", { wait_ms = 5000 })。
 --   window       可选，一条 window_rule 的全部字段（desktop / monitor / maximize …），
 --                process / title / name 自动继承，不用重复写。
+--   workspace    可选，这个程序的新窗口进第几个工作空间（window.workspace 的简写；
+--                与 window 里都写时以 window 为准）。只写它时也会展开成一条规则。
 --   hotkeys      可选，一组 hotkey（字段与 hotkey{} 完全相同）；其中的 window 动作
 --                自动继承 app 的 process / title / launch（显式写的优先；动作自己的
 --                launch 逐字段覆盖 app 的），于是不再需要手写 process = "..."。
@@ -790,6 +832,7 @@ app{
 -- 不写 name 也可以：规则与默认的绑定名都用 process。
 app{
   process = "obs64",
+  workspace = 2,
   window = { monitor = "primary", maximize = false, width = 1280, height = 800 },
 }
 

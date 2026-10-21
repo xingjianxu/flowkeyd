@@ -65,6 +65,9 @@ private slots:
     void helpersBuildTheSameTablesAsTheRawForm();
     void movingWindowOpsAreConverted();
     void windowActionMonitorIsConverted();
+    void workspaceActionIsConverted();
+    void workspaceSettingsAreConverted();
+    void workspaceRulesAndAppsAreConverted();
     void runWithoutArgsAndWithEmptyArgs();
     void elevatedIsConverted();
     void menuAndPowerHelpersBuildTheExpectedTables();
@@ -227,6 +230,118 @@ void TestLua::windowActionMonitorIsConverted()
     QVERIFY2(bad.contains(QStringLiteral("monitor")), qPrintable(bad));
     const QString wrongType = failure(R"(hotkey{ keys = "Win+1", action = window("activate", { monitor = {} }) })");
     QVERIFY2(wrongType.contains(QStringLiteral("monitor")), qPrintable(wrongType));
+}
+
+/// `workspace("switch"|"move", N)`：构造器与裸表两种写法都要能转换。
+void TestLua::workspaceActionIsConverted()
+{
+    const auto c = parse(R"(
+        settings{ workspace = { count = 4 } }
+        hotkey{ keys = "Alt+1", action = workspace("switch", 1) }
+        hotkey{ keys = "Alt+2", action = workspace("move", 2) }
+        hotkey{ keys = "Alt+3", action = { type = "workspace", op = "switch", index = 3 } }
+    )");
+    QVERIFY(c.has_value());
+    QCOMPARE(c->bindings.size(), std::size_t(3));
+    QCOMPARE(c->bindings[0].press.at(0).kind, core::Action::Kind::Workspace);
+    QCOMPARE(c->bindings[0].press.at(0).workspaceOp, core::WorkspaceOp::Switch);
+    QCOMPARE(c->bindings[0].press.at(0).workspaceIndex, std::uint32_t(1));
+    QCOMPARE(c->bindings[1].press.at(0).workspaceOp, core::WorkspaceOp::Move);
+    QCOMPARE(c->bindings[1].press.at(0).workspaceIndex, std::uint32_t(2));
+    QCOMPARE(c->bindings[2].press.at(0).workspaceIndex, std::uint32_t(3));
+    QCOMPARE(c->bindings[0].press.at(0).summary(), QStringLiteral("workspace switch 1"));
+
+    // `op` 只接 switch / move；`index` 必须写。
+    const QString badOp = failure(R"(hotkey{ keys = "Alt+5", action = { type = "workspace", op = "swap", index = 1 } })");
+    QVERIFY2(badOp.contains(QStringLiteral("unknown variant `swap`")), qPrintable(badOp));
+    const QString noIndex = failure(R"(hotkey{ keys = "Alt+5", action = { type = "workspace", op = "switch" } })");
+    QVERIFY2(noIndex.contains(QStringLiteral("missing field `index`")), qPrintable(noIndex));
+    // 超出 `settings.workspace.count` 的空间号由 `compile()` 报（不变量 6）。
+    const QString tooBig = failure(R"(
+        settings{ workspace = { count = 2 } }
+        hotkey{ keys = "Alt+5", action = workspace("switch", 7) }
+    )");
+    QVERIFY2(tooBig.contains(QStringLiteral("out of range")), qPrintable(tooBig));
+}
+
+/// `settings.workspace`：表与布尔两种形状，以及各种错形状的提示。
+void TestLua::workspaceSettingsAreConverted()
+{
+    // 不写就是默认（开着、9 个空间、跟随光标、新窗口进活动空间）。
+    const auto defaults = parse(R"(settings{ swallow = true })");
+    QVERIFY(defaults.has_value());
+    QVERIFY(defaults->settings.workspace.enabled);
+    QCOMPARE(defaults->settings.workspace.count, core::kDefaultWorkspaceCount);
+    QVERIFY(defaults->settings.workspace.switchTarget == core::WorkspaceSwitchTarget::Cursor);
+    QCOMPARE(defaults->settings.workspace.newWindow, std::uint32_t(0));
+    QVERIFY(defaults->settings.workspace.exclude.isEmpty());
+
+    const auto table = parse(R"(
+        settings{
+          workspace = {
+            enabled = true,
+            count = 4,
+            switch_target = "focus",
+            new_window = 3,
+            exclude = { "game.exe", "obs" },
+          },
+        }
+    )");
+    QVERIFY(table.has_value());
+    QCOMPARE(table->settings.workspace.count, std::uint32_t(4));
+    QVERIFY(table->settings.workspace.switchTarget == core::WorkspaceSwitchTarget::Focus);
+    QCOMPARE(table->settings.workspace.newWindow, std::uint32_t(3));
+    QCOMPARE(table->settings.workspace.exclude,
+             QStringList({QStringLiteral("game.exe"), QStringLiteral("obs")}));
+
+    // `workspace = false` 是「整个关掉」的简写。
+    const auto off = parse(R"(settings{ workspace = false })");
+    QVERIFY(off.has_value());
+    QVERIFY(!off->settings.workspace.enabled);
+
+    // `new_window = "active"` 与不写等价。
+    const auto active = parse(R"(settings{ workspace = { new_window = "active" } })");
+    QVERIFY(active.has_value());
+    QCOMPARE(active->settings.workspace.newWindow, std::uint32_t(0));
+
+    // 错的形状说清楚。
+    const QString badSwitch = failure(R"(settings{ workspace = { switch_target = "window" } })");
+    QVERIFY2(badSwitch.contains(QStringLiteral("expected one of `cursor`, `focus`")),
+             qPrintable(badSwitch));
+    const QString badNewWindow = failure(R"(settings{ workspace = { new_window = "first" } })");
+    QVERIFY2(badNewWindow.contains(QStringLiteral("new_window")), qPrintable(badNewWindow));
+    const QString badType = failure(R"(settings{ workspace = 9 })");
+    QVERIFY2(badType.contains(QStringLiteral("workspace")), qPrintable(badType));
+    const QString unknown = failure(R"(settings{ workspace = { size = 3 } })");
+    QVERIFY2(unknown.contains(QStringLiteral("unknown field `size`")), qPrintable(unknown));
+}
+
+/// `window_rule.workspace` 与 `app.workspace`（后者的 shorthand 展开在 `compile()` 里）。
+void TestLua::workspaceRulesAndAppsAreConverted()
+{
+    const auto rule = parse(R"(
+        settings{ workspace = { count = 5 } }
+        window_rule{ process = "code", workspace = 2, monitor = "none" }
+    )");
+    QVERIFY(rule.has_value());
+    QCOMPARE(rule->windowRules.size(), std::size_t(1));
+    QCOMPARE(rule->windowRules[0].workspace, std::optional<std::uint32_t>(2));
+
+    const auto app = parse(R"(
+        settings{ workspace = { count = 5 } }
+        app{
+          process = "code",
+          workspace = 3,
+          hotkeys = { { keys = "Alt+3", action = window("activate") } },
+        }
+    )");
+    QVERIFY(app.has_value());
+    QCOMPARE(app->windowRules.size(), std::size_t(1));
+    QCOMPARE(app->windowRules[0].workspace, std::optional<std::uint32_t>(3));
+    QCOMPARE(app->windowRules[0].process.value_or(QString()), QStringLiteral("code"));
+
+    const QString unknown = failure(R"(app{ process = "a", workspaces = 2 })");
+    QVERIFY2(unknown.contains(QStringLiteral("unknown field `workspaces`")), qPrintable(unknown));
 }
 
 void TestLua::runWithoutArgsAndWithEmptyArgs()

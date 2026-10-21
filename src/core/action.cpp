@@ -146,6 +146,17 @@ QString windowOpDebugName(WindowOp op)
     return QStringLiteral("Activate");
 }
 
+QString workspaceOpName(WorkspaceOp op)
+{
+    switch (op) {
+    case WorkspaceOp::Switch:
+        return QStringLiteral("switch");
+    case WorkspaceOp::Move:
+        return QStringLiteral("move");
+    }
+    return QStringLiteral("switch");
+}
+
 QString toggleStateDebugName(ToggleState state)
 {
     switch (state) {
@@ -297,6 +308,18 @@ std::optional<WindowOp> windowOpFromName(const QString &name)
     }
     if (key == QLatin1String("move_right_monitor") || key == QLatin1String("right_monitor")) {
         return WindowOp::MoveRightMonitor;
+    }
+    return std::nullopt;
+}
+
+std::optional<WorkspaceOp> workspaceOpFromName(const QString &name)
+{
+    const QString key = name.trimmed().toLower();
+    if (key == QLatin1String("switch") || key == QLatin1String("goto")) {
+        return WorkspaceOp::Switch;
+    }
+    if (key == QLatin1String("move") || key == QLatin1String("send")) {
+        return WorkspaceOp::Move;
     }
     return std::nullopt;
 }
@@ -486,6 +509,8 @@ QString Action::summary() const
             return QStringLiteral("apps %1").arg(rustDebug(*appsTitle));
         }
         return QStringLiteral("apps");
+    case Kind::Workspace:
+        return QStringLiteral("workspace %1 %2").arg(workspaceOpName(workspaceOp)).arg(workspaceIndex);
     case Kind::Power:
         return QStringLiteral("power %1").arg(powerOpName(powerOp));
     case Kind::Suspend:

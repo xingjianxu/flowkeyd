@@ -18,6 +18,7 @@ OverlayCard {
 
     property bool hasLaunch: entry.launch !== undefined
     property bool hasWindow: entry.window !== undefined
+    property bool hasWorkspace: entry.workspace !== undefined
     property int hotkeyRevision: 0
 
     onEntryChanged: overlay.ensure()
@@ -93,6 +94,34 @@ OverlayCard {
         visible: overlay.hasLaunch
         spec: overlay.entry.launch ? overlay.entry.launch : ({})
         editor: overlay.editor
+    }
+
+    Head {
+        text: qsTr("工作空间")
+    }
+
+    BoolRow {
+        width: parent.width
+        label: qsTr("指定工作空间")
+        hint: qsTr("这个程序的新窗口进第几个工作空间（window.workspace 的简写；下面「窗口摆放」里也写了就以那里为准）")
+        value: overlay.hasWorkspace
+        onPicked: {
+            overlay.hasWorkspace = value
+            if (value)
+                overlay.entry.workspace = 1
+            else
+                delete overlay.entry.workspace
+        }
+    }
+
+    SpinRow {
+        width: parent.width
+        visible: overlay.hasWorkspace
+        label: qsTr("第几个工作空间")
+        value: overlay.entry.workspace !== undefined ? overlay.entry.workspace : 1
+        from: 1
+        to: 10
+        onPicked: function (value) { overlay.entry.workspace = value }
     }
 
     Head {
@@ -248,6 +277,7 @@ OverlayCard {
             overlay.entry.hotkeys = []
         overlay.hasLaunch = overlay.entry.launch !== undefined
         overlay.hasWindow = overlay.entry.window !== undefined
+        overlay.hasWorkspace = overlay.entry.workspace !== undefined
     }
 
     function appendHotkey() {

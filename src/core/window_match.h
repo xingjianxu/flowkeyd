@@ -111,4 +111,44 @@ WindowPlan planWindowAction(WindowOp op, std::optional<bool> toggle, bool alread
 /// `animate`，而 `TransitionGuard` 也只在返回 true 时才去关 DWM 动画。
 bool windowOpHasTransition(WindowOp op);
 
+// ---------------------------------------------------------------------------
+// 工作空间：哪些窗口归它管（纯函数，可单测）
+// ---------------------------------------------------------------------------
+
+/// 一个候选窗口的原始观察值（除 `TopLevelWindowFacts` 之外还要问的那几项）。
+///
+/// `platform/win/workspace.cpp` 只负责枚举与调用 Win32，判断交给这里的纯函数。
+/// 两条与 M0 实测结论直接相关的字段：
+///   * `tracked` —— 这个窗口已经在工作空间状态机的记录里。它可能正被我们用
+///     `ShowWindow(SW_HIDE)` 藏着，于是 `IsWindowVisible` 是假的；
+///     **记录才是判据**（不能拿可见性当“在不在”）；
+///   * `ownProcess` —— flowkeyd 自己的窗口（弹窗 / 日志窗口）永远不归工作空间管。
+struct ManageableWindowFacts
+{
+    /// 窗口还在（`IsWindow`）。
+    bool exists = false;
+    /// 已经在工作空间状态机的记录里。
+    bool tracked = false;
+    /// 属主进程就是 flowkeyd 自己。
+    bool ownProcess = false;
+    /// 外壳自己的东西：`Progman` / `WorkerW` / 任务栏（`Shell_TrayWnd` 系列）。
+    bool shellWindow = false;
+    /// 已经被记录的窗口还满不满足「主窗口」判据（隐藏不影响这个判断）。
+    bool mainWindow = false;
+};
+
+/// 排除名单命中吗（可执行文件名的大小写无关子串；空名单 / 空 needle 不排除）。
+///
+/// 拿不到进程名时**不**排除（不能因为读不到就认定它“被排除了”）。
+bool workspaceExcluded(const std::optional<QString> &executableName, const QStringList &exclude);
+
+/// 这个窗口归不归工作空间管。
+///
+/// 判据：窗口还在、不是 flowkeyd 自己的、不是外壳自己的（任务栏 / 桌面）、
+/// 「主窗口」而不是工具窗口 / 无标题 / 有属主的对话框，且不在排除名单里。
+/// **已记录的窗口不受可见性影响**（它们可能正被我们藏着）。
+bool isManageableWindow(const ManageableWindowFacts &facts,
+                        const std::optional<QString> &executableName,
+                        const QStringList &exclude);
+
 } // namespace flowkeyd::core

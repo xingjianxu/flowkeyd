@@ -110,5 +110,9 @@ QStringList clipboardOpNames();
 QStringList windowOpNames();
 QStringList powerOpNames();
 QStringList toggleStateNames();
+/// `workspace` 动作的 op（`switch` / `move`）。
+QStringList workspaceOpNames();
+/// `settings.workspace.switch_target` 的取值（`cursor` / `focus`）。
+QStringList workspaceSwitchTargetNames();
 
 } // namespace flowkeyd::core

@@ -14,6 +14,20 @@
 using namespace flowkeyd::core;
 using namespace flowkeyd::test;
 
+namespace {
+
+/// 一个 `workspace("switch"|"move", N)` 动作。
+Action workspaceAction(WorkspaceOp op, std::uint32_t index)
+{
+    Action action;
+    action.kind = Action::Kind::Workspace;
+    action.workspaceOp = op;
+    action.workspaceIndex = index;
+    return action;
+}
+
+} // namespace
+
 class TestConfig : public QObject
 {
     Q_OBJECT
@@ -51,6 +65,9 @@ private slots:
     void appLaunchIsInheritedAndOverridden();
     void appProblemsAreReported();
     void settingsValidation();
+    void workspaceSettingsDefaultsAndValidation();
+    void workspaceActionIsCompiledAndValidated();
+    void windowRulesAndAppsCarryAWorkspace();
     void remoteDesktopDefaultsAndOverrides();
     void remoteDesktopProcessListIsValidated();
     void evaluationErrorsAreReported();
@@ -1274,6 +1291,152 @@ void TestConfig::remoteDesktopProcessListIsValidated()
     Config empty;
     empty.settings.remoteDesktopProcesses = QStringList{};
     QVERIFY(!compileConfig(empty).has_value());
+}
+
+void TestConfig::workspaceSettingsDefaultsAndValidation()
+{
+    // 默认：**开着**、每屏 9 个空间、跟随光标、新窗口进活动空间、没有排除名单。
+    const auto compiled = compileOrDie(Config{});
+    QVERIFY(compiled->settings.workspace.enabled);
+    QCOMPARE(compiled->settings.workspace.count, kDefaultWorkspaceCount);
+    QVERIFY(compiled->settings.workspace.switchTarget == WorkspaceSwitchTarget::Cursor);
+    QCOMPARE(compiled->settings.workspace.newWindow, 0u);
+    QVERIFY(compiled->settings.workspace.exclude.isEmpty());
+
+    // 范围：`count` 只接 1–10（夹在 `--check` 里报错，不让运行时猜）。
+    Config zero;
+    zero.settings.workspace.count = 0;
+    auto error = compileConfig(zero);
+    QVERIFY(error.has_value());
+    QVERIFY2(error->toString().contains(QStringLiteral("settings.workspace.count")),
+             qPrintable(error->toString()));
+
+    Config many;
+    many.settings.workspace.count = kMaxWorkspaceCount + 1;
+    QVERIFY(compileConfig(many).has_value());
+
+    // `new_window`：0 = `"active"`；否则必须落在 `1..count`。
+    Config newWindowTooBig;
+    newWindowTooBig.settings.workspace.count = 4;
+    newWindowTooBig.settings.workspace.newWindow = 5;
+    error = compileConfig(newWindowTooBig);
+    QVERIFY(error.has_value());
+    QVERIFY2(error->toString().contains(QStringLiteral("new_window")),
+             qPrintable(error->toString()));
+
+    Config newWindowOk;
+    newWindowOk.settings.workspace.count = 4;
+    newWindowOk.settings.workspace.newWindow = 4;
+    QVERIFY(!compileConfig(newWindowOk).has_value());
+
+    // 空串排除名单会匹配所有窗口（同 remote_desktop.processes 的理由）。
+    Config emptyExclude;
+    emptyExclude.settings.workspace.exclude =
+        QStringList{QStringLiteral("game.exe"), QStringLiteral("  ")};
+    error = compileConfig(emptyExclude);
+    QVERIFY(error.has_value());
+    QVERIFY2(error->toString().contains(QStringLiteral("settings.workspace.exclude[2]")),
+             qPrintable(error->toString()));
+}
+
+void TestConfig::workspaceActionIsCompiledAndValidated()
+{
+    Config config;
+    config.settings.workspace.count = 4;
+    config.hotkeys.push_back(hotkeyNamed(
+        QStringLiteral("ws-switch"), QStringLiteral("Alt+2"),
+        specOne(workspaceAction(WorkspaceOp::Switch, 2))));
+    const auto compiled = compileOrDie(config);
+    QCOMPARE(compiled->bindings.size(), std::size_t(1));
+    const Action &action = compiled->bindings.at(0).press.at(0);
+    QVERIFY(action.kind == Action::Kind::Workspace);
+    QVERIFY(action.workspaceOp == WorkspaceOp::Switch);
+    QCOMPARE(action.workspaceIndex, 2u);
+    QCOMPARE(action.summary(), QStringLiteral("workspace switch 2"));
+    // `workspace` 不是危险动作（不弹两次确认）。
+    QVERIFY(!isDestructive(action));
+
+    // 超出 `settings.workspace.count` 的空间号要在加载时报错（不变量 6）。
+    Config tooBig = config;
+    tooBig.hotkeys.clear();
+    tooBig.hotkeys.push_back(
+        hotkey(QStringLiteral("Alt+9"), specOne(workspaceAction(WorkspaceOp::Move, 9))));
+    auto error = compileConfig(tooBig);
+    QVERIFY(error.has_value());
+    QVERIFY2(error->toString().contains(QStringLiteral("workspace index 9 is out of range")),
+             qPrintable(error->toString()));
+
+    // `0` 不是合法空间号（空间从 1 开始）。
+    Config zero = tooBig;
+    zero.hotkeys.at(0).action->action.workspaceIndex = 0;
+    error = compileConfig(zero);
+    QVERIFY(error.has_value());
+    QVERIFY2(error->toString().contains(QStringLiteral("must be 1 or greater")),
+             qPrintable(error->toString()));
+
+    // 嵌在 `menu` 条目里的 `workspace` 动作也要被查（递归到子动作）。
+    Config nested;
+    nested.settings.workspace.count = 3;
+    Action menu;
+    menu.kind = Action::Kind::Menu;
+    MenuItemDef item = menuItem(QStringLiteral("工作空间 9"));
+    item.action = std::make_shared<ActionSpec>(specOne(workspaceAction(WorkspaceOp::Switch, 9)));
+    menu.items.push_back(item);
+    nested.hotkeys.push_back(hotkey(QStringLiteral("Alt+m"), specOne(menu)));
+    error = compileConfig(nested);
+    QVERIFY(error.has_value());
+    QVERIFY2(error->toString().contains(QStringLiteral("out of range")),
+             qPrintable(error->toString()));
+}
+
+void TestConfig::windowRulesAndAppsCarryAWorkspace()
+{
+    // `window_rule.workspace`：只写它也算“做了点事”（不能因为“只匹配、什么都不做”被丢掉）。
+    Config rule;
+    rule.settings.workspace.count = 5;
+    rule.settings.windowMonitor = MonitorRef{MonitorRef::Kind::None, 1, QString()};
+    WindowRuleDef def;
+    def.process = QStringLiteral("code");
+    def.workspace = 3;
+    rule.windowRules.push_back(def);
+    auto compiled = compileOrDie(rule);
+    QCOMPARE(compiled->windowRules.size(), std::size_t(1));
+    QCOMPARE(compiled->windowRules.at(0).workspace, std::optional<std::uint32_t>(3));
+    QVERIFY(!compiled->windowRules.at(0).applyGeometry);
+    QVERIFY2(compiled->windowRules.at(0).summary().contains(QStringLiteral("workspace 3")),
+             qPrintable(compiled->windowRules.at(0).summary()));
+
+    // 超出 count 的空间号报错。
+    Config tooBig = rule;
+    tooBig.windowRules.at(0).workspace = 9;
+    auto error = compileConfig(tooBig);
+    QVERIFY(error.has_value());
+    QVERIFY2(error->toString().contains(QStringLiteral("`workspace` must be between 1 and 5")),
+             qPrintable(error->toString()));
+
+    // `app.workspace` 是 `window.workspace` 的简写：没写 `window` 时也要展开成一条规则。
+    Config app;
+    AppDef appDef;
+    appDef.process = QStringLiteral("code");
+    appDef.workspace = 2;
+    app.apps.push_back(appDef);
+    compiled = compileOrDie(app);
+    QCOMPARE(compiled->windowRules.size(), std::size_t(1));
+    QCOMPARE(compiled->windowRules.at(0).process, std::optional<QString>(QStringLiteral("code")));
+    QCOMPARE(compiled->windowRules.at(0).workspace, std::optional<std::uint32_t>(2));
+
+    // 两处都写时 `window.workspace` 赢（显式写的优先）。
+    Config both;
+    AppDef withWindow;
+    withWindow.process = QStringLiteral("code");
+    withWindow.workspace = 1;
+    WindowRuleDef windowRule;
+    windowRule.workspace = 4;
+    withWindow.window = windowRule;
+    both.apps.push_back(withWindow);
+    compiled = compileOrDie(both);
+    QCOMPARE(compiled->windowRules.size(), std::size_t(1));
+    QCOMPARE(compiled->windowRules.at(0).workspace, std::optional<std::uint32_t>(4));
 }
 
 void TestConfig::evaluationErrorsAreReported()

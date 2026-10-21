@@ -20,6 +20,8 @@ private slots:
     void switchableWindowsDropHiddenShellWindows();
     void toggleOnlyCollapsesAnAlreadyActiveWindow();
     void onlyStateChangingOpsHaveTransitions();
+    void workspaceExcludeListMatchesProcessNames();
+    void manageableWindowsFollowTheRecordNotVisibility();
 };
 
 void TestWindowMatch::executableBaseNameHandlesBothSeparators()
@@ -202,6 +204,63 @@ void TestWindowMatch::onlyStateChangingOpsHaveTransitions()
     QVERIFY(!core::windowOpHasTransition(WindowOp::MoveNextDesktop));
     QVERIFY(core::windowOpHasTransition(WindowOp::MoveLeftMonitor));
     QVERIFY(core::windowOpHasTransition(WindowOp::MoveRightMonitor));
+}
+
+/// `settings.workspace.exclude`：进程名子串、大小写无关；拿不到进程名时不排除。
+void TestWindowMatch::workspaceExcludeListMatchesProcessNames()
+{
+    const QStringList exclude{QStringLiteral("game"), QStringLiteral("OBS")};
+    QVERIFY(core::workspaceExcluded(std::optional<QString>(QStringLiteral("game.exe")), exclude));
+    QVERIFY(core::workspaceExcluded(std::optional<QString>(QStringLiteral("obs64.exe")), exclude));
+    QVERIFY(!core::workspaceExcluded(std::optional<QString>(QStringLiteral("code.exe")), exclude));
+    // 空名单什么都不排除；拿不到属主进程名时也不能凭空排除。
+    QVERIFY(!core::workspaceExcluded(std::optional<QString>(QStringLiteral("game.exe")), {}));
+    QVERIFY(!core::workspaceExcluded(std::nullopt, exclude));
+    QVERIFY(!core::workspaceExcluded(std::optional<QString>(QString()), exclude));
+    // 空 needle 在 `--check` 阶段就会被拒；这里再兜一层（它不能把全部窗口排除掉）。
+    QVERIFY(!core::workspaceExcluded(std::optional<QString>(QStringLiteral("game.exe")),
+                                     {QString(), QStringLiteral("  ")}));
+}
+
+/// 「归工作空间管」的判据：记录（而不是 `IsWindowVisible`）决定一个窗口算不算。
+void TestWindowMatch::manageableWindowsFollowTheRecordNotVisibility()
+{
+    using core::ManageableWindowFacts;
+    const std::optional<QString> wezterm = QStringLiteral("wezterm-gui.exe");
+    const QStringList noExclude;
+
+    ManageableWindowFacts facts;
+    facts.exists = true;
+    facts.mainWindow = true;
+    QVERIFY(core::isManageableWindow(facts, wezterm, noExclude));
+
+    // 已被记录（可能正被我们 `SW_HIDE` 藏着）的窗口照旧归它管：
+    // 平台层列的 `mainWindow` 本来就不要求可见（`isMainWindowIgnoringVisibility`）。
+    ManageableWindowFacts tracked = facts;
+    tracked.tracked = true;
+    QVERIFY(core::isManageableWindow(tracked, wezterm, noExclude));
+
+    // 已经没了的窗口 / flowkeyd 自己的窗口 / 任务栏与桌面 / 工具窗口般的窗口
+    // 都不归它管。
+    ManageableWindowFacts gone = facts;
+    gone.exists = false;
+    QVERIFY(!core::isManageableWindow(gone, wezterm, noExclude));
+
+    ManageableWindowFacts own = facts;
+    own.ownProcess = true;
+    QVERIFY(!core::isManageableWindow(own, wezterm, noExclude));
+
+    ManageableWindowFacts shell = facts;
+    shell.shellWindow = true;
+    QVERIFY(!core::isManageableWindow(shell, wezterm, noExclude));
+
+    ManageableWindowFacts dialog = facts;
+    dialog.mainWindow = false;
+    QVERIFY(!core::isManageableWindow(dialog, wezterm, noExclude));
+
+    // 排除名单命中就不管（与 `settings.workspace.exclude` 一致）。
+    QVERIFY(!core::isManageableWindow(facts, wezterm,
+                                      {QStringLiteral("wezterm")}));
 }
 
 QTEST_MAIN(TestWindowMatch)

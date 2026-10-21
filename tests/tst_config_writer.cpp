@@ -5,8 +5,8 @@
 // 读回来用的是真正的 Lua 层（`lua::makeLuaEvaluator()`），而不是另一个 C++ 函数
 // —— 字段名写错、类型写错（例如把显示器序号写成字符串）都会在这里立刻现形。
 //
-// 覆盖的范围：`settings` 的每一个字段、全部 20 种动作、每种条目（hotkey / remap /
-// window_rule / app）的全部字段，以及字符串转义、重复参数、`short` 简写展开、
+// 覆盖的范围：`settings` 的每一个字段（含嵌套的 `settings.workspace`）、全部 21 种动作、每种条目
+// （hotkey / remap / window_rule / app）的全部字段，以及字符串转义、重复参数、`short` 简写展开、
 // `remote_desktop` 名单的两种形状。
 #include <QtTest>
 
@@ -188,6 +188,12 @@ std::vector<Action> allActions()
         out.push_back(action);
     }
     {
+        Action action = base(Action::Kind::Workspace);
+        action.workspaceOp = WorkspaceOp::Move;
+        action.workspaceIndex = 5;
+        out.push_back(action);
+    }
+    {
         Action action = base(Action::Kind::Power);
         action.powerOp = PowerOp::ScreenOff;
         out.push_back(action);
@@ -220,6 +226,12 @@ Config sampleConfig()
     config.settings.remoteDesktopProcesses = {QStringLiteral("mstsc.exe"),
                                               QStringLiteral("my rdp.exe")};
     config.settings.windowMonitor = MonitorRef{MonitorRef::Kind::Last, 1, QString()};
+    // 工作空间：故意把每一格都写成非默认值（默认是开 / 9 个 / 光标 / active / 空名单）。
+    config.settings.workspace.enabled = true;
+    config.settings.workspace.count = 6;
+    config.settings.workspace.switchTarget = WorkspaceSwitchTarget::Focus;
+    config.settings.workspace.newWindow = 4;
+    config.settings.workspace.exclude = {QStringLiteral("game.exe"), QStringLiteral("obs")};
 
     // 每种动作一条快捷键：和弦必须互不相同（否则 compile() 会报重复）。
     const std::vector<Action> actions = allActions();
@@ -339,11 +351,19 @@ Config sampleConfig()
         rule.maximize = false;
         config.windowRules.push_back(rule);
     }
+    {
+        // 只写 `workspace` 的规则（不碰几何，也不碰虚拟桌面）。
+        WindowRuleDef rule;
+        rule.process = QStringLiteral("alacritty");
+        rule.workspace = 3;
+        config.windowRules.push_back(rule);
+    }
 
     {
         AppDef app;
         app.name = QStringLiteral("wps");
         app.process = QStringLiteral("wps");
+        app.workspace = 2;
         app.window = WindowRuleDef{};
         app.window->desktop = 3;
         app.window->monitor = MonitorRef{MonitorRef::Kind::Cursor, 1, QString()};
@@ -407,6 +427,7 @@ private slots:
     void escapesStringsThatNeedIt();
     void backsUpAnExistingFile();
     void writesMonitorIndexAsANumber();
+    void writesWorkspaceAsANestedTable();
 };
 
 void TestConfigWriter::writesAMarkedLuaFile()
@@ -444,10 +465,10 @@ void TestConfigWriter::roundTripsThroughRealLua()
     }
 
     // 数目形状对上（真正的比较在下面）。
-    QCOMPARE(static_cast<int>(compiled.bindings.size()), 26);
+    QCOMPARE(static_cast<int>(compiled.bindings.size()), 27);
     // 禁用掉的那条 remap 不会进编译结果（`compile()` 只把有效的那条交给引擎）。
     QCOMPARE(static_cast<int>(compiled.remaps.size()), 1);
-    QCOMPARE(static_cast<int>(compiled.windowRules.size()), 4);
+    QCOMPARE(static_cast<int>(compiled.windowRules.size()), 5);
 
     // 结构与值必须逐字段一致。
     EvalResult evaluated;
@@ -544,6 +565,43 @@ void TestConfigWriter::writesMonitorIndexAsANumber()
     QCOMPARE(evaluated.config.settings.windowMonitor.kind, MonitorRef::Kind::Index);
     QCOMPARE(evaluated.config.settings.windowMonitor.index, 2u);
     QCOMPARE(evaluated.config.windowRules.at(0).monitor->index, 3u);
+}
+
+void TestConfigWriter::writesWorkspaceAsANestedTable()
+{
+    // `settings.workspace` 在配置里是**一张嵌套的表**（不是扁平键），里面每一项
+    // 都要能被 Lua 层读回原值：`new_window` 尤其容易写错（`"active"` 是字符串，
+    // 空间号是数字）。
+    Config config;
+    config.settings.workspace.enabled = true;
+    config.settings.workspace.count = 4;
+    config.settings.workspace.switchTarget = WorkspaceSwitchTarget::Focus;
+    config.settings.workspace.newWindow = 3;
+    config.settings.workspace.exclude = {QStringLiteral("game.exe")};
+
+    const QString text = configToLua(config);
+    QVERIFY(text.contains(QStringLiteral("workspace = {")));
+    QVERIFY(text.contains(QStringLiteral("count = 4")));
+    QVERIFY(text.contains(QStringLiteral("switch_target = \"focus\"")));
+    QVERIFY(text.contains(QStringLiteral("new_window = 3")));
+
+    EvalResult evaluated;
+    const auto failure = lua::makeLuaEvaluator()(text, QStringLiteral("mem"), &evaluated);
+    QVERIFY2(!failure.has_value(), failure.has_value() ? qPrintable(failure->toString()) : "");
+    QVERIFY(evaluated.config.settings.workspace.enabled);
+    QCOMPARE(evaluated.config.settings.workspace.count, 4u);
+    QVERIFY(evaluated.config.settings.workspace.switchTarget
+            == WorkspaceSwitchTarget::Focus);
+    QCOMPARE(evaluated.config.settings.workspace.newWindow, 3u);
+    QCOMPARE(evaluated.config.settings.workspace.exclude, QStringList{QStringLiteral("game.exe")});
+
+    // 默认值（`"active"`）写成字符串，且排除了空名单。
+    Config defaults;
+    const QString defaultText = configToLua(defaults);
+    QVERIFY(defaultText.contains(QStringLiteral("new_window = \"active\"")));
+    QVERIFY(!defaultText.contains(QStringLiteral("exclude")));
+    QCOMPARE(configToMap(evaluated.config).value(QStringLiteral("settings")),
+             configToMap(config).value(QStringLiteral("settings")));
 }
 
 QTEST_MAIN(TestConfigWriter)

@@ -637,3 +637,36 @@ active 后所在的 monitor 上"。
   `opensTargetsAsTheLoggedOnUser`（`open` 与 `app` 两种模式各跑一遍）、
   `reportsALauncherFailureFromTheShellHelper`；断言用**中文 SID** 而不是 `whoami` 的本地化文本，而且
   **不写 `whoami` 那种一次性文件**以外的任何东西。
+
+## 36. 按显示器独立的工作空间：`settings.workspace` + `workspace` 动作
+
+> 进度：**M2（配置面）/ M3（图形界面）/ M4（平台后端）已完成**；M5（事件管线）/ M6（动作执行）/ M7
+> （显示器拔插）/ M8（安全与恢复）/ M9-M10（与现有功能联动）**还没接线**。所以目前把
+> `workspace("switch", N)` 绑上去，执行时只会得到一条 `action ... is not implemented yet` 的 warning。
+> 实施计划在仓库根的 `plan.md`（M11 收尾时删除）。
+
+* 术语：这个功能叫「**工作空间**」，配置名 `workspace`；「**工作区**」仍然只指显示器扣掉任务栏后的
+  可用区域（`availableGeometry()` / `workArea`）；「虚拟桌面」仍然是 Windows 自己的那个。
+* 默认**开启**（`settings.workspace.enabled = true`，可写 `workspace = false` 一键关）。没有
+  `workspace(...)` 绑定时不隐藏任何窗口，只做轻量跟踪 —— 就绪后升级用户不会突然被"接管"窗口。
+* 每块显示器固定 **N 个空间**（`count`，默认 9，范围 1–10）；`switch_target` 决定 `switch` 作用在哪块
+  屏上（`"cursor"` 默认 / `"focus"`）；`new_window` 是 `"active"`（默认）或 `1..N`；`exclude` 里的程序
+  永远不管（空串是错误，同决策 26：空 needle 会匹配所有窗口）。
+* 动作只有两个形状：`workspace("switch", N)` / `workspace("move", N)`（裸表 `{ type = "workspace",
+  op = ..., index = ... }`）。`index` ≥ 1 且 ≤ `count` 在 `--check` 阶段校验（不变量 6）；
+  `next`/`prev`/`follow` 留到后续。**不算危险动作**（不触发两次确认）。
+* 规则落点：不新增条目类型，而是给 `window_rule` 加 `workspace`（决策 13 的做法），`app{}` 也能写
+  `workspace = N`（= `window.workspace` 的简写，两处都写时 `window` 优先）；只写它而没有 `window`
+  时也会展开出一条只带归属的规则。
+* **隐藏方式已由 M0 钉死为 `ShowWindow(SW_HIDE)`**（cloak 跨进程无权限、`SWP_HIDEWINDOW` 隐藏后
+  抢不到前台，实测见 `pitfalls.md`）。它封装在 `platform/win/workspace.*` 后面，以后要换方案只改那一处。
+* 「窗口在不在」**只看状态机自己的记录，不看 `IsWindowVisible`**：被我们藏起来的窗口全都变成不可见的。
+  所以 `enumerateManageable()` 要接受一份「已记录的窗口」列表，并且 `isMainWindowIgnoringVisibility()`
+  是另一条判据（纯逻辑在 `core::isManageableWindow()`，可单测）。
+* 两个 M0 实测约束已写进代码：`show()` 用 `SW_SHOWNOACTIVATE`（最小化的用 `SW_SHOWMINNOACTIVE`）；
+  目标进程无响应（`IsHungAppWindow`）时**不隐藏**（`SW_HIDE` 是跨线程 `SendMessage`，卡死会挂住
+  调用线程）。全部 hide/show/restack **只允许在工作线程上做**。
+* 验证：`tst_workspace`（状态机 19 条，含 3000 步随机序列）、`tst_window_match`（可管理窗口与排除名单）、
+  `tst_config`/`tst_lua`/`tst_config_writer`/`tst_config_editor`（配置面三处往返：真 Lua 读回逐字段
+  对比）、`tst_interactive::hidesAndShowsAWindowWithoutTouchingIt`（隐藏/显示后几何、最大化、最小化
+  都不变）与 `enumeratesManageableWindowsByTheirRecord`（本机实测通过）。

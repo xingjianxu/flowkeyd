@@ -447,6 +447,28 @@
 * **提权窗口一律动不了**（`ShowWindow` / `SetWindowPos` 都是 `ERROR_ACCESS_DENIED`=5）→ `--no-elevate` 的
   实例只能跳过 + 一条 warning（Q7 得证，不用再设计提权代理）。
 
+### 工作空间后端（M4，`platform/win/workspace.*`）
+
+* **`IsWindowVisible` 不是“窗口在不在”的判据**：被我们 `SW_HIDE` 藏起来的窗口全都变成不可见的。所以
+  `enumerateManageable()` 必须接受一份“已经在状态机记录里”的句柄列表，并用
+  `window::isMainWindowIgnoringVisibility()`（同一套判据、不要求可见）去判。直接把
+  `window::isMainWindow()` 用在记录里那些窗口上会**把它们从枚举里漏掉**（后果是它们再也回不来）。
+* **`ShowWindow` 的返回值不能用来判断失败**：它返回的是**之前的**可见状态，隐藏一个已经隐藏的窗口
+  也返回 0。判后置条件（`IsWindowVisible`），或者干脆不判。
+* **`SW_SHOWMAXIMIZED` / `SW_MAXIMIZE` 会抢前台**：`tst_interactive` 里 “先最大化再隐藏” 那一段会让
+  测试窗口闪一下前台，这不是产品行为（工作空间用的是 `SW_SHOWNOACTIVATE`）。
+* **UWP 要藏的是 `ApplicationFrameWindow`**：传进来一个 `Windows.UI.Core.CoreWindow` 时要往
+  `GA_ROOT` 上找一层（`manageTarget()`），否则藏的只是内容窗口、宿主窗口还在任务栏里。
+* **恢复不需要 `SetWindowPlacement`**：`SW_HIDE` → `SW_SHOWNOACTIVATE` 之后位置、大小、最大化、最小化
+  全部由 Windows 自己保持（M0 实测 + `tst_interactive` 回归）。只在 `showCmd` 真的变了时才拿隐藏前
+  记下的 `WINDOWPLACEMENT` 摆回去，避免无条件 `SetWindowPlacement` 把“最大化”变成“还原”。
+* **不要给 hide/show 套锁**：它们可能阻塞（跨线程 `SendMessage`），而调用方只有动作工作线程一条
+  （不变量 5）。`savedPlacements()` 是一张不加锁的 `std::map`，就靠这条约束。
+* **跑单个 `tst_interactive` 用例**（不用整个套件）：先 `$env:PATH = 'C:\Qt\6.11.2\mingw_64\bin;C:\Qt\Tools\mingw1310_64\bin;' + $env:PATH`，
+  再 `$env:FLOWKEYD_ALLOW_INTERACTIVE_TESTS = '1'`，然后
+  `tst_interactive.exe -o tmp\x.txt,txt <用例名>`。**直接跑 exe 时输出会“消失”**（本机 `QTEST_MAIN` 的
+  stdout 拿不到），所以总是带 `-o`；不带 PATH 时进程根本起不来（Qt DLL），表现同样是“无输出 + 退出码 1”。
+
 ## 原生 shell 右键菜单（`platform/win/shell_menu`）
 
 * **`TrackPopupMenuEx` 弹的是 shell 生成的菜单，所以菜单消息必须转给 `IContextMenu2/3`**：`HMENU` 里可能

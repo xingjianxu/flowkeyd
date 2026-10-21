@@ -13,6 +13,7 @@
 #include "core/keys.h"
 #include "core/monitor_ref.h"
 #include "core/remote_desktop.h"
+#include "core/workspace.h"
 
 #include <QByteArray>
 #include <QString>
@@ -77,9 +78,43 @@ std::optional<TriggerMode> triggerModeFromName(const QString &name);
 /// `tap` 每次按下只触发一次目标。
 enum class RemapMode { Hold, Tap };
 
+/// `settings.workspace.switch_target`：`workspace("switch", N)` 作用在哪块屏上。
+///
+/// `Cursor`（默认）看**光标**所在的那块（“我现在看着的那块屏”），
+/// `Focus` 看**前台窗口**所在的那块（鼠标在别处、人还在当前窗口里）。
+enum class WorkspaceSwitchTarget { Cursor, Focus };
+
+QString workspaceSwitchTargetName(WorkspaceSwitchTarget target);
+std::optional<WorkspaceSwitchTarget> workspaceSwitchTargetFromName(const QString &name);
+
 // ---------------------------------------------------------------------------
 // settings / hotkey / remap
 // ---------------------------------------------------------------------------
+
+/// `settings.workspace`：按显示器独立的工作空间（Hyprland 风格）。
+///
+/// 中文叫「**工作空间**」；`availableGeometry()` / `workArea` 那个「工作区」是另一
+/// 回事，别混。
+///
+/// **默认开启**：没有任何 `workspace` 绑定时它只是轻量跟踪窗口归属，不隐藏任何
+/// 窗口（README 的「工作空间」一章写清了这一点）。
+struct WorkspaceSettings
+{
+    /// `settings.workspace.enabled`：整套机制的总开关。
+    bool enabled = true;
+    /// 每块显示器各有几个工作空间（`1`–`10`，默认 `9`）。
+    std::uint32_t count = kDefaultWorkspaceCount;
+    /// `workspace("switch", N)` 作用在哪块显示器上。
+    WorkspaceSwitchTarget switchTarget = WorkspaceSwitchTarget::Cursor;
+    /// 新窗口默认归入哪个工作空间：`0` = 该显示器**当前的活动空间**
+    /// （配置里写 `"active"`，默认），否则是 `1..count`。
+    std::uint32_t newWindow = 0;
+    /// 完全不归工作空间管的程序（可执行文件名，大小写无关子串）。
+    /// 界面里叫「排除的程序」；空串是错误（空串会匹配所有窗口，同决策 26）。
+    QStringList exclude;
+
+    friend bool operator==(const WorkspaceSettings &, const WorkspaceSettings &) = default;
+};
 
 struct Settings
 {
@@ -118,6 +153,8 @@ struct Settings
     /// —— flowkeyd 完全不碰窗口的位置。`window_rule` 与 `window` 动作上写了
     /// `monitor` 的条目不受它影响（显式写的优先）。
     MonitorRef windowMonitor{MonitorRef::Kind::Cursor, 1, QString()};
+    /// 按显示器独立的工作空间（`settings.workspace`）。
+    WorkspaceSettings workspace;
 };
 
 /// 一个或多个动作。
@@ -218,6 +255,9 @@ struct WindowRuleDef
     std::optional<bool> topmost;
     /// 目标显示器；不写就用 `settings.window_monitor`（默认 = 光标所在的那一块）。
     std::optional<MonitorRef> monitor;
+    /// 这个程序的新窗口归入第几个工作空间（1 起）；不写就是
+    /// `settings.workspace.new_window`（默认 = 当前活动空间）。
+    std::optional<std::uint32_t> workspace;
     /// 是否铺满目标显示器的工作区。默认：给了 `monitor`、又没写位置/大小时为 true。
     std::optional<bool> maximize;
     /// 相对目标显示器工作区左上角的偏移（像素）。
@@ -245,6 +285,9 @@ struct AppDef
     std::optional<QString> title;
     /// 可选的窗口摆放规则；`process` / `title` / `name` 留空时由 app 补齐。
     std::optional<WindowRuleDef> window;
+    /// 这个程序的新窗口归入第几个工作空间（1 起）。
+    /// 它是 `window.workspace` 的简写：`window` 里写了就以那里为谁。
+    std::optional<std::uint32_t> workspace;
     /// 这个程序怎么启动：`hotkeys` 里的 `window()` 动作自动继承它，
     /// 于是动作只需要写 `window("activate")`（或只写要覆盖的 `wait_ms`）。
     std::optional<LaunchSpec> launch;
@@ -321,6 +364,9 @@ struct WindowRule
     std::optional<QString> process;
     std::optional<std::uint32_t> desktop;
     std::optional<MonitorRef> monitor;
+    /// 这个程序的新窗口应该归入第几个工作空间（1 起）；不写就是
+    /// `settings.workspace.new_window`。
+    std::optional<std::uint32_t> workspace;
     /// 钉在所有虚拟桌面上（`true`）/ 取消钉住（`false`）；不写就是不去碰它。
     std::optional<bool> allDesktops;
     /// 始终在最上层（`true`）/ 取消置顶（`false`）；不写就是不去碰它。
@@ -364,7 +410,14 @@ std::optional<ConfigError> compile(const Config &config,
                                    Compiled *out);
 
 /// 一个动作的加载期校验。
-void validateAction(const QString &label, const Action &action, QStringList *errors);
+///
+/// `workspaceCount` 不为空时还要校验 `workspace` 动作的目标空间号落在 `1..count`
+/// 里（`compile()` 会把 `settings.workspace.count` 传进来；直接调用本函数而不传
+/// 时只校验“>= 1”）。
+void validateAction(const QString &label,
+                    const Action &action,
+                    QStringList *errors,
+                    std::optional<std::uint32_t> workspaceCount = std::nullopt);
 
 // ---------------------------------------------------------------------------
 // 文件装载

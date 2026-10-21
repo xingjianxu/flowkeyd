@@ -294,6 +294,8 @@ add_library(flowkeyd_platform STATIC
     src/platform/win/update.h
     src/platform/win/window.cpp
     src/platform/win/window.h
+    src/platform/win/workspace.cpp
+    src/platform/win/workspace.h
 )
 target_include_directories(flowkeyd_platform PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(flowkeyd_platform PUBLIC

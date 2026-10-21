@@ -79,16 +79,21 @@
     `src/core/config_map.cpp` 的 `*ToMap`/`*FromMap`、以及 `src/qml/` 里对应的界面**（页 / 弹层 /
     `ActionEditor` 的 `visible: root.type === "…"` 分支 + `ConfigText.qml` 的中文名）。新增/修改/删除任何
     字段或取值（含默认值与范围）都要三处一起改；`settings`/`hotkey`/`remap`/`window_rule`/`app`/
-    `launch`/选单条目与全部 20 种动作一视同仁。
+    `launch`/选单条目与全部 21 种动作一视同仁。
     * **界面那一侧漏接不报错**：字段被默默丢掉、或用户在界面里根本改不了它。`tst_config_writer` /
       `tst_config_editor` 的往返测试只盯住中间那一处；第 1、3 处没有自动检查，只能靠这份清单人肉过一遍。
     * 查缺口**不能只 grep 字段名**（`name`/`enabled` 这种名字在别处也出现）：要按「每一节的字段表」逐行
       对照 `src/lua/lua_config.cpp` 的 `checkFields`/`convertAction` 与界面（`config_map.cpp` + QML）。
-14. **术语：Windows 虚拟桌面就叫「虚拟桌面」**。README、本文件、`docs/notes/`、示例配置与代码注释里它
-    一律写「虚拟桌面」（代码里是 `desktop` / `IVirtualDesktop*`、配置字段 `desktop`/`all_desktops`），
-    **不要再用 workspace 这个词**（早先的写法已清理干净）；“切过去 / 搬过去 / 钉在所有桌面”说的都是它。
-    「**工作区**」是另一个概念，只指一块显示器扣掉任务栏后的可用区域（`availableGeometry()` /
-    `workArea`），不要拿来指虚拟桌面。「远程桌面 / 交互式桌面 / 桌面会话」是第三个概念，照旧区分。
+14. **术语三个词分清楚（别混）**：
+    * 「**虚拟桌面**」= Windows 自己的那个（代码 `desktop` / `IVirtualDesktop*`、配置字段
+      `desktop`/`all_desktops`）；“切过去 / 搬过去 / 钉在所有桌面”说的都是它。**不要用 workspace
+      指它**（早先那种写法已清理干净）。
+    * 「**工作区**」= 一块显示器扣掉任务栏后的可用区域（`availableGeometry()` / `workArea`），
+      不要拿来指虚拟桌面。
+    * 「**工作空间**」= 决策 36 那个新功能（Hyprland 风格、每块显示器独立的一套空间；配置字段
+      `workspace`、动作 `workspace("switch"|"move", N)`、`settings.workspace`）。它**不是**虚拟
+      桌面（两者互不干扰），也不是工作区。
+    * 「远程桌面 / 交互式桌面 / 桌面会话」是第四个概念，照旧区分。
 
 ---
 
@@ -220,14 +225,24 @@ UI 只有托盘图标 + 日志窗口、`menu`/`help`/`windows`/`apps`/`update` �
 34. **图形化配置界面（托盘「配置...」）**：可缩放的普通窗口（左导航 + 分组卡片 + 状态行），**不加
     `Qt.Tool`**。**保存 = 整体重写 `config.lua`**（单一真源是 `core::configToMap()`，由 `configToLua()`
     生成；先留 `.bak`，覆盖非界面生成的文件前先问；首行标记 `-- flowkeyd-config-editor:generated`）。
-    覆盖全量字段与 20 种动作。**保存前用同一个 Lua 求值器 + `core::compile()` 读回来校验，不通过一个字节
+    覆盖全量字段与 21 种动作。**保存前用同一个 Lua 求值器 + `core::compile()` 读回来校验，不通过一个字节
     都不写**。条目编辑走每次新建的弹层；和弦用**文本录入 + 即时校验**；**中文显示、英文存储**
     （`ConfigText` 单例，三态用 `TriRow`）；保存成功就 `reloadRequested()`。
+    * `settings` 里嵌套的表（目前只有 `settings.workspace`）用 `ConfigEditor::setWorkspaceSetting()` 改，
+      它只动那一层，不会把其它设置项写丢。
 35. **启动的程序默认是「当前登录用户的普通权限」，`elevated = true` 才提权**（`run` 与 `launch`；`open` 与
     启动器总是普通权限）。做法：从登录 shell 拿主令牌 + `CreateProcessWithTokenW`；`ShellExecuteExW` 没有
     令牌参数，所以 `open` 与 `shell:AppsFolder` 走**普通权限的代理进程**（自己的隐藏副本 `--shell-*`，不
     提权/不读配置/不装钩子）。拿不到令牌就退回继承令牌 + warning。**启动器右键菜单里的命令仍然提权**
     （已知限制，见第 12 节）。
+36. **工作空间：按显示器独立的一套空间（`settings.workspace` + `workspace` 动作）**。**M2（配置面）/
+    M3（图形界面）/ M4（平台后端）已完成**；事件管线、动作执行与显示器拔插还**没接线**（跑起来只会得到
+    `action ... is not implemented yet`）。要点：默认**开启**但没绑定就不会隐藏任何窗口；`count` 1–10（默认 9）；
+    `switch_target` = `"cursor"`（默认）/ `"focus"`；`new_window` = `"active"`（默认）或 1..count；
+    `exclude` 空串报错；动作只有 `workspace("switch"|"move", N)`，`index` ≤ `count` 在 `--check` 校验；
+    规则用 `window_rule.workspace` / `app.workspace`（后者是前者的简写）；隐藏方式钉死为
+    `ShowWindow(SW_HIDE)`（`platform/win/workspace.*` 里唯一一处）；“窗口在不在”只看状态机记录、
+    `IsWindowVisible` 不可信。完整理由见 `decisions.md` 第 36 条，实施计划见根目录 `plan.md`。
 
 ---
 
@@ -287,10 +302,10 @@ Qt 侧齐备：`Qt6::Quick`、`QuickControls2`、`Qt6QuickControls2FluentWinUI3S
 | `core/pinyin.*` / `core/pinyin_data.*` | 汉字读音查询 / 生成的读音表 |
 | `core/monitor_ref.*` / `core/window_monitor_state.*` | “摆到哪块屏”的取值与判据 / `monitor = "last"` 的记忆 |
 | `core/config_map.*` / `core/config_writer.*` | 结构体 ↔ QVariant 字典（界面用）/ 结构体 → Lua 源码（含生成标记、`.bak`） |
-| `core/workspace.*` | 工作空间**纯逻辑状态机**（命令 → 显隐/焦点效果列表）；M1 已就位，尚未接线 |
+| `core/workspace.*` | 工作空间**纯逻辑状态机**（命令 → 显隐/焦点效果列表）；M1 已就位，**尚未接线**（M5/M6） |
 | `core/log_tail.*` / `core/update_check.*` / `core/version.*` / `core/desktop_badge.*` | 日志增量尾随 / 更新纯逻辑 / 版本号 / 徽标文字与字号 |
 | `src/lua/lua_config.*` + `lua_prelude.lua` | **Lua 与 C++ 的唯一边界**（转成 `core::Config`，逐条目带上下文报错）；DSL 编进 qrc |
-| `src/platform/win/` | 一个文件一件事：`ffi`（全部声明 + `currentExecutablePath()`）、`nt`、`process`（run 三条路 / open / `--shell-*` 代理）、`dwm`、`monitor`、`input`（`SendInput`、验收后门、`copySelection`）、`ime`、`hook`（回调 + 消息循环 + 定时器 + `window_rule` 监听 + 显示器轮询 + 前台事件）、`apps`（扫描 + 启动 + 图标 + `StaThread`）、`shell_menu`、`audio`（MTA，高风险）、`clipboard`、`window`、`desktop`（版本表）、`power`、`tray`、`logging`/`single_instance`、`elevate`/`autostart`/`update` |
+| `src/platform/win/` | 一个文件一件事：`ffi`（全部声明 + `currentExecutablePath()`）、`nt`、`process`（run 三条路 / open / `--shell-*` 代理）、`dwm`、`monitor`、`input`（`SendInput`、验收后门、`copySelection`）、`ime`、`hook`（回调 + 消息循环 + 定时器 + `window_rule` 监听 + 显示器轮询 + 前台事件）、`apps`（扫描 + 启动 + 图标 + `StaThread`）、`shell_menu`、`audio`（MTA，高风险）、`clipboard`、`window`、`workspace`（工作空间的 hide/show/restack/身份/枚举，`SW_HIDE` 只在这里）、`desktop`（版本表）、`power`、`tray`、`logging`/`single_instance`、`elevate`/`autostart`/`update` |
 | `src/app/dispatcher.*` | **动作工作线程**：执行动作、`window` 的先启动再激活与默认 `toggle`、摆显示器、四张卡片的请求、`window_rule` 三遍、桌面轮询、启动器状态文件路径 |
 | `src/app/runtime.*` | 引擎 + 钩子 + 分发 + 托盘 + 弹窗总装；`ControlCmd` 通道；`--quit` 事件句柄 |
 | `src/app/{menu,help,window_list,app_list}_model.*` / `log_model.*` | 卡片与日志窗口的**纯逻辑**（`QAbstractListModel`，只用 QtCore）；行几何与鼠标命中不归它们管 |
@@ -558,7 +573,8 @@ debug 看不到的警告）+ `FLOWKEYD_BUILD_TESTS=OFF`。
 * **新的 QML `import`** 先看 `cmake/PruneRuntime.cmake` 的保留名单，否则弹窗在启动预热那一步就报
   `module "…" is not installed`。
 * **每个新行为都要落到能自动验证的地方**：纯逻辑进 `core` + 单测；桌面行为进 `scripts/acceptance.ps1`；
-  需要真桌面的进 `tst_interactive`；只有几何/外观用 `tmp/preview/` 抓图。
+  需要真桌面的进 `tst_interactive`（直接跑单个用例：先 `$env:PATH = 'C:\Qt\6.11.2\mingw_64\bin;C:\Qt\Tools\mingw1310_64\bin;' + $env:PATH`，再
+  `tst_interactive.exe -o tmp\x.txt,txt <用例名>`）；只有几何/外观用 `tmp/preview/` 抓图。
 
 ---
 
@@ -572,7 +588,7 @@ debug 看不到的警告）+ `FLOWKEYD_BUILD_TESTS=OFF`。
 | 配置目录 / 日志文件 | `%USERPROFILE%\.config\flowkeyd\config.lua` / `…\flowkeyd.log` |
 | DSL 全局表 | `flowkeyd.*`（挂在脚本全局） |
 | 条目 | `settings{}` / `hotkey{}` / `remap{}` / `window_rule{}` / `app{}`（声明式写法 `apps`） |
-| 动作 | `run`/`send`/`type`/`open`/`volume`/`media`/`clipboard`/`window`/`notify`/`menu`/`help`/`windows`/`apps`/`power`/`desktop`/`caps_lock`/`suspend`/`reload`/`quit`/`none` |
+| 动作 | `run`/`send`/`type`/`open`/`volume`/`media`/`clipboard`/`window`/`notify`/`menu`/`help`/`windows`/`apps`/`workspace`/`power`/`desktop`/`caps_lock`/`suspend`/`reload`/`quit`/`none` |
 | 和弦 | `~` 放行原始按键、`*` 忽略额外修饰键；结构是 **修饰键 + 一个按键**；单个字母键名必须小写 |
 | 启动权限 | `run`/`launch` 有 `elevated`（默认 `false` = 普通用户）；`open` 与启动器总是普通权限 |
 

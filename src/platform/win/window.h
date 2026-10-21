@@ -45,6 +45,13 @@ std::vector<HWND> topLevelWindows();
 /// `window_rule` 与窗口切换器用的是同一条判据（纯逻辑在 `core/window_match`）。
 bool isMainWindow(HWND hwnd);
 
+/// 与 `isMainWindow()` 同一套判据，但**不要求窗口当前可见**。
+///
+/// 工作空间把窗口藏起来用的是 `ShowWindow(SW_HIDE)`（M0 实测的唯一可用办法），
+/// 那之后 `IsWindowVisible` 就是假的了 —— 而“它还是一个主窗口吗”这个问题仍然
+/// 要能回答（我们的记录里可能就存着它，回来的时候还得显示它）。
+bool isMainWindowIgnoringVisibility(HWND hwnd);
+
 /// 窗口切换器（`windows` 动作）要不要列出这个窗口。
 ///
 /// 判据是 `isMainWindow()` 再加上一句「**shell 真的会显示它**」：被

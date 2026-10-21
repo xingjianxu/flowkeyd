@@ -83,6 +83,16 @@ constexpr EnumName<ToggleState> kToggleStates[] = {
     {ToggleState::Toggle, "toggle"},
 };
 
+constexpr EnumName<WorkspaceOp> kWorkspaceOps[] = {
+    {WorkspaceOp::Switch, "switch"},
+    {WorkspaceOp::Move, "move"},
+};
+
+constexpr EnumName<WorkspaceSwitchTarget> kWorkspaceSwitchTargets[] = {
+    {WorkspaceSwitchTarget::Cursor, "cursor"},
+    {WorkspaceSwitchTarget::Focus, "focus"},
+};
+
 constexpr EnumName<RemapMode> kRemapModes[] = {
     {RemapMode::Hold, "hold"},
     {RemapMode::Tap, "tap"},
@@ -497,6 +507,23 @@ QVariantMap settingsToMap(const Settings &settings)
                    stringListVariant(settings.remoteDesktopProcesses));
     }
     out.insert(QStringLiteral("window_monitor"), monitorRefValue(settings.windowMonitor));
+    // `settings.workspace`：嵌套一层表（与配置文件里的形状一致）。
+    // `exclude` 为空时不写（与 remote_desktop_processes 一样：赘余的默认值写进文件
+    // 只会让以后改默认值时不生效）。
+    QVariantMap workspace;
+    workspace.insert(QStringLiteral("enabled"), settings.workspace.enabled);
+    workspace.insert(QStringLiteral("count"), settings.workspace.count);
+    workspace.insert(QStringLiteral("switch_target"),
+                     enumName(kWorkspaceSwitchTargets, settings.workspace.switchTarget));
+    workspace.insert(QStringLiteral("new_window"),
+                     settings.workspace.newWindow == 0
+                         ? QVariant(QStringLiteral("active"))
+                         : QVariant(static_cast<uint>(settings.workspace.newWindow)));
+    if (!settings.workspace.exclude.isEmpty()) {
+        workspace.insert(QStringLiteral("exclude"),
+                         stringListVariant(settings.workspace.exclude));
+    }
+    out.insert(QStringLiteral("workspace"), workspace);
     return out;
 }
 
@@ -523,6 +550,31 @@ Settings settingsFromMap(const QVariantMap &map)
     }
     if (auto ref = monitorRefFromText(stringOr(map, "window_monitor"))) {
         settings.windowMonitor = *ref;
+    }
+    if (has(map, "workspace")) {
+        const QVariant value = map.value(QStringLiteral("workspace"));
+        if (value.metaType().id() == QMetaType::Bool) {
+            settings.workspace.enabled = value.toBool();
+        } else {
+            const QVariantMap workspace = value.toMap();
+            settings.workspace.enabled = boolOr(workspace, "enabled", settings.workspace.enabled);
+            settings.workspace.count = uintOr(workspace, "count", settings.workspace.count);
+            if (has(workspace, "switch_target")) {
+                settings.workspace.switchTarget =
+                    workspaceSwitchTargetFromName(stringOr(workspace, "switch_target"))
+                        .value_or(settings.workspace.switchTarget);
+            }
+            if (has(workspace, "new_window")) {
+                // `"active"` 与数字都能读：`QVariant` 的 `toUInt` 对字符串 `"active"`
+                // 会失败，所以先试数字。
+                bool ok = false;
+                const uint number = workspace.value(QStringLiteral("new_window")).toUInt(&ok);
+                settings.workspace.newWindow = ok ? number : 0;
+            }
+            if (has(workspace, "exclude")) {
+                settings.workspace.exclude = stringListOr(workspace, "exclude");
+            }
+        }
     }
     return settings;
 }
@@ -699,6 +751,11 @@ QVariantMap actionToMap(const Action &action)
         out.insert(QStringLiteral("type"), QStringLiteral("apps"));
         putIf(action.appsTitle, &out, "title");
         break;
+    case Action::Kind::Workspace:
+        out.insert(QStringLiteral("type"), QStringLiteral("workspace"));
+        out.insert(QStringLiteral("op"), enumName(kWorkspaceOps, action.workspaceOp));
+        out.insert(QStringLiteral("index"), action.workspaceIndex);
+        break;
     case Action::Kind::Power:
         out.insert(QStringLiteral("type"), QStringLiteral("power"));
         out.insert(QStringLiteral("op"), powerOpName(action.powerOp));
@@ -811,6 +868,11 @@ Action actionFromMap(const QVariantMap &map, QStringList *errors, const QString 
     } else if (type == QLatin1String("apps")) {
         action.kind = Action::Kind::Apps;
         action.appsTitle = nonEmpty(optionalString(map, "title"));
+    } else if (type == QLatin1String("workspace")) {
+        action.kind = Action::Kind::Workspace;
+        action.workspaceOp = workspaceOpFromName(stringOr(map, "op", QStringLiteral("switch")))
+                                 .value_or(WorkspaceOp::Switch);
+        action.workspaceIndex = uintOr(map, "index", 1);
     } else if (type == QLatin1String("power")) {
         action.kind = Action::Kind::Power;
         action.powerOp = powerOpFromName(stringOr(map, "op", QStringLiteral("sleep")))
@@ -839,8 +901,8 @@ QStringList actionKindNames()
             QStringLiteral("notify"), QStringLiteral("volume"),    QStringLiteral("media"),
             QStringLiteral("clipboard"), QStringLiteral("desktop"), QStringLiteral("caps_lock"),
             QStringLiteral("power"),  QStringLiteral("suspend"),   QStringLiteral("help"),
-            QStringLiteral("windows"), QStringLiteral("apps"),      QStringLiteral("reload"),
-            QStringLiteral("quit"),   QStringLiteral("none")};
+            QStringLiteral("windows"), QStringLiteral("apps"),      QStringLiteral("workspace"),
+            QStringLiteral("reload"), QStringLiteral("quit"),     QStringLiteral("none")};
 }
 
 QVariantMap defaultActionMap(const QString &type)
@@ -895,6 +957,11 @@ QVariantMap defaultActionMap(const QString &type)
     }
     if (type == QLatin1String("desktop")) {
         return mapOf({{"type", QStringLiteral("desktop")}, {"switch", 1}});
+    }
+    if (type == QLatin1String("workspace")) {
+        return mapOf({{"type", QStringLiteral("workspace")},
+                      {"op", QStringLiteral("switch")},
+                      {"index", 1}});
     }
     if (type == QLatin1String("power")) {
         return mapOf({{"type", QStringLiteral("power")}, {"op", QStringLiteral("sleep")}});
@@ -1069,6 +1136,7 @@ QVariantMap windowRuleToMap(const WindowRuleDef &def)
     putIf(def.title, &out, "title");
     putIf(def.process, &out, "process");
     putU32If(def.desktop, &out, "desktop");
+    putU32If(def.workspace, &out, "workspace");
     putBoolIf(def.allDesktops, &out, "all_desktops");
     putBoolIf(def.topmost, &out, "topmost");
     if (def.monitor.has_value()) {
@@ -1090,6 +1158,7 @@ WindowRuleDef windowRuleFromMap(const QVariantMap &map)
     def.title = optionalString(map, "title");
     def.process = optionalString(map, "process");
     def.desktop = optionalUint(map, "desktop");
+    def.workspace = optionalUint(map, "workspace");
     def.allDesktops = optionalBool(map, "all_desktops");
     def.topmost = optionalBool(map, "topmost");
     if (auto ref = monitorRefFromText(stringOr(map, "monitor"))) {
@@ -1111,6 +1180,7 @@ QVariantMap appToMap(const AppDef &def)
     putIf(def.process, &out, "process");
     putIf(def.title, &out, "title");
     out.insert(QStringLiteral("enabled"), def.enabled);
+    putU32If(def.workspace, &out, "workspace");
     if (def.window.has_value()) {
         out.insert(QStringLiteral("window"), windowRuleToMap(*def.window));
     } else {
@@ -1136,6 +1206,7 @@ AppDef appFromMap(const QVariantMap &map, QStringList *errors, const QString &la
     def.process = optionalString(map, "process");
     def.title = optionalString(map, "title");
     def.enabled = boolOr(map, "enabled", true);
+    def.workspace = optionalUint(map, "workspace");
     const QVariantMap window = map.value(QStringLiteral("window")).toMap();
     if (!window.isEmpty()) {
         def.window = windowRuleFromMap(window);
@@ -1296,6 +1367,24 @@ QStringList toggleStateNames()
 {
     QStringList out;
     for (const EnumName<ToggleState> &entry : kToggleStates) {
+        out.append(QString::fromLatin1(entry.text));
+    }
+    return out;
+}
+
+QStringList workspaceOpNames()
+{
+    QStringList out;
+    for (const EnumName<WorkspaceOp> &entry : kWorkspaceOps) {
+        out.append(QString::fromLatin1(entry.text));
+    }
+    return out;
+}
+
+QStringList workspaceSwitchTargetNames()
+{
+    QStringList out;
+    for (const EnumName<WorkspaceSwitchTarget> &entry : kWorkspaceSwitchTargets) {
         out.append(QString::fromLatin1(entry.text));
     }
     return out;

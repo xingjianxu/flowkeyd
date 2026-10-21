@@ -115,6 +115,29 @@ std::optional<TriggerMode> triggerModeFromName(const QString &name)
     return std::nullopt;
 }
 
+QString workspaceSwitchTargetName(WorkspaceSwitchTarget target)
+{
+    switch (target) {
+    case WorkspaceSwitchTarget::Cursor:
+        return QStringLiteral("cursor");
+    case WorkspaceSwitchTarget::Focus:
+        return QStringLiteral("focus");
+    }
+    return QStringLiteral("cursor");
+}
+
+std::optional<WorkspaceSwitchTarget> workspaceSwitchTargetFromName(const QString &name)
+{
+    const QString key = name.trimmed().toLower();
+    if (key == QLatin1String("cursor") || key == QLatin1String("mouse")) {
+        return WorkspaceSwitchTarget::Cursor;
+    }
+    if (key == QLatin1String("focus") || key == QLatin1String("window")) {
+        return WorkspaceSwitchTarget::Focus;
+    }
+    return std::nullopt;
+}
+
 RepeatSpec RepeatSpec::makeFlag(bool value)
 {
     RepeatSpec spec;
@@ -158,6 +181,9 @@ QString WindowRule::summary() const
     }
     if (monitor.has_value()) {
         parts.append(monitor->describe());
+    }
+    if (workspace.has_value()) {
+        parts.append(QStringLiteral("workspace %1").arg(*workspace));
     }
     if (applyGeometry) {
         if (maximize) {
@@ -365,6 +391,20 @@ void expandApps(const std::vector<AppDef> &apps,
             if (!rule.name.has_value()) {
                 rule.name = name;
             }
+            // `app.workspace` 是 `window.workspace` 的简写：`window` 里写了就以
+            // 那里为谁（与 process / title 的继承规则一致）。
+            if (!rule.workspace.has_value() && app.workspace.has_value()) {
+                rule.workspace = app.workspace;
+            }
+            windowRules->push_back(std::move(rule));
+        } else if (app.workspace.has_value()) {
+            // 只写了 `workspace`（没写 `window`）：也得展开成一条规则，
+            // 否则那个字段会默默消失（M10 的“指定程序默认进某个工作空间”）。
+            WindowRuleDef rule;
+            rule.process = app.process;
+            rule.title = app.title;
+            rule.name = name;
+            rule.workspace = app.workspace;
             windowRules->push_back(std::move(rule));
         }
 
@@ -448,6 +488,32 @@ std::optional<ConfigError> compile(const Config &config,
         }
     }
 
+    // ---- settings.workspace ----
+    const WorkspaceSettings &workspace = config.settings.workspace;
+    if (workspace.count < kMinWorkspaceCount || workspace.count > kMaxWorkspaceCount) {
+        errors.append(QStringLiteral("settings.workspace.count must be between %1 and %2 (got %3)")
+                          .arg(kMinWorkspaceCount)
+                          .arg(kMaxWorkspaceCount)
+                          .arg(workspace.count));
+    }
+    // `0` = `"active"`（新窗口进那块屏当前的活动空间）。
+    if (workspace.newWindow != 0
+        && (workspace.newWindow < kMinWorkspaceCount || workspace.newWindow > workspace.count)) {
+        errors.append(QStringLiteral("settings.workspace.new_window must be `\"active\"` or a "
+                                     "workspace number between 1 and %1 (got %2)")
+                          .arg(workspace.count)
+                          .arg(workspace.newWindow));
+    }
+    // 同 remote_desktop.processes：空串会匹配所有窗口，那时排除名单等于“全部排除”。
+    for (int i = 0; i < workspace.exclude.size(); ++i) {
+        if (workspace.exclude.at(i).trimmed().isEmpty()) {
+            errors.append(QStringLiteral(
+                              "settings.workspace.exclude[%1] must not be empty (an empty process "
+                              "name would match every window)")
+                              .arg(i + 1));
+        }
+    }
+
     for (std::size_t i = 0; i < hotkeys.size(); ++i) {
         const HotkeyDef &def = hotkeys.at(i);
         const QString label = def.name.has_value()
@@ -491,10 +557,10 @@ std::optional<ConfigError> compile(const Config &config,
         // 在加载时就把发送脚本、参数与选单结构的问题抓出来，
         // 而不是等到凌晨三点那个快捷键终于被按下的时候。
         for (const Action &action : press) {
-            validateAction(label, action, &errors);
+            validateAction(label, action, &errors, config.settings.workspace.count);
         }
         for (const Action &action : release) {
-            validateAction(label, action, &errors);
+            validateAction(label, action, &errors, config.settings.workspace.count);
         }
 
         std::optional<Repeat> repeat;
@@ -695,6 +761,15 @@ std::optional<ConfigError> compile(const Config &config,
             errors.append(QStringLiteral("%1: `width`/`height` must be greater than 0").arg(label));
             continue;
         }
+        if (def.workspace.has_value()
+            && (*def.workspace < kMinWorkspaceCount
+                || *def.workspace > config.settings.workspace.count)) {
+            errors.append(QStringLiteral("%1: `workspace` must be between 1 and %2 (got %3)")
+                              .arg(label)
+                              .arg(config.settings.workspace.count)
+                              .arg(*def.workspace));
+            continue;
+        }
 
         WindowRule rule;
         rule.name = def.name.value_or(QStringLiteral("window rule #%1").arg(i + 1));
@@ -702,6 +777,7 @@ std::optional<ConfigError> compile(const Config &config,
         rule.process = hasProcess ? def.process : std::nullopt;
         rule.desktop = def.desktop;
         rule.monitor = def.monitor;
+        rule.workspace = def.workspace;
         rule.allDesktops = def.allDesktops;
         rule.topmost = def.topmost;
         // 默认最大化只对**写死**的显示器生效（`monitor = 2` / `"primary"` /
@@ -721,7 +797,7 @@ std::optional<ConfigError> compile(const Config &config,
         const bool hasDefaultMonitor = !def.monitor.has_value()
             && config.settings.windowMonitor.kind != MonitorRef::Kind::None;
         if (!rule.desktop.has_value() && !rule.applyGeometry && !rule.allDesktops.has_value()
-            && !rule.topmost.has_value() && !hasDefaultMonitor) {
+            && !rule.topmost.has_value() && !rule.workspace.has_value() && !hasDefaultMonitor) {
             warnings.append(QStringLiteral("%1: only matches windows and does nothing").arg(label));
             continue;
         }
@@ -777,7 +853,10 @@ std::optional<ConfigError> compile(const Config &config,
 
 namespace {
 
-void validateMenu(const QString &label, const std::vector<MenuItemDef> &items, QStringList *errors)
+void validateMenu(const QString &label,
+                  const std::vector<MenuItemDef> &items,
+                  QStringList *errors,
+                  std::optional<std::uint32_t> workspaceCount)
 {
     if (items.empty()) {
         errors->append(QStringLiteral(
@@ -835,7 +914,8 @@ void validateMenu(const QString &label, const std::vector<MenuItemDef> &items, Q
                     } else {
                         validateAction(QStringLiteral("%1 (`%2`)").arg(itemLabel, item.label),
                                        nestedAction,
-                                       errors);
+                                       errors,
+                                       workspaceCount);
                     }
                 }
             }
@@ -845,7 +925,10 @@ void validateMenu(const QString &label, const std::vector<MenuItemDef> &items, Q
 
 } // namespace
 
-void validateAction(const QString &label, const Action &action, QStringList *errors)
+void validateAction(const QString &label,
+                    const Action &action,
+                    QStringList *errors,
+                    std::optional<std::uint32_t> workspaceCount)
 {
     switch (action.kind) {
     case Action::Kind::Send: {
@@ -931,7 +1014,7 @@ void validateAction(const QString &label, const Action &action, QStringList *err
         break;
     }
     case Action::Kind::Menu:
-        validateMenu(label, action.items, errors);
+        validateMenu(label, action.items, errors, workspaceCount);
         break;
     case Action::Kind::Help:
         if (action.helpTitle.has_value() && action.helpTitle->trimmed().isEmpty()) {
@@ -954,6 +1037,22 @@ void validateAction(const QString &label, const Action &action, QStringList *err
                                .arg(label));
         }
         break;
+    case Action::Kind::Workspace: {
+        // `index` 必须落在 `1..settings.workspace.count` 里：`WorkspaceState` 会把越界
+        // 的值夹住（不丢窗口），但配置里写错的数字应当在这里被指出来（不变量 6）。
+        if (action.workspaceIndex < 1) {
+            errors->append(QStringLiteral("%1: workspace index must be 1 or greater")
+                               .arg(label));
+        } else if (workspaceCount.has_value() && action.workspaceIndex > *workspaceCount) {
+            errors->append(QStringLiteral("%1: workspace index %2 is out of range (this config "
+                                          "has %3 workspace(s) per monitor; see "
+                                          "settings.workspace.count)")
+                               .arg(label)
+                               .arg(action.workspaceIndex)
+                               .arg(*workspaceCount));
+        }
+        break;
+    }
     default:
         break;
     }

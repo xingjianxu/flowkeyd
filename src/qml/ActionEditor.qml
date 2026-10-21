@@ -4,7 +4,7 @@ import QtQuick
 import QtQuick.Controls.FluentWinUI3
 import QtQuick.Layouts
 
-// 一个声明式动作的编辑器（`run` / `send` / `window` / `menu` / `power`……20 种）。
+// 一个声明式动作的编辑器（`run` / `send` / `window` / `menu` / `power`……21 种）。
 //
 // 三条规矩：
 //
@@ -39,8 +39,17 @@ Column {
 
     function setType(value) {
         root.type = value
-        if (root.action)
-            root.action.type = value
+        if (!root.action)
+            return
+        root.action.type = value
+        // `workspace` 的两个字段都是必填的（`--check` 会拒“missing field `index`”）：
+        // 切到它时先把默认值补上，否则用户在界面上什么都不改就保存会失败。
+        if (value === "workspace") {
+            if (root.action.op === undefined)
+                root.action.op = "switch"
+            if (root.action.index === undefined)
+                root.action.index = 1
+        }
     }
 
     function setWindowOp(value) {
@@ -638,6 +647,39 @@ Column {
         }
     }
 
+    Column {
+        width: root.width
+        spacing: 6
+        visible: root.type === "workspace"
+
+        ChoiceRow {
+            width: root.width
+            label: qsTr("操作")
+            options: root.editor ? root.editor.workspaceOps : []
+            labels: ConfigText.labels("workspaceOp", options)
+            value: root.action.op !== undefined ? root.action.op : "switch"
+            onPicked: function (value) { root.action.op = value }
+        }
+        SpinRow {
+            width: root.width
+            label: qsTr("第几个工作空间")
+            hint: qsTr("从 1 开始，不能超过 settings.workspace.count（默认 9）")
+            value: root.action.index !== undefined ? root.action.index : 1
+            from: 1
+            to: 10
+            onPicked: function (value) { root.action.index = value }
+        }
+        Label {
+            width: root.width
+            text: qsTr("切换只影响一块屏（默认 = 光标所在的那块）；发出的窗口进非活动空间时会立即隐藏，你留在原来的空间里。")
+            color: root.palette.placeholderText
+            font.family: "Microsoft YaHei"
+            font.pointSize: 9
+            wrapMode: Text.WordWrap
+        }
+    }
+
+    // ---- power -----------------------------------------------------------
     Column {
         width: root.width
         spacing: 6

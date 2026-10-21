@@ -59,6 +59,18 @@ enum class ToggleState { On, Off, Toggle };
 enum class CapsLockState { Off };
 enum class PowerOp { Sleep, Hibernate, Shutdown, Restart, Logoff, Lock, ScreenOff };
 
+/// `workspace` 动作能做的事（每个显示器独立的工作空间，见 README「工作空间」）。
+///
+/// 本期只做两件需求原文里的事：
+///   * `Switch` —— 把**某块显示器**切到第 N 个工作空间；
+///   * `Move` —— 把当前窗口发到它自己那块显示器的第 N 个工作空间。
+/// 循环切换（`next`/`prev`）与「搬完跟过去」（`follow`）留在后续，
+/// 免得第一版就出现两套语义。
+///
+/// 运行时的显示器由 `settings.workspace.switch_target` 决定（光标所在 / 焦点
+/// 窗口所在），动作本身不带 `monitor` 字段。
+enum class WorkspaceOp { Switch, Move };
+
 /// Rust `Debug` 风格的名字（摘要里用的就是它）。
 QString showModeDebugName(ShowMode mode);
 /// 配置里书写的名字（`normal` / `hidden` / `minimized` / `maximized`）；
@@ -69,6 +81,8 @@ QString mediaOpDebugName(MediaOp op);
 QString clipboardOpDebugName(ClipboardOp op);
 QString windowOpDebugName(WindowOp op);
 QString toggleStateDebugName(ToggleState state);
+/// `switch` / `move`（配置里书写的名字）。
+QString workspaceOpName(WorkspaceOp op);
 QString capsLockStateDebugName(CapsLockState state);
 
 /// 配置里书写的名字（snake_case）；`power` 的摘要也用它。
@@ -80,6 +94,7 @@ std::optional<VolumeOp> volumeOpFromName(const QString &name);
 std::optional<MediaOp> mediaOpFromName(const QString &name);
 std::optional<ClipboardOp> clipboardOpFromName(const QString &name);
 std::optional<WindowOp> windowOpFromName(const QString &name);
+std::optional<WorkspaceOp> workspaceOpFromName(const QString &name);
 std::optional<ToggleState> toggleStateFromName(const QString &name);
 std::optional<PowerOp> powerOpFromName(const QString &name);
 
@@ -186,6 +201,7 @@ struct Action
         Help,
         Windows,
         Apps,
+        Workspace,
         Power,
         Suspend,
         Reload,
@@ -272,6 +288,11 @@ struct Action
 
     // apps（程序启动器）
     std::optional<QString> appsTitle;
+
+    // workspace（每个显示器独立的工作空间）
+    WorkspaceOp workspaceOp = WorkspaceOp::Switch;
+    /// 目标工作空间号（1 起，`1..settings.workspace.count`）。
+    std::uint32_t workspaceIndex = 1;
 
     // power
     PowerOp powerOp = PowerOp::Sleep;

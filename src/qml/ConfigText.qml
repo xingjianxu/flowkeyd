@@ -32,6 +32,7 @@ QtObject {
             "help": qsTr("快捷键帮助"),
             "windows": qsTr("窗口切换器"),
             "apps": qsTr("程序启动器"),
+            "workspace": qsTr("工作空间"),
             "reload": qsTr("重载配置"),
             "quit": qsTr("退出"),
             "none": qsTr("什么都不做")
@@ -87,6 +88,14 @@ QtObject {
             "on": qsTr("挂起"),
             "off": qsTr("恢复"),
             "toggle": qsTr("切换")
+        },
+        workspaceOp: {
+            "switch": qsTr("切到某块屏的空间"),
+            "move": qsTr("把当前窗口发过去")
+        },
+        workspaceSwitchTarget: {
+            "cursor": qsTr("光标所在的那块屏"),
+            "focus": qsTr("前台窗口所在的那块屏")
         },
         trigger: {
             "press": qsTr("按下时"),

@@ -99,4 +99,41 @@ bool windowOpHasTransition(WindowOp op)
     return false;
 }
 
+bool workspaceExcluded(const std::optional<QString> &executableName, const QStringList &exclude)
+{
+    if (exclude.isEmpty()) {
+        return false;
+    }
+    if (!executableName.has_value() || executableName->isEmpty()) {
+        return false;
+    }
+    for (const QString &needle : exclude) {
+        const QString trimmed = needle.trimmed();
+        // 空 needle 在 `--check` 阶段就会被拒绝；这里再兜一层，
+        // 免得一个空串把**所有**窗口都排除掉。
+        if (trimmed.isEmpty()) {
+            continue;
+        }
+        if (executableName->contains(trimmed, Qt::CaseInsensitive)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool isManageableWindow(const ManageableWindowFacts &facts,
+                        const std::optional<QString> &executableName,
+                        const QStringList &exclude)
+{
+    if (!facts.exists || facts.ownProcess || facts.shellWindow) {
+        return false;
+    }
+    // 已记录的窗口可能正被我们藏着（`IsWindowVisible` 是假的），所以「主窗口」
+    // 那几项判据在平台层已经按“允许不可见”算好了；这里只认 `mainWindow`。
+    if (!facts.mainWindow) {
+        return false;
+    }
+    return !workspaceExcluded(executableName, exclude);
+}
+
 } // namespace flowkeyd::core

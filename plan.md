@@ -7,8 +7,9 @@
 > `--check flowkeyd.lua.example` 零警告）。
 
 **当前进度：M0 ✅（结论在下文 M0 节 + `docs/notes/pitfalls.md`）、M1 ✅（`src/core/workspace.*` +
-`tests/tst_workspace.cpp`，语义在下文 M1 节末尾）。下一步：M2（配置面）/M4（平台后端）可与 M3 并行开工；
-M4 的隐藏方式已钉死为 `SW_HIDE`。门禁：M2 开工前需要项目所有者把第 3 节的 Q2/Q3/Q4/Q6/Q8 拍一下。**
+`tests/tst_workspace.cpp`）、M2 ✅、M3 ✅、M4 ✅（语义在下文各自的「→ 已产出」）。下一步：**M5（事件管线）/
+M6（动作执行）/ M8（安全与恢复）**。注意：在 M5/M6 接线之前，把 `workspace(...)` 绑上去只会得到一条
+`action ... is not implemented yet` 的 warning —— 配置面、界面与平台后端已经就位。**
 
 ## 0. 已确认的决策（来自与项目所有者的问答）
 
@@ -201,7 +202,7 @@ M2 之后要用到的语义（**都已有单测钉住**）：
 * 命令全部**幂等**（重复的 `windowAppeared` / `switchTo` / `focusChanged` / `restoreAll` 都是空效果），
   不认识的窗口一律忽略；`windowDestroyed` / `focusChanged` / `windowMinimized` **恒为空效果**。
 
-### M2　配置面（依赖 M1 的类型；只做 core + lua + 文档）
+### M2　配置面（依赖 M1 的类型；只做 core + lua + 文档）　✅ 已完成
 
 **目标**：把需求落成稳定的公开 schema（决策 4：当破坏性变更对待）。
 
@@ -216,7 +217,22 @@ M2 之后要用到的语义（**都已有单测钉住**）：
   `flowkeyd.lua.example`（Q8）。
 * 测试：`tst_config`（校验与展开）、`tst_lua`（转换、错误文本）；`--check` 示例零警告。
 
-### M3　图形化配置界面（工作约定第 13 条的第三处；依赖 M2）
+→ **已产出**：`Settings::WorkspaceSettings`（`core/config.h`，含 `kMin/kMax/kDefaultWorkspaceCount`，
+取自 `core/workspace.h`）、`WorkspaceSwitchTarget` + 名字互转；`WindowRuleDef::workspace` /
+`AppDef::workspace` / 编译后的 `WindowRule::workspace`；`Action::Kind::Workspace` +
+`WorkspaceOp{Switch, Move}` + `workspaceIndex`（`summary()` = `workspace switch 3`，
+**不算危险动作**）。Lua 层：`settings.workspace` 支持**布尔简写**与表两种形状，`new_window` 接
+`"active"` 或数字，未知键报错；`workspace(op, index)` 构造器（也在 `flowkeyd.*` 下）。
+校验（`compile()`）：`count` 1–10、`new_window` ∈ {0} ∪ [1,count]、`exclude` 空串报错、
+`window_rule.workspace` 与 **workspace 动作的 `index`**（含嵌在 `menu` 里的）都必须在 1..count ——
+为此 `validateAction()` 多了一个 `workspaceCount` 参数（不传时只查 `>= 1`）。`expandApps`：
+`app.workspace` 是 `window.workspace` 的简写（两处都写时 `window` 优先），**只写它时也会
+展开出一条只带归属的规则**。“只匹配窗口、什么都不做” 的警告把 `workspace` 也算作“做了点事”。
+文档：README 新增「工作空间」一章 + `settings`/动作/`window_rule`/`app` 表；
+`flowkeyd.lua.example`（Q8：`Alt+1..9` / `Alt+Shift+1..9` 写出来但**默认注释**，并写明与启动器
+`Alt+数字` 冲突）。
+
+### M3　图形化配置界面（工作约定第 13 条的第三处；依赖 M2）　✅ 已完成
 
 * `core/config_map.cpp`：`settingsToMap`/`settingsFromMap`（嵌套 `workspace` 表）、`ruleToMap`/`appToMap`
   的新字段、`actionToMap`/`actionFromMap`、`actionKindNames()`、`defaultActionMap()`；`config_writer` 的
@@ -227,7 +243,19 @@ M2 之后要用到的语义（**都已有单测钉住**）：
 * 测试：`tst_config_map` / `tst_config_writer` 整份往返（真 Lua 读回逐字段对比）；`tst_config_editor`。
 * 手工：打开配置窗口走一遍每个新控件（界面漏接不报错，只能人肉核对）。
 
-### M4　平台后端：隐藏 / 显示 / 重排（依赖 M0 的结论　✅ 结论已就绪）
+→ **已产出**：`config_map`：`settingsToMap/FromMap` 的嵌套 `workspace` 表（`new_window` 写 `"active"`
+或**数字**，`exclude` 为空时不写）、`windowRuleToMap/FromMap` 与 `appToMap/FromMap` 的 `workspace`、
+`actionToMap/FromMap` 的 `workspace`、`actionKindNames()`/`defaultActionMap()`、`workspaceOpNames()` /
+`workspaceSwitchTargetNames()`；`ConfigEditor::setWorkspaceSetting()`（只改嵌套那一层）与
+`workspaceOps`/`workspaceSwitchTargets` 两个属性。QML：`ActionEditor.qml` 的 `workspace` 分支（切到这个
+类型时自动补上 `op`/`index`，否则“什么都不改就保存”会得到 `missing field index`）、
+`ConfigAdvancedPage.qml` 的工作空间卡片、`WindowRuleFields.qml` 与 `AppOverlay.qml` 的
+「指定工作空间」、`ConfigText.qml` 的中文名。无新 QML 文件，所以 `CMakeLists.txt` 不需要登记。
+测试：`tst_config_writer`（整份往返里已经覆盖所有新字段 + 一条专门验嵌套表/new_window 形状的）、
+`tst_config_editor`（`setWorkspaceSetting` → 保存 → 用真 Lua 读回逐字段对比）。
+**待人眼过一遍**：打开配置界面看五个新控件（`tst_*` 只覆盖模型层）。
+
+### M4　平台后端：隐藏 / 显示 / 重排（依赖 M0 的结论　✅ 结论已就绪）　✅ 已完成
 
 **目标**：`platform/win/workspace.*`，一个文件一件事。**隐藏方式已由 M0 定为 `ShowWindow(SW_HIDE)`**
 （Cloak 跨进程无权、`SWP_HIDEWINDOW` 抢不到前台，见 `pitfalls.md`）。
@@ -253,6 +281,17 @@ M2 之后要用到的语义（**都已有单测钉住**）：
 * 新增未公开 API 要 `LoadLibraryW + GetProcAddress` 运行时解析（第 3 节依赖政策）。
 * 测试：纯逻辑部分进 `core`；真机行为进 `tst_interactive`（开一个记事本：隐藏→`IsWindowVisible`/最小化状态
   →显示→几何与最大化不变；**不碰系统电源动作**）。
+
+→ **已产出**：`src/platform/win/workspace.{h,cpp}`（已加进 `flowkeyd_platform`）：
+`identityOf` / `stillSame`（PID + **进程创建时间** + 类名；窗口自己的创建时间没有公开 API）、
+`hide`（`SW_HIDE`，先存 `WINDOWPLACEMENT`；目标进程 `IsHungAppWindow` 时直接失败）、
+`show`（`SW_SHOWNOACTIVATE`，最小化的用 `SW_SHOWMINNOACTIVE`，`showCmd` 真的变了才 `SetWindowPlacement`
+摆回去）、`restack`（底 → 顶逐对 `SetWindowPos(…, SWP_NOACTIVATE)`）、`manageTarget`（UWP →
+`ApplicationFrameWindow`）、`enumerateManageable(tracked, exclude)`。「窗口在不在」不看
+`IsWindowVisible`：判据拆成新的纯函数 `core::workspaceExcluded()` / `core::isManageableWindow()`，
+并新增 `window::isMainWindowIgnoringVisibility()`。真机用例：
+`tst_interactive::hidesAndShowsAWindowWithoutTouchingIt`（几何 / 最大化 / 最小化 / 身份 / 伪身份）与
+`enumeratesManageableWindowsByTheirRecord`（本机已实跑通过）。
 
 ### M5　事件管线：从钩子线程到状态机（依赖 M1、M4）
 

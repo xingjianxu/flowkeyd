@@ -22,6 +22,7 @@
 #include <QThread>
 
 #include <cstring>
+#include <algorithm>
 #include <functional>
 #include <utility>
 #include <vector>
@@ -42,6 +43,7 @@
 #include "platform/win/monitor.h"
 #include "platform/win/process.h"
 #include "platform/win/window.h"
+#include "platform/win/workspace.h"
 
 // `ConvertSidToStringSidW`（完整性级别的 SID 文本）。（`windows.h` 已经由
 // `platform/win/ffi.h` 引进来。）
@@ -364,6 +366,8 @@ private slots:
     void cloakedWindowsAreHiddenFromTheSwitcher();
     void cloakedWindowsOnOtherDesktopsStaySwitchable();
     void switchesTheInputMethodToEnglish();
+    void hidesAndShowsAWindowWithoutTouchingIt();
+    void enumeratesManageableWindowsByTheirRecord();
     void launchesProgramsWithTheRequestedPrivilege();
     void opensTargetsAsTheLoggedOnUser();
     void reportsALauncherFailureFromTheShellHelper();
@@ -1664,6 +1668,125 @@ void TestInteractive::switchesTheInputMethodToEnglish()
         platform::win::ime::restoreMode(window.hwnd(), platform::win::ime::Mode{});
     QVERIFY2(nothing.ok, qPrintable(nothing.detail));
     QVERIFY(!nothing.changed);
+}
+
+/// 工作空间后端：隐藏 / 显示要保持几何与最大化·最小化，且不动焦点、不把窗口弄丢。
+///
+/// M0 的实测结论（`ShowWindow(SW_HIDE)` 唯一可用）在这里被钉成回归测试：如果
+/// 以后有人换成 `SWP_HIDEWINDOW` 或 cloak，这一条会立刻看出来。
+void TestInteractive::hidesAndShowsAWindowWithoutTouchingIt()
+{
+    if (!interactiveEnabled()) {
+        QSKIP("set FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1 to run the interactive tests");
+    }
+    namespace ws = platform::win::workspace;
+    const QString marker =
+        QStringLiteral("flowkeyd-workspace-%1").arg(QCoreApplication::applicationPid());
+    TestWindow window(marker);
+    HWND hwnd = window.hwnd();
+    QVERIFY2(hwnd != nullptr, "the test window was not created");
+
+    // 把窗口摆到一个确定的几何上（后面要比对它有没有被动过）。
+    QVERIFY(SetWindowPos(hwnd, nullptr, 200, 160, 640, 420, SWP_NOZORDER | SWP_NOACTIVATE) != 0);
+    RECT before{};
+    QVERIFY(GetWindowRect(hwnd, &before) != 0);
+
+    // 身份：隐藏前后同一个窗口仍然是“那一个”。
+    const ws::Identity identity = ws::identityOf(hwnd);
+    QVERIFY(identity.valid);
+    QCOMPARE(identity.className, QStringLiteral("FlowkeydInteractiveTestWindow"));
+    QVERIFY(ws::stillSame(hwnd, identity));
+    QCOMPARE(ws::manageTarget(hwnd), hwnd);
+
+    QString error;
+    QVERIFY2(ws::hide(hwnd, &error), qPrintable(error));
+    QVERIFY(IsWindowVisible(hwnd) == 0);
+    QVERIFY2(IsWindow(hwnd) != 0, "the window must still exist while hidden");
+    RECT hidden{};
+    QVERIFY(GetWindowRect(hwnd, &hidden) != 0);
+    QCOMPARE(hidden.left, before.left);
+    QCOMPARE(hidden.top, before.top);
+    QCOMPARE(hidden.right, before.right);
+    QCOMPARE(hidden.bottom, before.bottom);
+
+    // 构造一个“假的”身份：PID 对不上就不能当成同一个窗口（HWND 复用的防护）。
+    ws::Identity impostor = identity;
+    impostor.pid += 1;
+    QVERIFY(!ws::stillSame(hwnd, impostor));
+    impostor = identity;
+    impostor.className = QStringLiteral("NotOurClass");
+    QVERIFY(!ws::stillSame(hwnd, impostor));
+
+    QVERIFY2(ws::show(hwnd, nullptr, &error), qPrintable(error));
+    QVERIFY(IsWindowVisible(hwnd) != 0);
+    QVERIFY(ws::stillSame(hwnd, identity));
+    RECT shown{};
+    QVERIFY(GetWindowRect(hwnd, &shown) != 0);
+    QCOMPARE(shown.left, before.left);
+    QCOMPARE(shown.top, before.top);
+    QCOMPARE(shown.right, before.right);
+    QCOMPARE(shown.bottom, before.bottom);
+
+    // 最大化的窗口藏起来再显示仍是最大化。
+    ShowWindow(hwnd, SW_MAXIMIZE);
+    QVERIFY(IsZoomed(hwnd) != 0);
+    QVERIFY2(ws::hide(hwnd, &error), qPrintable(error));
+    QVERIFY2(ws::show(hwnd, nullptr, &error), qPrintable(error));
+    QVERIFY2(IsZoomed(hwnd) != 0, "the maximized state was lost");
+    ShowWindow(hwnd, SW_RESTORE);
+
+    // 最小化的窗口藏起来再显示仍是最小化（隐藏不该把它弹出来）。
+    ShowWindow(hwnd, SW_MINIMIZE);
+    QVERIFY(IsIconic(hwnd) != 0);
+    QVERIFY2(ws::hide(hwnd, &error), qPrintable(error));
+    QVERIFY2(ws::show(hwnd, nullptr, &error), qPrintable(error));
+    QVERIFY2(IsIconic(hwnd) != 0, "the minimized state was lost");
+}
+
+/// 「归工作空间管」的枚举：自己进程的窗口永远不进去，未记录的窗口必须真的可见。
+///
+/// 真正的跟踪列表在状态机里（M5 接线），所以这里只验后端这一侧能验的部分：
+/// 自进程排除与“未记录 = 看可见性”。“已记录的藏起来窗口也要算进来”那条
+/// 属于纯逻辑，由 `tst_window_match` 的 `manageableWindowsFollowTheRecordNotVisibility`
+/// 钉住；真机那一半要等状态机接线（M5）后才能做出“外国进程 + 被我们藏起来”
+/// 的现场。
+void TestInteractive::enumeratesManageableWindowsByTheirRecord()
+{
+    if (!interactiveEnabled()) {
+        QSKIP("set FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1 to run the interactive tests");
+    }
+    namespace ws = platform::win::workspace;
+    const QString marker =
+        QStringLiteral("flowkeyd-manageable-%1").arg(QCoreApplication::applicationPid());
+    TestWindow window(marker);
+    HWND hwnd = window.hwnd();
+    QVERIFY2(hwnd != nullptr, "the test window was not created");
+
+    // 自己进程的窗口永远不归工作空间管（否则切一下空间就能把 flowkeyd 的弹窗藏了）。
+    const std::vector<HWND> untracked = ws::enumerateManageable({}, {});
+    for (HWND other : untracked) {
+        DWORD pid = 0;
+        GetWindowThreadProcessId(other, &pid);
+        QVERIFY2(pid != GetCurrentProcessId(),
+                 "the current process's own windows must never be manageable");
+        QVERIFY(IsWindowVisible(other) != 0);
+    }
+
+    // 藏起来之后：当成“未记录的窗口”时它已经被可见性筛掉了；
+    // 带着记录去问时它仍被“不是自己的窗口”这一条筛掉（flowkeyd 自己的弹窗
+    // 绝不能因为切空间而被藏起来）。隐藏前先确认它本来算一个「主窗口」。
+    QVERIFY(platform::win::window::isMainWindow(hwnd));
+    QString error;
+    QVERIFY2(ws::hide(hwnd, &error), qPrintable(error));
+    QVERIFY(IsWindowVisible(hwnd) == 0);
+    QVERIFY(platform::win::window::isMainWindowIgnoringVisibility(hwnd));
+    const std::vector<HWND> withRecord = ws::enumerateManageable({hwnd}, {});
+    const bool listedWithRecord =
+        std::find(withRecord.begin(), withRecord.end(), hwnd) != withRecord.end();
+    QVERIFY2(!listedWithRecord,
+             "own-process windows must be skipped even when they are tracked");
+    QVERIFY2(ws::show(hwnd, nullptr, &error), qPrintable(error));
+    QVERIFY(IsWindowVisible(hwnd) != 0);
 }
 
 /// `run` 的默认权限：**以当前登录用户的普通权限启动**。

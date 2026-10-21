@@ -130,6 +130,9 @@ QString windowRuleSubtitle(const WindowRuleDef &def)
     if (def.monitor.has_value()) {
         parts.append(QStringLiteral("显示器 %1").arg(def.monitor->describe()));
     }
+    if (def.workspace.has_value()) {
+        parts.append(QStringLiteral("工作空间 %1").arg(*def.workspace));
+    }
     if (def.maximize.has_value() && *def.maximize) {
         parts.append(QStringLiteral("最大化"));
     }
@@ -180,6 +183,9 @@ QString appSubtitle(const AppDef &def)
     }
     if (def.launch.has_value()) {
         parts.append(QStringLiteral("启动 %1").arg(def.launch->program));
+    }
+    if (def.workspace.has_value()) {
+        parts.append(QStringLiteral("工作空间 %1").arg(*def.workspace));
     }
     if (def.window.has_value()) {
         parts.append(windowRuleSubtitle(*def.window));
@@ -302,6 +308,16 @@ QStringList ConfigEditor::powerOps() const
 QStringList ConfigEditor::toggleStates() const
 {
     return core::toggleStateNames();
+}
+
+QStringList ConfigEditor::workspaceOps() const
+{
+    return core::workspaceOpNames();
+}
+
+QStringList ConfigEditor::workspaceSwitchTargets() const
+{
+    return core::workspaceSwitchTargetNames();
 }
 
 QStringList ConfigEditor::monitorPresets() const
@@ -516,6 +532,22 @@ void ConfigEditor::setSetting(const QString &key, const QVariant &value)
 void ConfigEditor::resetRemoteDesktopProcesses()
 {
     setSetting(keyName("remote_desktop_processes"), QVariant());
+}
+
+void ConfigEditor::setWorkspaceSetting(const QString &key, const QVariant &value)
+{
+    QVariantMap current = settings();
+    QVariantMap workspace = current.value(keyName("workspace")).toMap();
+    if (value.isValid()) {
+        workspace.insert(key, value);
+    } else {
+        workspace.remove(key);
+    }
+    current.insert(keyName("workspace"), workspace);
+    m_root.insert(keyName("settings"), current);
+    emit settingsChanged();
+    emit contentChanged();
+    markDirty();
 }
 
 // ---------------------------------------------------------------------------

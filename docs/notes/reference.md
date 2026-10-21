@@ -19,7 +19,8 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、`--ch
 
 * `settings{}`：`log_level`、`swallow`、`exact_modifiers`、`release_modifiers`、`repeat_interval_ms`、
   `repeat_delay_ms`、`tick_ms`、`input_backend`、`single_instance`、`elevate`、`remote_desktop`、
-  `window_monitor`。**未知键报错。** `window_monitor`（默认 `"cursor"`）= 没写明 `monitor` 时摆到哪块屏。
+  `window_monitor`、`workspace`。**未知键报错。** `window_monitor`（默认 `"cursor"`）= 没写明 `monitor` 时
+  摆到哪块屏。
 * `hotkey{}`：`keys`（单个和弦或一组）、`name`、`trigger`（`press`/`release`/`repeat`）、`action`
   （别名 `press`、`on_press`）、`on_release`、`swallow`、`repeatable`（`true` 或
   `{ interval_ms, delay_ms }`；也认 `["repeat"]`）、`enabled`、`comment`、`remote_desktop`。
@@ -30,17 +31,22 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、`--ch
   `false`，或者 `{ enabled = …, processes = { … } }`；条目上的 `remote_desktop = true` = 在远程桌面里也
   照常拦（默认 `false` = 放行）。
 * `window_rule{}`：字段见 `decisions.md` 第 13 条；`monitor` 的六种取值（含 `"cursor"` / `"last"` /
-  `"none"`）与缺省行为见第 33 条。
-* `app{}`：见 `decisions.md` 第 15 条；声明式写法叫 `apps`。
+  `"none"`）与缺省行为见第 33 条；`workspace`（1..`settings.workspace.count`）见第 36 条。
+* `app{}`：见 `decisions.md` 第 15 条；声明式写法叫 `apps`；再加一个 `workspace`（= `window.workspace` 的
+  简写，只写它时会展开出一条只带归属的规则，见第 36 条）。
+* `settings.workspace`：`enabled`（默认 `true`）、`count`（1–10，默认 9）、`switch_target`（`"cursor"` 默认 /
+  `"focus"`）、`new_window`（`"active"` 默认 / 1..count）、`exclude`（进程名子串，**空串报错**）；
+  写 `workspace = false` 也能整个关。**空串、超出 `count` 的索引都在 `--check` 报错**。
 * 和弦语法：`~` 放行原始按键、`*` 忽略额外修饰键；`Numpad*` 与主键盘同名键不同。
   **和弦的结构是 `Modifiers + 一个按键`**：`keys = "NumpadSub+NumpadAdd"` 是语法错（`NumpadSub` 不是
   修饰键），守护进程会直接拒绝启动。
 * **单个字母的键名必须小写**（`decisions.md` 第 17 条）。
 * 动作：`run`/`send`/`type`/`open`/`volume`/`media`/`clipboard`/`window`/`notify`/`menu`/`help`/
-  `windows`/`apps`/`power`/`desktop`/`caps_lock`/`suspend`/`reload`/`quit`/`none`，字段逐条见 README 的
-  动作表。简写字符串：`"run:…"`、`"send:…"`、`"type:…"`、`"open:…"`、`"notify:t|b"`、`"volume:up"`、
-  `"media:next"`、`"clipboard:get"`、`"window:minimize"`、`"desktop:1"`、`"power:sleep"`、裸关键字
-  `reload`/`quit`/`help`/`windows`/`apps`/`none`。
+  `windows`/`apps`/`workspace`/`power`/`desktop`/`caps_lock`/`suspend`/`reload`/`quit`/`none`，字段逐条见
+  README 的动作表。简写字符串：`"run:…"`、`"send:…"`、`"type:…"`、`"open:…"`、`"notify:t|b"`、
+  `"volume:up"`、`"media:next"`、`"clipboard:get"`、`"window:minimize"`、`"desktop:1"`、`"power:sleep"`、
+  裸关键字 `reload`/`quit`/`help`/`windows`/`apps`/`none`。`workspace` **没有简写**（要两个参数：
+  `workspace("switch", 2)`）；它不算危险动作，但**运行时尚未接线**（见 `decisions.md` 第 36 条）。
 * **启动权限**：`run` 与 `launch`（`window` 的 / `app{}` 的，共用一份字段块）都有 `elevated`，**默认
   `false` = 当前登录用户的普通权限**；`open` 与程序启动器没有这个字段（它们总是普通权限）。
 * **完全没有动作**的快捷键就是一个按键屏蔽器（会吞掉它匹配到的按键）。

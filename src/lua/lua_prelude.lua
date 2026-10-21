@@ -84,17 +84,20 @@ function remap(t)
   state.remaps[#state.remaps + 1] = registration(t, "remap")
 end
 
--- 注册一条窗口摆放规则：某个程序的窗口出现时放到哪个虚拟桌面 / 显示器。
+-- 注册一条窗口摆放规则：某个程序的窗口出现时放到哪个虚拟桌面 / 显示器 / 工作空间。
 --   window_rule{ process = "wezterm", desktop = 2, monitor = 2 }
 --   window_rule{ process = "code", monitor = "primary", maximize = false,
 --                x = 0, y = 0, width = 1280, height = 800 }
 --   window_rule{ process = "wezterm", all_desktops = true }   -- 钉在所有虚拟桌面上
 --   window_rule{ process = "code", topmost = true }           -- 始终在最上层
+--   window_rule{ process = "code", workspace = 2 }           -- 新窗口进工作空间 2
 -- monitor 有六种写法：`2`（1 起，先左后右、再上后下）/ "primary" / "DISPLAY2"，
 -- 以及三个“不写死”的取值："cursor"（光标所在的那一块）、"last"（这个程序上一次
 -- 被摆到过的那一块，记在 windows.json）、"none"（不碰窗口的位置）。**不写 monitor**
 -- 就用 settings.window_monitor（默认 "cursor"）：所以没写 monitor 的规则也会把窗口
 -- 摆到光标所在的那块屏上（保持大小并居中），不想这样就在这儿写 "none"。
+-- workspace（1..settings.workspace.count）：这块屏上新开的工作空间归属；不写就按
+-- settings.workspace.new_window（默认 = 那块屏当前的活动工作空间）。
 -- 触发时机只有三个：窗口第一次出现、断开的显示器重新接上、flowkeyd 启动时；
 -- 之后不再干预（用户自己移动/缩放窗口不会被纠正）。
 -- all_desktops = true 与 desktop 互斥；all_desktops / topmost 写 false 就是
@@ -114,6 +117,7 @@ end
 --       wait_ms = 10000,
 --     },
 --     window = { desktop = 3, monitor = 2 },
+--     workspace = 2,                       -- 可选：新窗口进工作空间 2（window.workspace 的简写）
 --     hotkeys = {
 --       -- launch 自动继承，所以这里只写要覆盖的部分
 --       { keys = "Win+3", action = window("activate", { wait_ms = 5000 }) },
@@ -132,7 +136,7 @@ end
 -- 注册一组全局设置。可以多次调用，后写的键覆盖先写的。
 -- 字段：log_level / swallow / exact_modifiers / release_modifiers /
 --       repeat_interval_ms / repeat_delay_ms / tick_ms / input_backend /
---       single_instance / elevate / remote_desktop / window_monitor。
+--       single_instance / elevate / remote_desktop / window_monitor / workspace。
 --
 -- window_monitor（默认 "cursor"）：窗口**没写明 monitor** 时摆到哪一块显示器上。
 --   "cursor" 光标所在的那一块（默认：唤起一个程序时它出现在你正在看的那块屏上）；
@@ -146,6 +150,18 @@ end
 --   remote_desktop = false 就完全关掉这项检测；写成表可以换名单：
 --     remote_desktop = { enabled = true, processes = { "mstsc.exe", "ToDesk.exe" } }
 --   （processes 写了就是整体替换内置的微软 RDP 客户端名单；空表 = 谁都不算。）
+--
+-- workspace（默认开启）：按显示器独立的工作空间（Hyprland 风格）。
+--   workspace = false                                   -- 整个关掉
+--   workspace = {
+--     enabled = true,
+--     count = 9,                                        -- 每块屏几个空间（1–10）
+--     switch_target = "cursor",                         -- workspace("switch") 作用于哪块屏：
+--                                                       --   "cursor" = 光标所在的那一块（默认）
+--                                                       --   "focus"  = 前台窗口所在的那一块
+--     new_window = "active",                            -- 新窗口进哪儿："active"（默认）或 1..count
+--     exclude = { "game.exe" },                         -- 完全不归它管的程序（进程名子串）
+--   }
 function settings(t)
   state.settings[#state.settings + 1] = registration(t, "settings")
 end
@@ -307,6 +323,23 @@ function desktop(number)
   return { type = "desktop", switch = number }
 end
 
+-- 工作空间（每个显示器独立的一组空间，Hyprland 风格）：
+--   workspace("switch", 2)   -- 把那块屏（见 settings.workspace.switch_target）切到空间 2
+--   workspace("move", 2)     -- 把当前窗口发到它自己那块屏的空间 2
+-- 空间号从 1 开始，不能超过 settings.workspace.count（默认 9）。
+-- `switch` 只影响一块屏：光标所在的那一块，或者 settings.workspace.switch_target
+-- 写 "focus" 时前台窗口所在的那一块；别的屏上的窗口不动。
+-- `move` 非活动空间时窗口立即隐藏，你留在原来的空间里。
+function workspace(op, index)
+  if type(op) ~= "string" then
+    error("workspace() expects \"switch\" or \"move\", got " .. type(op), 2)
+  end
+  if type(index) ~= "number" then
+    error("workspace() expects a workspace number (1 is the first), got " .. type(index), 2)
+  end
+  return { type = "workspace", op = op, index = index }
+end
+
 -- 系统电源：睡眠 / 休眠 / 关机 / 重启 / 注销 / 锁定 / 关屏。
 --   power("sleep")
 -- 关机、重启、注销需要管理员权限（flowkeyd 默认就是提权运行的），
@@ -425,6 +458,7 @@ flowkeyd = {
   caps_lock = caps_lock,
   suspend = suspend,
   desktop = desktop,
+  workspace = workspace,
   power = power,
   menu = menu,
   help = help,

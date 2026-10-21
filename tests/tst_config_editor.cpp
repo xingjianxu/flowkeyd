@@ -77,6 +77,7 @@ private slots:
     void refusesToSaveAnInvalidConfig();
     void saveWritesParseableLuaAndBacksUp();
     void saveRemembersMonitorIndexAsANumber();
+    void saveRemembersNestedWorkspaceSettings();
     void pickFreeChordAvoidsUsedOnes();
     void startFromDefaultsSurvivesBrokenFile();
 };
@@ -327,6 +328,71 @@ void TestConfigEditor::saveRemembersMonitorIndexAsANumber()
     QCOMPARE(compiled.settings.windowMonitor.index, 2u);
     QCOMPARE(compiled.windowRules.at(0).monitor->kind, MonitorRef::Kind::Index);
     QCOMPARE(compiled.windowRules.at(0).monitor->index, 3u);
+}
+
+void TestConfigEditor::saveRemembersNestedWorkspaceSettings()
+{
+    // 界面把 `settings.workspace` 当成一张嵌套的表改（`setWorkspaceSetting()`），
+    // 保存后必须真的落成一张表，并且每一项都能被 Lua 层读回原值。
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    auto editor = makeEditor(dir, QString());
+    const QString path = QDir(dir.path()).filePath(QStringLiteral("config.lua"));
+    QVERIFY(editor->load(path));
+
+    // 默认就开着，且是一张完整的表（界面每一格都能读到值）。
+    const QVariantMap defaults = editor->settings().value(QStringLiteral("workspace")).toMap();
+    QCOMPARE(defaults.value(QStringLiteral("enabled")).toBool(), true);
+    QCOMPARE(defaults.value(QStringLiteral("count")).toUInt(), 9u);
+    QCOMPARE(defaults.value(QStringLiteral("switch_target")).toString(),
+             QStringLiteral("cursor"));
+    QCOMPARE(defaults.value(QStringLiteral("new_window")).toString(), QStringLiteral("active"));
+
+    editor->setWorkspaceSetting(QStringLiteral("count"), 4);
+    editor->setWorkspaceSetting(QStringLiteral("switch_target"), QStringLiteral("focus"));
+    editor->setWorkspaceSetting(QStringLiteral("new_window"), 3);
+    editor->setWorkspaceSetting(QStringLiteral("exclude"),
+                                QStringList{QStringLiteral("game.exe")});
+    // `undefined` 等于把这个键删掉（回到默认）。
+    editor->setWorkspaceSetting(QStringLiteral("enabled"), QVariant());
+    const QVariantMap edited = editor->settings().value(QStringLiteral("workspace")).toMap();
+    QVERIFY(!edited.contains(QStringLiteral("enabled")));
+
+    // 再加一条带工作空间的窗口规则与一个 workspace 动作，整份跑一次往返。
+    QVariantMap rule = editor->newWindowRule();
+    rule.insert(QStringLiteral("process"), QStringLiteral("code"));
+    rule.insert(QStringLiteral("workspace"), 2);
+    editor->appendWindowRule(rule);
+
+    QVariantMap hotkey = editor->hotkeys().isEmpty() ? editor->newHotkey()
+                                                    : editor->hotkeys().at(0).toMap();
+    QVariantMap action = editor->newAction(QStringLiteral("workspace"));
+    QCOMPARE(action.value(QStringLiteral("op")).toString(), QStringLiteral("switch"));
+    action.insert(QStringLiteral("op"), QStringLiteral("move"));
+    action.insert(QStringLiteral("index"), 3);
+    QVariantList actions;
+    actions.append(action);
+    hotkey.insert(QStringLiteral("actions"), actions);
+    if (editor->hotkeys().isEmpty()) {
+        editor->appendHotkey(hotkey);
+    } else {
+        editor->updateHotkey(0, hotkey);
+    }
+
+    QVERIFY2(editor->save(), qPrintable(editor->saveError()));
+
+    Compiled compiled;
+    const auto failure = loadConfig(lua::makeLuaEvaluator(), path, &compiled);
+    QVERIFY2(!failure.has_value(), failure.has_value() ? qPrintable(failure->toString()) : "");
+    QCOMPARE(compiled.settings.workspace.count, 4u);
+    QVERIFY(compiled.settings.workspace.enabled);
+    QVERIFY(compiled.settings.workspace.switchTarget == WorkspaceSwitchTarget::Focus);
+    QCOMPARE(compiled.settings.workspace.newWindow, 3u);
+    QCOMPARE(compiled.settings.workspace.exclude, QStringList{QStringLiteral("game.exe")});
+    QCOMPARE(compiled.windowRules.at(0).workspace, std::optional<std::uint32_t>(2));
+    QCOMPARE(compiled.bindings.at(0).press.at(0).kind, Action::Kind::Workspace);
+    QCOMPARE(compiled.bindings.at(0).press.at(0).workspaceOp, WorkspaceOp::Move);
+    QCOMPARE(compiled.bindings.at(0).press.at(0).workspaceIndex, 3u);
 }
 
 void TestConfigEditor::pickFreeChordAvoidsUsedOnes()

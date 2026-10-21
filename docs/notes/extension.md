@@ -125,6 +125,24 @@ Win32/COM 后端就放在 `platform/win/*`，并在 `tst_interactive` 里加一�
 的 `app` 注释 → README 与示例 → `tst_config`（展开）/`tst_lua`（转换）。如果新字段是"可被动作局部覆盖
 的一整份值"（像 `launch`），照 `LaunchFields` 的做法把"写了哪些键"记下来。
 
+## 新的工作空间能力（`workspace`）
+
+三层，别跳墙：
+
+1. **纯逻辑**：`core/workspace.*`（`WorkspaceState` 的命令 → `WorkspaceEffects`）。新语义加在这里，并在
+   `tst_workspace` 加一条用例（那里已经有 3000 步随机序列 + 不变量检查）。
+2. **平台层**：`platform/win/workspace.*`。隐藏方式只在这一个文件里（目前唯一可用的是
+   `ShowWindow(SW_HIDE)`）；**新增任何 hide/show 路径都要保持“先写恢复日志、再隐藏”**（M8），而且
+   只能在工作线程上做。枚举可管理窗口的判据在 `core::isManageableWindow()`（纯，`tst_window_match`）。
+3. **动作与规则**：`Action::Kind::Workspace`（`workspaceOp` + `workspaceIndex`）/ `WindowRuleDef.workspace` /
+   `AppDef.workspace`。动作要同时改 `actionToMap`/`actionFromMap`、`actionKindNames()`、
+   `defaultActionMap()`、`ActionEditor.qml` 的 `visible: root.type === "workspace"` 分支、`ConfigText.qml`
+   （工作约定第 13 条）；规则字段要同时改 `config_map.cpp` 的 `windowRuleToMap/FromMap` 与
+   `WindowRuleFields.qml`。再加一项：`settings.workspace` 的嵌套字段要同时改 `settingsToMap/FromMap`、
+   `ConfigEditor::setWorkspaceSetting()` 的调用点（`ConfigAdvancedPage.qml` 的工作空间卡片）与 README
+   的「工作空间」一章。
+4. 实施计划与剩余任务（事件管线、动作执行、显示器拔插、恢复日志）在仓库根 `plan.md` 的 M5–M11。
+
 ## 新的窗口条件 / 跨桌面语义
 
 * **新的窗口条件**：`core/window_match`（纯逻辑）+ `platform/win/window` 的枚举适配 +
