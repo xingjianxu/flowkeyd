@@ -84,6 +84,11 @@
       `tst_config_editor` 的往返测试只盯住中间那一处；第 1、3 处没有自动检查，只能靠这份清单人肉过一遍。
     * 查缺口**不能只 grep 字段名**（`name`/`enabled` 这种名字在别处也出现）：要按「每一节的字段表」逐行
       对照 `src/lua/lua_config.cpp` 的 `checkFields`/`convertAction` 与界面（`config_map.cpp` + QML）。
+14. **术语：Windows 虚拟桌面就叫「虚拟桌面」**。README、本文件、`docs/notes/`、示例配置与代码注释里它
+    一律写「虚拟桌面」（代码里是 `desktop` / `IVirtualDesktop*`、配置字段 `desktop`/`all_desktops`），
+    **不要再用 workspace 这个词**（早先的写法已清理干净）；“切过去 / 搬过去 / 钉在所有桌面”说的都是它。
+    「**工作区**」是另一个概念，只指一块显示器扣掉任务栏后的可用区域（`availableGeometry()` /
+    `workArea`），不要拿来指虚拟桌面。「远程桌面 / 交互式桌面 / 桌面会话」是第三个概念，照旧区分。
 
 ---
 
@@ -136,7 +141,7 @@ UI 只有托盘图标 + 日志窗口、`menu`/`help`/`windows`/`apps`/`update` �
 12. **版本号 = `yy-MM-dd-<git 短修订>`**：日期取 exe 自己的 mtime（**不用编译期常量**，否则每次重链接）、
     修订是 CMake 写进 `generated/flowkeyd_revision.h` 的常量。**先提交再构建**，收尾时显式 configure 一次
     或核对 `--version` 的哈希。
-13. **`window_rule{...}`** 控制“程序出现在哪个 workspace / monitor”，显示器重接入时重新归位。字段见
+13. **`window_rule{...}`** 控制「程序出现在哪个虚拟桌面 / 显示器」，显示器重接入时重新归位。字段见
     `decisions.md` 第 13 条。要点：`monitor` 只认序号（1 起）/`"primary"`/设备名；写了 `monitor` 又没写
     位置大小 = **默认最大化**；只写 `desktop` 不动几何；`all_desktops` 与 `desktop` 互斥、走
     `IVirtualDesktopPinnedApps`；触发时机只有三个（窗口首次出现 / 显示器重接入 / 启动时）；“主窗口”判据

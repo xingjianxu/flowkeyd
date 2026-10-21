@@ -110,7 +110,8 @@ debug 里构建单测（`FLOWKEYD_BUILD_TESTS=ON`），release 里不构建单�
 
 ## 13. 窗口摆放规则 `window_rule{...}`
 
-控制"某个程序启动时出现在哪个 workspace 和 monitor"，且**显示器重新接入时按配置重新归位**。字段：
+控制"某个程序启动时出现在哪个**虚拟桌面**和哪块**显示器**"（代码里的 `desktop` 就是 Windows 虚拟桌面），
+且**显示器重新接入时按配置重新归位**。字段：
 `process`/`title`（至少一个）、`desktop`、`all_desktops`、`topmost`、`monitor`、`maximize`、`x`/`y`、
 `width`/`height`、`name`、`enabled`。
 
