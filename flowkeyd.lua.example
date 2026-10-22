@@ -119,7 +119,8 @@ settings{
   tray_badge = "both",
 
   -- 工作空间（按显示器独立的一组空间，Hyprland 风格）。**默认开启**，但没有任何
-  -- `workspace("switch", N)` / `workspace("move", N)` 绑定时它只是跟着记窗口归属，
+  -- `workspace("switch", N)` / `workspace("move", N)` / `workspace("move_next",
+  -- { follow = true })` 绑定时它只是跟着记窗口归属，
   -- 不会隐藏任何窗口。`workspace = false` 是整个关掉。
   --   count         每块屏有几个空间（1–10，默认 9）；改小之后超出范围的空间并入最后一个。
   --   switch_target `workspace("switch", N)` 作用在哪块屏上：
@@ -502,12 +503,18 @@ end
 --   workspace("move", 2)    —— 把当前窗口发到它自己那块屏的空间 2（非活动空间则立即隐藏）
 --   workspace("prev")       —— 往前一个空间（已经在空间 1 时什么都不做，不循环）
 --   workspace("next")       —— 往后一个空间（已经在最后一个时什么都不做，不循环）
+--   workspace("move_prev")  —— 把当前窗口发到它自己那个空间的前一个（不循环）
+--   workspace("move_next")  —— 把当前窗口发到它自己那个空间的后一个（不循环）
+--
+-- 三个搬移 op（`move` / `move_prev` / `move_next`）可以再带 `follow = true`：搬完
+-- 把那块屏**也切到目标空间**并重新激活窗口（人跟着窗口走）。不写时窗口进了
+-- 非活动空间就立即隐藏，你留在原来的空间里。`follow` 写在切换 op 上会被拒绝。
 --
 -- 下面这组是最常见的绑法，但**默认注释掉**：启动器的快速启动键用的就是
 -- `Alt` + 数字（`Alt+1`..`Alt+9`、`Alt+0`，见上面 apps 那一节），两者会抢。
 -- 要用就在这里换一组不冲突的和弦，或者接受“启动器开着时优先给启动器”。
--- 最后两条是相对切换（不需要空间号）；注意 `Ctrl+Win+←/→` 正好是 Windows
--- 自己的「切虚拟桌面」，绑了就会把它吞掉。
+-- 相对的那些不需要空间号；注意 `Ctrl+Win+←/→` 正好是 Windows 自己的「切虚拟
+-- 桌面」，绑了就会把它吞掉（`Win+u` / `Win+i` 原本是「轻松使用」与「设置」）。
 --
 -- for i = 1, 9 do
 --   hotkey{ keys = "Alt+" .. i, action = workspace("switch", i) }
@@ -515,6 +522,8 @@ end
 -- end
 -- hotkey{ keys = "Ctrl+Win+Left",  action = workspace("prev") }
 -- hotkey{ keys = "Ctrl+Win+Right", action = workspace("next") }
+-- hotkey{ keys = "Win+u", action = workspace("move_prev", { follow = true }) }
+-- hotkey{ keys = "Win+i", action = workspace("move_next", { follow = true }) }
 
 -- 剪贴板辅助。
 hotkey{

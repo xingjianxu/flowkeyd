@@ -520,7 +520,7 @@ Enter 与主键盘的 Enter 共用 `VK_RETURN`，区分靠的是 Windows 的扩�
 | `power`     | `op` = `sleep`/`hibernate`/`shutdown`/`restart`/`logoff`/`lock`/`screen_off`                                | 系统电源：睡眠、休眠、关机、重启、注销、锁定、关屏。关机/重启/注销需要管理员权限（flowkeyd 默认就提权运行），失败时会写日志并弹一个气泡；`screen_off` 只是关掉全部显示器（不睡眠），不需要权限，任意按键/鼠标动作都会把屏幕重新点亮                                                                                      |
 | `apps`      | `title`（可选，只用作**窗口标题**）                                                                        | 弹出一个**程序启动器**（见[程序启动器](#程序启动器)）：开始菜单里的程序分三段摆出来 —— 「已固定」「最近使用」（最多两行）与一个「全部程序」按钮；输入按**名字 / 拼音 / 首字母的子串**筛选（`code`、`jishiben`、`jsb` 都能找到「记事本」与 `Visual Studio Code`）；用 `↑`/`↓`/`←`/`→` + `Enter`（或鼠标点一下）启动高亮那一个，**筛选之后前 10 个结果各带一个 `0`–`9` 的快速启动键**（图标右上角，按一下直接启动，easymotion 风格），**最近使用的程序另有 `Alt` + 数字（`Alt+1`–`Alt+9`、`Alt+0`）、已固定的程序另有 `Alt` + 功能键（`Alt+F1`–`Alt+F12`）的快速启动键**，`Space` 固定 / 取消固定，**右键某一格弹出那个程序的原生 Windows 右键菜单**，`Esc` 关窗；卡片开着时**再按一次同一个快捷键就是关掉它**。目录来自三个地方：`shell:AppsFolder`（与开始菜单「所有应用」一致，含商店应用与系统工具；文档 / 网址 / 卸载程序被滤掉）、**控制面板的「所有控制面板项」**（网络连接、电源选项、程序和功能、设备管理器……），以及**内置的常用「Windows 设置」页**（显示、声音、网络、电源和睡眠，共 26 个 `ms-settings:` 页面，名字带「设置：」前缀）；启动与图标都交给 shell，启动的程序是**当前登录用户的普通权限** |
 | `desktop`   | `switch`（从 1 开始）                                                                                     | 切到第 N 个虚拟桌面（Task View 里从左到右的顺序）                                                                                                                                                                                                                                          |
-| `workspace` | `op` = `switch`/`move`/`prev`/`next`、`index`（仅 `switch`/`move`）                                 | 按显示器独立的工作空间（见[工作空间](#工作空间)）：`switch` 把一块屏（默认 = 光标所在的那块，可改成前台窗口所在的那块）切到第 `index` 个空间；`move` 把**当前窗口**发到它自己那块屏的第 `index` 个空间；`prev`/`next` 在那块屏上往前 / 往后挪一格（到两头就不动了，**不循环**，所以不需要 `index`）。`index` 不能超过 `settings.workspace.count` |
+| `workspace` | `op` = `switch`/`move`/`move_prev`/`move_next`/`prev`/`next`、`index`（仅 `switch`/`move`）、`follow`（仅三个搬移 op）                                 | 按显示器独立的工作空间（见[工作空间](#工作空间)）：`switch` 把一块屏（默认 = 光标所在的那块，可改成前台窗口所在的那块）切到第 `index` 个空间；`move` 把**当前窗口**发到它自己那块屏的第 `index` 个空间；`move_prev`/`move_next` 把当前窗口发到它**自己那个空间**的前 / 后一个（到两头就不动了，**不循环**）；`prev`/`next` 把那块屏往前 / 往后挪一格（同样不循环）。`move_prev`/`move_next`/`prev`/`next` 都不需要 `index`。三个搬移 op 可以再写 `follow = true`：搬完之后把那块屏**也切到目标空间**并重新激活那个窗口（不写时窗口立刻隐藏，你留在原来的空间里）；写在 `switch`/`prev`/`next` 上会被 `--check` 拒绝。`index` 不能超过 `settings.workspace.count` |
 | `suspend`   | `state` = `on`/`off`/`toggle`                                                                             | 暂停快捷键匹配；suspend 快捷键本身仍然可用                                                                                                                                                                                                                                                |
 | `reload`    |                                                                                                           | 重新读取配置文件                                                                                                                                                                                                                                                                          |
 | `quit`      |                                                                                                           | 退出 flowkeyd                                                                                                                                                                                                                                                                             |
@@ -532,7 +532,8 @@ Enter 与主键盘的 Enter 共用 `VK_RETURN`，区分靠的是 Windows 的扩�
 `"power:sleep"`、`"reload"`、`"quit"`、`"help"`、`"windows"`、`"apps"`、`"none"`。
 
 `workspace` 没有简写：它至少有一个 `op` 参数（`switch`/`move` 还要空间号），写成
-`workspace("switch", 2)` / `workspace("next")` 比塞进一个字符串清楚。
+`workspace("switch", 2)` / `workspace("next")` 比塞进一个字符串清楚；带 `follow` 时写
+`workspace("move_next", { follow = true })`（绝对空间号写成 `workspace("move", 3, { follow = true })`）。
 
 可能有多个窗口匹配；最近使用过的那个（Z 序里最靠前的）胜出，而已还原的窗口优于最小化
 的窗口。不可见窗口以及属于别的窗口的弹出窗口（对话框、工具提示、菜单）会被忽略。匹配
@@ -890,6 +891,9 @@ end
 -- 相对切换（到底就不动了，不循环）
 hotkey{ keys = "Ctrl+Win+Left", action = workspace("prev") }
 hotkey{ keys = "Ctrl+Win+Right", action = workspace("next") }
+-- 相对搬移：把当前窗口带到相邻空间，人跟着过去（`follow = true`）
+hotkey{ keys = "Win+u", action = workspace("move_prev", { follow = true }) }
+hotkey{ keys = "Win+i", action = workspace("move_next", { follow = true }) }
 ```
 
 | 字段 | 默认 | 说明 |
@@ -900,9 +904,9 @@ hotkey{ keys = "Ctrl+Win+Right", action = workspace("next") }
 | `new_window` | `"active"` | 新窗口归入哪个空间：`"active"` = 那块屏当前的活动空间，或者写 `1..count`。单个程序优先用 `window_rule` / `app` 的 `workspace`；只对 flowkeyd 运行期间新出现的窗口生效（启动时已经开着的窗口照旧收编进各自的活动空间，不然重启一次所有窗口都会被藏起来） |
 | `exclude` | 空 | 完全不归工作空间管的程序（可执行文件名，大小写无关子串）。空字符串会被 `--check` 拒绝 |
 
-**默认开启，但不开快捷键就什么都不做**：没有任何 `workspace("switch"/"move", N)`
-或 `workspace("prev"/"next")` 绑定时，它只是跟着记窗口归属，不会隐藏任何窗口；即使
-开着也可以随时写 `workspace = false` 一键关掉。
+**默认开启，但不开快捷键就什么都不做**：没有任何 `workspace("switch"/"move", N)`、
+`workspace("move_prev"/"move_next")` 或 `workspace("prev"/"next")` 绑定时，它只是跟着
+记窗口归属，不会隐藏任何窗口；即使开着也可以随时写 `workspace = false` 一键关掉。
 
 **两条显式默认（没有开关）**：
 
@@ -917,27 +921,40 @@ hotkey{ keys = "Ctrl+Win+Right", action = workspace("next") }
 光标所在的那一块），所以它正好就是“按一下 `workspace("switch", N)` 会切哪一块”的那个
 号（见[托盘图标上的数字](#托盘图标上的数字)）。
 
-### 四个动作
+### 六个动作
 
 | 写法 | 行为 |
 | ---- | ---- |
 | `workspace("switch", 2)` | 把 `switch_target` 指定的那块屏切到空间 2：旧空间的窗口隐藏、新空间的显示，焦点回到新空间**最近用过的**窗口（空空间不抢焦点） |
-| `workspace("move", 2)` | 把**当前窗口**（不写 `target`/`process` 就是前台窗口）发到它自己那块屏的空间 2。目标是**非活动**空间时窗口立即隐藏，你留在原来的空间里 |
 | `workspace("prev")` | 把上面那块屏切到**上一个**空间（按当前活动空间 − 1）。已经在空间 1 时**什么都不做**（不循环） |
 | `workspace("next")` | 把上面那块屏切到**下一个**空间（按当前活动空间 + 1）。已经在最后一个空间时**什么都不做**（不循环） |
+| `workspace("move", 2)` | 把**当前窗口**（不写 `target`/`process` 就是前台窗口）发到它自己那块屏的空间 2。目标是**非活动**空间时窗口立即隐藏，你留在原来的空间里 |
+| `workspace("move_prev")` | 把当前窗口发到**它自己那个空间**的上一个（它是前台窗口，所以也就是那块屏活动空间 − 1）。已经在空间 1 时什么都不做（不循环） |
+| `workspace("move_next")` | 把当前窗口发到它自己那个空间的下一个。已经在最后一个空间时什么都不做（不循环） |
 
-`prev` / `next` 是**相对**切换，所以不需要空间号；它们和绝对切换作用于同一块屏
-（`switch_target`），日志里会写 `workspace prev 3 on \\.\DISPLAY1` 这样的行。
-想用 `Win+Ctrl+←/→` 切换的写法：
+`prev` / `next` / `move_prev` / `move_next` 都是**相对**的，所以不需要空间号；
+`prev`/`next` 与绝对切换作用于同一块屏（`switch_target`），`move_prev`/`move_next`
+与 `move` 一样作用于**那个窗口自己那块屏**。日志里会写
+`workspace prev 3 on \\.\DISPLAY1`、`workspace move_next 3 (... on \\.\DISPLAY1, view followed)`
+这样的行。
+想用 `Win+Ctrl+←/→` 切换、用 `Win+u`/`Win+i` 带着窗口走：
 
 ```lua
 hotkey{ keys = "Ctrl+Win+Left",  action = workspace("prev") }   -- 会吞掉 Windows 自己的「上一张虚拟桌面」
 hotkey{ keys = "Ctrl+Win+Right", action = workspace("next") }
+-- 把当前窗口发到相邻空间，人跟着过去（不写 follow 就只搬窗口、你留在原地）
+hotkey{ keys = "Win+u", action = workspace("move_prev", { follow = true }) }
+hotkey{ keys = "Win+i", action = workspace("move_next", { follow = true }) }
 ```
+
+`follow = true`（只对 `move` / `move_prev` / `move_next` 有意义，写在别的 op 上会被
+`--check` 拒绝）的语义：搬完窗口之后把**那块屏也切到目标空间**，并重新激活那个窗口 ——
+于是同一个快捷键可以一次次把窗口往下一个空间推，人一直看着它。不写 `follow`（默认）
+时窗口进了非活动空间就立即隐藏，你留在原来的空间里。
 
 `index` 从 1 开始，不能超过 `settings.workspace.count`（超了 `--check` 会报错，并指出
 是哪一条）。空间号也可以用裸表写：`{ type = "workspace", op = "move", index = 2 }`；
-相对切换写成 `{ type = "workspace", op = "prev" }`。
+相对的那些写成 `{ type = "workspace", op = "prev" }` / `{ type = "workspace", op = "move_next", follow = true }`。
 
 ### 哪些窗口归它管
 

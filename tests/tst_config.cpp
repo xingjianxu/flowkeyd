@@ -1375,6 +1375,39 @@ void TestConfig::workspaceActionIsCompiledAndValidated()
     QCOMPARE(relativeCompiled->bindings.at(1).press.at(0).summary(),
              QStringLiteral("workspace next"));
 
+    // 相对搬移 `move_prev` / `move_next` + `follow`：同样没有空间号（`index` 不被校验），
+    // `follow` 出现在摘要里（与 window 的 `move_*_desktop` 一致）。
+    Config moving;
+    moving.settings.workspace.count = 4;
+    Action moveNext = workspaceAction(WorkspaceOp::MoveNext, 0);
+    moveNext.follow = true;
+    moving.hotkeys.push_back(
+        hotkeyNamed(QStringLiteral("ws-move-next"), QStringLiteral("Win+i"), specOne(moveNext)));
+    Action movePrev = workspaceAction(WorkspaceOp::MovePrev, 99);
+    moving.hotkeys.push_back(
+        hotkeyNamed(QStringLiteral("ws-move-prev"), QStringLiteral("Win+u"), specOne(movePrev)));
+    const auto movingCompiled = compileOrDie(moving);
+    QCOMPARE(movingCompiled->bindings.size(), std::size_t(2));
+    QVERIFY(movingCompiled->bindings.at(0).press.at(0).workspaceOp == WorkspaceOp::MoveNext);
+    QCOMPARE(movingCompiled->bindings.at(0).press.at(0).follow, std::optional<bool>(true));
+    QCOMPARE(movingCompiled->bindings.at(0).press.at(0).summary(),
+             QStringLiteral("workspace move_next (follow)"));
+    QVERIFY(movingCompiled->bindings.at(1).press.at(0).workspaceOp == WorkspaceOp::MovePrev);
+    QCOMPARE(movingCompiled->bindings.at(1).press.at(0).summary(),
+             QStringLiteral("workspace move_prev"));
+
+    // `follow` 只对三个搬移 op 有意义；写在切换 op 上是一个静默的空操作，所以拒绝。
+    Config badFollow;
+    badFollow.settings.workspace.count = 4;
+    Action switchWithFollow = workspaceAction(WorkspaceOp::Switch, 2);
+    switchWithFollow.follow = true;
+    badFollow.hotkeys.push_back(
+        hotkeyNamed(QStringLiteral("ws-bad"), QStringLiteral("F1"), specOne(switchWithFollow)));
+    auto followError = compileConfig(badFollow);
+    QVERIFY(followError.has_value());
+    QVERIFY2(followError->toString().contains(QStringLiteral("`follow` only works with op")),
+             qPrintable(followError->toString()));
+
     // 超出 `settings.workspace.count` 的空间号要在加载时报错（不变量 6）。
     Config tooBig = config;
     tooBig.hotkeys.clear();

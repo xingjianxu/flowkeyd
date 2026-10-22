@@ -32,6 +32,10 @@ Column {
     /// 状态在根对象上各留一个副本（由 `setType` / `setWindowOp` 同步）。
     property string type: root.action && root.action.type ? root.action.type : "none"
     property string windowOp: root.action && root.action.op ? root.action.op : "activate"
+    /// `workspace` 的当前 op（理由同上；`prev` / `next` / `move_prev` / `move_next`
+    /// 是相对的，界面里要把“第几个空间”那一行藏起来）。
+    property string workspaceOp: root.action && root.action.type === "workspace" && root.action.op
+                                 ? root.action.op : "switch"
     property bool hasLaunch: root.action && root.action.launch !== undefined
 
     width: parent ? parent.width : 0
@@ -56,6 +60,20 @@ Column {
         root.windowOp = value
         if (root.action)
             root.action.op = value
+    }
+
+    function setWorkspaceOp(value) {
+        root.workspaceOp = value
+        if (!root.action)
+            return
+        root.action.op = value
+        // 相对 op 没有空间号：把键删掉，否则写出去的配置里会多一个用不上的 `index`。
+        if (value === "switch" || value === "move") {
+            if (root.action.index === undefined)
+                root.action.index = 1
+        } else {
+            delete root.action.index
+        }
     }
 
     /// `TriRow` 的三态值写回：`undefined` 等于把这个键删掉（回到默认）。
@@ -657,23 +675,32 @@ Column {
             label: qsTr("操作")
             options: root.editor ? root.editor.workspaceOps : []
             labels: ConfigText.labels("workspaceOp", options)
-            value: root.action.op !== undefined ? root.action.op : "switch"
-            onPicked: function (value) { root.action.op = value }
+            value: root.workspaceOp
+            onPicked: function (value) { root.setWorkspaceOp(value) }
         }
         SpinRow {
             width: root.width
             label: qsTr("第几个工作空间")
             hint: qsTr("从 1 开始，不能超过 settings.workspace.count（默认 9）")
-            // `prev` / `next` 是**相对**切换（按当前活动空间算，不循环），没有空间号可填。
-            visible: !root.action || (root.action.op !== "prev" && root.action.op !== "next")
+            // 相对的四个 op（`prev` / `next` / `move_prev` / `move_next`）不看空间号。
+            visible: root.workspaceOp === "switch" || root.workspaceOp === "move"
             value: root.action.index !== undefined ? root.action.index : 1
             from: 1
             to: 10
             onPicked: function (value) { root.action.index = value }
         }
+        TriRow {
+            width: root.width
+            label: qsTr("让视图跟过去")
+            hint: qsTr("搬完窗口再把那块屏也切到目标空间，并重新激活它")
+            visible: root.workspaceOp === "move" || root.workspaceOp === "move_prev"
+                     || root.workspaceOp === "move_next"
+            value: root.action.follow
+            onPicked: function (value) { root.setOptional("follow", value) }
+        }
         Label {
             width: root.width
-            text: qsTr("切换只影响一块屏（默认 = 光标所在的那块）；发出的窗口进非活动空间时会立即隐藏，你留在原来的空间里。prev / next 到头了就什么都不做，不会循环。")
+            text: qsTr("切换只影响一块屏（默认 = 光标所在的那块）；发出的窗口进非活动空间时会立即隐藏，你留在原来的空间里（勾上「让视图跟过去」就不留）。prev / next / move_prev / move_next 到头了就什么都不做，不会循环。")
             color: root.palette.placeholderText
             font.family: "Microsoft YaHei"
             font.pointSize: 9

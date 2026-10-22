@@ -671,14 +671,29 @@ active 后所在的 monitor 上"。
 * 每块显示器固定 **N 个空间**（`count`，默认 9，范围 1–10）；`switch_target` 决定 `switch` 作用在哪块
   屏上（`"cursor"` 默认 / `"focus"`）；`new_window` 是 `"active"`（默认）或 `1..N`；`exclude` 里的程序
   永远不管（空串是错误，同决策 26：空 needle 会匹配所有窗口）。
-* 动作四个形状：`workspace("switch", N)` / `workspace("move", N)`（裸表 `{ type = "workspace",
-  op = ..., index = ... }`），以及**相对切换** `workspace("prev")` / `workspace("next")`
-  （2026-10 补：需求是 `Win+Ctrl+←/→` 切上一个 / 下一个工作空间，而且**不循环**）。
-  `index` ≥ 1 且 ≤ `count` 在 `--check` 阶段校验（不变量 6），**`prev`/`next` 不看 `index`**
-  （所以不校验、界面也把空间号那一行藏起来）。相对那一步在 `Dispatcher` 里用纯函数
-  `core::stepIndex(count, active - 1, ±1, /*wrap=*/false)` 算：返回空 = 已经在两头，
-  什么都不做、也不动任何窗口（与 `move_left/right_monitor` 的“不循环”一致）。
-  `move` 仍然只有绝对形状。**不算危险动作**（不触发两次确认）。
+* 动作形状：`workspace("switch", N)` / `workspace("move", N)`（裸表 `{ type = "workspace",
+  op = ..., index = ... }`）、**相对切换** `workspace("prev")` / `workspace("next")`
+  （2026-10 补：需求是 `Win+Ctrl+←/→` 切上一个 / 下一个工作空间，而且**不循环**），以及
+  **相对搬移** `workspace("move_prev")` / `workspace("move_next")` + `follow`
+  （2026-10 补：需求是 `Win+u` / `Win+i` 把当前窗口带到上一个 / 下一个空间并跟随视图）。
+  `index` ≥ 1 且 ≤ `count` 在 `--check` 阶段校验（不变量 6），**四个相对 op 不看
+  `index`**（所以不校验、界面也把空间号那一行藏起来）。相对那一步在 `Dispatcher` 里用纯函数
+  `core::stepIndex(count, ...)` 算：返回空 = 已经在两头，什么都不做、也不动任何窗口（与
+  `move_left/right_monitor` 的“不循环”一致）。相对**切换**按那块屏的**活动空间**算，相对
+  **搬移**按那个窗口**自己的空间**算（前台窗口一定在活动空间里，所以两者实际相等；但窗口
+  被藏在非活动空间时前者会算错，后者不会）。**不算危险动作**（不触发两次确认）。
+* `follow`（**2026-10 补**，与决策 18 的 `window` 同名同义）：只由三个搬移 op 接受
+  （`move` / `move_prev` / `move_next`），写在 `switch` / `prev` / `next` 上 `--check` 报错
+  —— 切换本来就会把视图带过去，写在那里只是静默空操作。默认 `false`（与 `window` 的
+  `move_*_desktop` 一致）：不写 `follow` 时窗口进了非活动空间就立即隐藏、用户留在原地。
+  实现落在状态机里（`WorkspaceState::moveWindow(window, index, follow)`），做法是
+  “先把窗口放进目标空间、再 `switchTo()`”，而且**只算一份效果列表**（不是搬一次再切一次，
+  否则会先藏后显闪一下）；焦点直接给那个窗口（用户要的就是“跟着它走”），托盘徽标也立刻
+  补一次轮询（与 `switch` 一致）。窗口记录在**别的虚拟桌面**上时 `follow` 无效（那种情况
+  下要切的是另一张桌面的空间，不归这里管）。日志多一段 `, view followed`，摘要变成
+  `workspace move_next (follow)`。Lua 构造器给 `workspace()` 加了第三个参数，且允许
+  “选项表直接占第二位”：`workspace("move_next", { follow = true })` /
+  `workspace("move", 3, { follow = true })`。
 * 规则落点：不新增条目类型，而是给 `window_rule` 加 `workspace`（决策 13 的做法），`app{}` 也能写
   `workspace = N`（= `window.workspace` 的简写，两处都写时 `window` 优先）；只写它而没有 `window`
   时也会展开出一条只带归属的规则。

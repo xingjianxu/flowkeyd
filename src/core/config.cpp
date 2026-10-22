@@ -1041,9 +1041,26 @@ void validateAction(const QString &label,
         // `index` 必须落在 `1..settings.workspace.count` 里：`WorkspaceState` 会把越界
         // 的值夹住（不丢窗口），但配置里写错的数字应当在这里被指出来（不变量 6）。
         //
-        // `prev` / `next` 是**相对**切换（按当前活动空间算，不循环），根本不看
-        // `index`，所以不校验它（界面里这两个 op 也会把空间号那一行藏起来）。
-        if (action.workspaceOp == WorkspaceOp::Prev || action.workspaceOp == WorkspaceOp::Next) {
+        // `prev` / `next` 是**相对**切换（按当前活动空间算，不循环），
+        // `move_prev` / `move_next` 是**相对**搬移（按那个窗口自己那个空间算，
+        // 同样不循环），它们根本不看 `index`，所以不校验它（界面里这几个 op 也会把
+        // 空间号那一行藏起来）。
+        const bool relative = action.workspaceOp == WorkspaceOp::Prev
+                              || action.workspaceOp == WorkspaceOp::Next
+                              || action.workspaceOp == WorkspaceOp::MovePrev
+                              || action.workspaceOp == WorkspaceOp::MoveNext;
+        // `follow` 只对三个搬移 op 有意义（搬完再把视图也切过去）。写在切换 op 上
+        // 是一个静默的空操作（切换本来就会把视图带过去），所以拒绝。
+        const bool moveOp = action.workspaceOp == WorkspaceOp::Move
+                            || action.workspaceOp == WorkspaceOp::MovePrev
+                            || action.workspaceOp == WorkspaceOp::MoveNext;
+        if (action.follow.has_value() && !moveOp) {
+            errors->append(
+                QStringLiteral("%1: `follow` only works with op = \"move\", \"move_prev\" or "
+                               "\"move_next\", not %2")
+                    .arg(label, workspaceOpName(action.workspaceOp)));
+        }
+        if (relative) {
             break;
         }
         if (action.workspaceIndex < 1) {

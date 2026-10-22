@@ -181,7 +181,12 @@ public:
     /// 空间 → 窗口立即隐藏，活动空间**不变**（用户留在原地）。只有这个窗口正是
     /// 「最近拿到焦点的那一个」（也就是用户正在操作的窗口）时，才会把焦点交给活动
     /// 空间里次近的窗口 —— 那一步不可省，见 `WorkspaceEffects::focus`。
-    WorkspaceEffects moveWindow(WindowId window, std::uint32_t index);
+    ///
+    /// `follow = true`（`workspace("move", N, { follow = true })`）时额外把**视图也
+    /// 切到目标空间**：两块屏的状态都被改，效果只算一遗（不是“先藏再显”两步），
+    /// 焦点也直接给这个窗口。内部就是「先把窗口放进目标空间、再 `switchTo()`」。
+    /// 窗口记录在**别的虚拟桌面**上时 `follow` 无效（切当前桌面的空间毫无意义）。
+    WorkspaceEffects moveWindow(WindowId window, std::uint32_t index, bool follow = false);
 
     /// 窗口出现了（`EVENT_OBJECT_SHOW` / 启动时收编 / 规则把新窗口放进某个空间）。
     ///

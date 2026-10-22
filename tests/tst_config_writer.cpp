@@ -191,6 +191,7 @@ std::vector<Action> allActions()
         Action action = base(Action::Kind::Workspace);
         action.workspaceOp = WorkspaceOp::Move;
         action.workspaceIndex = 5;
+        action.follow = true;
         out.push_back(action);
     }
     {
@@ -306,6 +307,22 @@ Config sampleConfig()
         def.keys = {QStringLiteral("Ctrl+Alt+6")};
         Action action = base(Action::Kind::Workspace);
         action.workspaceOp = WorkspaceOp::Prev;
+        ActionSpec spec;
+        spec.kind = ActionSpec::Kind::One;
+        spec.action = action;
+        def.action = spec;
+        config.hotkeys.push_back(def);
+    }
+
+    {
+        // 相对**搬移** + `follow`：写成
+        // `{ type = "workspace", op = "move_next", follow = true }`，同样没有 `index`。
+        HotkeyDef def;
+        def.name = QStringLiteral("hk-workspace-move-next");
+        def.keys = {QStringLiteral("Win+i")};
+        Action action = base(Action::Kind::Workspace);
+        action.workspaceOp = WorkspaceOp::MoveNext;
+        action.follow = true;
         ActionSpec spec;
         spec.kind = ActionSpec::Kind::One;
         spec.action = action;
@@ -482,7 +499,7 @@ void TestConfigWriter::roundTripsThroughRealLua()
     }
 
     // 数目形状对上（真正的比较在下面）。
-    QCOMPARE(static_cast<int>(compiled.bindings.size()), 28);
+    QCOMPARE(static_cast<int>(compiled.bindings.size()), 29);
     // 禁用掉的那条 remap 不会进编译结果（`compile()` 只把有效的那条交给引擎）。
     QCOMPARE(static_cast<int>(compiled.remaps.size()), 1);
     QCOMPARE(static_cast<int>(compiled.windowRules.size()), 5);

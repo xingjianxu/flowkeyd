@@ -335,22 +335,40 @@ end
 --   workspace("move", 2)     -- 把当前窗口发到它自己那块屏的空间 2
 --   workspace("prev")        -- 往前一个空间（到头了什么都不做，**不循环**）
 --   workspace("next")        -- 往后一个空间（到头了什么都不做，**不循环**）
--- 空间号从 1 开始，不能超过 settings.workspace.count（默认 9）。`prev` / `next`
--- 按当前活动空间算，所以不需要空间号。
+--   workspace("move_prev")   -- 把当前窗口发到它自己那个空间的前一个（不循环）
+--   workspace("move_next")   -- 把当前窗口发到它自己那个空间的后一个（不循环）
+-- 空间号从 1 开始，不能超过 settings.workspace.count（默认 9）。`prev` / `next` /
+-- `move_prev` / `move_next` 都是相对的，所以不需要空间号。
 -- `switch` 只影响一块屏：光标所在的那一块，或者 settings.workspace.switch_target
 -- 写 "focus" 时前台窗口所在的那一块；别的屏上的窗口不动。
 -- `move` 非活动空间时窗口立即隐藏，你留在原来的空间里。
-function workspace(op, index)
+--
+-- 三个搬移 op（`move` / `move_prev` / `move_next`）都可以再带 `follow = true`：
+-- 搬完之后把**视图也切到目标空间**并重新激活那个窗口（默认为 false，即只搬窗口）：
+--   workspace("move_next", { follow = true })    -- 把窗口带到下一个空间，人也跟过去
+--   workspace("move", 3, { follow = true })
+-- `follow` 只能写在搬移 op 上，写在 `switch` / `prev` / `next` 上会被 `--check` 拒绝。
+function workspace(op, index, opts)
   if type(op) ~= "string" then
-    error("workspace() expects \"switch\", \"move\", \"prev\" or \"next\", got " .. type(op), 2)
+    error(
+      "workspace() expects \"switch\", \"move\", \"move_prev\", \"move_next\", \"prev\" or "
+        .. "\"next\", got "
+        .. type(op),
+      2
+    )
   end
-  if op == "prev" or op == "next" then
-    return { type = "workspace", op = op }
+  if is_table(index) and opts == nil then
+    -- 相对 op 的第二个参数直接就是选项表：`workspace("move_next", { follow = true })`
+    opts, index = index, nil
   end
-  if type(index) ~= "number" then
-    error("workspace() expects a workspace number (1 is the first), got " .. type(index), 2)
+  local action = { type = "workspace", op = op }
+  if op == "switch" or op == "move" then
+    if type(index) ~= "number" then
+      error("workspace() expects a workspace number (1 is the first), got " .. type(index), 2)
+    end
+    action.index = index
   end
-  return { type = "workspace", op = op, index = index }
+  return merge(action, opts)
 end
 
 -- 系统电源：睡眠 / 休眠 / 关机 / 重启 / 注销 / 锁定 / 关屏。

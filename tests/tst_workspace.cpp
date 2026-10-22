@@ -134,6 +134,7 @@ private slots:
     void emptySpaceDoesNotStealFocus();
     void minimizedWindowsAreNotFocusTargets();
     void movingForegroundWindowHandsFocusOver();
+    void movingWithFollowSwitchesTheView();
     void movingBackgroundWindowLeavesFocusAlone();
     void destroyedWindowsForgetTheirRecords();
     void monitorsAreIndependent();
@@ -392,6 +393,44 @@ void TestWorkspace::movingForegroundWindowHandsFocusOver()
     QCOMPARE(*effects.focus, core::WindowId{2});
     QVERIFY(state.isVisible(2));
     QCOMPARE(state.record(2)->workspace.index, 1u);
+}
+
+void TestWorkspace::movingWithFollowSwitchesTheView()
+{
+    core::WorkspaceState state;
+    state.setDesktop(kDeskA);
+    state.windowAppeared(1, kScreen1); // 空间 1（活动）
+    state.windowAppeared(2, kScreen1);
+    state.focusChanged(1);
+    state.focusChanged(2); // 用户正在用 2
+
+    // `follow = true`：把 2 发到空间 2，**视图也跟着过去**，焦点仍然在 2 上。
+    const core::WorkspaceEffects effects = state.moveWindow(2, 2, true);
+    QCOMPARE(listing(effects.show), listing({2}));
+    QCOMPARE(listing(effects.hide), listing({1})); // 空间 1 的窗口被藏起来
+    QVERIFY(effects.focus.has_value());
+    QCOMPARE(*effects.focus, core::WindowId{2});
+    QCOMPARE(activeOf(state, kScreen1), 2u);
+    QVERIFY(state.isVisible(2));
+    QVERIFY(!state.isVisible(1));
+    QCOMPARE(state.record(2)->workspace.index, 2u);
+    // 一份效果列表就完成（不能“先藏再显”闪一下）：同一个窗口不会同时在两边。
+    for (const core::WindowId id : effects.show) {
+        QVERIFY(std::find(effects.hide.begin(), effects.hide.end(), id) == effects.hide.end());
+    }
+
+    // 带着视图往回搬：空间 2 → 1 也是同一个机制。
+    const core::WorkspaceEffects back = state.moveWindow(2, 1, true);
+    QCOMPARE(activeOf(state, kScreen1), 1u);
+    QCOMPARE(listing(back.show), listing({1, 2}));
+    QCOMPARE(listing(back.hide), QStringList{});
+    QVERIFY(back.focus.has_value());
+    QCOMPARE(*back.focus, core::WindowId{2});
+    QVERIFY(state.isVisible(1));
+    QVERIFY(state.isVisible(2));
+
+    // 目标就是当前活动空间时“跟随”无意义（空间 1 → 空间 1 本来就不动）。
+    QVERIFY(state.moveWindow(1, 1, true).isEmpty());
 }
 
 void TestWorkspace::movingBackgroundWindowLeavesFocusAlone()

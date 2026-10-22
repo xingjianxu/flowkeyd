@@ -588,15 +588,21 @@ core::Action convertAction(lua_State *L, int index)
     } else if (type == QLatin1String("workspace")) {
         action.kind = core::Action::Kind::Workspace;
         action.workspaceOp = *core::workspaceOpFromName(enumName(
-            L, index, "op", {"switch", "move", "prev", "next"}, QStringLiteral("switch")));
-        // `prev` / `next` 是**相对**切换（按当前活动空间算，不循环），没有空间号可写。
+            L, index, "op", {"switch", "move", "move_prev", "move_next", "prev", "next"},
+            QStringLiteral("switch")));
+        // `prev` / `next` / `move_prev` / `move_next` 都是**相对**的（按当前状态算），
+        // 没有空间号可写。
         const bool relative = action.workspaceOp == core::WorkspaceOp::Prev
-                              || action.workspaceOp == core::WorkspaceOp::Next;
+                              || action.workspaceOp == core::WorkspaceOp::Next
+                              || action.workspaceOp == core::WorkspaceOp::MovePrev
+                              || action.workspaceOp == core::WorkspaceOp::MoveNext;
         const auto number = optInteger(L, index, "index", 1, 4294967295LL, QStringLiteral("u32"));
         if (!number.has_value() && !relative) {
             fail(QStringLiteral("missing field `index` (the workspace number, 1 is the first)"));
         }
         action.workspaceIndex = number.has_value() ? static_cast<quint32>(*number) : 1;
+        // 搬完之后把视图也切过去（只对搬移 op 有意义，其它 op 由 `core::compile()` 拒绝）。
+        action.follow = optBool(L, index, "follow");
     } else if (type == QLatin1String("power")) {
         action.kind = core::Action::Kind::Power;
         action.powerOp = *core::powerOpFromName(

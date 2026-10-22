@@ -369,7 +369,7 @@ WorkspaceEffects WorkspaceState::switchTo(const MonitorKey &monitor, std::uint32
     return effects;
 }
 
-WorkspaceEffects WorkspaceState::moveWindow(WindowId window, std::uint32_t index)
+WorkspaceEffects WorkspaceState::moveWindow(WindowId window, std::uint32_t index, bool follow)
 {
     WorkspaceEffects effects;
     const auto it = m_windows.find(window);
@@ -382,6 +382,10 @@ WorkspaceEffects WorkspaceState::moveWindow(WindowId window, std::uint32_t index
     if (target == record.workspace.index) {
         return effects; // 已经在那个空间里：无操作
     }
+    // 视图跟随只在窗口就在**当前虚拟桌面**上时才有意义（否则要切的是另一张桌面的
+    // 空间，那件事不归这里管）。
+    const bool followView = follow && record.workspace.desktop == m_desktop;
+    const MonitorKey monitor = record.workspace.monitor;
     record.workspace.index = target;
     record.zOrder = ++m_zSeq;
     record.homeMonitor.reset();
@@ -389,6 +393,15 @@ WorkspaceEffects WorkspaceState::moveWindow(WindowId window, std::uint32_t index
     if (target == spaces.active) {
         // 从藏着的空间被叫回活动空间：露出来并聚焦（用户刚要求的就是它）。
         effects.show.push_back(window);
+        effects.focus = window;
+        return effects;
+    }
+    if (followView) {
+        // 视图也跟着过去：等价于“先把它放进目标空间，再把那块屏切到目标空间”，
+        // 但只算一份效果（否则会先藏后显闪一下）。窗口刚被搬、又刚刚在前台，
+        // 所以切完之后聚焦它（而不是让 `focusCandidate()` 去猜）。
+        m_lastFocused = window;
+        effects = switchTo(monitor, target);
         effects.focus = window;
         return effects;
     }

@@ -164,6 +164,7 @@ UI 只有托盘图标 + 日志窗口、`menu`/`help`/`windows`/`apps`/`update` �
     **例外**：发送脚本里的裸字符保持 AutoHotkey 语义（`send("A")` 打大写 A、花括号里是键名）。
 18. **`window` 的 `follow`**（只对两个跨桌面 op 有效，默认 `false`）：搬完把视图也切过去并重新激活，两步在
     **同一个 STA 会话**里做完；不产生窗口过渡；保持激活是尽力而为（失败只记 warning）。
+    **`workspace` 的三个搬移 op 有同义的 `follow`**（见第 36 条）。
 19. **前台是覆盖层时跳过它**：不写 `target`/`process` 的 `window` 动作沿 Z 序往下找第一个“主窗口”（否则会
     去操控 PowerToys 的「快捷键指南」）。`windowDesktopId()` 可重试；`moveWindowToAdjacent()` 搬完**等
     桌面 GUID 真的变了再返回**。
@@ -245,10 +246,14 @@ UI 只有托盘图标 + 日志窗口、`menu`/`help`/`windows`/`apps`/`update` �
     M11（文档、验收、收尾）全部完成**。要点：默认**开启**但没绑定就不会隐藏任何窗口；`count` 1–10（默认 9）；
     `switch_target` = `"cursor"`（默认）/ `"focus"`；`new_window` = `"active"`（默认）或 1..count
     （**只对 flowkeyd 运行期间新出现的窗口生效**，启动时已在的窗口照旧收编进各自活动空间）；
-    `exclude` 空串报错；动作有四种形状：`workspace("switch"|"move", N)`（`index` ≤ `count`
+    `exclude` 空串报错；动作有六种形状：`workspace("switch"|"move", N)`（`index` ≤ `count`
     在 `--check` 校验）与**相对切换** `workspace("prev"|"next")`（按那块屏的活动空间 ±1，
     **不循环**：已经在两头就什么都不做；不看也不要求 `index`，相对那一步用纯函数
-    `core::stepIndex(..., wrap=false)` 在 `Dispatcher` 里算）；
+    `core::stepIndex(..., wrap=false)` 在 `Dispatcher` 里算）、**相对搬移**
+    `workspace("move_prev"|"move_next")`（按那个窗口自己的空间 ±1，同样不循环）；三个搬移
+    op 都可以带 `follow = true`（默认 `false`）：搬完把**那块屏也切到目标空间**并重新激活
+    那个窗口，状态机一次算完（先放窗口再 `switchTo()`，不是先藏后显），日志多一段
+    `, view followed`；写在 `switch`/`prev`/`next` 上会报错；
     规则用 `window_rule.workspace` / `app.workspace`（后者是前者的简写），归属优先级 = 命中窗口的
     **第一条**规则的 `workspace` → `settings.workspace.new_window` → 那块屏的活动空间（纯函数
     `core::workspaceForNewWindow()`）；钩子线程**先发 `window_rule` 的摆放、再发工作空间的收编**

@@ -157,6 +157,10 @@ QString workspaceOpName(WorkspaceOp op)
         return QStringLiteral("prev");
     case WorkspaceOp::Next:
         return QStringLiteral("next");
+    case WorkspaceOp::MovePrev:
+        return QStringLiteral("move_prev");
+    case WorkspaceOp::MoveNext:
+        return QStringLiteral("move_next");
     }
     return QStringLiteral("switch");
 }
@@ -331,6 +335,13 @@ std::optional<WorkspaceOp> workspaceOpFromName(const QString &name)
     }
     if (key == QLatin1String("next") || key == QLatin1String("switch_next")) {
         return WorkspaceOp::Next;
+    }
+    if (key == QLatin1String("move_prev") || key == QLatin1String("prev_move")
+        || key == QLatin1String("move_previous")) {
+        return WorkspaceOp::MovePrev;
+    }
+    if (key == QLatin1String("move_next") || key == QLatin1String("next_move")) {
+        return WorkspaceOp::MoveNext;
     }
     return std::nullopt;
 }
@@ -520,12 +531,17 @@ QString Action::summary() const
             return QStringLiteral("apps %1").arg(rustDebug(*appsTitle));
         }
         return QStringLiteral("apps");
-    case Kind::Workspace:
-        // `prev` / `next` 是相对切换，没有空间号可写。
-        if (workspaceOp == WorkspaceOp::Prev || workspaceOp == WorkspaceOp::Next) {
-            return QStringLiteral("workspace %1").arg(workspaceOpName(workspaceOp));
+    case Kind::Workspace: {
+        // `prev` / `next` / `move_prev` / `move_next` 都是**相对**的，没有空间号可写。
+        QString text = QStringLiteral("workspace %1").arg(workspaceOpName(workspaceOp));
+        if (workspaceOp == WorkspaceOp::Switch || workspaceOp == WorkspaceOp::Move) {
+            text += QLatin1String(" ") + QString::number(workspaceIndex);
         }
-        return QStringLiteral("workspace %1 %2").arg(workspaceOpName(workspaceOp)).arg(workspaceIndex);
+        if (follow.value_or(false)) {
+            text += QLatin1String(" (follow)");
+        }
+        return text;
+    }
     case Kind::Power:
         return QStringLiteral("power %1").arg(powerOpName(powerOp));
     case Kind::Suspend:

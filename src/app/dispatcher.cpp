@@ -2539,22 +2539,26 @@ void Dispatcher::executeWorkspaceAction(const core::Compiled &config,
         return;
     }
 
-    if (action.workspaceOp == core::WorkspaceOp::Move) {
+    const bool moveOp = action.workspaceOp == core::WorkspaceOp::Move
+                        || action.workspaceOp == core::WorkspaceOp::MovePrev
+                        || action.workspaceOp == core::WorkspaceOp::MoveNext;
+    if (moveOp) {
+        const QString op = core::workspaceOpName(action.workspaceOp);
         // 目标 = **当前前台窗口**（决策 19 的「跳过覆盖层」找法）。
         const HWND hwnd = win::window::find(core::WindowQuery::make(std::nullopt, std::nullopt));
         if (hwnd == nullptr) {
-            win::logWarn(QStringLiteral("`%1` workspace move: there is no foreground window")
-                             .arg(hotkey));
+            win::logWarn(QStringLiteral("`%1` workspace %2: there is no foreground window")
+                             .arg(hotkey, op));
             return;
         }
         const core::WindowId id = win::workspace::idOf(hwnd);
         const QString title = win::window::windowTitle(hwnd);
         const bool tracked = m_workspace.tracks(id);
         if (!win::workspace::isManageable(hwnd, tracked, settings.exclude)) {
-            win::logWarn(QStringLiteral("`%1` workspace move: %2 is not managed by the workspace "
+            win::logWarn(QStringLiteral("`%1` workspace %2: %3 is not managed by the workspace "
                                         "feature (not a main window, an excluded program, or one "
                                         "of flowkeyd's own windows)")
-                             .arg(hotkey, core::rustDebug(title)));
+                             .arg(hotkey, op, core::rustDebug(title)));
             return;
         }
         if (!tracked) {
@@ -2562,28 +2566,68 @@ void Dispatcher::executeWorkspaceAction(const core::Compiled &config,
             // 否则 `moveWindow()` 会把「不认识的窗口」直接忽略。
             const QString monitor = monitorKeyOf(hwnd, monitors);
             if (monitor.isEmpty()) {
-                win::logWarn(QStringLiteral("`%1` workspace move: cannot tell which monitor %2 is on")
-                                 .arg(hotkey, core::rustDebug(title)));
+                win::logWarn(QStringLiteral("`%1` workspace %2: cannot tell which monitor %3 is on")
+                                 .arg(hotkey, op, core::rustDebug(title)));
                 return;
             }
             applyWorkspaceEffects(m_workspace.windowAppeared(id, monitor),
                                   QStringLiteral("window appeared"));
         }
-        const core::WorkspaceEffects effects = m_workspace.moveWindow(id, action.workspaceIndex);
+        // 相对搬移（`workspace("move_prev")` / `workspace("move_next")`）：目标 =
+        // 这个窗口**自己那个空间** ± 1；到头了就是什么都不做（**不循环**，与相对
+        // 切换的口径一致）。状态机只认绝对空间号，相对那一步在这里算 ——
+        // `core::stepIndex()` 是纯函数，所以"不循环"的语义仍然只有一处实现。
+        std::uint32_t target = action.workspaceIndex;
+        const std::optional<core::WindowRecord> before = m_workspace.record(id);
+        const core::MonitorKey monitorOfWindow = before.has_value() ? before->workspace.monitor : QString();
+        if (action.workspaceOp != core::WorkspaceOp::Move) {
+            const std::uint32_t current = before.has_value() ? before->workspace.index : 1;
+            const std::optional<std::size_t> stepped = core::stepIndex(
+                m_workspace.count(),
+                current > 0 ? current - 1 : 0,
+                action.workspaceOp == core::WorkspaceOp::MovePrev ? -1 : 1,
+                /*wrap=*/false);
+            if (!stepped.has_value()) {
+                win::logInfo(QStringLiteral("`%1` -> workspace %2: already at space %3 on %4")
+                                 .arg(hotkey, op)
+                                 .arg(current)
+                                 .arg(monitorOfWindow));
+                return;
+            }
+            target = static_cast<std::uint32_t>(*stepped) + 1;
+        }
+        std::uint32_t activeBefore = 0; // 0 = 不知道
+        if (const std::optional<core::MonitorSpaces> spaces = m_workspace.spaces(monitorOfWindow)) {
+            activeBefore = spaces->active;
+        }
+        const bool follow = action.follow.value_or(false);
+        const core::WorkspaceEffects effects = m_workspace.moveWindow(id, target, follow);
         const std::optional<core::WindowRecord> record = m_workspace.record(id);
-        const std::uint32_t space =
-            record.has_value() ? record->workspace.index : action.workspaceIndex;
+        const std::uint32_t space = record.has_value() ? record->workspace.index : target;
         applyWorkspaceEffects(effects,
                              QStringLiteral("moving %1 to space %2")
                                  .arg(core::rustDebug(title))
                                  .arg(space));
-        win::logInfo(QStringLiteral("`%1` -> workspace move %2 (%3 on %4, %5)")
-                         .arg(hotkey)
+        // 视图真的跟着切了：那块屏的活动空间变了（只可能是 `follow` 干的）。
+        std::uint32_t activeAfter = activeBefore;
+        if (const std::optional<core::MonitorSpaces> spaces = m_workspace.spaces(monitorOfWindow)) {
+            activeAfter = spaces->active;
+        }
+        const bool followed = follow && activeBefore != 0 && activeAfter != activeBefore;
+        QString detail = m_workspace.isVisible(id) ? QStringLiteral("visible")
+                                                    : QStringLiteral("hidden");
+        if (followed) {
+            detail += QStringLiteral(", view followed");
+        }
+        win::logInfo(QStringLiteral("`%1` -> workspace %2 %3 (%4 on %5, %6)")
+                         .arg(hotkey, op)
                          .arg(space)
-                         .arg(core::rustDebug(title),
-                              record.has_value() ? record->workspace.monitor : QString())
-                         .arg(m_workspace.isVisible(id) ? QStringLiteral("visible")
-                                                        : QStringLiteral("hidden")));
+                         .arg(core::rustDebug(title), monitorOfWindow)
+                         .arg(detail));
+        if (followed) {
+            // 托盘上的徽标现在就该变成新的空间号（与 `switch` 一致）。
+            pollDesktop();
+        }
         return;
     }
 

@@ -50,11 +50,15 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、`--ch
   README 的动作表。简写字符串：`"run:…"`、`"send:…"`、`"type:…"`、`"open:…"`、`"notify:t|b"`、
   `"volume:up"`、`"media:next"`、`"clipboard:get"`、`"window:minimize"`、`"desktop:1"`、`"power:sleep"`、
   裸关键字 `reload`/`quit`/`help`/`windows`/`apps`/`none`。`workspace` **没有简写**
-  （`workspace("switch", 2)` / `workspace("next")`）；它不算危险动作。`switch` / `prev` / `next` 作用在
-  **哪块屏**由 `settings.workspace.switch_target` 决定（`"cursor"` 默认 / `"focus"`），`move` 的目标是
-  **当前前台窗口**（前台是覆盖层时跳过它）。`prev` / `next` 是相对切换：按那块屏当前活动空间 ±1，
-  **不循环**（已经在两头时什么都不做），所以不写 `index`，也不校验它。显隐只对**当前虚拟桌面**上的
-  窗口做（记录过时的窗口会被跳过）。
+  （`workspace("switch", 2)` / `workspace("next")` / `workspace("move_next", { follow = true })`）；它不算危险
+  动作。`switch` / `prev` / `next` 作用在
+  **哪块屏**由 `settings.workspace.switch_target` 决定（`"cursor"` 默认 / `"focus"`），`move` / `move_prev` /
+  `move_next` 的目标是**当前前台窗口**（前台是覆盖层时跳过它）。`prev` / `next` / `move_prev` /
+  `move_next` 都是相对的：`prev`/`next` 按那块屏当前活动空间 ±1，`move_prev`/`move_next` 按那个窗口
+  自己那个空间 ±1，都**不循环**（已经在两头时什么都不做），所以不写 `index`，也不校验它。`follow`
+  （默认 `false`）只由三个搬移 op 接受：搬完把那块屏也切到目标空间并重新激活窗口（日志里多一段
+  `, view followed`）；写在 `switch` / `prev` / `next` 上会被 `--check` 拒绝。显隐只对**当前虚拟
+  桌面**上的窗口做（记录过时的窗口会被跳过）。
 * **启动权限**：`run` 与 `launch`（`window` 的 / `app{}` 的，共用一份字段块）都有 `elevated`，**默认
   `false` = 当前登录用户的普通权限**；`open` 与程序启动器没有这个字段（它们总是普通权限）。
 * **完全没有动作**的快捷键就是一个按键屏蔽器（会吞掉它匹配到的按键）。
@@ -133,6 +137,9 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
   一个远程桌面客户端窗口抢到前台就会把所有绑定放行）。覆盖：`workspace("switch"|"move", N)` 的
   显隐与日志、**相对切换 `workspace("prev"|"next")`**（一路 1→2→3→4，再按一次 next 只写一行
   `already at space 4`、窗口没被翻出来；prev 再走回空间 1，在 1 上再按一次同理不循环）、
+  **相对搬移 `workspace("move_next", { follow = true })` / `workspace("move_prev", { follow = true })`**
+  （带着窗口往下一个空间走、那块屏的活动空间也跟着变、窗口仍然在前台，日志里写着 `view followed`；
+  往回走看 `move_prev`；走到头只写一行 `already at space N`，不循环）、
   `window("activate")` 唤起藏在别的工作空间的窗口、**切换器里的别进程窗口**（筛到它就
   “先切空间再激活”）、预写恢复日志 → 强杀 → `--restore-windows` 按日志恢复、`new_window` 与规则的
   新窗口归属、`quit` 前恢复可见。脚本里**不断言“隐藏前台窗口之后前台没变”**（Windows 自己会把前台

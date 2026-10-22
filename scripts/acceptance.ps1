@@ -48,7 +48,9 @@
 #     绑定被放行（键到达前台、动作不跑）、`remote_desktop = true` 的例外照常拦下来
 #     并执行；换掉名单重载之后，绑定又回到正常行为，而且 quit 例外能停掉它
 #   * 工作空间（三个一次性实例，`charmap.exe` 当载体）：`workspace("switch"|"move", N)`
-#     真的显隐窗口（切换后焦点回到那个空间最近的窗口、空空间不抢焦点）、
+#     与相对切换 / 相对搬移（`prev`/`next`/`move_prev`/`move_next`，带 `follow` 的那种
+#     会把窗口带到相邻空间并让视图跟过去）真的显隐窗口（切换后焦点回到那个空间最近的
+#     窗口、空空间不抢焦点）、相对的那些到两头就不动（不循环）、
 #     `window("activate")` / `windows()` 切换器能把藏在别的工作空间里的**别进程**
 #     窗口唤起（先切空间再激活）、隐藏前先写恢复日志、强杀之后 `--restore-windows`
 #     按日志把窗口放回来，以及 `new_window = N` / `window_rule{ workspace = N }`
@@ -147,6 +149,7 @@ $VK_F19 = 0x82
 $VK_F20 = 0x83
 $VK_F21 = 0x84
 $VK_F22 = 0x85
+$VK_F23 = 0x86
 $VK_F24 = 0x87
 $VK_CAPSLOCK = 0x14
 $VK_OEM_MINUS = 0xBD
@@ -1880,6 +1883,8 @@ hotkey { name = "accept-ws-switch-1", keys = "Ctrl+Alt+F16", action = workspace(
 hotkey { name = "accept-ws-prev", keys = "Ctrl+Alt+F17", action = workspace("prev") }
 hotkey { name = "accept-ws-next", keys = "Ctrl+Alt+F18", action = workspace("next") }
 hotkey { name = "accept-ws-move-2", keys = "Ctrl+Alt+F20", action = workspace("move", 2) }
+hotkey { name = "accept-ws-move-next", keys = "Ctrl+Alt+F22", action = workspace("move_next", { follow = true }) }
+hotkey { name = "accept-ws-move-prev", keys = "Ctrl+Alt+F23", action = workspace("move_prev", { follow = true }) }
 hotkey { name = "accept-ws-reveal", keys = "Ctrl+Alt+F21",
   action = window("activate", { process = "charmap", toggle = false }) }
 hotkey { name = "accept-ws-switch", keys = "LWin", trigger = "release", action = windows() }
@@ -1974,6 +1979,38 @@ hotkey { name = "accept-ws-quit", keys = "Ctrl+Alt+F10", action = quit() }
         WaitUntil { [FlowInject]::ForegroundTitle() -eq $wsTitle } 6000)
     Check '唤起的日志里带着它所在的工作空间' (
         (WsText $ws1Log $ws1Out) -match 'accept-ws-reveal[^\r\n]*workspace 2 on')
+
+    # 相对搬移 + 跟随视图：`workspace("move_next", { follow = true })` / `move_prev`。
+    # 此刻载体在空间 2、活动空间也是 2，前台就是它（上一段 `window("activate")` 刚做完），
+    # 正好是“把窗口发到相邻空间、人跟着过去”的起点。
+    # **不用 `ChordUntil`**：它重试前会用 `FocusCatcher` 抢前台，而这一组动作的
+    # 目标就是前台窗口 —— 抢走之后就搬错窗口了。所以只按一次，失败就如实报。
+    CtrlAlt $VK_F22
+    Check 'workspace("move_next", follow)：窗口被带到空间 3，视图也跟着过去' (
+        WaitUntil {
+            (WsText $ws1Log $ws1Out) -match 'accept-ws-move-next[^\r\n]*workspace move_next 3[^\r\n]*view followed'
+        } 8000)
+    Check '跟过去之后窗口还看得见、还在前台' (
+        [FlowInject]::IsVisible($wsHwnd) -and (WaitUntil { [FlowInject]::ForegroundTitle() -eq $wsTitle } 5000))
+    CtrlAlt $VK_F23
+    Check 'workspace("move_prev", follow)：窗口回到空间 2（视图也回来）' (
+        WaitUntil {
+            (WsText $ws1Log $ws1Out) -match 'accept-ws-move-prev[^\r\n]*workspace move_prev 2[^\r\n]*view followed'
+        } 8000)
+    CtrlAlt $VK_F23
+    Check 'move_prev 走到空间 1：窗口跟着过去，仍然看得见' (
+        (WaitUntil {
+            (WsText $ws1Log $ws1Out) -match 'accept-ws-move-prev[^\r\n]*workspace move_prev 1[^\r\n]*view followed'
+        } 8000) -and [FlowInject]::IsVisible($wsHwnd))
+    CtrlAlt $VK_F23
+    Check '到头的 move_prev 只记一行 already at space 1（不循环）' (
+        WaitUntil { (WsText $ws1Log $ws1Out) -match 'accept-ws-move-prev[^\r\n]*already at space 1' } 5000)
+    # 把它送回空间 2：后面的检查（切换器唤起）依赖这个归属。
+    CtrlAlt $VK_F22
+    Check 'move_next 把窗口送回空间 2（视图跟着）' (
+        WaitUntil {
+            (WsText $ws1Log $ws1Out) -match 'accept-ws-move-next[^\r\n]*workspace move_next 2[^\r\n]*view followed'
+        } 8000)
 
     # 窗口切换器：被工作空间藏起来的**别进程**窗口也要列出来（`SW_HIDE` 之后
     # `IsWindowVisible` 是假的，只能靠状态机的记录）；筛到只剩一个就直接激活它

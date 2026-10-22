@@ -242,9 +242,12 @@ void TestLua::workspaceActionIsConverted()
         hotkey{ keys = "Alt+3", action = { type = "workspace", op = "switch", index = 3 } }
         hotkey{ keys = "Alt+6", action = workspace("prev") }
         hotkey{ keys = "Alt+7", action = { type = "workspace", op = "next" } }
+        hotkey{ keys = "Win+i", action = workspace("move_next", { follow = true }) }
+        hotkey{ keys = "Win+u", action = { type = "workspace", op = "move_prev", follow = true } }
+        hotkey{ keys = "Alt+8", action = workspace("move", 3, { follow = true }) }
     )");
     QVERIFY(c.has_value());
-    QCOMPARE(c->bindings.size(), std::size_t(5));
+    QCOMPARE(c->bindings.size(), std::size_t(8));
     QCOMPARE(c->bindings[0].press.at(0).kind, core::Action::Kind::Workspace);
     QCOMPARE(c->bindings[0].press.at(0).workspaceOp, core::WorkspaceOp::Switch);
     QCOMPARE(c->bindings[0].press.at(0).workspaceIndex, std::uint32_t(1));
@@ -258,7 +261,20 @@ void TestLua::workspaceActionIsConverted()
     QCOMPARE(c->bindings[4].press.at(0).workspaceOp, core::WorkspaceOp::Next);
     QCOMPARE(c->bindings[4].press.at(0).summary(), QStringLiteral("workspace next"));
 
-    // `op` 只接 switch / move / prev / next；绝对切换（switch / move）必须写 `index`。
+    // 相对**搬移** + `follow`：第二种参数既可以是空间号，也可以直接是选项表。
+    QCOMPARE(c->bindings[5].press.at(0).workspaceOp, core::WorkspaceOp::MoveNext);
+    QCOMPARE(c->bindings[5].press.at(0).follow, std::optional<bool>(true));
+    QCOMPARE(c->bindings[5].press.at(0).summary(), QStringLiteral("workspace move_next (follow)"));
+    QCOMPARE(c->bindings[6].press.at(0).workspaceOp, core::WorkspaceOp::MovePrev);
+    QCOMPARE(c->bindings[6].press.at(0).follow, std::optional<bool>(true));
+    QCOMPARE(c->bindings[6].press.at(0).summary(), QStringLiteral("workspace move_prev (follow)"));
+    QCOMPARE(c->bindings[7].press.at(0).workspaceOp, core::WorkspaceOp::Move);
+    QCOMPARE(c->bindings[7].press.at(0).workspaceIndex, std::uint32_t(3));
+    QCOMPARE(c->bindings[7].press.at(0).follow, std::optional<bool>(true));
+    QCOMPARE(c->bindings[7].press.at(0).summary(), QStringLiteral("workspace move 3 (follow)"));
+
+    // `op` 只接 switch / move / move_prev / move_next / prev / next；绝对切换（switch / move）
+    // 必须写 `index`；`follow` 只能写在搬移 op 上（切换本来就会把视图带过去）。
     const QString badOp = failure(R"(hotkey{ keys = "Alt+5", action = { type = "workspace", op = "swap", index = 1 } })");
     QVERIFY2(badOp.contains(QStringLiteral("unknown variant `swap`")), qPrintable(badOp));
     const QString noIndex = failure(R"(hotkey{ keys = "Alt+5", action = { type = "workspace", op = "switch" } })");

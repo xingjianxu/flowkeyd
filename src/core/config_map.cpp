@@ -86,6 +86,8 @@ constexpr EnumName<ToggleState> kToggleStates[] = {
 constexpr EnumName<WorkspaceOp> kWorkspaceOps[] = {
     {WorkspaceOp::Switch, "switch"},
     {WorkspaceOp::Move, "move"},
+    {WorkspaceOp::MovePrev, "move_prev"},
+    {WorkspaceOp::MoveNext, "move_next"},
     {WorkspaceOp::Prev, "prev"},
     {WorkspaceOp::Next, "next"},
 };
@@ -768,10 +770,11 @@ QVariantMap actionToMap(const Action &action)
     case Action::Kind::Workspace:
         out.insert(QStringLiteral("type"), QStringLiteral("workspace"));
         out.insert(QStringLiteral("op"), enumName(kWorkspaceOps, action.workspaceOp));
-        // `prev` / `next` 是相对切换：没有空间号可写（写了也没用）。
+        // `prev` / `next` / `move_prev` / `move_next` 是相对的：没有空间号可写（写了也没用）。
         if (action.workspaceOp == WorkspaceOp::Switch || action.workspaceOp == WorkspaceOp::Move) {
             out.insert(QStringLiteral("index"), action.workspaceIndex);
         }
+        putBoolIf(action.follow, &out, "follow");
         break;
     case Action::Kind::Power:
         out.insert(QStringLiteral("type"), QStringLiteral("power"));
@@ -890,6 +893,7 @@ Action actionFromMap(const QVariantMap &map, QStringList *errors, const QString 
         action.workspaceOp = workspaceOpFromName(stringOr(map, "op", QStringLiteral("switch")))
                                  .value_or(WorkspaceOp::Switch);
         action.workspaceIndex = uintOr(map, "index", 1);
+        action.follow = optionalBool(map, "follow");
     } else if (type == QLatin1String("power")) {
         action.kind = Action::Kind::Power;
         action.powerOp = powerOpFromName(stringOr(map, "op", QStringLiteral("sleep")))
