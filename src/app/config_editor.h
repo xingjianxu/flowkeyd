@@ -64,10 +64,6 @@ class ConfigEditor : public QObject
     Q_PROPERTY(QStringList windowOps READ windowOps CONSTANT)
     Q_PROPERTY(QStringList powerOps READ powerOps CONSTANT)
     Q_PROPERTY(QStringList toggleStates READ toggleStates CONSTANT)
-    Q_PROPERTY(QStringList workspaceOps READ workspaceOps CONSTANT)
-    Q_PROPERTY(QStringList workspaceSwitchTargets READ workspaceSwitchTargets CONSTANT)
-    Q_PROPERTY(QStringList workspaceSwitchEffects READ workspaceSwitchEffects CONSTANT)
-    Q_PROPERTY(QStringList trayBadgeModes READ trayBadgeModes CONSTANT)
     Q_PROPERTY(QStringList monitorPresets READ monitorPresets CONSTANT)
     Q_PROPERTY(QStringList defaultRemoteDesktopProcesses READ defaultRemoteDesktopProcesses CONSTANT)
 
@@ -105,12 +101,6 @@ public:
     QStringList windowOps() const;
     QStringList powerOps() const;
     QStringList toggleStates() const;
-    QStringList workspaceOps() const;
-    QStringList workspaceSwitchTargets() const;
-    /// `settings.workspace.switch_effect` 的取值（`auto` / `instant` / `freeze`）。
-    QStringList workspaceSwitchEffects() const;
-    /// `settings.tray_badge` 的取值（`both` / `desktop` / `workspace`）。
-    QStringList trayBadgeModes() const;
     QStringList monitorPresets() const;
     QStringList defaultRemoteDesktopProcesses() const;
 
@@ -134,8 +124,6 @@ public:
     // ---- settings ----
     /// 改一个设置项；`value` 无效（QML 里的 `undefined`）时删掉这个键（回到默认）。
     Q_INVOKABLE void setSetting(const QString &key, const QVariant &value);
-    /// 改 `settings.workspace` 里的一个字段（嵌套表）；`value` 无效时删掉它。
-    Q_INVOKABLE void setWorkspaceSetting(const QString &key, const QVariant &value);
     /// 恢复内置的远程桌面进程名单（删掉 `remote_desktop_processes`）。
     Q_INVOKABLE void resetRemoteDesktopProcesses();
 

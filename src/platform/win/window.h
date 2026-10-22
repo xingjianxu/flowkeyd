@@ -23,12 +23,7 @@ namespace flowkeyd::platform::win::window {
 
 /// 定位查询描述的窗口；没有任何匹配时返回 nullptr。
 /// 查询意为“前台窗口”而没有前台窗口时同样返回 nullptr。
-///
-/// `tracked` 是工作空间状态机记着的窗口：它们可能正被我们藏起来
-/// （`ShowWindow(SW_HIDE)` → `IsWindowVisible` 为假），但仍然是用户自己的程序
-/// 窗口，所以 `window("activate")` / `windows()` 必须能找到它们（M9）。
-/// 优先级：看得见的 > 被我们藏起来的 > 最小化的。
-HWND find(const core::WindowQuery &query, const std::vector<HWND> &tracked = {});
+HWND find(const core::WindowQuery &query);
 
 /// 拥有这个窗口的可执行文件的**小写文件名**（`wezterm-gui.exe`）。
 /// 拿不到（进程已退出、访问被拒）时返回 `std::nullopt`。
@@ -50,13 +45,6 @@ std::vector<HWND> topLevelWindows();
 /// `window_rule` 与窗口切换器用的是同一条判据（纯逻辑在 `core/window_match`）。
 bool isMainWindow(HWND hwnd);
 
-/// 与 `isMainWindow()` 同一套判据，但**不要求窗口当前可见**。
-///
-/// 工作空间把窗口藏起来用的是 `ShowWindow(SW_HIDE)`（M0 实测的唯一可用办法），
-/// 那之后 `IsWindowVisible` 就是假的了 —— 而“它还是一个主窗口吗”这个问题仍然
-/// 要能回答（我们的记录里可能就存着它，回来的时候还得显示它）。
-bool isMainWindowIgnoringVisibility(HWND hwnd);
-
 /// 窗口切换器（`windows` 动作）要不要列出这个窗口。
 ///
 /// 判据是 `isMainWindow()` 再加上一句「**shell 真的会显示它**」：被
@@ -68,13 +56,9 @@ bool isMainWindowIgnoringVisibility(HWND hwnd);
 /// 这正是它比 Alt+Tab 多出来的能力。判断“在别的桌面上”会问一句虚拟桌面后端
 /// （COM），所以**只对 cloaked 的窗口问**，不是每条都问。
 ///
-/// `hiddenByUs` = 这个窗口正被**工作空间**藏着（来自状态机的记录，不是 Win32）：
-/// 那时 `IsWindowVisible` 是假的，但它仍然是用户自己的程序窗口，必须能列出来
-/// （选中它 = 先切到它那个工作空间再激活）。
-///
 /// `window_rule` 不走这一条：它只关心“看起来像不像主窗口”，而在窗口出现的
 /// 路径（钩子线程）上加一次 COM 查询不合适。
-bool isSwitchableWindow(HWND hwnd, bool hiddenByUs = false);
+bool isSwitchableWindow(HWND hwnd);
 
 /// 当前打开的一个程序窗口（窗口切换器用）。
 struct OpenWindow
@@ -92,10 +76,7 @@ struct OpenWindow
 /// **不包含 flowkeyd 自己的窗口**（弹窗 / 日志窗口不该出现在切换器里），
 /// 也不含锁屏 / 隐藏窗口；跨虚拟桌面的窗口会被列出来（激活时会把视图切过去），
 /// 而被 shell 藏起来的假窗口（输入法宿主、隐藏的 UWP 窗口）不会。
-///
-/// `tracked` 是工作空间状态机记着的窗口：被它们藏起来的那批虽然
-/// `IsWindowVisible` 为假，也必须列出来（M9）。
-std::vector<OpenWindow> listOpenWindows(const std::vector<HWND> &tracked = {});
+std::vector<OpenWindow> listOpenWindows();
 
 /// 窗口的可见标题（取不到时返回 `"<untitled>"` / `"<invalid window>"`）。
 QString windowTitle(HWND hwnd);

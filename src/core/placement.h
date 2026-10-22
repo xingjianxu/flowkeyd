@@ -86,21 +86,6 @@ Rect placementRect(const Rect &current,
                    std::optional<std::uint32_t> width,
                    std::optional<std::uint32_t> height);
 
-/// 窗口是否**不在** `monitor` 这块屏上（显示器拔插之后要不要把它物理上搬回去）。
-///
-/// `normalPosition` 是窗口的**还原矩形**（`WINDOWPLACEMENT::rcNormalPosition`，
-/// 最大化 / 最小化 / 被我们藏起来的窗口都看它）：
-///   * 显示器被拔出：Windows 会把窗口留在已经不存在的坐标上（窗口的属主那块屏
-///     从 `EnumDisplayMonitors` 里消失了，`rcNormalPosition` 还指着它）→ 必须搬到
-///     剩下的屏上，否则用户再也看不见它；
-///   * 显示器重新接入：`WorkspaceState` 已经把窗口物归原主，窗口本人却还留在
-///     刚才那块屏上 → 搬回去；
-///   * 本来就好端端地压在那块屏上（含跨屏的情况）→ 不动它。
-///
-/// 「在这块屏上」= 与它的**边界**有非空重叠。用 `bounds` 而不是 `work`：任务栏
-/// 挡住的窗口不需要重新居中。
-bool windowIsOffMonitor(const Rect &normalPosition, const MonitorDescription &monitor);
-
 /// 窗口是否命中这条规则：`title` 与 `process` 都要满足（与 `window` 动作同一套
 /// 子串匹配；`process` 拿不到时不算匹配）。
 bool windowMatchesRule(const WindowRule &rule,
@@ -126,26 +111,6 @@ const WindowRule *firstWindowRule(const std::vector<WindowRule> &rules,
 bool windowRulePinsDesktop(const std::vector<WindowRule> &rules,
                            const QString &title,
                            const std::optional<QString> &executableName);
-
-/// 新出现的窗口应该归入第几个工作空间。
-///
-/// 优先级（与 `window_rule` 的其它字段一致，先写的规则赢）：
-///   1. 命中这个窗口的第一条 `window_rule` 写了 `workspace`（`app.workspace` 展开成它）
-///      → 用规则里的空间号，**规则赢**；
-///   2. 否则用 `settings.workspace.new_window`（`0` = `"active"`）；
-///   3. 都没写 → `std::nullopt`，也就是那块显示器**此刻的活动空间**（默认行为）。
-///
-/// 命中规则但规则没写 `workspace` 时**不**去看后面的规则：规则按书写顺序匹配，
-/// 先命中的那条就是这个窗口的规则（与 `firstWindowRule()` 的口径一致），它没提
-/// 工作空间就退到全局默认。
-///
-/// 注意它只决定**归属**，不碰几何，也不负责显隐 —— 空间号与目标显示器当前活动
-/// 空间不同时，`core::WorkspaceState::windowAppeared()` 会立刻把窗口藏起来
-/// （`settings.workspace.new_window = N` 与 `window_rule.workspace` 同一个机制）。
-std::optional<std::uint32_t> workspaceForNewWindow(const std::vector<WindowRule> &rules,
-                                                   const QString &title,
-                                                   const std::optional<QString> &executableName,
-                                                   const Settings &settings);
 
 /// `window` 动作的 `op = "activate"` 该把窗口摆到哪一块显示器上。
 ///

@@ -59,24 +59,6 @@ enum class ToggleState { On, Off, Toggle };
 enum class CapsLockState { Off };
 enum class PowerOp { Sleep, Hibernate, Shutdown, Restart, Logoff, Lock, ScreenOff };
 
-/// `workspace` 动作能做的事（每个显示器独立的工作空间，见 README「工作空间」）。
-///   * `Switch` —— 把**某块显示器**切到第 N 个工作空间（`index`）；
-///   * `Move` —— 把当前窗口发到它自己那块显示器的第 N 个工作空间（`index`）；
-///   * `MovePrev` / `MoveNext` —— 把当前窗口发到它在**自己那个空间**的前 / 后一个
-///     空间，**不循环**（已经在头 / 尾就什么都不做），所以不需要 `index`；
-///   * `Prev` / `Next` —— 在**当前活动空间**上往前 / 往后挪一格，**不循环**
-///     （到头了就是什么都不做），所以不需要 `index`。
-///
-/// 切换类的 `Switch` / `Prev` / `Next` 作用在哪块显示器由
-/// `settings.workspace.switch_target` 决定（光标所在 / 焦点窗口所在）；搬移类的
-/// `Move` / `MovePrev` / `MoveNext` 永远作用在**那个窗口自己那块**显示器上。
-/// 动作本身不带 `monitor` 字段。
-///
-/// 三个搬移 op 都可以再带 `follow = true`：搬完之后把**视图也切到目标空间**并
-/// 重新激活那个窗口（与 `window` 动作的 `move_prev_desktop` / `move_next_desktop`
-/// 的 `follow` 同一套语义）。
-enum class WorkspaceOp { Switch, Move, Prev, Next, MovePrev, MoveNext };
-
 /// Rust `Debug` 风格的名字（摘要里用的就是它）。
 QString showModeDebugName(ShowMode mode);
 /// 配置里书写的名字（`normal` / `hidden` / `minimized` / `maximized`）；
@@ -87,8 +69,6 @@ QString mediaOpDebugName(MediaOp op);
 QString clipboardOpDebugName(ClipboardOp op);
 QString windowOpDebugName(WindowOp op);
 QString toggleStateDebugName(ToggleState state);
-/// `switch` / `move`（配置里书写的名字）。
-QString workspaceOpName(WorkspaceOp op);
 QString capsLockStateDebugName(CapsLockState state);
 
 /// 配置里书写的名字（snake_case）；`power` 的摘要也用它。
@@ -100,7 +80,6 @@ std::optional<VolumeOp> volumeOpFromName(const QString &name);
 std::optional<MediaOp> mediaOpFromName(const QString &name);
 std::optional<ClipboardOp> clipboardOpFromName(const QString &name);
 std::optional<WindowOp> windowOpFromName(const QString &name);
-std::optional<WorkspaceOp> workspaceOpFromName(const QString &name);
 std::optional<ToggleState> toggleStateFromName(const QString &name);
 std::optional<PowerOp> powerOpFromName(const QString &name);
 
@@ -207,7 +186,6 @@ struct Action
         Help,
         Windows,
         Apps,
-        Workspace,
         Power,
         Suspend,
         Reload,
@@ -267,13 +245,9 @@ struct Action
     std::optional<std::uint64_t> waitMs;
     std::optional<bool> toggle;
     std::optional<bool> animate;
-    /// 附加行为：搬完之后**把视图也切到目标那里**并重新激活那个窗口（默认
-    /// `false`，即只搬窗口、视图不动）。
-    ///
-    /// 只有两种动作认它：
-    ///   * `window` 的 `move_prev_desktop` / `move_next_desktop`（切到目标虚拟桌面）；
-    ///   * `workspace` 的 `move` / `move_prev` / `move_next`（切到目标工作空间）。
-    /// 写在别的 op 上会被 `--check` 拒绝（静默的空操作是更糟的行为）。
+    /// 只对 `move_prev_desktop` / `move_next_desktop` 有意义的附加行为：搬完之后
+    /// **把视图也切到目标桌面**并重新激活那个窗口（默认 `false`，即只搬窗口、
+    /// 视图不动）。写在其它的 op 上会被 `--check` 拒绝。
     std::optional<bool> follow;
     /// `window` 动作的 `op = "activate"` 把窗口摆到哪一块显示器上。
     /// 不写时的优先级：命中的第一条 `window_rule` 的 `monitor` →
@@ -298,13 +272,6 @@ struct Action
 
     // apps（程序启动器）
     std::optional<QString> appsTitle;
-
-    // workspace（每个显示器独立的工作空间）
-    WorkspaceOp workspaceOp = WorkspaceOp::Switch;
-    /// 目标工作空间号（1 起，`1..settings.workspace.count`）。
-    /// **只对 `Switch` / `Move` 有意义**：`Prev` / `Next` 按当前活动空间算，
-    /// 不用也不看这个字段。
-    std::uint32_t workspaceIndex = 1;
 
     // power
     PowerOp powerOp = PowerOp::Sleep;

@@ -62,13 +62,6 @@ bool Runtime::start(const QString &configPath,
                 m_dispatcher->submitPlacement(current, event);
             }
         },
-        [this](const std::shared_ptr<const core::Compiled> &current,
-               const core::WorkspaceEvent &event) {
-            if (m_dispatcher != nullptr) {
-                m_dispatcher->submitWorkspace(current, event);
-            }
-        },
-        m_workspaceEvents,
         error);
     if (!started) {
         m_workerThread->quit();
@@ -94,11 +87,6 @@ bool Runtime::start(const QString &configPath,
         win::PlacementEvent event;
         event.kind = win::PlacementEvent::Kind::Startup;
         m_dispatcher->submitPlacement(startupConfig, event);
-        // 工作空间的「收编」排在它后面：规则真的把窗口搬了屏之后，归属才按**实际**
-        // 所在的那块屏来算。窗口列表由工作线程自己枚举（钩子线程不枚举窗口）。
-        core::WorkspaceEvent workspaceEvent;
-        workspaceEvent.kind = core::WorkspaceEvent::Kind::Startup;
-        m_dispatcher->submitWorkspace(startupConfig, workspaceEvent);
     }
 
     // `--quit` 通道：另一个进程（install.ps1）用它请我们走干净退出路径，
@@ -116,23 +104,6 @@ bool Runtime::start(const QString &configPath,
             requestShutdownFromAnyThread();
         });
         m_quitNotifier = notifier;
-    }
-
-    // `--restore-windows` 通道（M8）：另一个进程请我们把被工作空间藏起来的窗口
-    // 全部放回来（没有实例在跑时，那个进程会自己按恢复日志做）。
-    QString restoreError;
-    m_restoreEvent = win::createRestoreEvent(win::instanceKey(configPath), &restoreError);
-    if (m_restoreEvent == nullptr) {
-        win::logWarn(QStringLiteral("no restore channel (%1); `--restore-windows` cannot reach "
-                                    "this instance")
-                         .arg(restoreError));
-    } else {
-        auto *notifier = new QWinEventNotifier(static_cast<HANDLE>(m_restoreEvent), this);
-        connect(notifier, &QWinEventNotifier::activated, this, [this]() {
-            win::logInfo(QStringLiteral("restore requested by another process"));
-            requestWorkspaceRestore();
-        });
-        m_restoreNotifier = notifier;
     }
     return true;
 }
@@ -153,12 +124,6 @@ void Runtime::shutdown()
         m_hook->stop();
         m_hook.reset();
     }
-    if (m_dispatcher != nullptr) {
-        // 退出前把被工作空间藏起来的窗口**全部放回来**（M8）：不先停钩子的话，
-        // 一次“切换工作空间”会跟在恢复后面再次藏掉窗口。有上限 —— 动作线程可能
-        // 卡在某个长动作里，那时日志会先留着，下次启动再恢复。
-        m_dispatcher->restoreWorkspaceNow(3000);
-    }
     if (m_workerThread != nullptr) {
         m_workerThread->quit();
         m_workerThread->wait();
@@ -176,15 +141,6 @@ void Runtime::shutdown()
     if (m_quitEvent != nullptr) {
         CloseHandle(static_cast<HANDLE>(m_quitEvent));
         m_quitEvent = nullptr;
-    }
-    if (m_restoreNotifier != nullptr) {
-        m_restoreNotifier->setEnabled(false);
-        delete m_restoreNotifier;
-        m_restoreNotifier = nullptr;
-    }
-    if (m_restoreEvent != nullptr) {
-        CloseHandle(static_cast<HANDLE>(m_restoreEvent));
-        m_restoreEvent = nullptr;
     }
 }
 
@@ -232,21 +188,6 @@ void Runtime::requestShutdownFromAnyThread()
     QMetaObject::invokeMethod(this, &Runtime::performShutdown, Qt::QueuedConnection);
 }
 
-void Runtime::requestWorkspaceRestore()
-{
-    if (m_dispatcher != nullptr) {
-        m_dispatcher->submitWorkspaceRestore();
-    }
-}
-
-bool Runtime::restoreWorkspaceNow(int timeoutMs)
-{
-    if (m_dispatcher == nullptr) {
-        return true;
-    }
-    return m_dispatcher->restoreWorkspaceNow(timeoutMs);
-}
-
 void Runtime::notifyFromAnyThread(const QString &title, const QString &body)
 {
     emit notificationRequested(title, body);
@@ -260,11 +201,13 @@ void Runtime::reportSuspended(bool suspended)
         this, [this, suspended]() { emit suspendedChanged(suspended); }, Qt::QueuedConnection);
 }
 
-void Runtime::reportDesktop(const core::TrayBadge &badge)
+void Runtime::reportDesktop(int number, int count)
 {
     // 与 `reportSuspended` 同一个道理：工作线程只负责“说话”，换图标由 GUI 线程做。
     QMetaObject::invokeMethod(
-        this, [this, badge]() { emit desktopChanged(badge); }, Qt::QueuedConnection);
+        this,
+        [this, number, count]() { emit desktopChanged(number, count); },
+        Qt::QueuedConnection);
 }
 
 void Runtime::showMenuFromAnyThread(MenuRequest request)

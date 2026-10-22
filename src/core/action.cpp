@@ -146,25 +146,6 @@ QString windowOpDebugName(WindowOp op)
     return QStringLiteral("Activate");
 }
 
-QString workspaceOpName(WorkspaceOp op)
-{
-    switch (op) {
-    case WorkspaceOp::Switch:
-        return QStringLiteral("switch");
-    case WorkspaceOp::Move:
-        return QStringLiteral("move");
-    case WorkspaceOp::Prev:
-        return QStringLiteral("prev");
-    case WorkspaceOp::Next:
-        return QStringLiteral("next");
-    case WorkspaceOp::MovePrev:
-        return QStringLiteral("move_prev");
-    case WorkspaceOp::MoveNext:
-        return QStringLiteral("move_next");
-    }
-    return QStringLiteral("switch");
-}
-
 QString toggleStateDebugName(ToggleState state)
 {
     switch (state) {
@@ -316,32 +297,6 @@ std::optional<WindowOp> windowOpFromName(const QString &name)
     }
     if (key == QLatin1String("move_right_monitor") || key == QLatin1String("right_monitor")) {
         return WindowOp::MoveRightMonitor;
-    }
-    return std::nullopt;
-}
-
-std::optional<WorkspaceOp> workspaceOpFromName(const QString &name)
-{
-    const QString key = name.trimmed().toLower();
-    if (key == QLatin1String("switch") || key == QLatin1String("goto")) {
-        return WorkspaceOp::Switch;
-    }
-    if (key == QLatin1String("move") || key == QLatin1String("send")) {
-        return WorkspaceOp::Move;
-    }
-    if (key == QLatin1String("prev") || key == QLatin1String("previous")
-        || key == QLatin1String("switch_prev")) {
-        return WorkspaceOp::Prev;
-    }
-    if (key == QLatin1String("next") || key == QLatin1String("switch_next")) {
-        return WorkspaceOp::Next;
-    }
-    if (key == QLatin1String("move_prev") || key == QLatin1String("prev_move")
-        || key == QLatin1String("move_previous")) {
-        return WorkspaceOp::MovePrev;
-    }
-    if (key == QLatin1String("move_next") || key == QLatin1String("next_move")) {
-        return WorkspaceOp::MoveNext;
     }
     return std::nullopt;
 }
@@ -531,17 +486,6 @@ QString Action::summary() const
             return QStringLiteral("apps %1").arg(rustDebug(*appsTitle));
         }
         return QStringLiteral("apps");
-    case Kind::Workspace: {
-        // `prev` / `next` / `move_prev` / `move_next` 都是**相对**的，没有空间号可写。
-        QString text = QStringLiteral("workspace %1").arg(workspaceOpName(workspaceOp));
-        if (workspaceOp == WorkspaceOp::Switch || workspaceOp == WorkspaceOp::Move) {
-            text += QLatin1String(" ") + QString::number(workspaceIndex);
-        }
-        if (follow.value_or(false)) {
-            text += QLatin1String(" (follow)");
-        }
-        return text;
-    }
     case Kind::Power:
         return QStringLiteral("power %1").arg(powerOpName(powerOp));
     case Kind::Suspend:

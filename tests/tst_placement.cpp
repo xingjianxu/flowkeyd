@@ -56,7 +56,6 @@ private slots:
     void placementRectHonoursPositionAndSize();
     void placementRectClampsIntoTheWorkArea();
     void placementRectAlignsTopLeftWhenLargerThanTheWorkArea();
-    void windowIsOffMonitorComparesTheRestoreRectWithTheBounds();
     void windowMatchesRuleRequiresEveryCondition();
     void windowRuleSummaryIsReadable();
     void firstWindowRulePicksTheFirstMatch();
@@ -65,7 +64,6 @@ private slots:
     void monitorRefDescriptionsAreReadable();
     void selectMonitorIgnoresRuntimeTargets();
     void windowActionMonitorPrefersTheMostSpecificTarget();
-    void workspaceForNewWindowPrefersTheWinningRule();
 };
 
 void TestPlacement::sortedMonitorsOrdersLeftThenTop()
@@ -242,32 +240,6 @@ void TestPlacement::placementRectAlignsTopLeftWhenLargerThanTheWorkArea()
     QCOMPARE(rect.y, 0);
     QCOMPARE(rect.width, 4000);
     QCOMPARE(rect.height, 3000);
-}
-
-void TestPlacement::windowIsOffMonitorComparesTheRestoreRectWithTheBounds()
-{
-    // 两块并排的 1920x1080（显示器拔插之后「窗口该不该搬回去」的判据，M7）。
-    const core::MonitorDescription left = monitor(QStringLiteral("\\\\.\\DISPLAY1"), 0, 0, 1920, 1080);
-    const core::MonitorDescription right = monitor(QStringLiteral("\\\\.\\DISPLAY2"), 1920, 0, 1920, 1080);
-
-    // 在里面 / 压跨两块屏（部分出去也算在里面）→ 不用搬。
-    QVERIFY(!core::windowIsOffMonitor(core::Rect{100, 100, 800, 600}, left));
-    QVERIFY(!core::windowIsOffMonitor(core::Rect{-100, -50, 800, 600}, left));
-    QVERIFY(!core::windowIsOffMonitor(core::Rect{1500, 100, 800, 600}, right));
-
-    // 拔掉右屏之后，它上面的窗口坐标还在右屏那块已经不存在的范围里 → 要搬。
-    QVERIFY(core::windowIsOffMonitor(core::Rect{2200, 200, 800, 600}, left));
-    // 接回右屏之后，窗口还留在左屏上 → 也要搬（物归原主）。
-    QVERIFY(core::windowIsOffMonitor(core::Rect{100, 100, 800, 600}, right));
-
-    // 贴边：右边界正好相等时算没有重叠（半开区间），左边界相等时有重叠。
-    QVERIFY(core::windowIsOffMonitor(core::Rect{1920, 0, 100, 100}, left));
-    QVERIFY(!core::windowIsOffMonitor(core::Rect{1919, 0, 100, 100}, left));
-
-    // 退化矩形（读不到几何时的兜底）：当成“哪儿都不在”，宁可搬一次也不要
-    // 让窗口留在屏幕外面。
-    QVERIFY(core::windowIsOffMonitor(core::Rect{0, 0, 0, 0}, left));
-    QVERIFY(core::windowIsOffMonitor(core::Rect{100, 100, 800, 600}, core::MonitorDescription{}));
 }
 
 void TestPlacement::windowMatchesRuleRequiresEveryCondition()
@@ -516,72 +488,6 @@ void TestPlacement::windowActionMonitorPrefersTheMostSpecificTarget()
              core::MonitorRef::Kind::None);
     QCOMPARE(core::windowActionMonitor(std::nullopt, nullptr, off).kind,
              core::MonitorRef::Kind::None);
-}
-
-// 新窗口归哪个工作空间：命中规则的前后顺序与 `settings.workspace.new_window` 的
-// 回落关系。
-void TestPlacement::workspaceForNewWindowPrefersTheWinningRule()
-{
-    const std::optional<QString> code(QStringLiteral("code.exe"));
-    core::Settings settings;
-
-    // 额外校验一个前提：默认就是 `"active"`（`0`，那块屏当前的活动空间）。
-    QCOMPARE(settings.workspace.newWindow, std::uint32_t(0));
-    // 没有规则、也没设 `new_window` → `nullopt` = 活动空间（旧行为不变）。
-    QVERIFY(!core::workspaceForNewWindow({}, QStringLiteral("main.cpp"), code, settings)
-                 .has_value());
-
-    // 全局默认写了 3 → 没人认领的窗口都去 3。
-    core::Settings third = settings;
-    third.workspace.newWindow = 3;
-    const std::optional<std::uint32_t> fallback =
-        core::workspaceForNewWindow({}, QStringLiteral("main.cpp"), code, third);
-    QVERIFY(fallback.has_value());
-    QCOMPARE(*fallback, std::uint32_t(3));
-
-    // 规则的 `workspace` 赢过全局默认。
-    core::WindowRule editor = rule(QStringLiteral("code"));
-    editor.workspace = 2;
-    const std::optional<std::uint32_t> fromRule =
-        core::workspaceForNewWindow({editor}, QStringLiteral("main.cpp"), code, third);
-    QVERIFY(fromRule.has_value());
-    QCOMPARE(*fromRule, std::uint32_t(2));
-
-    // 命中规则但规则没写 `workspace` → 回落到全局默认（而不是“没有归属”）：规则
-    // 只说几何时，新窗口仍然进 `new_window` 指的那个空间。
-    core::WindowRule geometryOnly = rule(QStringLiteral("code"));
-    core::MonitorRef secondMonitor;
-    secondMonitor.kind = core::MonitorRef::Kind::Index;
-    secondMonitor.index = 2;
-    geometryOnly.monitor = secondMonitor;
-    const std::optional<std::uint32_t> fromGlobal =
-        core::workspaceForNewWindow({geometryOnly}, QStringLiteral("main.cpp"), code, third);
-    QVERIFY(fromGlobal.has_value());
-    QCOMPARE(*fromGlobal, std::uint32_t(3));
-    // 全局也是 `"active"` 时就真的没有归属要求。
-    QVERIFY(!core::workspaceForNewWindow({geometryOnly}, QStringLiteral("main.cpp"), code, settings)
-                 .has_value());
-
-    // 先写的规则赢：第一条没写 `workspace` 就不再往下看（与 `firstWindowRule()`
-    // 同一个口径 —— 摆放与归属不能各认一条规则）。
-    core::WindowRule first = rule(QStringLiteral("code"));
-    core::WindowRule second = rule(QStringLiteral("code"));
-    second.workspace = 4;
-    const std::optional<std::uint32_t> inheritsFirst =
-        core::workspaceForNewWindow({first, second}, QStringLiteral("main.cpp"), code, settings);
-    QVERIFY(!inheritsFirst.has_value());
-    // 把没写 `workspace` 的那条挡在外面（`title` 不命中）就轮得到第二条。
-    first.title = QStringLiteral("settings");
-    const std::optional<std::uint32_t> fromSecond =
-        core::workspaceForNewWindow({first, second}, QStringLiteral("main.cpp"), code, settings);
-    QVERIFY(fromSecond.has_value());
-    QCOMPARE(*fromSecond, std::uint32_t(4));
-
-    // 规则只命中别的程序时不影响这个窗口。
-    core::WindowRule other = rule(QStringLiteral("wezterm"));
-    other.workspace = 5;
-    QVERIFY(!core::workspaceForNewWindow({other}, QStringLiteral("main.cpp"), code, settings)
-                 .has_value());
 }
 
 QTEST_MAIN(TestPlacement)

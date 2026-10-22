@@ -28,13 +28,6 @@ QString instanceKey(const QString &configPath);
 /// 没法从外面通知持有者退出（见 AGENTS.md 第 10 节）。
 QString quitEventName(const QString &key);
 
-/// `Local\flowkeyd-<散列>-restore`：`--restore-windows` 请求那个实例把工作空间
-/// 藏起来的窗口全部放回来。
-///
-/// 与退出事件完全同一套做法（自动重置 + Low 完整性描述符）：为什么不用互斥体、
-/// 为什么要单独一个名字，理由都一样。
-QString restoreEventName(const QString &key);
-
 /// 守护进程侧：创建退出请求事件（自动重置）。失败时返回 `nullptr` 并填 `error`。
 ///
 /// 事件用**手工构造的安全描述符**创建：默认描述符的对象带着创建者的完整性级别
@@ -43,19 +36,11 @@ QString restoreEventName(const QString &key);
 /// **Low** 完整性标签，任何级别的调用者都能置位它。
 HANDLE createQuitEvent(const QString &key, QString *error);
 
-/// 守护进程侧：创建「恢复全部窗口」请求事件（自动重置）。与 `createQuitEvent`
-/// 同一套描述符与理由。
-HANDLE createRestoreEvent(const QString &key, QString *error);
-
 /// 客户端侧：请 `key` 对应的实例退出。
 ///
 /// 返回 false 表示调用本身失败（`error` 里是英文原因）；返回 true 时看 `*running`，
 /// 它是 false 就说明没有实例在跑（不算错误）。
 bool requestQuit(const QString &key, bool *running, QString *error);
-
-/// 客户端侧：请 `key` 对应的实例把工作空间藏起来的窗口全部放回来。
-/// 语义与 `requestQuit` 完全一样（`*running` = 有没有实例在跑）。
-bool requestRestore(const QString &key, bool *running, QString *error);
 
 /// 客户端侧：退出事件对象还在不在。守护进程握着它，所以「对象消失」就等于
 /// 「那个实例已经退干净了」——`--quit` 用它来等进程真正收尾。

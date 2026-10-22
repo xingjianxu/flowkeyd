@@ -329,13 +329,6 @@ public:
     /// 而失败（见实现）；默认不重试。
     std::optional<QString> windowDesktopId(HWND hwnd, int attempts = 1) const;
 
-    /// **当前**桌面的 GUID（未公开的 `IVirtualDesktop::GetID`）。
-    ///
-    /// 工作空间按（虚拟桌面，显示器）分开记，需要这个不透明的键；`GetCurrentDesktop`
-    /// 与 `IVirtualDesktop::GetID` 都是未公开接口，所以这里与 `desktopIndexOfWindow`
-    /// 一样做了自检，失败时只报错。
-    std::optional<QString> currentDesktopGuid(QString *error) const;
-
     /// `hwnd` 所在桌面在 `desktops` 里的下标。
     std::optional<std::size_t> desktopIndexOfWindow(HWND hwnd,
                                                    const std::vector<ComPtr> &desktops,
@@ -507,25 +500,6 @@ bool Session::currentDesktop(ComPtr *out, QString *error) const
     }
     *out = ComPtr(result);
     return true;
-}
-
-std::optional<QString> Session::currentDesktopGuid(QString *error) const
-{
-    ComPtr desktop;
-    if (!currentDesktop(&desktop, error)) {
-        return std::nullopt;
-    }
-    // `IVirtualDesktop::GetID` 在 vtable 下标 4（与 `desktopIndexOfWindow` 同一个
-    // 调用；布局不对时只会返回错误码，不会随机破坏内存）。
-    GUID id{};
-    const HRESULT hr = vtableOf<IVirtualDesktopVtbl>(desktop.get())->getId(desktop.get(), &id);
-    if (FAILED(hr)) {
-        if (error != nullptr) {
-            *error = hresultMessage(hr, "IVirtualDesktop::GetID");
-        }
-        return std::nullopt;
-    }
-    return guidText(id);
 }
 
 bool Session::switchDesktop(const ComPtr &target, QString *error) const
@@ -1586,62 +1560,6 @@ std::optional<bool> isWindowOnCurrentDesktop(HWND hwnd, QString *error)
     return result;
 }
 
-std::vector<std::optional<bool>> windowsOnCurrentDesktop(const std::vector<HWND> &windows,
-                                                         QString *error)
-{
-    std::vector<std::optional<bool>> out(windows.size());
-    if (windows.empty()) {
-        return out;
-    }
-    QString localError;
-    inSta([&]() {
-        Apartment apartment;
-        if (!apartment.enter(&localError)) {
-            return;
-        }
-        void *manager = nullptr;
-        const HRESULT hr = CoCreateInstance(
-            kClsidVirtualDesktopManager, nullptr, CLSCTX_ALL, kIidVirtualDesktopManager, &manager);
-        if (FAILED(hr) || manager == nullptr) {
-            localError = hresultMessage(hr, "CoCreateInstance(CLSID_VirtualDesktopManager)");
-            return;
-        }
-        ComPtr guard(manager);
-        const auto *vtable = vtableOf<IVirtualDesktopManagerVtbl>(manager);
-        for (std::size_t i = 0; i < windows.size(); ++i) {
-            const HWND hwnd = windows.at(i);
-            if (hwnd == nullptr || IsWindow(hwnd) == 0) {
-                continue;  // `std::nullopt` = 不知道（窗口已经不在了）。
-            }
-            BOOL onCurrent = FALSE;
-            const HRESULT query =
-                vtable->isWindowOnCurrentVirtualDesktop(manager, hwnd, &onCurrent);
-            if (FAILED(query)) {
-                localError = hresultMessage(
-                    query, "IVirtualDesktopManager::IsWindowOnCurrentVirtualDesktop");
-                continue;
-            }
-            if (onCurrent != FALSE) {
-                out[i] = true;
-                continue;
-            }
-            // FALSE 可能是“不属于任何虚拟桌面”（打包应用的宿主、刚创建还没被 shell
-            // 登记的窗口）：那种情况我们“不知道它在哪”，不是“它在别的桌面上”。
-            GUID id{};
-            if (SUCCEEDED(vtable->getWindowDesktopId(manager, hwnd, &id))
-                && guidText(id) == guidText(GUID{})) {
-                localError = QStringLiteral("the window is not on any virtual desktop");
-                continue;
-            }
-            out[i] = false;
-        }
-    });
-    if (error != nullptr) {
-        *error = localError;
-    }
-    return out;
-}
-
 std::optional<QString> windowDesktopId(HWND hwnd, QString *error)
 {
     if (hwnd == nullptr || IsWindow(hwnd) == 0) {
@@ -1667,29 +1585,6 @@ std::optional<QString> windowDesktopId(HWND hwnd, QString *error)
         if (!result.has_value()) {
             localError = QStringLiteral("could not read the desktop id of the window");
         }
-    });
-    if (!result.has_value() && error != nullptr) {
-        *error = localError;
-    }
-    return result;
-}
-
-std::optional<QString> currentDesktopId(QString *error)
-{
-    std::optional<QString> result;
-    QString localError;
-    inSta([&]() {
-        Apartment apartment;
-        if (!apartment.enter(&localError)) {
-            return;
-        }
-        const WindowsVersion version = windowsVersion();
-        const ApiEntry &api = apiFor(version.build, version.revision);
-        Session session;
-        if (!session.open(api, version, &localError)) {
-            return;
-        }
-        result = session.currentDesktopGuid(&localError);
     });
     if (!result.has_value() && error != nullptr) {
         *error = localError;

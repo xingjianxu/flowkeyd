@@ -6,7 +6,6 @@
 
 #include "app/popup_host.h"
 #include "core/config.h"
-#include "core/workspace_event.h"
 
 #include <QObject>
 #include <QString>
@@ -42,21 +41,11 @@ public:
                QString *error);
 
     /// 停动作线程与钩子线程（幂等）。只在 GUI 线程调用。
-    ///
-    /// 退出前会先请动作线程把**被工作空间藏起来的窗口全部放回来**（M8）：不先
-    /// 停钩子的话，一次“切换工作空间”会跟在恢复后面再次藏掉窗口。
     void shutdown();
 
     const QString &configPath() const { return m_configPath; }
     platform::win::HookThread *hook() const { return m_hook.get(); }
     bool isSuspended() const;
-
-    /// 「我们自己引起的显隐事件」的抑制表（钩子线程命中即吞，动作线程执行效果前
-    /// 登记）。两边必须看到**同一张**表，所以由这里拥有并共享出去。
-    std::shared_ptr<core::ExpectedWorkspaceEvents> workspaceEvents() const
-    {
-        return m_workspaceEvents;
-    }
 
     /// 把弹窗宿主交给运行时（GUI 线程、启动时调一次）。
     ///
@@ -73,19 +62,13 @@ public:
     void reloadFromAnyThread();
     /// 请求干净退出（投递到 GUI 线程执行）。
     void requestShutdownFromAnyThread();
-
-    /// 线程安全：请动作线程把被工作空间藏起来的窗口全部放回来（异步）。
-    /// 托盘菜单「恢复全部窗口」与 `--restore-windows` 通道都走它。
-    void requestWorkspaceRestore();
-    /// 线程安全：现在就恢复，**最多等 `timeoutMs`**（注销 / 关机 / 退出用）。
-    bool restoreWorkspaceNow(int timeoutMs);
     /// 弹一个托盘气泡（投递到 GUI 线程）。
     void notifyFromAnyThread(const QString &title, const QString &body);
     /// 工作线程调用：把动作触发的挂起状态变化广播给 GUI 线程（托盘提示用）。
     void reportSuspended(bool suspended);
-    /// 工作线程调用：把托盘徽标的内容（显示模式 + 工作空间号 + 虚拟桌面号）广播给
-    /// GUI 线程（见 `Dispatcher::startDesktopWatch`）。
-    void reportDesktop(const core::TrayBadge &badge);
+    /// 工作线程调用：把「当前是第几号虚拟桌面」广播给 GUI 线程（托盘的数字图标用，
+    /// 见 `Dispatcher::startDesktopWatch`）。
+    void reportDesktop(int number, int count);
     /// 工作线程调用：在 GUI 线程上弹出选单。
     void showMenuFromAnyThread(MenuRequest request);
     /// 工作线程调用：在 GUI 线程上弹出帮助窗口。
@@ -99,9 +82,9 @@ signals:
     void notificationRequested(const QString &title, const QString &body);
     void reloadFinished(const QString &summary);
     void suspendedChanged(bool suspended);
-    /// 托盘徽标要换一张了（`badge` 里带着显示模式与两个号）：GUI 线程用它把图标换
-    /// 成对应的数字徽标，并把工作空间 / 桌面写进悬停提示。
-    void desktopChanged(const core::TrayBadge &badge);
+    /// 当前虚拟桌面变了（`number` 从 1 开始，`count` 是桌面总数）：GUI 线程用它
+    /// 把托盘图标换成对应的数字徽标，并把 `桌面 N/M` 写进悬停提示。
+    void desktopChanged(int number, int count);
     /// 退出流程已经走完（钩子卸掉、动作线程停下）。
     void finished();
 
@@ -109,8 +92,6 @@ private:
     void performShutdown();
 
     QString m_configPath;
-    /// 工作空间的自触发事件抑制表（见 `workspaceEvents()`）。
-    std::shared_ptr<core::ExpectedWorkspaceEvents> m_workspaceEvents = std::make_shared<core::ExpectedWorkspaceEvents>();
     std::unique_ptr<platform::win::HookThread> m_hook;
     PopupHost *m_popupHost = nullptr;
     QThread *m_workerThread = nullptr;
@@ -118,9 +99,6 @@ private:
     /// `--quit` 的退出事件（`HANDLE`；这里不引入 `windows.h`，见 runtime.cpp）。
     void *m_quitEvent = nullptr;
     QWinEventNotifier *m_quitNotifier = nullptr;
-    /// `--restore-windows` 的请求事件（与退出事件同一套做法）。
-    void *m_restoreEvent = nullptr;
-    QWinEventNotifier *m_restoreNotifier = nullptr;
     bool m_shuttingDown = false;
     bool m_started = false;
 };

@@ -1,7 +1,5 @@
 #include "platform/win/dwm.h"
 
-#include "platform/win/logging.h"
-
 #include <cstring>
 
 namespace flowkeyd::platform::win::dwm {
@@ -18,7 +16,6 @@ constexpr DWORD kCloaked = 14;
 
 using DwmSetWindowAttributeFn = HRESULT(WINAPI *)(HWND, DWORD, LPCVOID, DWORD);
 using DwmGetWindowAttributeFn = HRESULT(WINAPI *)(HWND, DWORD, PVOID, DWORD);
-using DwmFlushFn = HRESULT(WINAPI *)();
 
 /// 把 `GetProcAddress` 的结果转成具体签名（`-Wcast-function-type` 讨厌直接转换）。
 template <typename Fn>
@@ -53,13 +50,6 @@ DwmGetWindowAttributeFn getWindowAttribute()
     return resolved;
 }
 
-/// 解析（并缓存）`dwmapi!DwmFlush`；拿不到时返回 nullptr。
-DwmFlushFn flushFrame()
-{
-    static DwmFlushFn resolved = resolve<DwmFlushFn>("DwmFlush");
-    return resolved;
-}
-
 } // namespace
 
 bool available()
@@ -87,57 +77,6 @@ bool forceDisableTransitions(HWND hwnd, bool disabled, QString *error)
     return true;
 }
 
-TransitionGuard::TransitionGuard(HWND hwnd, bool animate) : m_hwnd(hwnd)
-{
-    if (animate) {
-        return;
-    }
-    QString error;
-    if (forceDisableTransitions(hwnd, true, &error)) {
-        m_active = true;
-    } else {
-        // 没有 DWM（或无头会话）时只是动画多一点，不该让调用方失败。
-        logDebug(QStringLiteral("keeping the DWM transition of the window: %1").arg(error));
-    }
-}
-
-TransitionGuard::~TransitionGuard()
-{
-    if (!m_active) {
-        return;
-    }
-    QString error;
-    if (!forceDisableTransitions(m_hwnd, false, &error)) {
-        logDebug(QStringLiteral("could not re-enable the DWM transition of the window: %1")
-                     .arg(error));
-    }
-}
-
-std::size_t setTransitionsDisabled(const std::vector<HWND> &windows, bool disabled)
-{
-    std::size_t applied = 0;
-    QString firstError;
-    for (const HWND hwnd : windows) {
-        if (hwnd == nullptr) {
-            continue;
-        }
-        QString error;
-        if (forceDisableTransitions(hwnd, disabled, &error)) {
-            ++applied;
-        } else if (firstError.isEmpty()) {
-            firstError = error;
-        }
-    }
-    if (!firstError.isEmpty()) {
-        // 逐窗口一行 debug 会在一台没有合成器的机器上刷屏，所以一批只记一次。
-        logDebug(QStringLiteral("keeping the DWM transitions of %1 of %2 window(s): %3")
-                     .arg(windows.size() - applied)
-                     .arg(windows.size())
-                     .arg(firstError));
-    }
-    return applied;
-}
-
 bool isCloaked(HWND hwnd)
 {
     const DwmGetWindowAttributeFn get = getWindowAttribute();
@@ -150,22 +89,6 @@ bool isCloaked(HWND hwnd)
         return false;
     }
     return cloaked != 0;
-}
-
-std::uint32_t waitForFrames(std::uint32_t count)
-{
-    const DwmFlushFn flush = flushFrame();
-    if (flush == nullptr || count == 0) {
-        return 0;
-    }
-    std::uint32_t waited = 0;
-    for (std::uint32_t frame = 0; frame < count; ++frame) {
-        if (FAILED(flush())) {
-            break;
-        }
-        ++waited;
-    }
-    return waited;
 }
 
 } // namespace flowkeyd::platform::win::dwm

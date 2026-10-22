@@ -585,24 +585,6 @@ core::Action convertAction(lua_State *L, int index)
     } else if (type == QLatin1String("apps")) {
         action.kind = core::Action::Kind::Apps;
         action.appsTitle = optString(L, index, "title");
-    } else if (type == QLatin1String("workspace")) {
-        action.kind = core::Action::Kind::Workspace;
-        action.workspaceOp = *core::workspaceOpFromName(enumName(
-            L, index, "op", {"switch", "move", "move_prev", "move_next", "prev", "next"},
-            QStringLiteral("switch")));
-        // `prev` / `next` / `move_prev` / `move_next` 都是**相对**的（按当前状态算），
-        // 没有空间号可写。
-        const bool relative = action.workspaceOp == core::WorkspaceOp::Prev
-                              || action.workspaceOp == core::WorkspaceOp::Next
-                              || action.workspaceOp == core::WorkspaceOp::MovePrev
-                              || action.workspaceOp == core::WorkspaceOp::MoveNext;
-        const auto number = optInteger(L, index, "index", 1, 4294967295LL, QStringLiteral("u32"));
-        if (!number.has_value() && !relative) {
-            fail(QStringLiteral("missing field `index` (the workspace number, 1 is the first)"));
-        }
-        action.workspaceIndex = number.has_value() ? static_cast<quint32>(*number) : 1;
-        // 搬完之后把视图也切过去（只对搬移 op 有意义，其它 op 由 `core::compile()` 拒绝）。
-        action.follow = optBool(L, index, "follow");
     } else if (type == QLatin1String("power")) {
         action.kind = core::Action::Kind::Power;
         action.powerOp = *core::powerOpFromName(
@@ -631,7 +613,6 @@ core::Action convertAction(lua_State *L, int index)
                                   QStringLiteral("desktop"), QStringLiteral("menu"),
                                   QStringLiteral("help"), QStringLiteral("windows"),
                                   QStringLiteral("apps"),
-                                  QStringLiteral("workspace"),
                                   QStringLiteral("power"),
                                   QStringLiteral("suspend"), QStringLiteral("reload"),
                                   QStringLiteral("quit"), QStringLiteral("none")})));
@@ -751,8 +732,7 @@ core::Settings convertSettings(lua_State *L, int index)
     checkFields(L, index,
                 {"log_level", "swallow", "exact_modifiers", "release_modifiers",
                  "repeat_interval_ms", "repeat_delay_ms", "tick_ms", "input_backend",
-                 "single_instance", "elevate", "remote_desktop", "window_monitor",
-                 "tray_badge", "workspace"});
+                 "single_instance", "elevate", "remote_desktop", "window_monitor"});
     core::Settings settings;
     if (auto value = optString(L, index, "log_level")) {
         settings.logLevel = *value;
@@ -790,87 +770,6 @@ core::Settings convertSettings(lua_State *L, int index)
     int windowMonitor = 0;
     if (pushField(L, index, "window_monitor", &windowMonitor)) {
         settings.windowMonitor = convertMonitorRef(L, windowMonitor);
-        lua_pop(L, 1);
-    }
-    // 托盘图标上的数字徽标显示什么（默认 `1/2`：工作空间号 / 虚拟桌面号）。
-    if (hasField(L, index, "tray_badge")) {
-        const QString name = enumName(L, index, "tray_badge",
-                                      {"both", "desktop", "workspace"},
-                                      QStringLiteral("both"));
-        settings.trayBadge = *core::trayBadgeModeFromName(name);
-    }
-    // 按显示器独立的工作空间（`settings.workspace`）。
-    //
-    // 两种形状都认：
-    //   workspace = false                                  -- 整个关掉
-    //   workspace = { count = 9, switch_target = "focus" }  -- 细调
-    // 后者缺的键保留默认值（默认**开启**、9 个空间、跟随光标）。
-    if (hasField(L, index, "workspace")) {
-        int v = 0;
-        pushField(L, index, "workspace", &v);
-        if (lua_type(L, v) == LUA_TBOOLEAN) {
-            settings.workspace.enabled = lua_toboolean(L, v) != 0;
-        } else if (lua_type(L, v) == LUA_TTABLE) {
-            checkFields(L, v, {"enabled", "count", "switch_target", "switch_effect", "new_window",
-                               "exclude"});
-            if (auto value = optBool(L, v, "enabled")) {
-                settings.workspace.enabled = *value;
-            }
-            if (auto value = optU32(L, v, "count")) {
-                settings.workspace.count = *value;
-            }
-            if (hasField(L, v, "switch_target")) {
-                const QString name =
-                    enumName(L, v, "switch_target", {"cursor", "focus"}, QStringLiteral("cursor"));
-                settings.workspace.switchTarget = *core::workspaceSwitchTargetFromName(name);
-            }
-            // 切空间时要不要把屏幕冻住（`auto` = 只在会闪的窗口上盖、`instant` = 不盖、
-            // `freeze` = 一律盖）。
-            if (hasField(L, v, "switch_effect")) {
-                const QString name = enumName(L, v, "switch_effect", {"auto", "instant", "freeze"},
-                                              QStringLiteral("auto"));
-                settings.workspace.switchEffect = *core::workspaceSwitchEffectFromName(name);
-            }
-            // `new_window = "active"`（默认）或者一个 1..count 的空间号。
-            int newWindow = 0;
-            if (pushField(L, v, "new_window", &newWindow)) {
-                if (lua_type(L, newWindow) == LUA_TSTRING) {
-                    const QString name = rawStringAt(L, newWindow).trimmed().toLower();
-                    if (name != QLatin1String("active")) {
-                        lua_pop(L, 2);
-                        fail(QStringLiteral("new_window: unknown variant `%1`, expected `\"active\"` "
-                                            "or a workspace number")
-                                 .arg(rawStringAt(L, newWindow)));
-                    }
-                    settings.workspace.newWindow = 0;
-                } else if (lua_type(L, newWindow) == LUA_TNUMBER && lua_isinteger(L, newWindow)) {
-                    const qint64 number = static_cast<qint64>(lua_tointeger(L, newWindow));
-                    if (number < 1 || number > 4294967295LL) {
-                        fail(QStringLiteral("new_window: invalid value: integer `%1`, expected "
-                                            "`\"active\"` or a workspace number >= 1")
-                                 .arg(number));
-                    }
-                    settings.workspace.newWindow = static_cast<quint32>(number);
-                } else {
-                    const QString type = luaTypeName(lua_type(L, newWindow));
-                    lua_pop(L, 2);
-                    fail(QStringLiteral("new_window: invalid type: %1, expected `\"active\"` or a "
-                                        "workspace number")
-                             .arg(type));
-                }
-                lua_pop(L, 1);
-            }
-            if (hasField(L, v, "exclude")) {
-                settings.workspace.exclude = oneOrManyStrings(L, v, "exclude");
-            }
-        } else {
-            const QString type = luaTypeName(lua_type(L, v));
-            lua_pop(L, 1);
-            fail(QStringLiteral("workspace: invalid type: %1, expected `true`, `false` or a "
-                                "table with `enabled` / `count` / `switch_target` / "
-                                "`switch_effect` / `new_window` / `exclude`")
-                     .arg(type));
-        }
         lua_pop(L, 1);
     }
     // `remote_desktop = true|false`，或者一张表：
@@ -1019,14 +918,13 @@ core::MonitorRef convertMonitorRef(lua_State *L, int index)
 core::WindowRuleDef convertWindowRule(lua_State *L, int index)
 {
     checkFields(L, index,
-                {"name", "title", "process", "desktop", "workspace", "all_desktops", "monitor",
-                 "maximize", "topmost", "x", "y", "width", "height", "enabled"});
+                {"name", "title", "process", "desktop", "all_desktops", "monitor", "maximize",
+                 "topmost", "x", "y", "width", "height", "enabled"});
     core::WindowRuleDef rule;
     rule.name = optString(L, index, "name");
     rule.title = optString(L, index, "title");
     rule.process = optString(L, index, "process");
     rule.desktop = optU32(L, index, "desktop");
-    rule.workspace = optU32(L, index, "workspace");
     rule.allDesktops = optBool(L, index, "all_desktops");
     rule.maximize = optBool(L, index, "maximize");
     rule.topmost = optBool(L, index, "topmost");
@@ -1139,14 +1037,11 @@ QVector<int> readTableList(lua_State *L, int index, const QString &what)
 
 core::AppDef convertApp(lua_State *L, int index)
 {
-    checkFields(L, index,
-                {"name", "process", "title", "window", "workspace", "launch", "hotkeys",
-                 "enabled"});
+    checkFields(L, index, {"name", "process", "title", "window", "launch", "hotkeys", "enabled"});
     core::AppDef app;
     app.name = optString(L, index, "name");
     app.process = optString(L, index, "process");
     app.title = optString(L, index, "title");
-    app.workspace = optU32(L, index, "workspace");
     app.enabled = optBool(L, index, "enabled").value_or(true);
 
     int launch = 0;

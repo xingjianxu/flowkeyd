@@ -8,21 +8,18 @@
 | 项 | 值 |
 | -- | -- |
 | 配置目录 / 日志文件 | `%USERPROFILE%\.config\flowkeyd\config.lua` / `…\flowkeyd.log` |
-| 工作空间恢复日志 | `<配置目录>\workspace.json`（只有藏着窗口时存在；全部恢复后自动删） |
 | DSL 全局表 | `flowkeyd.*`（挂在脚本全局） |
 | 示例配置 | `flowkeyd.lua.example` |
 
 CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、`--check`、`--list`、`--list-keys`、
-`--quit`、`--restore-windows`、`--no-autostart`、`--remove-autostart`、`--log-window`、`--log-level`、
-`--log-file`、`--no-color`、`--allow-multi`、`--no-prompt`、`--updated-from`、`-h/--help`、`-V/--version`。
+`--quit`、`--no-autostart`、`--remove-autostart`、`--log-window`、`--log-level`、`--log-file`、
+`--no-color`、`--allow-multi`、`--no-prompt`、`--updated-from`、`-h/--help`、`-V/--version`。
 
 ### 容易做漏的语义
 
 * `settings{}`：`log_level`、`swallow`、`exact_modifiers`、`release_modifiers`、`repeat_interval_ms`、
   `repeat_delay_ms`、`tick_ms`、`input_backend`、`single_instance`、`elevate`、`remote_desktop`、
-  `window_monitor`、`tray_badge`、`workspace`。**未知键报错。** `window_monitor`（默认 `"cursor"`）=
-  没写明 `monitor` 时摆到哪块屏；`tray_badge`（默认 `"both"`）= 托盘徽标显示`"both"`（左上工作空间
-  号、右下虚拟桌面号）/ `"desktop"` / `"workspace"`，详见 `decisions.md` 第 20 条。
+  `window_monitor`。**未知键报错。** `window_monitor`（默认 `"cursor"`）= 没写明 `monitor` 时摆到哪块屏。
 * `hotkey{}`：`keys`（单个和弦或一组）、`name`、`trigger`（`press`/`release`/`repeat`）、`action`
   （别名 `press`、`on_press`）、`on_release`、`swallow`、`repeatable`（`true` 或
   `{ interval_ms, delay_ms }`；也认 `["repeat"]`）、`enabled`、`comment`、`remote_desktop`。
@@ -33,34 +30,17 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、`--ch
   `false`，或者 `{ enabled = …, processes = { … } }`；条目上的 `remote_desktop = true` = 在远程桌面里也
   照常拦（默认 `false` = 放行）。
 * `window_rule{}`：字段见 `decisions.md` 第 13 条；`monitor` 的六种取值（含 `"cursor"` / `"last"` /
-  `"none"`）与缺省行为见第 33 条；`workspace`（1..`settings.workspace.count`）见第 36 条。
-* `app{}`：见 `decisions.md` 第 15 条；声明式写法叫 `apps`；再加一个 `workspace`（= `window.workspace` 的
-  简写，只写它时会展开出一条只带归属的规则，见第 36 条）。
-* `settings.workspace`：`enabled`（默认 `true`）、`count`（1–10，默认 9）、`switch_target`（`"cursor"` 默认 /
-  `"focus"`）、`switch_effect`（`"auto"` 默认 / `"instant"` / `"freeze"`：要不要用冻结快照遮住转场，
-  见第 36 条）、
-  `new_window`（`"active"` 默认 / 1..count；**只管运行期间新出现的窗口**，启动收编一律归入
-  活动空间）、`exclude`（进程名子串，**空串报错**）；写 `workspace = false` 也能整个关。**空串、超出
-  `count` 的索引都在 `--check` 报错**。归属优先级：命中窗口的第一条规则的 `workspace` → `new_window`
-  → 那块屏的活动空间（`core::workspaceForNewWindow()`）。
+  `"none"`）与缺省行为见第 33 条。
+* `app{}`：见 `decisions.md` 第 15 条；声明式写法叫 `apps`。
 * 和弦语法：`~` 放行原始按键、`*` 忽略额外修饰键；`Numpad*` 与主键盘同名键不同。
   **和弦的结构是 `Modifiers + 一个按键`**：`keys = "NumpadSub+NumpadAdd"` 是语法错（`NumpadSub` 不是
   修饰键），守护进程会直接拒绝启动。
 * **单个字母的键名必须小写**（`decisions.md` 第 17 条）。
 * 动作：`run`/`send`/`type`/`open`/`volume`/`media`/`clipboard`/`window`/`notify`/`menu`/`help`/
-  `windows`/`apps`/`workspace`/`power`/`desktop`/`caps_lock`/`suspend`/`reload`/`quit`/`none`，字段逐条见
-  README 的动作表。简写字符串：`"run:…"`、`"send:…"`、`"type:…"`、`"open:…"`、`"notify:t|b"`、
-  `"volume:up"`、`"media:next"`、`"clipboard:get"`、`"window:minimize"`、`"desktop:1"`、`"power:sleep"`、
-  裸关键字 `reload`/`quit`/`help`/`windows`/`apps`/`none`。`workspace` **没有简写**
-  （`workspace("switch", 2)` / `workspace("next")` / `workspace("move_next", { follow = true })`）；它不算危险
-  动作。`switch` / `prev` / `next` 作用在
-  **哪块屏**由 `settings.workspace.switch_target` 决定（`"cursor"` 默认 / `"focus"`），`move` / `move_prev` /
-  `move_next` 的目标是**当前前台窗口**（前台是覆盖层时跳过它）。`prev` / `next` / `move_prev` /
-  `move_next` 都是相对的：`prev`/`next` 按那块屏当前活动空间 ±1，`move_prev`/`move_next` 按那个窗口
-  自己那个空间 ±1，都**不循环**（已经在两头时什么都不做），所以不写 `index`，也不校验它。`follow`
-  （默认 `false`）只由三个搬移 op 接受：搬完把那块屏也切到目标空间并重新激活窗口（日志里多一段
-  `, view followed`）；写在 `switch` / `prev` / `next` 上会被 `--check` 拒绝。显隐只对**当前虚拟
-  桌面**上的窗口做（记录过时的窗口会被跳过）。
+  `windows`/`apps`/`power`/`desktop`/`caps_lock`/`suspend`/`reload`/`quit`/`none`，字段逐条见 README 的
+  动作表。简写字符串：`"run:…"`、`"send:…"`、`"type:…"`、`"open:…"`、`"notify:t|b"`、`"volume:up"`、
+  `"media:next"`、`"clipboard:get"`、`"window:minimize"`、`"desktop:1"`、`"power:sleep"`、裸关键字
+  `reload`/`quit`/`help`/`windows`/`apps`/`none`。
 * **启动权限**：`run` 与 `launch`（`window` 的 / `app{}` 的，共用一份字段块）都有 `elevated`，**默认
   `false` = 当前登录用户的普通权限**；`open` 与程序启动器没有这个字段（它们总是普通权限）。
 * **完全没有动作**的快捷键就是一个按键屏蔽器（会吞掉它匹配到的按键）。
@@ -81,7 +61,7 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、`--ch
 
 ## 验收脚本（`scripts/acceptance.ps1`）
 
-206 项检查（最近一次全跑了），约四分半，需要交互式桌面，**不属于 `ctest`**。它自己生成
+166 项检查（实跑 163，3 条数字键检查常被跳过），约三分钟，需要交互式桌面，**不属于 `ctest`**。它自己生成
 一份**一次性配置**，起一个非提权的守护进程，从另一个上下文用 `SendInput` 注入按键，再用一个获得焦点的
 WinForms 窗口从外面观察"按键到底有没有到达前台"（未绑定的键做正对照）。要让注入的按键触发绑定，守护进程
 得用 `FLOWKEYD_ACCEPT_INJECTED=1` 启动（只给测试用的后门，启用时日志里有一条警告）。
@@ -132,80 +112,20 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
 * 往脚本里插诊断时：把脚本复制到 `tmp/`，用 `[System.IO.File]::ReadAllText/WriteAllText(...,
   UTF8Encoding($true))` 做替换（**必须保 BOM**），再加一条只含 ASCII 的探针把失败的检查名写进 diag。
   **把临时脚本的中文检查名打到控制台会被代码页弄成乱码，很容易误判成另一条检查挂了。**
-* **工作空间那一段（M11 新增，约 25 秒，43 项）会真的藏窗口**：三个一次性实例（交互 / `new_window =`
-  3 / `window_rule{ workspace = 2 }`），载体是 `charmap.exe`（普通 Win32、每个实例自己开窗；**别换成
-  记事本** —— 本机那个是单实例带标签页的 Store 应用），配置里 `exclude` 排掉了捕捉窗口自己的
-  `powershell` 与控制台（否则一切空间就把测试自己藏了）、并把 `remote_desktop` 关掉（不关的话真机上
-  一个远程桌面客户端窗口抢到前台就会把所有绑定放行）。覆盖：`workspace("switch"|"move", N)` 的
-  显隐与日志、**相对切换 `workspace("prev"|"next")`**（一路 1→2→3→4，再按一次 next 只写一行
-  `already at space 4`、窗口没被翻出来；prev 再走回空间 1，在 1 上再按一次同理不循环）、
-  **相对搬移 `workspace("move_next", { follow = true })` / `workspace("move_prev", { follow = true })`**
-  （带着窗口往下一个空间走、那块屏的活动空间也跟着变、窗口仍然在前台，日志里写着 `view followed`；
-  往回走看 `move_prev`；走到头只写一行 `already at space N`，不循环）、
-  `window("activate")` 唤起藏在别的工作空间的窗口、**切换器里的别进程窗口**（筛到它就
-  “先切空间再激活”）、预写恢复日志 → 强杀 → `--restore-windows` 按日志恢复、`new_window` 与规则的
-  新窗口归属、`quit` 前恢复可见。脚本里**不断言“隐藏前台窗口之后前台没变”**（Windows 自己会把前台
-  交给别的窗口），那条保证在 `tst_workspace` 里。
-* 最近一次实跑（2026-10-22，“`switch_effect` 加 `auto` 档 + hold 100 → 66”那一轮）：`checks: 206, failures: 0`。
-  这一轮改的是 `applyWorkspaceEffects()`（盖不盖遮罩改由 `core::needsCoverForReveal()` 判）与
-  `kFreezeHoldMs` 66；工作空间那三段（`switch` / `prev` / `next` / `move_*` / `follow` /
-  `new_window` / 窗口规则 / 恢复日志 / `--restore-windows`）全过，跑验收的版本号是
-  `26-10-22-ce2fed8`（当时改动还没提交，二进制与随后提交的那份只差修订常量，跑完才 commit +
-  重建 `dist-release`）。整个跑不到 3 分钟（验收实例的载体是 `charmap.exe`，`auto` 档不会给它建遮罩，
-  所以与旧 `instant` 档同一个手感）。
-  踩到的环境坑：第一次跑被执行了 30 分钟还没结束、停在 134/206，原因是跑的时候前台窗口属于
-  `msrdc.exe`（WSLg 的 RDP 客户端）—— 验收实例按远程桌面放行，**所有注入的按键都被放行/忽略**，
-  每个检查都在等超时。用 `Start-Process` 重新拉一次就恢复了。以后看到“验收突然奇慢”，先看
-  `Get-Process msrdc`。
-* 上一次实跑（2026-10-22，“切空间默认不再冻结屏幕”那一轮）：`checks: 206, failures: 0`。
-  这一轮只给冻结快照加了一个开关（`settings.workspace.switch_effect`，当时默认 `"instant"` = 不抓
-  快照、不等那 100 ms），工作空间那一段（含 `switch` / `prev` / `next` / `move_*` / `follow` /
-  `new_window` / 窗口规则 / 恢复日志 / `--restore-windows`）全过，切完的版本号是
-  `26-10-22-dde3600`。常驻是在跑验收前停掉的（它跑在 `build/dist-release`，正是要重建的那一份），
-  跑完用 `schtasks /Run /TN flowkeyd` 拉起新构建。
-  `instant` 的实际耗时这次直接在日志里量到了（这一轮新加的 `debug` 分段计时）：一次切换 **0–47 ms**
-  （`show` 15–47 ms 是等目标 App 响应 `SW_SHOWNOACTIVATE`，`restack` 15 ms，`freeze` 与 `hold`
-  恒为 0）；旧路径多出来的那两项是 4K 整屏 `BitBlt` ~38 ms 与固定 100 ms。`"freeze"` 的遮罩本身
-  没动，由 `tst_interactive::freezesTheScreenWithAnOverlay` 看着（这一轮也重跑过，绿）。
-* 上一次实跑（2026-10-22，“切工作空间用冻结快照盖住过渡”那一轮）：`checks: 206, failures: 0`。
-  这一轮只改了**切空间那一段的执行顺序**（显隐前后多了一层 `platform/win/freeze.*` 遮罩 +
-  `dwm::waitForFrames` 等 100 ms），工作空间那一段（含 `switch` / `prev` / `next` / `move_*` /
-  `follow` / `new_window` / 窗口规则 / 恢复日志 / `--restore-windows`）全过，切完的版本号是
-  `26-10-22-8944eea`。常驻是在跑验收前停掉的（它跑在 `build/dist-release`，正是要重建的那一份）。
-  这一轮的“白屏有没有消掉”不在验收脚本里（它看不了帧）：那是用 `tmp/wsflicker/` 的逐帧抓屏探针
-  量的（`run-base3.txt` = 两个方向各 5 帧白屏，`run-freeze.txt` = 0 帧）。
-* 上一次实跑（2026-10-22，“切工作空间不再逐个等目标 App”）：`checks: 206, failures: 0`。
-  这一轮改了**工作空间的显隐路径**（`workspace::hideMany()` / `showMany()` 并行 + `dwm::setTransitionsDisabled()`
-  整批关过渡），所以整套跑了一次：工作空间那一段（含 `switch` / `prev` / `next` / `move_*` / `follow` /
-  `new_window` / 窗口规则 / 恢复日志 / `--restore-windows`）全过，其余各段也无回归。常驻是在跑验收
-  前停掉的（它跑在 `build/dist-release`，正是要重建的那一份），验收与收尾都用的是一份干净的
-  发布包；跑完用 `schtasks /Run /TN flowkeyd` 拉起新构建。
-* 上一次实跑（2026-10-22，“工作空间相对搬移 + `follow`”）：`checks: 206, failures: 0`。
-  新增的 6 条（`move_next`/`move_prev` + `follow` 的落点、前台保持、走到头不循环、最后把载体
-  送回空间 2）全过；修完「子窗口不是主窗口」（`a082105`）之后又整套跑了一次，同样 206/0
-  （那一次是在常驻停着的情况下跑的，与往常一样）。前一次跑（同一个二进制、改动一样）出现过一次
-  `外壳看不见被吞掉的 Win 和弦（0 ms 轻按）` 失败（diag 里前台跑到了 `org.wezfurlong.wezterm`，
-  不是捕捉窗口），重跑即绿 —— 与上一轮同一条已知 flake（不在这次改动的代码路径上）。
-* 上一次实跑（“工作空间显隐不带动画”那一轮）：`checks: 200, failures: 2` —— 失败的只有
-  `关掉之后前台回到捕捉窗口` / `关掉启动器之后前台回到捕捉窗口`（卡片关掉后前台本该回到捕捉窗口）。
-  **不是回归**：把这一轮的改动 `git stash` 掉、按 HEAD 重新构建 release 再跑一次，同样这两条失败
-  （`checks: 198, failures: 2`，少的 2 条是启动器数字键按下面的已知规则跳过），所以当时这台机器的
-  外壳 / 前台状态就是那样（同日还有一次 `外壳看不见被吞掉的 Win 和弦` 也 flake 了一次，改动的代码
-  不在这条路径上）。工作空间那一段（43 项）全过。
-* 上一次全绿：`checks: 200, failures: 0`（release 产物，`workspace("prev"|"next")` 那一轮）。
-  更早多轮常见 `checks: 189`：差的那几条是启动器的数字键检查 —— 真机目录约 200 条时，26 个单字母里
-  可能没有一个命中 1..8 个程序，脚本打一条诊断（写进 `$WorkDir\diag.txt`，UTF-8 无 BOM）**跳过**
-  它们：是跳过，不是失败。
-* 再往前一次：`checks: 189, failures: 0`（release 产物，托盘徽标改成两个角那一轮）。
-
-> **M8 / M9 / M10 当时都只跑了双构建 + `ctest` + 定向冒烟，没跑 acceptance.ps1**（项目所有者指示不做
-> 完整冒烟；工作空间那几条验收项统一推到 M11）。M11 已把那些项全部补进脚本，并用一次完整实跑收尾
-> （上面那行 `checks: 189, failures: 0`）。
+* 最近一次实跑：`checks: 163, failures: 2`（release 产物，2026-10-22，**移除工作空间**那一轮）。
+  两次失败都是同一条：关掉卡片之后前台回不到捕捉窗口 ——
+  `关掉之后前台回到捕捉窗口`（窗口切换器）与 `关掉之后启动器前台回到捕捉窗口`（程序启动器）。
+  **可重现**（连跑三次、有没有常驻在跑都一样）；加了诊断（`Wait-FgAfterClose`，把失败时的
+  前台窗口类名与标题码点写进 `diag.txt`）之后看到：卡片关掉后前台落在 **WezTerm 的窗口**上，
+  而不是 `flowkeyd-accept-catcher`。这一个提交只删代码（工作空间）与改注释，**没动**
+  `popup_host` / 前台恢复的任何路径，所以先当作环境/前台恢复的既有毛病记录下来，没有继续挖
+  （项目所有者要求本轮不再跑冒烟）。比 163 少的 3 条是上面那组数字键检查：真机目录约 200 条时，
+  26 个单字母里可能没有一个命中 1..8 个程序，脚本打一条诊断（写进 `$WorkDir\diag.txt`，UTF-8 无
+  BOM）**跳过**它们：是跳过，不是失败。
+* 上一次实跑（工作空间还在的时候）：`checks: 206, failures: 0`。工作空间那一整块已经移除，实现
+  在分支 `backup/workspace`，所以脚本也回到了 166/163 那一版。
 
 ## 手工冒烟清单（脚本覆盖不到的部分）
-
-> 验收脚本里**故意不做**的两件事：显示器拔插 / 拖屏（要真断一块屏）与“空空间不抢焦点”的肉眼确认
-> （隐藏前台窗口之后 Windows 会把前台交给别的窗口，外面分不出是谁干的）。它们在下面第 15–19 条里。
 
 1. `--check --config tmp/smoke.lua` 通过，`--list` 形状与 README 一致。
 2. 被吞掉的 `Win+…` 和弦：按完之后 Windows **不能**弹出开始菜单/搜索；按住 Windows 键超过自动重复延迟
@@ -250,28 +170,7 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
     屏；把那块屏的显示器断开（或把 `windows.json` 里的设备名改错）后按一次：只记一条 warning（`the
     remembered monitor … is not connected`）、窗口留在原处。靠 `settings{ window_monitor = "none" }` 把
     整项关掉后重载，再按一次应当**完全不动窗口**。
-15. **工作空间的显示器拔插与拖屏**（两块 1920x1080@200% 就能做；脚本完全不覆盖）：把某块屏上的几个窗口
-    拖好（含一个最大化、一个最小化），用 `DisplaySwitch.exe /internal` 或断线把它们那块屏禁掉 —— 那些
-    窗口应当出现在剩下的那块屏上（最大化仍是最大化、最小化仍然最小化，日志里是
-    `workspace: moved N window(s) back onto their monitor`）；把屏接回来 —— 它们应当**回到原来那块屏**
-    （非活动空间里的仍然藏着）。然后把一个窗口用鼠标（或 `Win+Shift+←/→`，**后者没有
-    `EVENT_SYSTEM_MOVESIZEEND`**，只能靠 `LOCATIONCHANGE` + 防抖）拖到另一块屏 —— 日志里应当有
-    `workspace: ... moved from \\.\DISPLAYx to \\.\DISPLAYy`，之后在那块屏上切空间，它跟着它新归属的
-    那块屏显隐（不再跟着旧屏）。最后改一下分辨率 / 缩放：归属不应发生任何变化（日志里既没有
-    `monitors changed` 下的 `moved`，也没有窗口被弹出 / 藏起来）。
-16. **工作空间的安全与恢复**（M8；脚本不覆盖）：
-    1. 把几个窗口 `workspace("move", 2)` 藏到非活动空间，然后 `taskkill /PID <pid> /F` 强杀守护进程
-       —— `<配置目录>\workspace.json` 应该已经存在（里面是那几条的 `hwnd` / `pid` / `class`）；重新启动
-       flowkeyd（或先跑 `flowkeyd --restore-windows`），窗口全部回来，文件被删掉；日志里是
-       `workspace: restored N window(s) from the recovery log`。
-    2. 同上先把窗口藏起来，然后从托盘菜单点 *恢复全部窗口* —— 立刻全部回来；再试一次 `--restore-windows`
-       （守护进程在跑时它会请那个实例去做，没有实例时自己按日志恢复）。
-    3. 同上先把窗口藏起来，然后**注销 / 关机** —— 注销前那一下窗口已经回来了（日志里
-       `session is ending; restoring the windows hidden by workspaces`）；做完这一条**必须确认没有任何窗口
-       卡在“已被我们藏起来”的状态**（`workspace.json` 应当已经不存在）。
-    4. 手动把 `workspace.json` 改坏（或写一条不存在的 `hwnd`）后重启：只记 warning + 丢掉那几条，
-       其它窗口照常恢复，进程不崩。
-17. **启动权限**（常驻实例是提权的，所以拿它验反而最直接）：
+15. **启动权限**（常驻实例是提权的，所以拿它验反而最直接）：
     1. 按一个 `action = run("notepad.exe")` 的快捷键，然后在**任务管理器**里看那个 `notepad.exe`：
        「详细信息」页的 `notepad.exe` 行右键只能看到「结束任务」而**没有** UAC 盾牌图标；命令行最快：
        `& build\dist-release\flowkeyd.exe --list` 里那条摘要应当**没有** `(elevated)`。
@@ -280,46 +179,3 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
        **不弹**。
     3. `open([[...\x.docx]])` 与从启动器点一个程序：开出来的程序同样应当是普通权限；但启动器**右键
        菜单**里的「打开」开出来的是提权的（已知限制）。
-18. **工作空间与其它功能的联动**（M9；脚本不覆盖跨进程那一半）：
-    1. 给记事本类程序写一条 `window("activate")` 快捷键，把它的窗口 `workspace("move", 2)` 藏到
-       非活动空间；再按那个快捷键 —— 那块屏应**切到空间 2**、窗口回来并拿到前台，日志里多一段
-       `(workspace 2 on \\.\DISPLAYx)`；再按一次（此时它已在活动空间里）应当是正常的 `toggle` 收起。
-    2. 同上把窗口藏到空间 2，然后开 `windows()` 切换器 —— 那个窗口**应该在列表里**（进程名 / 标题
-       照旧）；选中它 —— 同样先切到空间 2 再激活。
-    3. 给那个程序写 `window_rule{ process = "...", workspace = 2 }` 重载配置，然后在空间 1 里启动它
-       —— 新窗口应当**直接出现在空间 2、立即被藏起来**，焦点不被抢；再手动 `workspace("move", 1)`
-       把它搬回空间 1，切换几次空间也不再被规则拉回空间 2（规则只在三个时机生效）。
-    4. 把一个**看得见的**窗口用 `window("move_right_monitor")` 挪到另一块屏 —— 日志里应当有
-       `workspace ... on \\.\DISPLAYy`，之后在那块屏上切空间时它跟着新屏显隐（不再跟着旧屏）。
-    5. 把一个窗口藏到非活动空间，再对同一个程序按 `move_right_monitor` / `minimize` 的快捷键 ——
-       应该**什么都不发生**，只多一条 warning（`is hidden in another workspace`）；窗口没有被弹出来、
-       也没有卡在一种“看得见却被记录当藏着”的状态。
-19. **工作空间的切换与移动**（M6/M10 的基本手感，脚本只验单屏、普通窗口）：
-    1. 双屏：A 屏切到空间 2，B 屏的窗口一个不动；把鼠标移到 B 屏再切，只动 B 屏。`switch_target =
-       "focus"` 时，鼠标在 A、焦点在 B 就作用于 B。
-    2. 最大化 / 最小化 / 普通窗口各一个，来回切几次之后位置、大小、最大化、最小化都不变（最小化的
-       切回来仍是最小化）。
-    3. 空空间不抢焦点（前景窗口不变）；非空空间回到最近用过的那个窗口；Z 序还原。
-    4. `move` 到非活动空间：窗口立即消失、用户留在原空间；日志里那条以 `hidden)` 结尾。
-    5. 远程桌面前台（`mstsc.exe` / Windows App）时按工作空间快捷键：**放行、什么都不切**。
-    6. 切空间时窗口 **不应有淡出 / 淡入过渡**（该一下就到位）；被藏起来的窗口**不应该留在任务栏 / `Alt+Tab` 里**
-       （这两条都是写定的默认行为、没有开关，见 `decisions.md` 第 36 条）。
-    7. `switch_effect` 三个取值各切几次：默认 `"auto"` 下切**纯 native 程序**（记事本 / 资源管理器）
-       应与快捷键显隐单个窗口同一手感（没有一整拍的停顿），切**浏览器 / VSCode / WezTerm** 那几次
-       看得到“旧画面冻住 → 新空间整块出现”、没有闪；`"instant"` 下手感与单个窗口一致，但上面那些
-       程序会闪（浅色主题下就是白闪，35–48 ms）；`"freeze"` 下每次都多一拍（~100 ms）。`debug` 日志里那一行
-       `workspace: … took N ms (filter …, log …, freeze …, show …, hide …, restack …, hold …)`
-       能对得上：不盖时 `freeze` 与 `hold` 都是 `0`，盖的时候两者加起来就是那 ~100 ms
-       （快照 ≈ 42 ms 整屏 / ≈ 10 ms 单窗口 + `hold` 66 ms）。
-
-20. **托盘徽标（工作空间号 / 虚拟桌面号）**：脚本只能验 `--check` 通过，样式要人眼看。
-    1. 默认（`tray_badge = "both"`）：徽标**左上角是工作空间号（绿）、右下角是虚拟桌面号（蓝）**，
-       两个角之间一条 `/` 方向的白色对角线；切一次工作空间，**左上的号立即变**（不用等 500 ms）；
-       切一次虚拟桌面，右下的号半秒内变。
-    2. 双屏 + `switch_target = "cursor"`：徽标的工作空间号跟着**光标所在那块屏**走；改成 `"focus"`
-       之后跟着前台窗口。
-    3. `tray_badge = "desktop"` / `"workspace"`：徽标整块蓝 / 整块绿，一个号居中，没有对角线；
-       `workspace = false` 时前者只剩蓝底桌面号、后者退回应用图标。
-    4. 悬停提示里能看到 `（工作空间 1/9，桌面 2/4）`（缺哪个就少哪一个）。
-    5. 16 px（100% 缩放）与 32 px（200%，本机就是）两种尺寸都看过：两个角的数字都**看得清**、
-       不碰对角线、不越界，两位数显示 `9+`。

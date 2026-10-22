@@ -62,7 +62,8 @@ struct TopLevelWindowFacts
     /// `EnumWindows` 只给顶层窗口，但 `SetWinEventHook` **连子窗口一起报**，
     /// 所以候选里真的会出现子窗口：Chrome 的 `Chrome_RenderWidgetHostHWND`
     /// （标题就叫 `Chrome Legacy Window`）无属主、非工具窗口、有标题、有尺寸，
-    /// 不看 `WS_CHILD` 就会被当成一个程序窗口收编进工作空间。
+    /// 不看 `WS_CHILD` 就会被当成一个程序窗口（`window()` 匹配会挑中它，
+    /// 窗口切换器也会把它列出来）。
     bool child = false;
     /// `DWMWA_CLOAKED`：shell 或应用把这个窗口藏起来了。
     ///
@@ -71,13 +72,6 @@ struct TopLevelWindowFacts
     bool cloaked = false;
     /// 窗口就在**当前**虚拟桌面上（只在 `cloaked` 为真时才有意义）。
     bool onCurrentDesktop = true;
-    /// 这个窗口正被**工作空间**（我们自己）用 `ShowWindow(SW_HIDE)` 藏着。
-    ///
-    /// 它和 `visible` 是两件事：`visible` 是「此刻看不看得见」（藏起来就是假），
-    /// 这个字段回答的是「是不是我们自己藏的」。用户自己的程序被藏起来之后仍然要
-    /// 能出现在窗口切换器里（选中它先切到它那个工作空间再激活），所以判据不能
-    /// 只看可见性（M0 实测结论）。
-    bool hiddenByUs = false;
 };
 
 /// 「主窗口」判据：可见、**不是子窗口**、不是 Program Manager、无属主（或带
@@ -98,10 +92,6 @@ bool isMainWindow(const TopLevelWindowFacts &window);
 /// 被 cloaked 但确实在**别的**虚拟桌面上的窗口要保留 —— 这正是切换器与 Alt+Tab
 /// 不同的地方（`windows` 动作会切到那张桌面去），所以判据里必须带上
 /// `onCurrentDesktop`。
-///
-/// 被**工作空间**藏起来的窗口（`hiddenByUs`）要保留：`IsWindowVisible` 是假的，
-/// 但那仍然是用户自己的程序窗口。它与「shell 藏起来的假窗口」的区别只有一条 ——
-/// **状态机的记录里有它**（M0：不能用可见性判「在不在」）。
 bool isSwitchableWindow(const TopLevelWindowFacts &window);
 
 // ---------------------------------------------------------------------------
@@ -121,59 +111,12 @@ enum class WindowPlan {
 /// 只有 `op = "activate"`、`toggle` 没被显式写成 `false`、且窗口已经在前台
 /// 时才收起；其余情况一律执行原本的 op。`launch` 那条路径不走这里
 /// （它不套用 `toggle`）。
-///
-/// `hiddenByUs`（正被工作空间藏着）时**永远不收起**：`SW_HIDE` 之后
-/// `GetForegroundWindow()` 仍然指着那个隐藏窗口（M0 实测），不排除这一条的话
-/// 「唤起藏在别的工作空间里的窗口」会变成「把它最小化」。
-WindowPlan planWindowAction(WindowOp op,
-                            std::optional<bool> toggle,
-                            bool alreadyActive,
-                            bool hiddenByUs = false);
+WindowPlan planWindowAction(WindowOp op, std::optional<bool> toggle, bool alreadyActive);
 
 /// 这个 op 会不会产生窗口过渡（也就是 `animate` 对它有没有意义）。
 ///
 /// `close` 与 `toggle_topmost` 不产生过渡，`--check` 会拒绝写在这两个 op 上的
 /// `animate`，而 `TransitionGuard` 也只在返回 true 时才去关 DWM 动画。
 bool windowOpHasTransition(WindowOp op);
-
-// ---------------------------------------------------------------------------
-// 工作空间：哪些窗口归它管（纯函数，可单测）
-// ---------------------------------------------------------------------------
-
-/// 一个候选窗口的原始观察值（除 `TopLevelWindowFacts` 之外还要问的那几项）。
-///
-/// `platform/win/workspace.cpp` 只负责枚举与调用 Win32，判断交给这里的纯函数。
-/// 两条与 M0 实测结论直接相关的字段：
-///   * `tracked` —— 这个窗口已经在工作空间状态机的记录里。它可能正被我们用
-///     `ShowWindow(SW_HIDE)` 藏着，于是 `IsWindowVisible` 是假的；
-///     **记录才是判据**（不能拿可见性当“在不在”）；
-///   * `ownProcess` —— flowkeyd 自己的窗口（弹窗 / 日志窗口）永远不归工作空间管。
-struct ManageableWindowFacts
-{
-    /// 窗口还在（`IsWindow`）。
-    bool exists = false;
-    /// 已经在工作空间状态机的记录里。
-    bool tracked = false;
-    /// 属主进程就是 flowkeyd 自己。
-    bool ownProcess = false;
-    /// 外壳自己的东西：`Progman` / `WorkerW` / 任务栏（`Shell_TrayWnd` 系列）。
-    bool shellWindow = false;
-    /// 已经被记录的窗口还满不满足「主窗口」判据（隐藏不影响这个判断）。
-    bool mainWindow = false;
-};
-
-/// 排除名单命中吗（可执行文件名的大小写无关子串；空名单 / 空 needle 不排除）。
-///
-/// 拿不到进程名时**不**排除（不能因为读不到就认定它“被排除了”）。
-bool workspaceExcluded(const std::optional<QString> &executableName, const QStringList &exclude);
-
-/// 这个窗口归不归工作空间管。
-///
-/// 判据：窗口还在、不是 flowkeyd 自己的、不是外壳自己的（任务栏 / 桌面）、
-/// 「主窗口」而不是工具窗口 / 无标题 / 有属主的对话框，且不在排除名单里。
-/// **已记录的窗口不受可见性影响**（它们可能正被我们藏着）。
-bool isManageableWindow(const ManageableWindowFacts &facts,
-                        const std::optional<QString> &executableName,
-                        const QStringList &exclude);
 
 } // namespace flowkeyd::core

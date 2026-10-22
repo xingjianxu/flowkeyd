@@ -125,50 +125,6 @@ Win32/COM 后端就放在 `platform/win/*`，并在 `tst_interactive` 里加一�
 的 `app` 注释 → README 与示例 → `tst_config`（展开）/`tst_lua`（转换）。如果新字段是"可被动作局部覆盖
 的一整份值"（像 `launch`），照 `LaunchFields` 的做法把"写了哪些键"记下来。
 
-## 新的工作空间能力（`workspace`）
-
-三层，别跳墙：
-
-1. **纯逻辑**：`core/workspace.*`（`WorkspaceState` 的命令 → `WorkspaceEffects`）。新语义加在这里，并在
-   `tst_workspace` 加一条用例（那里已经有 3000 步随机序列 + 不变量检查）。
-2. **平台层**：`platform/win/workspace.*`。隐藏方式只在这一个文件里（目前唯一可用的是
-   `ShowWindow(SW_HIDE)`）；**新增任何 hide/show 路径都要保持“先写恢复日志、再隐藏”**（M8：日志核心在
-   `core/workspace_log.*`，写盘与恢复在 `platform/win/workspace.*` 的
-   `saveWorkspaceLog()`/`restoreFromLog()`；显示成功后才删条目），而且只能在工作线程上做。枚举可管理窗口
-   的判据在 `core::isManageableWindow()`（纯，`tst_window_match`）。
-   **跨显示器搬窗口用 `relocateToMonitor()`**（保持显隐 / 最大化 / 最小化），不要用
-   `monitor::moveToMonitor()` —— 后者会把藏起来的窗口弹出来。
-3. **动作与规则**：`Action::Kind::Workspace`（`workspaceOp` + `workspaceIndex`）/ `WindowRuleDef.workspace` /
-   `AppDef.workspace`。动作要同时改 `actionToMap`/`actionFromMap`、`actionKindNames()`、
-   `defaultActionMap()`、`ActionEditor.qml` 的 `visible: root.type === "workspace"` 分支、`ConfigText.qml`
-   （工作约定第 13 条）；规则字段要同时改 `config_map.cpp` 的 `windowRuleToMap/FromMap` 与
-   `WindowRuleFields.qml`。再加一项：`settings.workspace` 的嵌套字段要同时改 `settingsToMap/FromMap`、
-   `ConfigEditor::setWorkspaceSetting()` 的调用点（`ConfigAdvancedPage.qml` 的工作空间卡片）与 README
-   的「工作空间」一章。
-4. **事件管线**：钩子线程（`platform/win/hook.*`）只把 `core::WorkspaceEvent` 入队，动作工作线程
-   （`app/dispatcher.cpp` 的 `applyWorkspaceEvent()`）是**状态机的唯一所有者**，效果由
-   `applyWorkspaceEffects()` 交给平台层。新增一种事件的面积固定是三处：`core/workspace_event.h`
-   的 `Kind`（+`workspaceEventName()`）、钩子里产生它的那一处、`Dispatcher::applyWorkspaceEvent()`
-   的 `switch`。**自己引起的显隐**要在 `applyWorkspaceEffects()` 里先 `expect()` 再动手（`SW_HIDE`
-   会额外产生一条 `EVENT_OBJECT_SHOW`），否则状态机把自己的操作当成用户操作。纯逻辑部分在
-   `tst_workspace_event`，真机管线在 `tst_interactive::hookThreadReportsWorkspaceEventsForForeignWindows`
-   （**要“新窗口出现”就别用记事本**，见 `pitfalls.md`）。
-   **新窗口的归属优先级只有一处**：`core::workspaceForNewWindow()`（规则第一条 → `new_window` →
-   活动空间）。要改优先级就改它 + `tst_placement`。另外记住 `handlePlacementTick()` 里
-   **`WindowsShown` 必须在 `WindowAppeared` 之前发**：`window_rule` 只摆看得见的窗口，先藏就再也摆不到
-   （见 `pitfalls.md` 的「工作空间规则与默认归属（M10）」）。
-   **「这个程序会不会闪」只在一处**：`core/switch_cover.*`（`Chrome_WidgetWin_1` + 几个自带合成器的
-   进程名），`switch_effect = "auto"` 用它决定要不要建冻结遮罩；新发现某程序也会闪就加进程名/类名
-   + `tst_switch_cover` 加一条。**不要**把这种判断写进 `Dispatcher`（留纯逻辑才能单测）。
-5. **恢复与退出**：只要新增了任何 hide/show 的路径，就必须想清楚"进程死在中间怎么办"：日志条目在
-   `Dispatcher::applyWorkspaceEffects()` 里预写 / 删除；退出（`Runtime::shutdown()`）与关机 / 注销
-   （`platform/win/session.*` 的 `WM_QUERYENDSESSION`）都走 `restoreWorkspaceNow(ms)`，**必须有上限**
-   （动作线程可能卡在长动作里；日志会留着下次恢复）。手动入口是托盘「恢复全部窗口」与
-   `--restore-windows`（事件通道在 `single_instance.*`）。
-6. 验收：这个特性的行为大多在 `scripts/acceptance.ps1` 的「工作空间」那三段里（协议：三个一次性实例、
-   `charmap.exe` 当载体、配置里排掉测试自己的进程），纯逻辑在 `tst_workspace` / `tst_workspace_event` /
-   `tst_workspace_log` / `tst_placement` / `tst_window_match`；显示器拔插与拖屏这类只能手工。
-
 ## 新的窗口条件 / 跨桌面语义
 
 * **新的窗口条件**：`core/window_match`（纯逻辑）+ `platform/win/window` 的枚举适配 +

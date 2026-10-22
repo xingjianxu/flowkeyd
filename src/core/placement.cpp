@@ -142,24 +142,6 @@ Rect placementRect(const Rect &current,
     return Rect{px, py, w, h};
 }
 
-bool windowIsOffMonitor(const Rect &normalPosition, const MonitorDescription &monitor)
-{
-    const Rect &bounds = monitor.bounds;
-    // 退化矩形（宽 / 高非正）当成“哪儿都不在”：宁可把它搬一次，也不要让它留在
-    // 屏幕外面。
-    if (normalPosition.width <= 0 || normalPosition.height <= 0 || bounds.width <= 0
-        || bounds.height <= 0) {
-        return true;
-    }
-    // 只要有**非空**重叠就算它还在这块屏上：跨两块屏的窗口本来就有半边在外面，
-    // 那不是需要搬的理由。
-    const bool overlaps = normalPosition.x < bounds.x + bounds.width
-        && bounds.x < normalPosition.x + normalPosition.width
-        && normalPosition.y < bounds.y + bounds.height
-        && bounds.y < normalPosition.y + normalPosition.height;
-    return !overlaps;
-}
-
 bool windowMatchesRule(const WindowRule &rule,
                        const QString &title,
                        const std::optional<QString> &executableName)
@@ -194,22 +176,6 @@ bool windowRulePinsDesktop(const std::vector<WindowRule> &rules,
 {
     const WindowRule *rule = firstWindowRule(rules, title, executableName);
     return rule != nullptr && rule->desktop.has_value();
-}
-
-std::optional<std::uint32_t> workspaceForNewWindow(const std::vector<WindowRule> &rules,
-                                                   const QString &title,
-                                                   const std::optional<QString> &executableName,
-                                                   const Settings &settings)
-{
-    if (const WindowRule *rule = firstWindowRule(rules, title, executableName);
-        rule != nullptr && rule->workspace.has_value()) {
-        return rule->workspace;
-    }
-    // `0` = `"active"`（那块屏此刻的活动空间，与 `WorkspaceSettings::newWindow` 同一个口径）。
-    if (settings.workspace.newWindow != 0) {
-        return settings.workspace.newWindow;
-    }
-    return std::nullopt;
 }
 
 MonitorRef windowActionMonitor(const std::optional<MonitorRef> &actionMonitor,

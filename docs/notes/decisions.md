@@ -218,40 +218,19 @@ window`）。现在 `window::find(foreground)` 发现前台是别的工具窗口
   或窗口处于过渡状态时会返回 `TYPE_E_ELEMENTNOTFOUND`(0x8002802b)；`Session::moveWindowToAdjacent()`
   搬完**等桌面 GUID 真的变了再返回**（否则按住 Win 连按两次会读到旧桌面、把目标算错）。
 
-## 20. 托盘图标的主体是「第几个工作空间 / 第几号虚拟桌面」
+## 20. 托盘图标的主体是「当前是第几号虚拟桌面」
 
-* **画法**：圆角渐变方块 + **红色**（`#ff3b30`）**最粗字重**的数字（Windows 上 `Segoe UI`
-  字体族里只有 Regular / Bold，Black 是另一个字体族 `Segoe UI Black`，所以先找它；没有时退回
-  `Segoe UI` + `QFont::Black`）。数字按**字形墨迹**居中（按含行距的方框居中会明显偏高）。
-  数字是 2026-10 项目所有者的要求改成红色的（蓝、绿两种底都是暗色，红字比白字跳）。
-  虚拟桌面号用 `logo.svg` 的蓝渐变（`#00d2ff` → `#3a7bd5`）；工作空间号用**深**绿渐变
-  （`#12a150` → `#075e35`——红字压在浅绿上也发脏，绿深一点才拉得开）。
-* **默认样式（项目所有者 2026-10 要求，把原来那行 `1/2` 换成更大字）：**左上角工作空间号、
-  右下角虚拟桌面号，底色沿对角线分成左上绿 / 右下蓝，中间一条 `/` 方向的白线（左下 → 右上）。
-  因为每个号只占一个角，字号能到 `0.5 × 图标边长`（16 px 上是 8 px，而挤成 `1/2` 的 3 个字符
-  只有 6 px——项目所有者的反馈就是那个看不清）；`9+` 这种两位数降到 `0.30 × 边长` 并再往角里
-  挪一点，不碰那条线。由 `settings.tray_badge` 选：`"both"`（默认）/ `"desktop"`（只显示虚拟
-  桌面号，蓝底居中，本特性之前的样子）/ `"workspace"`（只显示工作空间号，绿底居中）。
-* **两位数一律显示 `9+`**（16 px 上两位数挤成一团）；一个号只有一个字符时用 `0.62 × 边长`
-  （居中那一支）或 `0.5 × 边长`（角上那一支）。画什么字、怎么拼、两个字号都是纯逻辑
-  （`core::desktop_badge`，`tst_desktop_badge` 盯着），图片是 `app::trayBadgeIcon()`
-  （9 个尺寸各自渲染，不缩放位图）。
-* **一个号都拿不到时退回应用图标**（锁屏、非交互会话、版本表对不上、`tray_badge = "workspace"` 而工作空间
-  关着）：不画 `0`、不留空白图标；悬停提示里的那个号也跟着消失（两个号都写着
-  `（工作空间 1/9，桌面 2/4）`）。`"both"` 里只有一个号可用时**不画那条对角线**，那个号居中、
-  整块用它自己的颜色。
-* **工作空间号 = `switch_target` 那块屏的活动空间**（默认光标所在的那块）。每块屏的空间是独立的，
-  而托盘只有一个，所以它报的正是“按一下 `workspace("switch", N)` 会动到的那块屏”的号。状态机只归动作
-  线程，所以这个号也只能在动作线程上读。
-* **来源是 500 ms 的轮询**，因为虚拟桌面没有任何"切换了"的通知，工作空间的自动变化（拔插屏、规则把窗口
-  藏起来）也没有一条现成的事件。轮询放在**动作线程**上（`Dispatcher::startDesktopWatch()`，由
-  `Runtime::start()` 排队投进去——`QTimer` 必须在它自己那条线程上创建），算好的**整份徽标内容**
-  （`core::TrayBadge`：显示模式 + 两个号 + 两个总数）经 `Runtime::reportDesktop()` 投回 GUI 线程换图标，
-  **绝不在 GUI 线程上做 COM**。查失败只在状态翻转时写一条 debug 日志，并**保留上一次的数字**，免得锁屏时
-  图标来回闪。`workspace("switch", N)` 执行完立刻自己补一次轮询（用户刚按完，数字不该晚半秒）。
-* 轮询要读配置（`tray_badge` / `workspace.enabled` / `switch_target`），而 `Compiled` 的指针在**钩子线程**
-  手里；所以动作线程在每个进来的任务（`submit*`）里顺手记住最新一份（`Dispatcher::rememberConfig()`），
-  轮询不求人。`reload` 之后下一个任务就会换掉它。
+* **画法**：蓝色渐变圆角方块（`logo.svg` 的 `#00d2ff` → `#3a7bd5`，圆角比例照抄 `rx = 56/256`）+
+  白色粗体数字居中。数字按**字形墨迹**居中（按含行距的方框居中会明显偏高）。
+* **两位数一律显示 `9+`**（16 px 上两位数挤成一团）。画什么字、用什么字号是纯逻辑
+  （`core::desktop_badge`，`tst_desktop_badge` 盯着），图片是 `app::desktopIcon()`（9 个尺寸各自渲染，
+  不缩放位图）。
+* **查不到时退回应用图标**（锁屏、非交互会话、版本表对不上）：不画 `0`、不留空白图标；悬停提示里的
+  `（桌面 N/M）` 也跟着消失。
+* **来源是 500 ms 的轮询**，因为虚拟桌面没有任何"切换了"的通知。轮询放在**动作线程**上
+  （`Dispatcher::startDesktopWatch()`，由 `Runtime::start()` 排队投进去——`QTimer` 必须在它自己那条
+  线程上创建），查到的值经 `Runtime::reportDesktop()` 投回 GUI 线程换图标，**绝不在 GUI 线程上做
+  COM**。查失败只在状态翻转时写一条 debug 日志，并**保留上一次的数字**，免得锁屏时图标来回闪。
 * `desktop::currentDesktopIndex()` 是给这条轮询用的精简只读查询；`windowsVersion()` 的结果因此改成
   **进程内缓存**（否则每 500 ms 读一次注册表）。
 * 与 `desktop` 动作共用同一张未公开的版本表，所以**只有能读到桌面时**才有数字。
@@ -659,240 +638,34 @@ active 后所在的 monitor 上"。
   `reportsALauncherFailureFromTheShellHelper`；断言用**中文 SID** 而不是 `whoami` 的本地化文本，而且
   **不写 `whoami` 那种一次性文件**以外的任何东西。
 
-## 36. 按显示器独立的工作空间：`settings.workspace` + `workspace` 动作
+## 36. 「工作空间」（按显示器独立的一套虚拟空间）试做后整体移除，系统回到 Windows 虚拟桌面
 
-> 进度：**M0（真机验证）到 M11（文档、验收、收尾）全部完成**。下面按实现顺序记录关键决定；验收脚本的
-> 覆盖见 `reference.md`。
+**结论：不做。** 2026-10 完整实现过一版（`settings.workspace`、`workspace(...)` 动作的
+switch/move/prev/next/move_prev/move_next、`window_rule.workspace`、切空间时的冻结快照遮罩
+`switch_effect`、恢复日志 `workspace.json`、`--restore-windows`、托盘徽标里的工作空间号），
+实机用下来**可用性不达标**：
 
-* 术语：这个功能叫「**工作空间**」，配置名 `workspace`；「**工作区**」仍然只指显示器扣掉任务栏后的
-  可用区域（`availableGeometry()` / `workArea`）；「虚拟桌面」仍然是 Windows 自己的那个。
-* 默认**开启**（`settings.workspace.enabled = true`，可写 `workspace = false` 一键关）。没有
-  `workspace(...)` 绑定时不隐藏任何窗口，只做轻量跟踪 —— 就绪后升级用户不会突然被"接管"窗口。
-* 每块显示器固定 **N 个空间**（`count`，默认 9，范围 1–10）；`switch_target` 决定 `switch` 作用在哪块
-  屏上（`"cursor"` 默认 / `"focus"`）；`new_window` 是 `"active"`（默认）或 `1..N`；`exclude` 里的程序
-  永远不管（空串是错误，同决策 26：空 needle 会匹配所有窗口）。
-* 动作形状：`workspace("switch", N)` / `workspace("move", N)`（裸表 `{ type = "workspace",
-  op = ..., index = ... }`）、**相对切换** `workspace("prev")` / `workspace("next")`
-  （2026-10 补：需求是 `Win+Ctrl+←/→` 切上一个 / 下一个工作空间，而且**不循环**），以及
-  **相对搬移** `workspace("move_prev")` / `workspace("move_next")` + `follow`
-  （2026-10 补：需求是 `Win+u` / `Win+i` 把当前窗口带到上一个 / 下一个空间并跟随视图）。
-  `index` ≥ 1 且 ≤ `count` 在 `--check` 阶段校验（不变量 6），**四个相对 op 不看
-  `index`**（所以不校验、界面也把空间号那一行藏起来）。相对那一步在 `Dispatcher` 里用纯函数
-  `core::stepIndex(count, ...)` 算：返回空 = 已经在两头，什么都不做、也不动任何窗口（与
-  `move_left/right_monitor` 的“不循环”一致）。相对**切换**按那块屏的**活动空间**算，相对
-  **搬移**按那个窗口**自己的空间**算（前台窗口一定在活动空间里，所以两者实际相等；但窗口
-  被藏在非活动空间时前者会算错，后者不会）。**不算危险动作**（不触发两次确认）。
-* `follow`（**2026-10 补**，与决策 18 的 `window` 同名同义）：只由三个搬移 op 接受
-  （`move` / `move_prev` / `move_next`），写在 `switch` / `prev` / `next` 上 `--check` 报错
-  —— 切换本来就会把视图带过去，写在那里只是静默空操作。默认 `false`（与 `window` 的
-  `move_*_desktop` 一致）：不写 `follow` 时窗口进了非活动空间就立即隐藏、用户留在原地。
-  实现落在状态机里（`WorkspaceState::moveWindow(window, index, follow)`），做法是
-  “先把窗口放进目标空间、再 `switchTo()`”，而且**只算一份效果列表**（不是搬一次再切一次，
-  否则会先藏后显闪一下）；焦点直接给那个窗口（用户要的就是“跟着它走”），托盘徽标也立刻
-  补一次轮询（与 `switch` 一致）。窗口记录在**别的虚拟桌面**上时 `follow` 无效（那种情况
-  下要切的是另一张桌面的空间，不归这里管）。日志多一段 `, view followed`，摘要变成
-  `workspace move_next (follow)`。Lua 构造器给 `workspace()` 加了第三个参数，且允许
-  “选项表直接占第二位”：`workspace("move_next", { follow = true })` /
-  `workspace("move", 3, { follow = true })`。
-* 规则落点：不新增条目类型，而是给 `window_rule` 加 `workspace`（决策 13 的做法），`app{}` 也能写
-  `workspace = N`（= `window.workspace` 的简写，两处都写时 `window` 优先）；只写它而没有 `window`
-  时也会展开出一条只带归属的规则。
-* **隐藏方式已由 M0 钉死为 `ShowWindow(SW_HIDE)`**，它封装在 `platform/win/workspace.*` 后面，以后要换
-  方案只改那一处。三条候选的实测结论（探针与数据见 `pitfalls.md`）：
-  * **DWM cloak 不可用**：`DwmSetWindowAttribute(DWMWA_CLOAK)` 对**别的进程**的窗口返回
-    `E_ACCESSDENIED`（提权窗口 `E_HANDLE`）——「像虚拟桌面那样 cloak 别人的窗口」是 shell 内部
-    能力，外部进程拿不到。同进程 cloak 本身很好（不发消息、67–90 µs），但与本功能无关。
-  * **`SetWindowPos(SWP_HIDEWINDOW)` 也不行**：它更快（0.6–1.1 ms）并且不发 `WM_SHOWWINDOW`，但隐藏之后
-    `AttachThreadInput` + `SetForegroundWindow` **抢不到前台**（返回 FALSE，前台还停在隐藏窗口上）。
-    工作空间必须能把焦点交给新空间里最近用过的窗口，所以它出局。
-  * **`SW_HIDE` 是唯一同时满足“状态完全保持 + 抢得到前台”的做法**：现代化窗口（Chrome / VSCode / WezTerm /
-    UWP / Directory Opus）隐藏再显示后几何、最大化、最小化一字不差，截图像素差 0.00%。代价是跨线程
-    `SendMessage` 语义（0.6–2.2 ms/窗口，目标进程卡死会挂住调用线程 → 只在工作线程做 + 先写恢复日志）、
-    任务栏与 Alt+Tab 里会消失（这正是想要的），以及**隐藏之后 `IVirtualDesktopManager::GetWindowDesktopId`
-    会失败**（归属必须先查后缓存）。
-* 「窗口在不在」**只看状态机自己的记录，不看 `IsWindowVisible`**：被我们藏起来的窗口全都变成不可见的。
-  所以 `enumerateManageable()` 要接受一份「已记录的窗口」列表，并且 `isMainWindowIgnoringVisibility()`
-  是另一条判据（纯逻辑在 `core::isManageableWindow()`，可单测）。
-* **两条显式默认（2026-10 补充，两款都没有开关）**：
-  * **显隐不带动画**：`SW_HIDE` 本身会让 DWM 给那个窗口播一次淡出 / 缩放过渡（切工作空间就是
-    一屏窗口依次淡出，很吵），`show()` 那一侧也有对应的淡入 —— 所以 `hide()` / `show()` /
-    `relocateToMonitor()` 里都套一层 `dwm::TransitionGuard(hwnd, false)`
-    （`DWMWA_TRANSITIONS_FORCEDISABLED`；与 `window()` 动作的 `animate = false` 是同一个 RAII 类，
-    它住在 `platform/win/dwm.*`）。属性读不回来，只能“设 TRUE → `ShowWindow` → 设回 FALSE”，
-    DWM 在过渡**开始**时读它，所以作用域只要盖住那一次调用。设不上只记一行 debug（无合成器的
-    会话动画多一点不算失败）。`show()` 是在窗口**还藏着**的时候设的 —— 这一点由
-    `tst_interactive::hidesAndShowsAWindowWithoutTouchingIt` 钉住（藏着也能往返设置）。
-    批量显隐（下面那条）用 `dwm::setTransitionsDisabled()`：整批之前设一次、整批之后才复原。
-    * **2026-10-22 复测修正**：这台机器上看不到淡出 —— 普通弹窗与最大化的重叠窗口、同进程与
-      跨进程，裸 `SW_HIDE` 都是一档 20 ms 采样之内直接变成背景（探针 `tmp/wshide/`）。属性留着
-      当保险，但**“一屏窗口依次消失”的真凶是串行 `SendMessage`，不是动画**。
-  * **一次切换的显隐是批量并行的**（2026-10-22 补）：`SW_HIDE` / `SW_SHOWNOACTIVATE`（以及
-    `show()` 收尾的 `SetWindowPlacement` / `SetWindowPos`）都是跨线程 `SendMessage`，耗时就是
-    目标 App 的 UI 线程响应时间；逐个做就是“一屏窗口按各 App 的快慢依次消失 / 出现”（实测：
-    `WM_SHOWWINDOW` 里睡 300 ms 的窗口，串行 3 个要 900 ms）。`Dispatcher` 因此走
-    `workspace::hideMany()` / `showMany()`：每个窗口的 `ShowWindow` 在各自的临时线程上做、
-    一起 `join`，总耗时从“求和”变成“取最大”。属于**调用线程自己的窗口**要就地做（否则
-    自己等自己 = 死锁），`WINDOWPLACEMENT` 兜底记录与日志仍只在动作线程上读写。
-    `tst_interactive::hidesAndShowsManyWindowsAtOnce` 钉住它（并行 ~250 ms / 串行 ~750 ms）。
-  * **被藏起来的窗口不进任务栏 / `Alt+Tab`**，写定的默认、**不提供开关**：`SW_HIDE` 的语义
-    就是如此，而且“别的空间的窗口不该出现在任务栏上”正是这个功能的目的。要做到“留在任务栏里”
-    必须**换藏法**（例如移出屏幕而不是 `SW_HIDE`），会把 M0 那条“隐藏之后还抢得到前台”的结论、
-    Z 序还原与恢复日志的语义一起推翻，不划算。要看它们就用 `windows()` / `window("activate")`
-    （会先切到它那个空间）或直接切空间。
-  * **切空间时用一张「冻结快照」盖住过渡**（M11 补，2026-10-22）：现代浏览器类程序被
-    `SW_HIDE` 再显示时，会在**揭示的那一瞬**白 30–45 ms（页面区整块变白，然后内容才回来；
-    记事本这类纯 GDI 程序不会）。逐帧探针与三次对照实验（`tmp/wsflicker/`）给出了三条硬结论：
-    1. 这不是我们的顺序问题 —— 不经 flowkeyd、手工 `SW_HIDE` → `SW_SHOWNOACTIVATE` 一模一样；
-    2. “先把新窗口插到旧空间顶层窗口底下画好，再藏旧的”**走不通**：Chromium 的遮挡计算
-       （`CalculateNativeWinOcclusion`）让它在被盖着时**根本不画** —— 等 31 / 94 / 180 ms，
-       白屏都恰好出现在藏掉旧窗口那一刻。这条路实现过、量过、已撤掉；
-    3. 跨进程 `DwmSetWindowAttribute(DWMWA_CLOAK)` 仍然是 `E_ACCESSDENIED`（当场复测），
-       学不了 shell 那套。
-    于是改成**把过渡盖住**：切之前抓一张「要露出来的那几块」的并集的屏幕快照，用一个
-    `WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT | WS_EX_LAYERED`
-    的无边框窗口铺上去（`platform/win/freeze.*`），照常显隐 + `restack` + 取焦点，
-    `DwmFlush` 等 `kFreezeHoldMs` = 100 ms 后一把撤掉。屏幕上看到的是「旧画面冻住一下，
-    然后新空间完整出现」：实测白屏帧从**两个方向各 5 帧变成 0 帧**（`tmp/wsflicker/run-freeze.txt`）。
-    分层 + `WS_EX_TRANSPARENT` 还顺带满足两个要求：鼠标点穿、不进 `Alt+Tab`、不抢前台；
-    快照拿不到（无合成器 / 建窗口失败）时**静默退回**旧行为，切换本身不受影响。
-    遮罩本身不播过渡动画（`dwm::TransitionGuard`），否则刚盖上去会淡入一下。
-  * **再补：这条遮罩改成可选的，默认关掉**（M12，2026-10-23）。项目的所有者反馈“切工作空间
-    比快捷键显隐单个窗口慢一拍”，量下来正是上面这两步：`BitBlt` 抓一张 4K 屏幕（3840×2160）
-    实测 **~38 ms**（降采样到 1/2、1/4 都没用，瓶颈是从屏幕 DC 读回 66 MB，不是写入），
-    再加上固定 `kFreezeHoldMs` = 100 ms 的等待 —— 合计 **~140 ms**，而一次切换的其他部分
-    （COM 桌面过滤 / 预写恢复日志 / `showMany` / `hideMany` / `restack` / 取焦点）都在 10 ms 量级。
-    所以加 `settings.workspace.switch_effect`：`"instant"` **一个字节都不抓、也不等**，
-    切完就返回（与快捷键显隐单个窗口同一条路径、同一种手感），代价是 Chromium 系程序会闪
-    35–48 ms；`"freeze"` 就是上面 M11 那套行为原样保留（无闪、慢 100–150 ms）。
-  * **再补：`auto` 档成为默认，hold 从 100 收到 66 ms**（2026-10）。项目的所有者问「为什么还是
-    有闪、能不能像唤起程序窗口那样瞬时」，于是把两件事重新量了一遍（`tmp/wsflashfix/`）：
-    1. `CAPTUREBLT` **对耗时没有影响**（整屏 42.2 vs 44.4 ms，噪声内），而且去掉它也不会漏
-       分层窗口（屏幕 DC 读回本来就过了 DWM 合成）→ 想靠“换个 BitBlt 标志”便宜下来是错的，
-       成本只跟**面积**走（1300×900 ≈ 10 ms，3840×2160 ≈ 42 ms）；
-    2. 遮罩需要 `hold` 多长：hold 33 ms 会漏 5 帧、**50 ms 0 帧**、66 ms 0 帧、100 ms 0 帧，
-       重新露出来的窗口稳定于 28–47 ms → 固定 100 ms 是偏保守的，**取 66**（留一帧余量）；
-    3. “把新窗口先抬到旧窗口上面再藏旧的”**更差**（过渡帧 11 → 30，两个方向都闪）：抬上去
-       就把那张“页面区还没画”的帧提前暴露了；
-    4. 存图看得很清楚：闪的只是**客户端页面区**（标题栏、地址栏都画好了），所以遮罩盖的
-       范围与时长都只能按它算。
-    结论：`SW_HIDE` 这条路上“瞬时 + 零闪”做不到（旧结论没变），但可以**只在真会闪的窗口上盖** ——
-    判据是纯函数 `core::needsCoverForReveal()`（认 `Chrome_WidgetWin_1` 与几个自带合成器的
-    进程名），于是 `auto` 档成为默认：native 程序（记事本这类纯 GDI）**0 延迟**，只有切到
-    浏览器 / 终端那几次付遮罩的钱（约 42 + 66 + 显隐 ≈ 110 ms；单窗口只要 ~80 ms）。
-    `instant` / `freeze` 两个旧取值照旧可用。`applyWorkspaceEffects()` 末尾的 `debug` 级分段计时
-    （`took N ms (filter …, log …, freeze …, show …, hide …, restack …, hold …)`）就是专门为
-    下次再有人问“慢在哪”留的：`instant` 下 `freeze` 与 `hold` 恒为 0。
-* 两个 M0 实测约束已写进代码：`show()` 用 `SW_SHOWNOACTIVATE`（最小化的用 `SW_SHOWMINNOACTIVE`）；
-  目标进程无响应（`IsHungAppWindow`）时**不隐藏**（`SW_HIDE` 是跨线程 `SendMessage`，卡死会挂住
-  调用线程）。全部 hide/show/restack **只允许在工作线程上做**。
-* **动作执行（M6）**：`Dispatcher::executeWorkspaceAction()`。`switch` 的目标屏 = 光标所在
-  （`switch_target = "cursor"`）或前台窗口所在（`"focus"`，前台是覆盖层时跳过它，与 `window` 动作
-  同一个找法；问不出来就退回光标）；`move` 的目标窗口 = 当前前台窗口（同一个找法），而且必须归工作
-  空间管（`isManageable()`：排除名单 / 非主窗口 / flowkeyd 自己的窗口一律拒绝；还没收编的先记账再搬）。
-* **动作前刷新「当前虚拟桌面」**：切虚拟桌面用的是 DWM cloak（不是显隐），钩子收不到事件，所以
-  `executeWorkspaceAction()` 每次都先 `refreshWorkspaceDesktop()` —— 否则人在桌面 B 时会去显隐桌面 A
-  的窗口。显隐前还会把 `hide` 列表用**一次批量 COM 查询**（`desktop::windowsOnCurrentDesktop()`，
-  一条一次性 STA 线程）过滤掉「已经不在当前桌面」的窗口（记录可能过时：`Win+Ctrl+Shift+←/→` 把窗口
-  送到别处）；问不出来（被我们藏起来的、打包应用宿主、COM 失败）的一律**保留** —— 「不知道」不等于
-  「在别的桌面」。启动收编（`adoptExistingWindows()`）用同一个批量查询，不把别的桌面上的窗口收进来。
-* **Z 序还原用 `restack()`**：`show` 按记录栈底 → 顶逐个露出来，**再**用一条 `restack()` 重排。
-  不要用 `show()` 的 `insertAfter`：`SetWindowPos(hwnd, 前一个)` 会把 `hwnd` 摆在前一个**下面**，
-  方向正好反（M0 探针记录的是顶 → 底）。
-* **显示器拔插与拖屏（M7）**：
-  * 拖到另一块屏、`Win+Shift+←/→` 搬屏 = 顶层窗口的 `EVENT_OBJECT_LOCATIONCHANGE` + 350 ms 防抖
-    （真机实测：`Win+Shift+←/→` **没有** `EVENT_SYSTEM_MOVESIZEEND`，只有 LOCATIONCHANGE），归属改到
-    目标屏的**活动空间**。**记录里那块屏已经不在时跳过**：拔屏之后 Windows 会替我们把窗口搬走，那条
-    事件比 `MonitorsChanged` 先入队，照它记账会把 `homeMonitor` 丢掉（重新接入时就回不到原屏）。
-  * 物理位置向记录看齐：`core::windowIsOffMonitor()`（还原矩形与那块屏的 `bounds` 有没有非空重叠）+ 
-    `platform/win/workspace::relocateToMonitor()`。**不能用 `monitor::moveToMonitor()`**：它靠
-    `SetWindowPlacement` 的 `showCmd` 收 / 放窗口，会把被我们藏起来的窗口弹出来；新函数保持显隐 /
-    最大化 / 最小化（藏着的用 `SW_HIDE` 收尾，最大化的先 `SW_RESTORE` 再重新最大化）。
-  * 顺序：`MonitorsChanged` → 状态机改归属（含 `homeMonitor`）→ `relocateDisplacedWindows()` → 执行
-    显隐效果；`window_rule` 的重新归位（决定 13）在同一个 tick 里排在后面，规则真把窗口另放时归属会
-    跟着 `LOCATIONCHANGE` 再跟过去（规则优先）。
-  * 分辨率 / 缩放 / 排列变化不动归属：归属键是**设备名**，钩子盘点的也是设备名集合；同一份集合重发
-    一次必须零效果（否则改一次分辨率就会把藏着的窗口弹出来）。
-* **安全与恢复（M8）**：`ShowWindow(SW_HIDE)` 意味着“程序死了窗口就没了”，所以隐藏是**先写日志再
-  动手**：
-  * 预写日志 `<配置目录>\workspace.json`（`core/workspace_log.*`，与 `launcher.json` 同一套路）。
-    记录窗口身份（`PID` + 属主进程创建时间 + 类名）与归属；**写不进去就干脆不隐藏**（宁可这一次
-    切换失败，也不要造出一批永远消失的窗口）。显示**成功之后**才删条目，失败的那条留着下次再试。
-    64 位整数（`HWND` / `FILETIME`）一律写成字符串：`QJsonValue` 的数字是 `double`，超过 2^53 会
-    静默丢精度。
-  * 启动最早期（`main.cpp`，**读配置之前**）按日志恢复：`stillSame()` 校验身份后全部 `show`，
-    已经不在 / 身份对不上（`HWND` 被复用）的条目直接丢掉，坏掉的文件当作空的重来（配置坏掉时窗口
-    也能回来）。**已有实例在跑时跳过**（判据 = `--quit` 那个事件对象还在，实例一死就消失）。
-  * 正常退出（`quit` / 托盘退出 / `--quit` / `aboutToQuit`）与**注销 / 关机** 
-    （`platform/win/session.*` 那个隐藏顶层窗口的 `WM_QUERYENDSESSION` / `WM_ENDSESSION`）前都恢复：
-    `Runtime::shutdown()` 与关机回调都走 `Dispatcher::restoreWorkspaceNow(ms)`，**有上限**
-    （退出 3 s、关机 2 s）——动作线程可能卡在长动作里，真超时就继续退出，日志留着下次恢复。
-  * 手动兜底：托盘菜单「恢复全部窗口（&W）」与 `--restore-windows`（有实例在跑就通过 `-restore`
-    事件请它做，没有就自己按日志恢复；**不读配置、不提权、不装钩子**，所以配置坏掉时也能用）。
-  * `reload` 失败不动状态机（失败时保留旧配置），所以也不会丢已藏窗口的账。
-* **与现有功能的联动（M9）**：被藏起来的窗口 `IsWindowVisible` 是假，所以一切“找窗口 / 列窗口”的
-  地方都得多收一份状态机记录（`tracked`）：`window::find(query, tracked)`（优先级：看得见的 >
-  被我们藏着的 > 最小化的）与 `window::listOpenWindows(tracked)`；判据本身在
-  `core::isSwitchableWindow()`（`TopLevelWindowFacts::hiddenByUs`，把“被我们藏着”折成可见，
-  「主窗口」其余判据一个不少）。
-  * 唤起 = **先切空间、再激活**。`window("activate")` / `windows()` 选中 / `launch` 之后都走
-    `Dispatcher::revealWindowWorkspace()`（内部是 `core::WorkspaceState::revealWindow()`：把它那块屏
-    切到它所在的空间，效果列表里就带着它）。顺序不能反：对一个 `SW_HIDE` 着的窗口 `raiseWindow()`
-    没用，而 `SetWindowPlacement`（摆屏 / 挪屏）会把它弹出来。
-  * 被藏着的窗口**永不 `toggle` 成最小化**（`core::planWindowAction(..., hiddenByUs)`）：M0 实测
-    `SW_HIDE` 之后 `GetForegroundWindow()` 仍然指着那个隐藏窗口，不排除这一条“唤起”会变成“收起”。
-    同理，对它做最小化 / 最大化 / 还原 / 挪屏一律拒绝 + warning（这些 op 靠 `ShowWindow` /
-    `SetWindowPlacement` 改显隐）；`close` / `toggle_topmost` 不碰显隐，照旧。
-  * 换屏之后的归属分两种：**看得见的**（用户拖 / 我们摆）并入目标屏的活动空间
-    （`windowMovedToMonitor()`）；**藏着的**保留空间号（`windowReboundToMonitor()`）—— 藏着的窗口
-    不可能被拖动，它换屏一定是我们干的，不能把规则刚设好的空间号抹掉。`Dispatcher::followWindowMonitor()`
-    在 `move_left/right_monitor`、`activate` 的摆屏、`launch` 之后各调一次。
-  * `window_rule.workspace` / `app.workspace` 在 `Dispatcher::applyWorkspaceRules()` 里生效，而它挂在
-    `applyPlacementRules()` 的同一遍上，于是与 `window_rule` 的**三个时机完全一致**（窗口首次出现 /
-    显示器重新接入 / 启动），用户后来自己 `workspace("move", N)` 搬走的窗口不会被规则拉回去。
-    没被跟踪的窗口用 `windowAppeared(..., index)`（落到非活动空间 → 立即隐藏、不抢焦点），已跟踪的用
-    `moveWindow()`；两种都把 `focus` 清掉（规则归位从不抢焦点）。
-* **规则与默认归属（M10）**：归属的优先级就是一条纯函数
-  `core::workspaceForNewWindow(rules, title, process, settings)`：命中窗口的**第一条**规则的
-  `workspace`（`app.workspace` 展开成它）→ `settings.workspace.new_window` → `std::nullopt` = 那块屏
-  此刻的活动空间。命中规则但规则没写 `workspace` 时 **不往下看第二条规则**（摆放与归属必须认同一条
-  规则，否则同一个窗口会被两条规则各拉一个方向）。
-  * **钩子线程里先发摆放、再发收编**（`handlePlacementTick()`）：`window_rule` 只能摆看得见的窗口
-    （「主窗口」判据里有“可见”），所以一旦工作空间先把新窗口藏进非活动空间，规则就再也碰不到它 ——
-    那个窗口以后被切出来时是没摆过的几何。反过来没有代价：两者在同一个 tick 里，归属看的仍然是
-    **摆完之后**的位置（规则把窗口搬到另一块屏时，归属按新屏算，实测日志
-    `tracking "…" on DISPLAY2 in space 2`）。
-  * `new_window` **只对运行期间新出现的窗口生效**：`adoptExistingWindows()`（启动收编）一律归入活动
-    空间。否则重启 / reload 一次就会把用户现有窗口全藏起来，而归属本来就不跨重启保存。
-  * 落到非活动空间的窗口**立刻隐藏且不抢焦点**（`windowAppeared(..., index)` 的效果列表里就带着
-    `hide`；新窗口出现不是用户要求换窗口的时机）。
-  * 验证：`tst_placement::workspaceForNewWindowPrefersTheWinningRule`（规则赢 / 规则没写时回落 /
-    先写的规则赢）、`tst_workspace::rulePlacedWindowIsHiddenWithoutFocus`（落到非活动空间 = 立即藏、
-    不抢焦点）；本机还跑过两次定向冒烟（一次性开发实例）：`new_window = 3` 下记事本一出现就
-    `window appeared -> 0 shown, 1 hidden` 并记入 space 3；`window_rule{ process = "charmap", monitor = 2,
-    workspace = 2 }` 下先 `maximized 3840x2160 at 3840,0` 再 `put "字符映射表" in space 2 -> 0 shown,
-    1 hidden`（两次都在 `--quit` 时恢复可见、`workspace.json` 自动删掉）。
-* 验证：`tst_workspace`（状态机 20 条，含 3000 步随机序列、`filterToCurrentDesktop` 的「不知道就保留」
-  规则与「同一份显示器集合重发零效果」）、
-  `tst_window_match`（可管理窗口与排除名单）、`tst_placement`（`windowIsOffMonitor`）、
-  `tst_config`/`tst_lua`/`tst_config_writer`/`tst_config_editor`（配置面三处往返：真 Lua 读回逐字段
-  对比）、`tst_interactive::hidesAndShowsAWindowWithoutTouchingIt`（隐藏/显示后几何、最大化、最小化
-  都不变）、`enumeratesManageableWindowsByTheirRecord`、`switchesWorkspacesWithRealWindows`（两个真窗口
-  在两个空间之间来回切：显隐、几何、Z 序与「空空间不抢焦点」）、
-  `relocatesDisplacedWindowsWithoutChangingState`（两块屏：藏着的 / 最大化的 / 最小化的窗口搬屏时状态
-  都不变）、`restoresHiddenWindowsFromTheRecoveryLog`（藏窗口 → 写日志 → 丢掉内存状态 → 只凭日志恢复：
-  窗口回来、日志被删掉；身份对不上 / 已经不存在的条目只被丢掉、不碰那个窗口）、
-  `revealsAWindowHiddenInAnotherWorkspace`（藏起来的窗口仍然被 `find` / 切换器判据认得，“先切空间”的
-  效果真的把它显示回来）—— 本机实测通过。
-  纯逻辑那一半在 `tst_workspace_log`（坏 JSON 容错、64 位整数不丢精度、去重 / 移除）。
+* 被 `ShowWindow(SW_HIDE)` 藏起来的窗口会**同时**从任务栏与 `Alt+Tab` 消失（这是写死的默认，
+  没有开关），于是“这个程序还在吗”完全靠记性；
+* 浏览器 / Electron 类程序被 `SW_HIDE` 过之后，揭示那一瞬会先给一帧空白的页面区（实测
+  35–48 ms 白帧）；用冻结快照遮罩（`freeze`）压住又变成每次切换多 ~100 ms 延迟，还要多一张全屏
+  置顶窗口；
+* 归属规则（`new_window` / `window_rule.workspace`）与“窗口搬屏后归哪个空间”的组合语义很难
+  预期，出问题时的表现是“窗口不见了”。
 
-> 验收脚本（`scripts/acceptance.ps1`）在 M11 补齐：三个一次性实例（交互 / `new_window` / `window_rule`），
-> 用 `charmap.exe` 当载体（普通 Win32、每个实例自己开窗；**记事本在本机是单实例带标签页的 Store 应用**，
-> 不适合当“新窗口”），配置里把捕捉窗口自己那个进程与控制台从工作空间里排除掉（否则切换空间会把测试
-> 自己的载体也藏起来）。覆盖：`switch` / `move` 的显隐与日志、唤起藏在别的工作空间里的窗口、**切换器里
-> 的别进程窗口**（筛到它就“先切空间再激活”）、预写恢复日志 → 强杀 → `--restore-windows` 按日志恢复、
-> `new_window = N` 与 `window_rule{ workspace = N }` 让新窗口首次出现就落在指定空间并直接隐藏、
-> `quit` 之前把藏起来的窗口放回来。
->
-> 两条**没有**进脚本、只留手工：显示器拔插 / 拖屏（要真的断开一块屏）与“切到空空间不抢焦点”的肉眼
-> 确认（隐藏一个前台窗口之后 Windows 自己会把前台交给别的窗口，外面分不出是外壳还是 flowkeyd 干的；
-> 硬保证在 `tst_workspace` 的 `switchTo` 空空间 → `focus` 为空）。
+**取舍怎么调都不舒服，所以整条路放弃。** 实现完整保留在分支 `backup/workspace`（末提交
+`42c4351`）；master 上全部删除，本机配置的绑定改回 Windows 虚拟桌面
+（`desktop(i)` / `window("move_prev_desktop"|"move_next_desktop", { follow = true })`）。
+
+* **不要再悄悄把它加回来**：这是明确的“试过、放弃”的决策。真要做新方案（例如换一种隐藏机制）
+  要先问项目所有者。
+* 删除范围：`core/workspace*`、`core/workspace_event*`、`core/workspace_log*`、
+  `core/switch_cover*`、`platform/win/workspace*`、`platform/win/freeze*`、
+  `platform/win/session*`（`SessionEndWatcher` 只为恢复日志存在）、`settings.workspace`、
+  `settings.tray_badge`、`workspace` 动作、`window_rule.workspace`、`switch_effect`、
+  `--restore-windows`、托盘「恢复全部窗口」，以及 `tst_workspace*` / `tst_switch_cover`。
+  动作种类回到 **20 种**；托盘图标回到只显示**虚拟桌面号**（`core::desktopBadge*`）。
+* **保留下来的一条独立成果**：`TopLevelWindowFacts.child`（`WS_CHILD` 的子窗口一律不是“主窗口”）。
+  那轮排查发现 `SetWinEventHook` 连子窗口一起报、Chrome 的 `Chrome_RenderWidgetHostHWND`
+  （标题 `Chrome Legacy Window`）会被当成程序窗口收进 `window()` 匹配与切换器里。
+  修法与工作空间无关，继续有效；细节见 `pitfalls.md`。

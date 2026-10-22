@@ -65,9 +65,6 @@ private slots:
     void helpersBuildTheSameTablesAsTheRawForm();
     void movingWindowOpsAreConverted();
     void windowActionMonitorIsConverted();
-    void workspaceActionIsConverted();
-    void workspaceSettingsAreConverted();
-    void workspaceRulesAndAppsAreConverted();
     void runWithoutArgsAndWithEmptyArgs();
     void elevatedIsConverted();
     void menuAndPowerHelpersBuildTheExpectedTables();
@@ -230,157 +227,6 @@ void TestLua::windowActionMonitorIsConverted()
     QVERIFY2(bad.contains(QStringLiteral("monitor")), qPrintable(bad));
     const QString wrongType = failure(R"(hotkey{ keys = "Win+1", action = window("activate", { monitor = {} }) })");
     QVERIFY2(wrongType.contains(QStringLiteral("monitor")), qPrintable(wrongType));
-}
-
-/// `workspace("switch"|"move", N)` / `workspace("prev"|"next")`：构造器与裸表两种写法都要能转换。
-void TestLua::workspaceActionIsConverted()
-{
-    const auto c = parse(R"(
-        settings{ workspace = { count = 4 } }
-        hotkey{ keys = "Alt+1", action = workspace("switch", 1) }
-        hotkey{ keys = "Alt+2", action = workspace("move", 2) }
-        hotkey{ keys = "Alt+3", action = { type = "workspace", op = "switch", index = 3 } }
-        hotkey{ keys = "Alt+6", action = workspace("prev") }
-        hotkey{ keys = "Alt+7", action = { type = "workspace", op = "next" } }
-        hotkey{ keys = "Win+i", action = workspace("move_next", { follow = true }) }
-        hotkey{ keys = "Win+u", action = { type = "workspace", op = "move_prev", follow = true } }
-        hotkey{ keys = "Alt+8", action = workspace("move", 3, { follow = true }) }
-    )");
-    QVERIFY(c.has_value());
-    QCOMPARE(c->bindings.size(), std::size_t(8));
-    QCOMPARE(c->bindings[0].press.at(0).kind, core::Action::Kind::Workspace);
-    QCOMPARE(c->bindings[0].press.at(0).workspaceOp, core::WorkspaceOp::Switch);
-    QCOMPARE(c->bindings[0].press.at(0).workspaceIndex, std::uint32_t(1));
-    QCOMPARE(c->bindings[1].press.at(0).workspaceOp, core::WorkspaceOp::Move);
-    QCOMPARE(c->bindings[1].press.at(0).workspaceIndex, std::uint32_t(2));
-    QCOMPARE(c->bindings[2].press.at(0).workspaceIndex, std::uint32_t(3));
-    QCOMPARE(c->bindings[0].press.at(0).summary(), QStringLiteral("workspace switch 1"));
-    // `prev` / `next` 是**相对**切换：没有空间号，摘要也不带数字。
-    QCOMPARE(c->bindings[3].press.at(0).workspaceOp, core::WorkspaceOp::Prev);
-    QCOMPARE(c->bindings[3].press.at(0).summary(), QStringLiteral("workspace prev"));
-    QCOMPARE(c->bindings[4].press.at(0).workspaceOp, core::WorkspaceOp::Next);
-    QCOMPARE(c->bindings[4].press.at(0).summary(), QStringLiteral("workspace next"));
-
-    // 相对**搬移** + `follow`：第二种参数既可以是空间号，也可以直接是选项表。
-    QCOMPARE(c->bindings[5].press.at(0).workspaceOp, core::WorkspaceOp::MoveNext);
-    QCOMPARE(c->bindings[5].press.at(0).follow, std::optional<bool>(true));
-    QCOMPARE(c->bindings[5].press.at(0).summary(), QStringLiteral("workspace move_next (follow)"));
-    QCOMPARE(c->bindings[6].press.at(0).workspaceOp, core::WorkspaceOp::MovePrev);
-    QCOMPARE(c->bindings[6].press.at(0).follow, std::optional<bool>(true));
-    QCOMPARE(c->bindings[6].press.at(0).summary(), QStringLiteral("workspace move_prev (follow)"));
-    QCOMPARE(c->bindings[7].press.at(0).workspaceOp, core::WorkspaceOp::Move);
-    QCOMPARE(c->bindings[7].press.at(0).workspaceIndex, std::uint32_t(3));
-    QCOMPARE(c->bindings[7].press.at(0).follow, std::optional<bool>(true));
-    QCOMPARE(c->bindings[7].press.at(0).summary(), QStringLiteral("workspace move 3 (follow)"));
-
-    // `op` 只接 switch / move / move_prev / move_next / prev / next；绝对切换（switch / move）
-    // 必须写 `index`；`follow` 只能写在搬移 op 上（切换本来就会把视图带过去）。
-    const QString badOp = failure(R"(hotkey{ keys = "Alt+5", action = { type = "workspace", op = "swap", index = 1 } })");
-    QVERIFY2(badOp.contains(QStringLiteral("unknown variant `swap`")), qPrintable(badOp));
-    const QString noIndex = failure(R"(hotkey{ keys = "Alt+5", action = { type = "workspace", op = "switch" } })");
-    QVERIFY2(noIndex.contains(QStringLiteral("missing field `index`")), qPrintable(noIndex));
-    // 超出 `settings.workspace.count` 的空间号由 `compile()` 报（不变量 6）。
-    const QString tooBig = failure(R"(
-        settings{ workspace = { count = 2 } }
-        hotkey{ keys = "Alt+5", action = workspace("switch", 7) }
-    )");
-    QVERIFY2(tooBig.contains(QStringLiteral("out of range")), qPrintable(tooBig));
-}
-
-/// `settings.workspace`：表与布尔两种形状，以及各种错形状的提示。
-void TestLua::workspaceSettingsAreConverted()
-{
-    // 不写就是默认（开着、9 个空间、跟随光标、遮罩自动判断、新窗口进活动空间）。
-    const auto defaults = parse(R"(settings{ swallow = true })");
-    QVERIFY(defaults.has_value());
-    QVERIFY(defaults->settings.workspace.enabled);
-    QCOMPARE(defaults->settings.workspace.count, core::kDefaultWorkspaceCount);
-    QVERIFY(defaults->settings.workspace.switchTarget == core::WorkspaceSwitchTarget::Cursor);
-    QVERIFY(defaults->settings.workspace.switchEffect == core::WorkspaceSwitchEffect::Auto);
-    QCOMPARE(defaults->settings.workspace.newWindow, std::uint32_t(0));
-    QVERIFY(defaults->settings.workspace.exclude.isEmpty());
-
-    const auto table = parse(R"(
-        settings{
-          workspace = {
-            enabled = true,
-            count = 4,
-            switch_target = "focus",
-            switch_effect = "freeze",
-            new_window = 3,
-            exclude = { "game.exe", "obs" },
-          },
-        }
-    )");
-    QVERIFY(table.has_value());
-    QCOMPARE(table->settings.workspace.count, std::uint32_t(4));
-    QVERIFY(table->settings.workspace.switchTarget == core::WorkspaceSwitchTarget::Focus);
-    QVERIFY(table->settings.workspace.switchEffect == core::WorkspaceSwitchEffect::Freeze);
-    QCOMPARE(table->settings.workspace.newWindow, std::uint32_t(3));
-    QCOMPARE(table->settings.workspace.exclude,
-             QStringList({QStringLiteral("game.exe"), QStringLiteral("obs")}));
-
-    // 三个取值都得收，且各自落到正确的枚举上。
-    const auto autoEffect = parse(R"(settings{ workspace = { switch_effect = "auto" } })");
-    QVERIFY(autoEffect.has_value());
-    QVERIFY(autoEffect->settings.workspace.switchEffect == core::WorkspaceSwitchEffect::Auto);
-    const auto instantEffect = parse(R"(settings{ workspace = { switch_effect = "instant" } })");
-    QVERIFY(instantEffect.has_value());
-    QVERIFY(instantEffect->settings.workspace.switchEffect
-            == core::WorkspaceSwitchEffect::Instant);
-
-    // `workspace = false` 是「整个关掉」的简写。
-    const auto off = parse(R"(settings{ workspace = false })");
-    QVERIFY(off.has_value());
-    QVERIFY(!off->settings.workspace.enabled);
-
-    // `new_window = "active"` 与不写等价。
-    const auto active = parse(R"(settings{ workspace = { new_window = "active" } })");
-    QVERIFY(active.has_value());
-    QCOMPARE(active->settings.workspace.newWindow, std::uint32_t(0));
-
-    // 错的形状说清楚。
-    const QString badSwitch = failure(R"(settings{ workspace = { switch_target = "window" } })");
-    QVERIFY2(badSwitch.contains(QStringLiteral("expected one of `cursor`, `focus`")),
-             qPrintable(badSwitch));
-    const QString badEffect =
-        failure(R"(settings{ workspace = { switch_effect = "smooth" } })");
-    QVERIFY2(badEffect.contains(QStringLiteral("expected one of `auto`, `instant`, `freeze`")),
-             qPrintable(badEffect));
-    const QString badNewWindow = failure(R"(settings{ workspace = { new_window = "first" } })");
-    QVERIFY2(badNewWindow.contains(QStringLiteral("new_window")), qPrintable(badNewWindow));
-    const QString badType = failure(R"(settings{ workspace = 9 })");
-    QVERIFY2(badType.contains(QStringLiteral("workspace")), qPrintable(badType));
-    const QString unknown = failure(R"(settings{ workspace = { size = 3 } })");
-    QVERIFY2(unknown.contains(QStringLiteral("unknown field `size`")), qPrintable(unknown));
-}
-
-/// `window_rule.workspace` 与 `app.workspace`（后者的 shorthand 展开在 `compile()` 里）。
-void TestLua::workspaceRulesAndAppsAreConverted()
-{
-    const auto rule = parse(R"(
-        settings{ workspace = { count = 5 } }
-        window_rule{ process = "code", workspace = 2, monitor = "none" }
-    )");
-    QVERIFY(rule.has_value());
-    QCOMPARE(rule->windowRules.size(), std::size_t(1));
-    QCOMPARE(rule->windowRules[0].workspace, std::optional<std::uint32_t>(2));
-
-    const auto app = parse(R"(
-        settings{ workspace = { count = 5 } }
-        app{
-          process = "code",
-          workspace = 3,
-          hotkeys = { { keys = "Alt+3", action = window("activate") } },
-        }
-    )");
-    QVERIFY(app.has_value());
-    QCOMPARE(app->windowRules.size(), std::size_t(1));
-    QCOMPARE(app->windowRules[0].workspace, std::optional<std::uint32_t>(3));
-    QCOMPARE(app->windowRules[0].process.value_or(QString()), QStringLiteral("code"));
-
-    const QString unknown = failure(R"(app{ process = "a", workspaces = 2 })");
-    QVERIFY2(unknown.contains(QStringLiteral("unknown field `workspaces`")), qPrintable(unknown));
 }
 
 void TestLua::runWithoutArgsAndWithEmptyArgs()
@@ -871,25 +717,6 @@ void TestLua::windowRulesAreConverted()
     QVERIFY2(badWindowMonitor.contains(QStringLiteral("monitor")), qPrintable(badWindowMonitor));
     const QString unknownSetting = failure(R"(settings{ window_monitors = 1 })");
     QVERIFY2(unknownSetting.contains(QStringLiteral("unknown field")), qPrintable(unknownSetting));
-
-    // `settings.tray_badge`：托盘徽标显示哪几个号（默认 `"both"` = 工作空间号 / 桌面号）。
-    // 取值是公开接口，写错要在 `--check` 里报出来，而且要把 `expected one of` 列全。
-    for (const auto &[text, expected] : {
-             std::pair{QStringLiteral("both"), core::TrayBadgeMode::Both},
-             std::pair{QStringLiteral("desktop"), core::TrayBadgeMode::Desktop},
-             std::pair{QStringLiteral("workspace"), core::TrayBadgeMode::Workspace},
-         }) {
-        const auto parsed = parse(QStringLiteral("settings{ tray_badge = \"%1\" }").arg(text));
-        QVERIFY2(parsed.has_value(), qPrintable(text));
-        QCOMPARE(parsed->settings.trayBadge, expected);
-    }
-    const auto trayDefault = parse(QString());
-    QVERIFY(trayDefault.has_value());
-    QCOMPARE(trayDefault->settings.trayBadge, core::TrayBadgeMode::Both);
-    const QString badTrayBadge = failure(R"(settings{ tray_badge = "vertigo" })");
-    QVERIFY2(badTrayBadge.contains(QStringLiteral("unknown variant `vertigo`")),
-             qPrintable(badTrayBadge));
-    QVERIFY2(badTrayBadge.contains(QStringLiteral("expected one of")), qPrintable(badTrayBadge));
 
     // 写了 monitor 但没写位置/大小：默认最大化（在 compile() 里定）。
     const auto maximizeDefault = parse(R"(window_rule{ process = "a", monitor = "primary" })");

@@ -32,7 +32,6 @@ QtObject {
             "help": qsTr("快捷键帮助"),
             "windows": qsTr("窗口切换器"),
             "apps": qsTr("程序启动器"),
-            "workspace": qsTr("工作空间"),
             "reload": qsTr("重载配置"),
             "quit": qsTr("退出"),
             "none": qsTr("什么都不做")
@@ -88,28 +87,6 @@ QtObject {
             "on": qsTr("挂起"),
             "off": qsTr("恢复"),
             "toggle": qsTr("切换")
-        },
-        workspaceOp: {
-            "switch": qsTr("切到某块屏的空间"),
-            "move": qsTr("把当前窗口发过去"),
-            "move_prev": qsTr("把当前窗口发到上一个空间（不循环）"),
-            "move_next": qsTr("把当前窗口发到下一个空间（不循环）"),
-            "prev": qsTr("上一个空间（不循环）"),
-            "next": qsTr("下一个空间（不循环）")
-        },
-        workspaceSwitchTarget: {
-            "cursor": qsTr("光标所在的那块屏"),
-            "focus": qsTr("前台窗口所在的那块屏")
-        },
-        workspaceSwitchEffect: {
-            "auto": qsTr("自动（只在会闪的程序上盖，其它程序无延迟）"),
-            "instant": qsTr("立即（最快，可能有闪）"),
-            "freeze": qsTr("冻结画面（一律盖，无闪，慢约 100 ms）")
-        },
-        trayBadge: {
-            "both": qsTr("左上工作空间号 + 右下虚拟桌面号（绿 / 蓝）"),
-            "desktop": qsTr("只显示虚拟桌面号（蓝底）"),
-            "workspace": qsTr("只显示工作空间号（绿底）")
         },
         trigger: {
             "press": qsTr("按下时"),

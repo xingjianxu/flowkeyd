@@ -15,7 +15,6 @@ Column {
     property var editor: null
 
     property bool hasDesktop: rule.desktop !== undefined
-    property bool hasWorkspace: rule.workspace !== undefined
     property bool hasGeometry: rule.x !== undefined || rule.y !== undefined
         || rule.width !== undefined || rule.height !== undefined
     property bool maximized: rule.maximize === true
@@ -104,30 +103,6 @@ Column {
         hint: qsTr("与「指定虚拟桌面」互斥")
         value: fields.rule.all_desktops
         onPicked: function (value) { fields.optional("all_desktops", value) }
-    }
-
-    BoolRow {
-        width: fields.width
-        label: qsTr("指定工作空间")
-        hint: qsTr("这个程序的新窗口进第几个工作空间；不写就看全局设置")
-        value: fields.hasWorkspace
-        onPicked: {
-            fields.hasWorkspace = value
-            if (value)
-                fields.rule.workspace = 1
-            else
-                delete fields.rule.workspace
-        }
-    }
-
-    SpinRow {
-        width: fields.width
-        visible: fields.hasWorkspace
-        label: qsTr("第几个工作空间")
-        value: fields.rule.workspace !== undefined ? fields.rule.workspace : 1
-        from: 1
-        to: 10
-        onPicked: function (value) { fields.rule.workspace = value }
     }
 
     TriRow {
