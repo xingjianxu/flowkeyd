@@ -144,7 +144,14 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
   “先切空间再激活”）、预写恢复日志 → 强杀 → `--restore-windows` 按日志恢复、`new_window` 与规则的
   新窗口归属、`quit` 前恢复可见。脚本里**不断言“隐藏前台窗口之后前台没变”**（Windows 自己会把前台
   交给别的窗口），那条保证在 `tst_workspace` 里。
-* 最近一次实跑（2026-10-22，“切工作空间不再逐个等目标 App”那一轮）：`checks: 206, failures: 0`。
+* 最近一次实跑（2026-10-22，“切工作空间用冻结快照盖住过渡”那一轮）：`checks: 206, failures: 0`。
+  这一轮只改了**切空间那一段的执行顺序**（显隐前后多了一层 `platform/win/freeze.*` 遮罩 +
+  `dwm::waitForFrames` 等 100 ms），工作空间那一段（含 `switch` / `prev` / `next` / `move_*` /
+  `follow` / `new_window` / 窗口规则 / 恢复日志 / `--restore-windows`）全过，切完的版本号是
+  `26-10-22-8944eea`。常驻是在跑验收前停掉的（它跑在 `build/dist-release`，正是要重建的那一份）。
+  这一轮的“白屏有没有消掉”不在验收脚本里（它看不了帧）：那是用 `tmp/wsflicker/` 的逐帧抓屏探针
+  量的（`run-base3.txt` = 两个方向各 5 帧白屏，`run-freeze.txt` = 0 帧）。
+* 上一次实跑（2026-10-22，“切工作空间不再逐个等目标 App”）：`checks: 206, failures: 0`。
   这一轮改了**工作空间的显隐路径**（`workspace::hideMany()` / `showMany()` 并行 + `dwm::setTransitionsDisabled()`
   整批关过渡），所以整套跑了一次：工作空间那一段（含 `switch` / `prev` / `next` / `move_*` / `follow` /
   `new_window` / 窗口规则 / 恢复日志 / `--restore-windows`）全过，其余各段也无回归。常驻是在跑验收
