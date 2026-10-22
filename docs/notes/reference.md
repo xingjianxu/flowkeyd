@@ -144,7 +144,13 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
   “先切空间再激活”）、预写恢复日志 → 强杀 → `--restore-windows` 按日志恢复、`new_window` 与规则的
   新窗口归属、`quit` 前恢复可见。脚本里**不断言“隐藏前台窗口之后前台没变”**（Windows 自己会把前台
   交给别的窗口），那条保证在 `tst_workspace` 里。
-* 最近一次实跑（2026-10-22，“工作空间相对搬移 + `follow`”那一轮）：`checks: 206, failures: 0`。
+* 最近一次实跑（2026-10-22，“切工作空间不再逐个等目标 App”那一轮）：`checks: 206, failures: 0`。
+  这一轮改了**工作空间的显隐路径**（`workspace::hideMany()` / `showMany()` 并行 + `dwm::setTransitionsDisabled()`
+  整批关过渡），所以整套跑了一次：工作空间那一段（含 `switch` / `prev` / `next` / `move_*` / `follow` /
+  `new_window` / 窗口规则 / 恢复日志 / `--restore-windows`）全过，其余各段也无回归。常驻是在跑验收
+  前停掉的（它跑在 `build/dist-release`，正是要重建的那一份），验收与收尾都用的是一份干净的
+  发布包；跑完用 `schtasks /Run /TN flowkeyd` 拉起新构建。
+* 上一次实跑（2026-10-22，“工作空间相对搬移 + `follow`”）：`checks: 206, failures: 0`。
   新增的 6 条（`move_next`/`move_prev` + `follow` 的落点、前台保持、走到头不循环、最后把载体
   送回空间 2）全过；修完「子窗口不是主窗口」（`a082105`）之后又整套跑了一次，同样 206/0
   （那一次是在常驻停着的情况下跑的，与往常一样）。前一次跑（同一个二进制、改动一样）出现过一次
