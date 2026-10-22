@@ -157,6 +157,9 @@ Win32/COM 后端就放在 `platform/win/*`，并在 `tst_interactive` 里加一�
    活动空间）。要改优先级就改它 + `tst_placement`。另外记住 `handlePlacementTick()` 里
    **`WindowsShown` 必须在 `WindowAppeared` 之前发**：`window_rule` 只摆看得见的窗口，先藏就再也摆不到
    （见 `pitfalls.md` 的「工作空间规则与默认归属（M10）」）。
+   **「这个程序会不会闪」只在一处**：`core/switch_cover.*`（`Chrome_WidgetWin_1` + 几个自带合成器的
+   进程名），`switch_effect = "auto"` 用它决定要不要建冻结遮罩；新发现某程序也会闪就加进程名/类名
+   + `tst_switch_cover` 加一条。**不要**把这种判断写进 `Dispatcher`（留纯逻辑才能单测）。
 5. **恢复与退出**：只要新增了任何 hide/show 的路径，就必须想清楚"进程死在中间怎么办"：日志条目在
    `Dispatcher::applyWorkspaceEffects()` 里预写 / 删除；退出（`Runtime::shutdown()`）与关机 / 注销
    （`platform/win/session.*` 的 `WM_QUERYENDSESSION`）都走 `restoreWorkspaceNow(ms)`，**必须有上限**

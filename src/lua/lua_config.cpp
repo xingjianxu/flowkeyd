@@ -824,11 +824,11 @@ core::Settings convertSettings(lua_State *L, int index)
                     enumName(L, v, "switch_target", {"cursor", "focus"}, QStringLiteral("cursor"));
                 settings.workspace.switchTarget = *core::workspaceSwitchTargetFromName(name);
             }
-            // 切空间时要不要把屏幕冻住（`instant` = 不冻、最快；`freeze` = 遮住 Chromium
-            // 类程序的白闪，代价是 100–150 ms）。
+            // 切空间时要不要把屏幕冻住（`auto` = 只在会闪的窗口上盖、`instant` = 不盖、
+            // `freeze` = 一律盖）。
             if (hasField(L, v, "switch_effect")) {
-                const QString name = enumName(L, v, "switch_effect", {"instant", "freeze"},
-                                              QStringLiteral("instant"));
+                const QString name = enumName(L, v, "switch_effect", {"auto", "instant", "freeze"},
+                                              QStringLiteral("auto"));
                 settings.workspace.switchEffect = *core::workspaceSwitchEffectFromName(name);
             }
             // `new_window = "active"`（默认）或者一个 1..count 的空间号。

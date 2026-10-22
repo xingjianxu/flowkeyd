@@ -205,10 +205,10 @@ ColumnLayout {
         ChoiceRow {
             Layout.fillWidth: true
             label: qsTr("切换效果")
-            hint: qsTr("「立即」最快，但 Chromium 系程序会闪一下白；「冻结画面」看不到白闪，代价是慢 100–150 ms")
+            hint: qsTr("「自动」只在 Chromium 系程序（Chrome / Edge / VSCode 等）会闪时才盖住画面，其它程序没有延迟；「立即」最快但会闪一下；「冻结画面」一律盖，代价是慢约 100 ms")
             options: page.editor ? page.editor.workspaceSwitchEffects : []
             labels: ConfigText.labels("workspaceSwitchEffect", options)
-            value: page.workspace("switch_effect", "instant")
+            value: page.workspace("switch_effect", "auto")
             onPicked: function (value) { page.editor.setWorkspaceSetting("switch_effect", value) }
         }
 

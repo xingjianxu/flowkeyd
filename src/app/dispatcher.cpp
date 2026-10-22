@@ -5,6 +5,7 @@
 #include "core/keys.h"
 #include "core/launcher_state.h"
 #include "core/placement.h"
+#include "core/switch_cover.h"
 #include "core/template.h"
 #include "core/window_match.h"
 #include "core/window_monitor_state.h"
@@ -62,11 +63,14 @@ namespace {
 
 /// 切工作空间时，**冻结快照**要盖多久（毫秒）。
 ///
-/// 遮罩这段时间里屏幕上是“旧画面冻住”。等的是那批新窗口把内容画出来：M11 量到
-/// Chromium 类程序被 `SW_HIDE` 过之后（哪怕之前画过）要 ~45 ms，从没画过的要 ~120 ms。
-/// 取 100 当折中：遮住的是“冻住的旧画面”，多等一点只是冻得久一点，看不到抖动；
-/// 调小到二三十毫秒会让白屏从遮罩下面漏出来。
-constexpr std::uint64_t kFreezeHoldMs = 100;
+/// 遮罩这段时间里屏幕上是“旧画面冻住”。等的是那批新窗口把内容画出来：
+///   * 重新露出已经画过的窗口：M12 逐帧实测 35–48 ms（`tmp/wsflashfix/`：标题栏、
+///     地址栏立刻就在，空的只是页面区）；hold 33 ms 不够、50 ms 刚好在边界、66 ms 有余量。
+///   * 从来没画过的窗口要 ~120 ms —— 这种窗口不在“切回来”这条路上（切空间露出来的
+///     都是用户看过的），真碰上了会看到遮罩撤得早一点，画面晚一帧到位，不会白闪。
+///
+/// 取 66：比旧值 100 省 34 ms，又留了一帧余量；再往下（≤ 50）就开始从遮罩下面漏帧。
+constexpr std::uint64_t kFreezeHoldMs = 66;
 
 /// 上限：一帧最多等 1/60 s，超过这个帧数绝不再等（防止刷新率很低时卡住）。
 constexpr std::uint32_t kFreezeHoldMaxFrames = 24;
@@ -2134,14 +2138,29 @@ void Dispatcher::applyWorkspaceEffects(const core::WorkspaceEffects &effects, co
     //
     // 盖不住（拿不到屏幕 DC / 建不了窗口）就照常切，只是会看到白屏（回到底层行为）。
     //
-    // **只有在 `settings.workspace.switch_effect = "freeze"` 时才盖**（M12）：快照本身在
-    // 4K 上要 ~40 ms（`BitBlt` 整屏从屏幕 DC 读回来），盖着的时候还要固定等
-    // `kFreezeHoldMs` —— 两项加起来就是用户按完快捷键到画面变的那 100–150 ms。
-    // 默认的 `"instant"` 一个字节都不抓，切完就返回（与快捷键显隐单个窗口一样快），
-    // 代价是上面那些程序会闪一下白。
-    const bool freezeScreen =
-        m_config != nullptr
-        && m_config->settings.workspace.switchEffect == core::WorkspaceSwitchEffect::Freeze;
+    // 开不开、看 `settings.workspace.switch_effect`（M12 + 2026-10 的 `auto` 档）：
+    //   * `"freeze"`：一律盖。快照本身在 4K 上要 ~42 ms（`BitBlt` 整屏从屏幕 DC 读回来，
+    //     只跟面积走：1300×900 只要 ~10 ms），盖着的时候还要固定等 `kFreezeHoldMs`；
+    //   * `"instant"`：一个字节都不抓，切完就返回（与快捷键显隐单个窗口一样快），
+    //     代价是浏览器类程序会闪一下；
+    //   * `"auto"`（**默认**）：只在**要露出来的窗口里有会闪的那一类**时才盖 ——
+    //     记事本这类纯 GDI 程序本来就不闪，所以大多数切换是 0 延迟，只有切到
+    //     浏览器 / 终端那几次付遮罩的钱。判据是纯函数 `core::needsCoverForReveal()`
+    //     （认 `Chrome_WidgetWin_1` 与几个自带合成器的进程名，见 `core/switch_cover.*`）。
+    const core::WorkspaceSwitchEffect effect =
+        m_config != nullptr ? m_config->settings.workspace.switchEffect
+                            : core::WorkspaceSwitchEffect::Instant;
+    bool freezeScreen = effect == core::WorkspaceSwitchEffect::Freeze;
+    if (!freezeScreen && effect == core::WorkspaceSwitchEffect::Auto && !showTargets.empty()) {
+        std::vector<core::RevealTraits> traits;
+        traits.reserve(showTargets.size());
+        for (const HWND hwnd : showTargets) {
+            traits.push_back(core::RevealTraits{
+                win::workspace::classNameOf(hwnd),
+                win::window::processName(hwnd).value_or(QString())});
+        }
+        freezeScreen = core::needsCoverForReveal(traits);
+    }
     win::freeze::FreezeFrame freeze;
     if (freezeScreen && !showTargets.empty()) {
         QString error;
@@ -2249,8 +2268,8 @@ void Dispatcher::applyWorkspaceEffects(const core::WorkspaceEffects &effects, co
     // 遮罩还盖着，趁这段时间等它画，然后一把撤掉 —— 屏幕上看到的是“旧画面 → 新空间”，
     // 中间没有任何一帧白屏。
     //
-    // 没有遮罩（`switch_effect = "instant"`）就没有可等的东西：App 画得早晚都直接落在
-    // 屏幕上，再等只是白等。
+    // 没有遮罩（`switch_effect = "instant"`，或者 `"auto"` 但这次没有会闪的窗口）就没有可等
+    // 的东西：App 画得早晚都直接落在屏幕上，再等只是白等。
     if (freeze.active()) {
         const std::uint64_t holdStarted = win::monotonicMs();
         std::uint32_t frames = 0;
@@ -2272,8 +2291,8 @@ void Dispatcher::applyWorkspaceEffects(const core::WorkspaceEffects &effects, co
                      .arg(hidden)
                      .arg(failed > 0 ? QStringLiteral(", %1 failed").arg(failed) : QString()));
     // 分段时间（`debug` 级）：用户抱怨“切工作空间比快捷键显隐窗口慢”时，看这一行就知道
-    // 慢在哪一段。`switch_effect = "freeze"` 时的 `freeze`（捏快照）与 `hold`（等 App 画完）
-    // 就是那 100–150 ms 的来源，`instant` 下两者都是 0。
+    // 慢在哪一段。`freeze` / `auto` 选择盖遮罩时的 `freeze`（捏快照）与 `hold`（等 App 画完）
+    // 就是那 ~100 ms 的来源，不盖的时候两者都是 0。
     win::logDebug(QStringLiteral("workspace: %1 took %2 ms (filter %3, log %4, freeze %5, show "
                                  "%6, hide %7, restack %8, focus %9, hold %10)")
                       .arg(reason)

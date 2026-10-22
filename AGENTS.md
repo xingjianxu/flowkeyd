@@ -244,9 +244,11 @@ UI 只有托盘图标 + 日志窗口、`menu`/`help`/`windows`/`apps`/`update` �
     （已知限制，见第 12 节）。
 36. **工作空间：按显示器独立的一套空间（`settings.workspace` + `workspace` 动作）**。**M0（真机验证）到
     M11（文档、验收、收尾）全部完成**。要点：默认**开启**但没绑定就不会隐藏任何窗口；`count` 1–10（默认 9）；
-    `switch_target` = `"cursor"`（默认）/ `"focus"`；`switch_effect` = `"instant"`（**默认**：不抓快照、
-    不等帧，与快捷键显隐单个窗口同一种手感，代价是 Chromium 系程序白闪 30–45 ms）/ `"freeze"`
-    （抓快照 + 固定 100 ms，无白闪但慢 100–150 ms —— 实测 4K 整屏 `BitBlt` 抓回就要 ~38 ms）；
+    `switch_target` = `"cursor"`（默认）/ `"focus"`；`switch_effect` = `"auto"`（**默认**：只在要露出来的
+    窗口里有**会闪的那一类**时才建遮罩 —— `core/needsCoverForReveal()` 认 `Chrome_WidgetWin_1` 与
+    几个自带合成器的进程名；native 程序 0 延迟）/ `"instant"`（从不抓、不等，最快，代价是浏览器类
+    程序会闪 35–48 ms）/ `"freeze"`（一律抓快照 + `kFreezeHoldMs` = **66 ms**，无闪但每次多约 100 ms；
+    4K 整屏 `BitBlt` 实测 42–44 ms，`CAPTUREBLT` 对耗时无影响）；
     `new_window` = `"active"`（默认）或 1..count
     （**只对 flowkeyd 运行期间新出现的窗口生效**，启动时已在的窗口照旧收编进各自活动空间）；
     `exclude` 空串报错；动作有六种形状：`workspace("switch"|"move", N)`（`index` ≤ `count`
@@ -267,11 +269,12 @@ UI 只有托盘图标 + 日志窗口、`menu`/`help`/`windows`/`apps`/`update` �
     逐个做就是“一屏窗口依次消失”（实测 300 ms/窗口 的 App，3 个窗口串行 900 ms）；
     **显隐一律不播 DWM 过渡**
     （批量用 `dwm::setTransitionsDisabled()`、单个用 `dwm::TransitionGuard(hwnd, false)`，别让它退化成
-    “淡出 / 淡入”）；**`switch_effect = "freeze"` 时还多一张「冻结快照」罩着**（`platform/win/freeze.*`：
+    “淡出 / 淡入”）；**需要遮罩的时候（`switch_effect` 为 `"freeze"`，或 `"auto"` 且这次有 Chromium /
+    Electron / WezTerm 类窗口要露出来）还多一张「冻结快照」罩着**（`platform/win/freeze.*`：
     先抓「要露出来的那几块」的并集的屏幕快照、铺一个置顶的无边框窗口盖上去，显隐 + `restack` +
-    取焦点全在遮罩下做完，`DwmFlush` 等 `kFreezeHoldMs` = 100 ms 再撤掉；默认的 `"instant"`
-    不建这个窗口、也不等）—— 因为现代浏览器类程序被 `SW_HIDE` 过之后会在
-    揭示那一瞬白 30–45 ms，而 Chromium 的遮挡计算又让它在被盖着时不画（“先插到旧窗口底下画好”
+    取焦点全在遮罩下做完，`DwmFlush` 等 `kFreezeHoldMs` = 66 ms 再撤掉；不盖时既不建窗口也不等）
+    —— 因为现代浏览器类程序被 `SW_HIDE` 过之后会在
+    揭示那一瞬先给一帧空白的页面区（实测 35–48 ms），而 Chromium 的遮挡计算又让它在被盖着时不画（“先插到旧窗口底下画好”
     实测无效，已撤），跨进程 cloak 是 `E_ACCESSDENIED`。遮罩必须 `WS_EX_TRANSPARENT | WS_EX_LAYERED`
     （点穿）+ `WS_EX_TOOLWINDOW`（不进 `Alt+Tab`）+ `WS_EX_NOACTIVATE`（不抢前台），自己也不许播过渡；
     被藏起来的窗口**同时从任务栏与 `Alt+Tab` 消失是写定的默认、没有开关**
@@ -354,6 +357,7 @@ Qt 侧齐备：`Qt6::Quick`、`QuickControls2`、`Qt6QuickControls2FluentWinUI3S
 | `core/config.*` / `core/action.*` | 结构体 + 严格校验 + `Compiled`/`expandApps` / 动作表示 + 摘要（`--list` 与 `help()` 共用）+ `isDestructive()` |
 | `core/template.*` / `core/window_match.*` | `{clipboard}`/`{selection}`/`{date}` / 窗口匹配纯函数 + “什么算一个程序窗口” |
 | `core/remote_desktop.*` / `core/placement.*` | 远程桌面名单匹配 / `window_rule` 几何与匹配、`stepIndex()`、`windowActionMonitor()` |
+| `core/switch_cover.*` | 「这个窗口被藏过再显示会不会闪」的判据（`Chrome_WidgetWin_1` + 几个自带合成器的进程名），`switch_effect = "auto"` 用；发现新程序也会闪就往那张名单里加 |
 | `core/app_list.*` / `core/launcher_state.*` | 启动器纯逻辑（判据、图标键、合并、匹配、分组、内置设置页）/ 固定+最近的持久状态 |
 | `core/pinyin.*` / `core/pinyin_data.*` | 汉字读音查询 / 生成的读音表 |
 | `core/monitor_ref.*` / `core/window_monitor_state.*` | “摆到哪块屏”的取值与判据 / `monitor = "last"` 的记忆 |

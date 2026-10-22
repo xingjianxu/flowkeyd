@@ -102,8 +102,9 @@ QtObject {
             "focus": qsTr("前台窗口所在的那块屏")
         },
         workspaceSwitchEffect: {
-            "instant": qsTr("立即（最快，可能有白闪）"),
-            "freeze": qsTr("冻结画面（无白闪，慢 100–150 ms）")
+            "auto": qsTr("自动（只在会闪的程序上盖，其它程序无延迟）"),
+            "instant": qsTr("立即（最快，可能有闪）"),
+            "freeze": qsTr("冻结画面（一律盖，无闪，慢约 100 ms）")
         },
         trayBadge: {
             "both": qsTr("左上工作空间号 + 右下虚拟桌面号（绿 / 蓝）"),

@@ -141,17 +141,22 @@ std::optional<WorkspaceSwitchTarget> workspaceSwitchTargetFromName(const QString
 QString workspaceSwitchEffectName(WorkspaceSwitchEffect effect)
 {
     switch (effect) {
+    case WorkspaceSwitchEffect::Auto:
+        return QStringLiteral("auto");
     case WorkspaceSwitchEffect::Instant:
         return QStringLiteral("instant");
     case WorkspaceSwitchEffect::Freeze:
         return QStringLiteral("freeze");
     }
-    return QStringLiteral("instant");
+    return QStringLiteral("auto");
 }
 
 std::optional<WorkspaceSwitchEffect> workspaceSwitchEffectFromName(const QString &name)
 {
     const QString key = name.trimmed().toLower();
+    if (key == QLatin1String("auto")) {
+        return WorkspaceSwitchEffect::Auto;
+    }
     if (key == QLatin1String("instant")) {
         return WorkspaceSwitchEffect::Instant;
     }

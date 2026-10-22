@@ -655,6 +655,8 @@ void TestConfigWriter::writesWorkspaceAsANestedTable()
     Config defaults;
     const QString defaultText = configToLua(defaults);
     QVERIFY(defaultText.contains(QStringLiteral("new_window = \"active\"")));
+    // 默认值也要写出来（界面保存一次就固定下来），包括 `auto`。
+    QVERIFY(defaultText.contains(QStringLiteral("switch_effect = \"auto\"")));
     QVERIFY(!defaultText.contains(QStringLiteral("exclude")));
     QCOMPARE(configToMap(evaluated.config).value(QStringLiteral("settings")),
              configToMap(config).value(QStringLiteral("settings")));

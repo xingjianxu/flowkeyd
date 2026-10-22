@@ -98,6 +98,7 @@ constexpr EnumName<WorkspaceSwitchTarget> kWorkspaceSwitchTargets[] = {
 };
 
 constexpr EnumName<WorkspaceSwitchEffect> kWorkspaceSwitchEffects[] = {
+    {WorkspaceSwitchEffect::Auto, "auto"},
     {WorkspaceSwitchEffect::Instant, "instant"},
     {WorkspaceSwitchEffect::Freeze, "freeze"},
 };

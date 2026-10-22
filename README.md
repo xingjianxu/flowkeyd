@@ -901,6 +901,7 @@ hotkey{ keys = "Win+i", action = workspace("move_next", { follow = true }) }
 | `enabled` | `true` | 总开关。写 `workspace = false` 也能整个关掉 |
 | `count` | `9` | 每块显示器的空间数量，只能 `1`–`10`。改小时超出范围的空间会并入最后一个 |
 | `switch_target` | `"cursor"` | `workspace("switch", N)` 作用在哪块屏上：`"cursor"` = 光标所在的那一块；`"focus"` = 前台窗口所在的那一块 |
+| `switch_effect` | `"auto"` | 切空间那一下要不要用冻结快照盖住转场：`"auto"` = 只在会闪的程序上盖（默认）、`"instant"` = 从不盖（最快）、`"freeze"` = 一律盖。见下面「`switch_effect`：快一点，还是要不要闪」 |
 | `new_window` | `"active"` | 新窗口归入哪个空间：`"active"` = 那块屏当前的活动空间，或者写 `1..count`。单个程序优先用 `window_rule` / `app` 的 `workspace`；只对 flowkeyd 运行期间新出现的窗口生效（启动时已经开着的窗口照旧收编进各自的活动空间，不然重启一次所有窗口都会被藏起来） |
 | `exclude` | 空 | 完全不归工作空间管的程序（可执行文件名，大小写无关子串）。空字符串会被 `--check` 拒绝 |
 
@@ -908,20 +909,42 @@ hotkey{ keys = "Win+i", action = workspace("move_next", { follow = true }) }
 `workspace("move_prev"/"move_next")` 或 `workspace("prev"/"next")` 绑定时，它只是跟着
 记窗口归属，不会隐藏任何窗口；即使开着也可以随时写 `workspace = false` 一键关掉。
 
-**三条显式默认（没有开关）**：
+**三条显式默认**：
 
 * **不带动画**：隐藏与显示都**不播过渡动画**（`ShowWindow` 前后套一层
   `DWMWA_TRANSITIONS_FORCEDISABLED`，与 `window()` 动作的 `animate = false` 同一套
   机制），切空间是“直接消失 / 直接出现”，不是淡出淡入。
-* **过渡用一张冻结快照盖住**：切的时候会先抓「要露出来的那几块」的当前画面，用它盖住
-  那块区域（置顶、不抢焦点、鼠标点穿、不进 `Alt+Tab`），等新窗口把内容画完（~100 ms）
-  再拿掉。你看到的是「旧画面冻住一下，然后新空间完整出现」。这么做的原因：浏览器类程序
-  （Chrome / Edge / Electron / VS Code）被隐藏再显示时，会在**揭示的那一瞬白 30–45 ms**
-  （页面区整块变白再画回来），而它在被别的窗口盖着时**根本不画**，所以没法提前画好。
-  拿不到屏幕快照时（例如某些远程会话）自动退回“不盖”的老行为。
+* **过渡用一张冻结快照盖住（要不要盖看 `switch_effect`）**：需要盖的时候，切之前先抓
+  「要露出来的那几块」的当前画面，用它盖住那块区域（置顶、不抢焦点、鼠标点穿、不进
+  `Alt+Tab`），显隐完等新窗口把内容画完再拿掉。你看到的是「旧画面冻住一下，然后新空间
+  完整出现」。拿不到屏幕快照时（例如某些远程会话）自动退回“不盖”。
 * **不进任务栏**：被藏起来的窗口在 **Windows 任务栏与 `Alt+Tab` 里也一起消失**
   （`SW_HIDE` 本来的语义，也正是这个功能的目的）。要看它们就切到它所在的空间 ——
   窗口切换器（`windows()`）与 `window("activate")` 会替你切过去再激活。
+
+#### `switch_effect`：快一点，还是要不要闪
+
+为什么会有这个选项：被隐藏过再显示出来的窗口里，**自带合成器**的那类程序（Chrome /
+Edge / Electron / VS Code / WezTerm）会在重新露出来的那一瞬先给一帧空白的客户端区 ——
+标题栏、地址栏都画好了，空的只是页面区，实测 **35–48 ms**；记事本这类纯 GDI 程序
+从来不会。它被别的窗口盖着时**根本不画**，所以“先画好再露出来”这条路不通（逐帧实测
+过），要躲开就只能把过渡盖住。
+
+| 取值 | 行为 | 代价 |
+| ---- | ---- | ---- |
+| `"auto"`（默认） | **只在要露出来的窗口里有会闪的那一类**（Chromium / Electron / WezTerm）时才盖 | native 程序 0 延迟；浏览器那几次约 100 ms |
+| `"instant"` | 从不盖，切完就结束 | 0 延迟，但浏览器会闪一下 |
+| `"freeze"` | 一律盖 | 无闪，但每次多约 100 ms（快照 ≈ 42 ms 整屏 / ≈ 10 ms 单窗口 + 固定等 66 ms） |
+
+```lua
+settings{ workspace = { switch_effect = "auto" } }    -- 默认：该盖才盖
+settings{ workspace = { switch_effect = "instant" } } -- 最快，浏览器会闪
+settings{ workspace = { switch_effect = "freeze" } }  -- 一律盖，绝无闪
+```
+
+`"auto"` 认的是一张窗口类 / 进程名单（`core/switch_cover.*`：`Chrome_WidgetWin_1`、
+`chrome.exe`、`msedge.exe`、`code.exe`、`wezterm-gui.exe` 等）；发现某个程序也会闪而它没被
+盖住，把它的类名或进程名加进那张名单即可。
 
 托盘图标上的工作空间号显示的是 **`switch_target` 指定的那块屏**的活动空间（默认 =
 光标所在的那一块），所以它正好就是“按一下 `workspace("switch", N)` 会切哪一块”的那个
@@ -1025,9 +1048,10 @@ hotkey{ keys = "Win+i", action = workspace("move_next", { follow = true }) }
 
 * 被隐藏的窗口在**任务栏与 Alt+Tab 里也看不到** —— 这是写定的默认行为，没有开关
   （理由见[工作空间](#工作空间)的「三条显式默认」）。
-* `switch_effect = "instant"`（默认）下，Chrome / Edge / VS Code 这类程序被切回来时会
-  **白闪 30–45 ms**。想要完全无白闪就改成 `"freeze"`，代价是每次切换慢 100–150 ms
-  （原因与取舍见[工作空间](#工作空间)的「`switch_effect`：快一点还是要不要白闪」）。
+* `switch_effect = "instant"` 下，Chrome / Edge / VS Code 这类程序被切回来时会闪一下
+  （实测 35–48 ms，浅色主题下就是白闪）。默认的 `"auto"` 只在真的会闪的程序上盖、其它
+  程序 0 延迟；完全不想看到闪就写 `"freeze"`，代价是每次切换慢约 100 ms（原因与取舍见
+  [工作空间](#工作空间)的「`switch_effect`：快一点，还是要不要闪」）。
 * `--no-elevate` 运行、而目标窗口属于**提权进程**时无法隐藏它（UIPI）：跳过那个窗口并写
   一条 warning。常驻实例是提权启动的，只有开发期的 `--no-elevate` 会碰到。
 * 目标进程无响应时不会去隐藏它的窗口（以免把动作线程挂住），只写一条 warning。

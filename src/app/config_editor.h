@@ -107,7 +107,7 @@ public:
     QStringList toggleStates() const;
     QStringList workspaceOps() const;
     QStringList workspaceSwitchTargets() const;
-    /// `settings.workspace.switch_effect` 的取值（`instant` / `freeze`）。
+    /// `settings.workspace.switch_effect` 的取值（`auto` / `instant` / `freeze`）。
     QStringList workspaceSwitchEffects() const;
     /// `settings.tray_badge` 的取值（`both` / `desktop` / `workspace`）。
     QStringList trayBadgeModes() const;

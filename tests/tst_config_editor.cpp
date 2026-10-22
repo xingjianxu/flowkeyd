@@ -368,7 +368,7 @@ void TestConfigEditor::saveRemembersNestedWorkspaceSettings()
     QCOMPARE(defaults.value(QStringLiteral("switch_target")).toString(),
              QStringLiteral("cursor"));
     QCOMPARE(defaults.value(QStringLiteral("switch_effect")).toString(),
-             QStringLiteral("instant"));
+             QStringLiteral("auto"));
     QCOMPARE(defaults.value(QStringLiteral("new_window")).toString(), QStringLiteral("active"));
 
     editor->setWorkspaceSetting(QStringLiteral("count"), 4);

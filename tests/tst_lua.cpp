@@ -290,13 +290,13 @@ void TestLua::workspaceActionIsConverted()
 /// `settings.workspace`：表与布尔两种形状，以及各种错形状的提示。
 void TestLua::workspaceSettingsAreConverted()
 {
-    // 不写就是默认（开着、9 个空间、跟随光标、新窗口进活动空间）。
+    // 不写就是默认（开着、9 个空间、跟随光标、遮罩自动判断、新窗口进活动空间）。
     const auto defaults = parse(R"(settings{ swallow = true })");
     QVERIFY(defaults.has_value());
     QVERIFY(defaults->settings.workspace.enabled);
     QCOMPARE(defaults->settings.workspace.count, core::kDefaultWorkspaceCount);
     QVERIFY(defaults->settings.workspace.switchTarget == core::WorkspaceSwitchTarget::Cursor);
-    QVERIFY(defaults->settings.workspace.switchEffect == core::WorkspaceSwitchEffect::Instant);
+    QVERIFY(defaults->settings.workspace.switchEffect == core::WorkspaceSwitchEffect::Auto);
     QCOMPARE(defaults->settings.workspace.newWindow, std::uint32_t(0));
     QVERIFY(defaults->settings.workspace.exclude.isEmpty());
 
@@ -320,6 +320,15 @@ void TestLua::workspaceSettingsAreConverted()
     QCOMPARE(table->settings.workspace.exclude,
              QStringList({QStringLiteral("game.exe"), QStringLiteral("obs")}));
 
+    // 三个取值都得收，且各自落到正确的枚举上。
+    const auto autoEffect = parse(R"(settings{ workspace = { switch_effect = "auto" } })");
+    QVERIFY(autoEffect.has_value());
+    QVERIFY(autoEffect->settings.workspace.switchEffect == core::WorkspaceSwitchEffect::Auto);
+    const auto instantEffect = parse(R"(settings{ workspace = { switch_effect = "instant" } })");
+    QVERIFY(instantEffect.has_value());
+    QVERIFY(instantEffect->settings.workspace.switchEffect
+            == core::WorkspaceSwitchEffect::Instant);
+
     // `workspace = false` 是「整个关掉」的简写。
     const auto off = parse(R"(settings{ workspace = false })");
     QVERIFY(off.has_value());
@@ -336,7 +345,7 @@ void TestLua::workspaceSettingsAreConverted()
              qPrintable(badSwitch));
     const QString badEffect =
         failure(R"(settings{ workspace = { switch_effect = "smooth" } })");
-    QVERIFY2(badEffect.contains(QStringLiteral("expected one of `instant`, `freeze`")),
+    QVERIFY2(badEffect.contains(QStringLiteral("expected one of `auto`, `instant`, `freeze`")),
              qPrintable(badEffect));
     const QString badNewWindow = failure(R"(settings{ workspace = { new_window = "first" } })");
     QVERIFY2(badNewWindow.contains(QStringLiteral("new_window")), qPrintable(badNewWindow));

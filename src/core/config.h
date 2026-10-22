@@ -90,14 +90,20 @@ std::optional<WorkspaceSwitchTarget> workspaceSwitchTargetFromName(const QString
 
 /// `settings.workspace.switch_effect`：切空间的那一下要不要把屏幕「冻住」。
 ///
-/// 背景：被 `SW_HIDE` 过的窗口再显示出来时，Chromium 类程序（Chrome / Edge /
-/// Electron / VSCode）会白 30–45 ms。`Freeze` 抓一张屏幕快照盖上去、等 App 画完
-/// 再撤掉，看不到白屏，代价是每次切换多 100–150 ms（快照本身在 4K 上就要 ~40 ms，
-/// 加固定 100 ms 的等待）；`Instant` 什么都不做，切完就结束 —— 与快捷键显隐单个
-/// 窗口一样快，但上面那些程序会闪一下白。
+/// 背景：被 `SW_HIDE` 过的窗口再显示出来时，**自带合成器**的那一类程序（Chromium /
+/// Electron / VSCode / WezTerm）会先给一帧空白的客户端区，实测 35–48 ms
+/// （`tmp/wsflashfix/`：标题栏地址栏都画好了、空的只是页面区）。
 ///
-/// **默认 `Instant`**：延迟比一个转场效果重要。
-enum class WorkspaceSwitchEffect { Instant, Freeze };
+/// * `Instant`：什么都不抓、什么都不等，切完就结束 —— 与快捷键显隐单个窗口一样快，
+///   代价是上面那些程序会闪一下；
+/// * `Freeze`：一律抓一张「要露出来的那几块」的屏幕快照盖上去，显隐完等
+///   `kFreezeHoldMs` 再撤 —— 无闪，代价是抓屏（本机整屏 3840×2160 实测 ~42 ms，
+///   只跟面积走：1300×900 只要 ~10 ms）加固定等待；
+/// * `Auto`：**只在要露出来的窗口里有会闪的那一类时才盖** —— 记事本这类纯 GDI 程序
+///   本来就不闪，于是大多数切换是 0 延迟，只有切到浏览器 / 终端那几次付遮罩的钱。
+///
+/// **默认 `Auto`**（2026-10 起；在此之前默认 `Instant`）。
+enum class WorkspaceSwitchEffect { Auto, Instant, Freeze };
 
 QString workspaceSwitchEffectName(WorkspaceSwitchEffect effect);
 std::optional<WorkspaceSwitchEffect> workspaceSwitchEffectFromName(const QString &name);
@@ -121,8 +127,8 @@ struct WorkspaceSettings
     std::uint32_t count = kDefaultWorkspaceCount;
     /// `workspace("switch", N)` 作用在哪块显示器上。
     WorkspaceSwitchTarget switchTarget = WorkspaceSwitchTarget::Cursor;
-    /// 切换时要不要用冻结快照遮住转场（默认 `Instant`：不遮，最快）。
-    WorkspaceSwitchEffect switchEffect = WorkspaceSwitchEffect::Instant;
+    /// 切换时要不要用冻结快照遮住转场（默认 `Auto`：只在会闪的窗口上盖）。
+    WorkspaceSwitchEffect switchEffect = WorkspaceSwitchEffect::Auto;
     /// 新窗口默认归入哪个工作空间：`0` = 该显示器**当前的活动空间**
     /// （配置里写 `"active"`，默认），否则是 `1..count`。
     std::uint32_t newWindow = 0;

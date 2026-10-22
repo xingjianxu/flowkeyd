@@ -114,7 +114,7 @@ QStringList toggleStateNames();
 QStringList workspaceOpNames();
 /// `settings.workspace.switch_target` 的取值（`cursor` / `focus`）。
 QStringList workspaceSwitchTargetNames();
-/// `settings.workspace.switch_effect` 的取值（`instant` / `freeze`）。
+/// `settings.workspace.switch_effect` 的取值（`auto` / `instant` / `freeze`）。
 QStringList workspaceSwitchEffectNames();
 
 } // namespace flowkeyd::core

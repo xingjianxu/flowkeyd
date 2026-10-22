@@ -37,7 +37,8 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、`--ch
 * `app{}`：见 `decisions.md` 第 15 条；声明式写法叫 `apps`；再加一个 `workspace`（= `window.workspace` 的
   简写，只写它时会展开出一条只带归属的规则，见第 36 条）。
 * `settings.workspace`：`enabled`（默认 `true`）、`count`（1–10，默认 9）、`switch_target`（`"cursor"` 默认 /
-  `"focus"`）、`switch_effect`（`"instant"` 默认 / `"freeze"`：要不要用冻结快照遮住转场，见第 36 条）、
+  `"focus"`）、`switch_effect`（`"auto"` 默认 / `"instant"` / `"freeze"`：要不要用冻结快照遮住转场，
+  见第 36 条）、
   `new_window`（`"active"` 默认 / 1..count；**只管运行期间新出现的窗口**，启动收编一律归入
   活动空间）、`exclude`（进程名子串，**空串报错**）；写 `workspace = false` 也能整个关。**空串、超出
   `count` 的索引都在 `--check` 报错**。归属优先级：命中窗口的第一条规则的 `workspace` → `new_window`
@@ -145,8 +146,19 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
   “先切空间再激活”）、预写恢复日志 → 强杀 → `--restore-windows` 按日志恢复、`new_window` 与规则的
   新窗口归属、`quit` 前恢复可见。脚本里**不断言“隐藏前台窗口之后前台没变”**（Windows 自己会把前台
   交给别的窗口），那条保证在 `tst_workspace` 里。
-* 最近一次实跑（2026-10-22，“切空间默认不再冻结屏幕”那一轮）：`checks: 206, failures: 0`。
-  这一轮只给冻结快照加了一个开关（`settings.workspace.switch_effect`，默认 `"instant"` = 不抓
+* 最近一次实跑（2026-10-22，“`switch_effect` 加 `auto` 档 + hold 100 → 66”那一轮）：`checks: 206, failures: 0`。
+  这一轮改的是 `applyWorkspaceEffects()`（盖不盖遮罩改由 `core::needsCoverForReveal()` 判）与
+  `kFreezeHoldMs` 66；工作空间那三段（`switch` / `prev` / `next` / `move_*` / `follow` /
+  `new_window` / 窗口规则 / 恢复日志 / `--restore-windows`）全过，跑验收的版本号是
+  `26-10-22-ce2fed8`（当时改动还没提交，二进制与随后提交的那份只差修订常量，跑完才 commit +
+  重建 `dist-release`）。整个跑不到 3 分钟（验收实例的载体是 `charmap.exe`，`auto` 档不会给它建遮罩，
+  所以与旧 `instant` 档同一个手感）。
+  踩到的环境坑：第一次跑被执行了 30 分钟还没结束、停在 134/206，原因是跑的时候前台窗口属于
+  `msrdc.exe`（WSLg 的 RDP 客户端）—— 验收实例按远程桌面放行，**所有注入的按键都被放行/忽略**，
+  每个检查都在等超时。用 `Start-Process` 重新拉一次就恢复了。以后看到“验收突然奇慢”，先看
+  `Get-Process msrdc`。
+* 上一次实跑（2026-10-22，“切空间默认不再冻结屏幕”那一轮）：`checks: 206, failures: 0`。
+  这一轮只给冻结快照加了一个开关（`settings.workspace.switch_effect`，当时默认 `"instant"` = 不抓
   快照、不等那 100 ms），工作空间那一段（含 `switch` / `prev` / `next` / `move_*` / `follow` /
   `new_window` / 窗口规则 / 恢复日志 / `--restore-windows`）全过，切完的版本号是
   `26-10-22-dde3600`。常驻是在跑验收前停掉的（它跑在 `build/dist-release`，正是要重建的那一份），
@@ -292,11 +304,13 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
     5. 远程桌面前台（`mstsc.exe` / Windows App）时按工作空间快捷键：**放行、什么都不切**。
     6. 切空间时窗口 **不应有淡出 / 淡入过渡**（该一下就到位）；被藏起来的窗口**不应该留在任务栏 / `Alt+Tab` 里**
        （这两条都是写定的默认行为、没有开关，见 `decisions.md` 第 36 条）。
-    7. `switch_effect` 两种取值各切几次：默认 `"instant"` 下手感与快捷键显隐单个窗口一致（没有一整拍
-       的停顿），Chrome / Edge / VSCode 会白闪 30–45 ms；`"freeze"` 下看得到“旧画面冻住 → 新空间整块
-       出现”，没有任何白屏，但明显多一拍（~150 ms）。`debug` 日志里那一行
+    7. `switch_effect` 三个取值各切几次：默认 `"auto"` 下切**纯 native 程序**（记事本 / 资源管理器）
+       应与快捷键显隐单个窗口同一手感（没有一整拍的停顿），切**浏览器 / VSCode / WezTerm** 那几次
+       看得到“旧画面冻住 → 新空间整块出现”、没有闪；`"instant"` 下手感与单个窗口一致，但上面那些
+       程序会闪（浅色主题下就是白闪，35–48 ms）；`"freeze"` 下每次都多一拍（~100 ms）。`debug` 日志里那一行
        `workspace: … took N ms (filter …, log …, freeze …, show …, hide …, restack …, hold …)`
-       能对得上：`"instant"` 下 `freeze` 与 `hold` 都是 `0`，`"freeze"` 下两者加起来就是那 100–150 ms。
+       能对得上：不盖时 `freeze` 与 `hold` 都是 `0`，盖的时候两者加起来就是那 ~100 ms
+       （快照 ≈ 42 ms 整屏 / ≈ 10 ms 单窗口 + `hold` 66 ms）。
 
 20. **托盘徽标（工作空间号 / 虚拟桌面号）**：脚本只能验 `--check` 通过，样式要人眼看。
     1. 默认（`tray_badge = "both"`）：徽标**左上角是工作空间号（绿）、右下角是虚拟桌面号（蓝）**，
