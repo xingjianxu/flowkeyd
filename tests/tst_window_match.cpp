@@ -122,6 +122,17 @@ void TestWindowMatch::mainWindowFactsNeedsEveryCondition()
     empty.hasArea = false;
     QVERIFY(!core::isMainWindow(empty));
 
+    // 子窗口（`WS_CHILD`）永远不是程序窗口：它们也会无属主、有标题、有尺寸。
+    // `EnumWindows` 不给它们，但 `SetWinEventHook` 会 —— Chrome 的
+    // `Chrome_RenderWidgetHostHWND`（标题 `Chrome Legacy Window`）就是这样
+    // 被当成主窗口收编进工作空间的。
+    core::TopLevelWindowFacts child = facts;
+    child.child = true;
+    QVERIFY(!core::isMainWindow(child));
+    // 连 `WS_EX_APPWINDOW` 也不改变这件事（子窗口不可能进任务栏）。
+    child.appWindow = true;
+    QVERIFY(!core::isMainWindow(child));
+
     // 有属主的是对话框 / 弹出窗口：除非它显式声明了 `WS_EX_APPWINDOW`
     // （任务栏与 Alt+Tab 的规则就是这样）。
     core::TopLevelWindowFacts dialog = facts;

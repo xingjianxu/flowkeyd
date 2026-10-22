@@ -223,6 +223,12 @@ core::TopLevelWindowFacts windowFacts(HWND hwnd, bool requireVisible = true)
         facts.isShellWindow = true;
         return facts;
     }
+    // `WS_CHILD` 的窗口（控件 / 渲染宿主）不是程序窗口。`EnumWindows` 不给它们，
+    // 但 `EVENT_OBJECT_SHOW` 会 —— Chrome 的 `Chrome_RenderWidgetHostHWND` 就是
+    // 这样混进来的（标题 `Chrome Legacy Window`，无属主、非工具窗口），不看这一条
+    // 就会被当成主窗口收编，之后对它们 `ShowWindow` 还会报 `ERROR_INVALID_HANDLE`。
+    const LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+    facts.child = (style & WS_CHILD) != 0;
     const LONG_PTR exStyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
     facts.appWindow = (exStyle & WS_EX_APPWINDOW) != 0;
     facts.hasOwner = GetWindow(hwnd, GW_OWNER) != nullptr;

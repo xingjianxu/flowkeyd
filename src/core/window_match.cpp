@@ -50,6 +50,12 @@ bool windowMatchesQuery(const WindowQuery &query,
 
 bool isMainWindow(const TopLevelWindowFacts &window)
 {
+    // 子窗口永远不是“一个程序窗口”：`EnumWindows` 不会给它们，但
+    // `SetWinEventHook(EVENT_OBJECT_SHOW)` 会（Chrome 的渲染宿主就是这条路
+    // 进来的），而它们也一样无属主、有标题、有尺寸。
+    if (window.child) {
+        return false;
+    }
     if (!window.visible || window.isShellWindow || window.toolWindow) {
         return false;
     }

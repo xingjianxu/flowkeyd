@@ -57,6 +57,13 @@ struct TopLevelWindowFacts
     bool hasTitle = false;
     /// 窗口矩形非空。
     bool hasArea = false;
+    /// `WS_CHILD`：子窗口（控件 / 渲染宿主）。
+    ///
+    /// `EnumWindows` 只给顶层窗口，但 `SetWinEventHook` **连子窗口一起报**，
+    /// 所以候选里真的会出现子窗口：Chrome 的 `Chrome_RenderWidgetHostHWND`
+    /// （标题就叫 `Chrome Legacy Window`）无属主、非工具窗口、有标题、有尺寸，
+    /// 不看 `WS_CHILD` 就会被当成一个程序窗口收编进工作空间。
+    bool child = false;
     /// `DWMWA_CLOAKED`：shell 或应用把这个窗口藏起来了。
     ///
     /// **它不等于“在别的虚拟桌面上”**：被搬到别的桌面的窗口也是 cloaked，
@@ -73,8 +80,8 @@ struct TopLevelWindowFacts
     bool hiddenByUs = false;
 };
 
-/// 「主窗口」判据：可见、不是 Program Manager、无属主（或带 `WS_EX_APPWINDOW`）、
-/// 非工具窗口、有标题、尺寸非零。
+/// 「主窗口」判据：可见、**不是子窗口**、不是 Program Manager、无属主（或带
+/// `WS_EX_APPWINDOW`）、非工具窗口、有标题、尺寸非零。
 ///
 /// 很多程序会拿无标题 / 工具窗口当消息汇或渲染宿主（拿 `process` 匹配时会一次
 /// 命中一堆），真正的主窗口至少会写个标题。`window_rule` 的 `isPlaceableWindow`
