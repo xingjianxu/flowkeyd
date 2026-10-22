@@ -253,7 +253,11 @@ UI 只有托盘图标 + 日志窗口、`menu`/`help`/`windows`/`apps`/`update` �
     **第一条**规则的 `workspace` → `settings.workspace.new_window` → 那块屏的活动空间（纯函数
     `core::workspaceForNewWindow()`）；钩子线程**先发 `window_rule` 的摆放、再发工作空间的收编**
     （规则只能摆看得见的窗口，所以归属必须在摆完之后才决定）；隐藏方式钉死为
-    `ShowWindow(SW_HIDE)`（`platform/win/workspace.*` 里唯一一处）；“窗口在不在”只看状态机记录、
+    隐藏方式钉死为
+    `ShowWindow(SW_HIDE)`（`platform/win/workspace.*` 里唯一一处）；**显隐一律不播 DWM 过渡**
+    （`hide()`/`show()`/`relocateToMonitor()` 里套 `dwm::TransitionGuard(hwnd, false)`，别让它退化成
+    “淡出 / 淡入”）；被藏起来的窗口**同时从任务栏与 `Alt+Tab` 消失是写定的默认、没有开关**
+    （理由见 `decisions.md` 第 36 条，不要为了“留个任务栏按钮”去换藏法）；“窗口在不在”只看状态机记录、
     `IsWindowVisible` 不可信。事件管线：钩子线程（只有 `settings.workspace.enabled` 时才装
     `LOCATIONCHANGE` 与 `MINIMIZESTART..END` 两个窄范围监听）只把 `core::WorkspaceEvent` 入队，
     状态机的**唯一所有者是动作工作线程**，我们自己引起的显隐靠 `core::ExpectedWorkspaceEvents` 吞掉

@@ -350,8 +350,13 @@
 * **`SetWindowPlacement` 是跨显示器摆放的关键**：`IsZoomed` 就先 `SW_RESTORE`，然后写
   `WINDOWPLACEMENT.rcNormalPosition`（屏幕坐标）并设 `showCmd`，最后对非最大化的情况再补一次
   `SetWindowPos`（`SWP_NOACTIVATE`）。最小化的窗口只更新"还原位置"。它不会抢焦点。
-* **`DWMWA_TRANSITIONS_FORCEDISABLED` 读不回来**，只能"设 TRUE → `ShowWindow` → 设回 FALSE"
-  （RAII `TransitionGuard`）；DWM 在过渡**开始**时读它。
+* **`SW_HIDE` / `SW_SHOWNOACTIVATE` 本身会播 DWM 过渡**（淡出 / 淡入），所以“直接藏 / 直接
+  露”必须在 `ShowWindow` 外套 `dwm::TransitionGuard(hwnd, false)`（工作空间的 `hide()` /
+  `show()` / `relocateToMonitor()` 都这么写）。`show()` 要能对**还藏着**的窗口设这个属性
+  （`tst_interactive::hidesAndShowsAWindowWithoutTouchingIt` 验了这一点）：设不上就只是多一段
+  动画，不会失败。
+* **`DWMWA_TRANSITIONS_FORCEDISABLED` 读不回来**，只能“设 TRUE → `ShowWindow` → 设回 FALSE”
+  （RAII `dwm::TransitionGuard`）；DWM 在过渡**开始**时读它。
 * **终端窗口不能靠标题找**（`process = "wezterm"`，窗口属于 `wezterm-gui.exe`）。
 * **`run`/`window.launch` 走 `CreateProcess`、不查 `App Paths`、也不能用 `DETACHED_PROCESS`**（会静默
   杀死控制台子进程，用 `CREATE_NO_WINDOW`）。

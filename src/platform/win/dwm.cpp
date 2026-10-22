@@ -1,5 +1,7 @@
 #include "platform/win/dwm.h"
 
+#include "platform/win/logging.h"
+
 #include <cstring>
 
 namespace flowkeyd::platform::win::dwm {
@@ -75,6 +77,32 @@ bool forceDisableTransitions(HWND hwnd, bool disabled, QString *error)
         return false;
     }
     return true;
+}
+
+TransitionGuard::TransitionGuard(HWND hwnd, bool animate) : m_hwnd(hwnd)
+{
+    if (animate) {
+        return;
+    }
+    QString error;
+    if (forceDisableTransitions(hwnd, true, &error)) {
+        m_active = true;
+    } else {
+        // 没有 DWM（或无头会话）时只是动画多一点，不该让调用方失败。
+        logDebug(QStringLiteral("keeping the DWM transition of the window: %1").arg(error));
+    }
+}
+
+TransitionGuard::~TransitionGuard()
+{
+    if (!m_active) {
+        return;
+    }
+    QString error;
+    if (!forceDisableTransitions(m_hwnd, false, &error)) {
+        logDebug(QStringLiteral("could not re-enable the DWM transition of the window: %1")
+                     .arg(error));
+    }
 }
 
 bool isCloaked(HWND hwnd)

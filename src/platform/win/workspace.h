@@ -82,6 +82,9 @@ HWND manageTarget(HWND hwnd);
 /// 位置 / 大小 / 最大化 / 最小化都由 Windows 自己保持（M0 实测），记录只是给
 /// `show()` 一个“万一被改了就摆回去”的兜底。
 ///
+/// **不播动画**：`SW_HIDE` 本身会让 DWM 淡出，所以这里套 `dwm::TransitionGuard`
+/// （切工作空间要的是“直接不见”）。设不上这个属性时只是多一段动画，不影响结果。
+///
 /// 只在动作工作线程上调用。目标进程无响应时直接失败（英文原因），不去冒把线程
 /// 挂住的风险。
 bool hide(HWND hwnd, QString *error);
@@ -89,7 +92,7 @@ bool hide(HWND hwnd, QString *error);
 /// 把窗口显示回来（不激活）。
 ///
 /// 最小化的窗口用 `SW_SHOWMINNOACTIVE`（否则会把用户刚收起来的窗口弹出来），
-/// 其余用 `SW_SHOWNOACTIVATE`（我们随后会显式决定聚焦谁）。
+/// 其余用 `SW_SHOWNOACTIVATE`（我们随后会显式决定聚焦谁）。同样不播动画。
 ///
 /// `insertAfter` 是**记录栈里比它低一层**的那个窗口（`nullptr` = 不动 Z 序）；
 /// 真正的整栈还原交给 `restack()`。

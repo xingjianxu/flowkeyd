@@ -1765,6 +1765,18 @@ void TestInteractive::hidesAndShowsAWindowWithoutTouchingIt()
     QString error;
     QVERIFY2(ws::hide(hwnd, &error), qPrintable(error));
     QVERIFY(IsWindowVisible(hwnd) == 0);
+
+    // 显隐不带过渡动画（`dwm::TransitionGuard`）：`show()` 要在窗口**还藏着**的
+    // 时候就先设这个属性，所以“藏着也设得上”必须成立（设不上只会退化成有动画，
+    // 代码里只记一行 debug、不报错 —— 这里把它钉住）。
+    if (platform::win::dwm::available()) {
+        QString dwmError;
+        QVERIFY2(platform::win::dwm::forceDisableTransitions(hwnd, true, &dwmError),
+                 qPrintable(dwmError));
+        QVERIFY2(platform::win::dwm::forceDisableTransitions(hwnd, false, &dwmError),
+                 qPrintable(dwmError));
+    }
+
     QVERIFY2(IsWindow(hwnd) != 0, "the window must still exist while hidden");
     RECT hidden{};
     QVERIFY(GetWindowRect(hwnd, &hidden) != 0);

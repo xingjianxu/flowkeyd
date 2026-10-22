@@ -904,6 +904,15 @@ hotkey{ keys = "Ctrl+Win+Right", action = workspace("next") }
 或 `workspace("prev"/"next")` 绑定时，它只是跟着记窗口归属，不会隐藏任何窗口；即使
 开着也可以随时写 `workspace = false` 一键关掉。
 
+**两条显式默认（没有开关）**：
+
+* **不带动画**：隐藏与显示都**不播过渡动画**（`ShowWindow` 前后套一层
+  `DWMWA_TRANSITIONS_FORCEDISABLED`，与 `window()` 动作的 `animate = false` 同一套
+  机制），切空间是“直接消失 / 直接出现”，不是淡出淡入。
+* **不进任务栏**：被藏起来的窗口在 **Windows 任务栏与 `Alt+Tab` 里也一起消失**
+  （`SW_HIDE` 本来的语义，也正是这个功能的目的）。要看它们就切到它所在的空间 ——
+  窗口切换器（`windows()`）与 `window("activate")` 会替你切过去再激活。
+
 托盘图标上的工作空间号显示的是 **`switch_target` 指定的那块屏**的活动空间（默认 =
 光标所在的那一块），所以它正好就是“按一下 `workspace("switch", N)` 会切哪一块”的那个
 号（见[托盘图标上的数字](#托盘图标上的数字)）。
@@ -941,6 +950,7 @@ hotkey{ keys = "Ctrl+Win+Right", action = workspace("next") }
 
 * 隐藏 / 显示之后窗口的位置、大小、最大化、最小化都不变（`ShowWindow(SW_HIDE)` 那些
   状态都由 Windows 自己保持）；每个空间也记住自己的 Z 序与最近拿到焦点的窗口。
+  显隐本身也不播过渡动画（见上面的「两条显式默认」）。
 * 新窗口归入它出现时所在那块屏的**活动空间**，除非命中了 `window_rule` / `app` 的
   `workspace`（规则优先）或者 `settings.workspace.new_window` 指了别的 —— 那样窗口在
   出现后**立刻**被藏进对应空间，不会抢焦点（也不影响它自己的几何：`window_rule` 先在
@@ -990,7 +1000,8 @@ hotkey{ keys = "Ctrl+Win+Right", action = workspace("next") }
 
 ### 已知限制
 
-* 被隐藏的窗口在**任务栏与 Alt+Tab 里也看不到**（这是刻意的，也正是这个功能的目的）。
+* 被隐藏的窗口在**任务栏与 Alt+Tab 里也看不到** —— 这是写定的默认行为，没有开关
+  （理由见[工作空间](#工作空间)的「两条显式默认」）。
 * `--no-elevate` 运行、而目标窗口属于**提权进程**时无法隐藏它（UIPI）：跳过那个窗口并写
   一条 warning。常驻实例是提权启动的，只有开发期的 `--no-elevate` 会碰到。
 * 目标进程无响应时不会去隐藏它的窗口（以免把动作线程挂住），只写一条 warning。

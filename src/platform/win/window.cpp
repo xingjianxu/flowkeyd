@@ -117,47 +117,6 @@ BOOL CALLBACK enumWindowProc(HWND hwnd, LPARAM)
     return FALSE;
 }
 
-/// 一次会改变窗口状态的调用，顺带（默认）关掉 DWM 的过渡动画。
-///
-/// `DWMWA_TRANSITIONS_FORCEDISABLED` 读不回来，所以只能“设 TRUE → ShowWindow
-/// → 设回 FALSE”，也就是假定这个窗口本来是带动画的。
-class TransitionGuard
-{
-public:
-    TransitionGuard(HWND hwnd, bool animate) : m_hwnd(hwnd)
-    {
-        if (animate) {
-            return;
-        }
-        QString error;
-        if (dwm::forceDisableTransitions(hwnd, true, &error)) {
-            m_active = true;
-        } else {
-            // 没有 DWM（或无头会话）时只是动画多一点，不该让动作失败。
-            logDebug(QStringLiteral("keeping the DWM transition of the window: %1").arg(error));
-        }
-    }
-
-    ~TransitionGuard()
-    {
-        if (!m_active) {
-            return;
-        }
-        QString error;
-        if (!dwm::forceDisableTransitions(m_hwnd, false, &error)) {
-            logDebug(QStringLiteral("could not re-enable the DWM transition of the window: %1")
-                         .arg(error));
-        }
-    }
-
-    TransitionGuard(const TransitionGuard &) = delete;
-    TransitionGuard &operator=(const TransitionGuard &) = delete;
-
-private:
-    HWND m_hwnd = nullptr;
-    bool m_active = false;
-};
-
 /// 窗口是不是在当前（用户看着的那张）虚拟桌面上。
 ///
 /// 拿不到答案时（虚拟桌面后端不可用）返回 `true`，也就是按老行为处理：
@@ -544,7 +503,7 @@ bool setTopmost(HWND hwnd, bool topmost, QString *error)
 bool applyTo(HWND hwnd, core::WindowOp op, bool animate, QString *detail, QString *error, bool follow)
 {
     const QString title = windowTitle(hwnd);
-    std::optional<TransitionGuard> guard;
+    std::optional<dwm::TransitionGuard> guard;
     if (core::windowOpHasTransition(op)) {
         guard.emplace(hwnd, animate);
     }

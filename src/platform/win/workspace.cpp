@@ -3,6 +3,7 @@
 
 #include "core/action.h"
 #include "core/window_match.h"
+#include "platform/win/dwm.h"
 #include "platform/win/logging.h"
 #include "platform/win/monitor.h"
 #include "platform/win/window.h"
@@ -183,6 +184,11 @@ bool hide(HWND hwnd, QString *error)
         return fail(QStringLiteral("the window is not responding"));
     }
     const WINDOWPLACEMENT placement = placementOf(hwnd);
+    // 藏窗口**不要动画**：`ShowWindow(SW_HIDE)` 会让 DWM 给这个窗口播一次淡出/
+    // 缩放过渡（切工作空间时是一屏窗口依次淡出，很吵）。与 `window()` 动作的
+    // `animate = false` 同一套机制（过渡在**开始**时读这个属性，所以作用域只要
+    // 盖住下面这句 `ShowWindow` 就够）；设不上只影响多一段动画，不算失败。
+    dwm::TransitionGuard guard(hwnd, false);
     ShowWindow(hwnd, SW_HIDE);
     // `ShowWindow` 的返回值是“之前的可见状态”，0 是正常情况，所以看后置条件。
     if (IsWindowVisible(hwnd) != 0) {
@@ -208,6 +214,12 @@ bool show(HWND hwnd, HWND insertAfter, QString *error)
     }
     // 最小化的窗口（`IsIconic`）显示回来时仍是 `SW_SHOWMINNOACTIVE`
     // （M0 实测 `IsIconic` 保持为 1、几何不变），这里照抄那个状态。
+    //
+    // 与 `hide()` 对称：露出来也不要淡入动画。窗口现在**还藏着**（`SW_HIDE` 的
+    // 窗口照样能设这个属性，`tst_interactive` 的
+    // `hidesAndShowsAWindowWithoutTouchingIt` 钉住这一点），所以守卫盖住整个
+    // 函数体：`ShowWindow` 与下面两处位置兜底都是同一次“从藏到显”的过渡。
+    dwm::TransitionGuard guard(hwnd, false);
     const bool minimized = IsIconic(hwnd) != 0;
     ShowWindow(hwnd, minimized ? SW_SHOWMINNOACTIVE : SW_SHOWNOACTIVATE);
     if (IsWindowVisible(hwnd) == 0) {
@@ -279,6 +291,10 @@ bool relocateToMonitor(HWND hwnd, const core::MonitorDescription &destination, Q
     if (IsHungAppWindow(hwnd) != 0) {
         return fail(QStringLiteral("the window is not responding"));
     }
+    // 搬完之后的收尾可能改显隐（藏着的窗口被 `SetWindowPlacement` 露出来再
+    // `SW_HIDE` 回去；最大化的窗口先 `SW_RESTORE` 再重新最大化）——都不要动画：
+    // 工作空间后端碰显隐一律“直接一下就到位”。
+    dwm::TransitionGuard guard(hwnd, false);
 
     const bool visible = IsWindowVisible(hwnd) != 0;
     const bool minimized = IsIconic(hwnd) != 0;

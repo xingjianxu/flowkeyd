@@ -698,6 +698,20 @@ active 后所在的 monitor 上"。
 * 「窗口在不在」**只看状态机自己的记录，不看 `IsWindowVisible`**：被我们藏起来的窗口全都变成不可见的。
   所以 `enumerateManageable()` 要接受一份「已记录的窗口」列表，并且 `isMainWindowIgnoringVisibility()`
   是另一条判据（纯逻辑在 `core::isManageableWindow()`，可单测）。
+* **两条显式默认（2026-10 补充，两款都没有开关）**：
+  * **显隐不带动画**：`SW_HIDE` 本身会让 DWM 给那个窗口播一次淡出 / 缩放过渡（切工作空间就是
+    一屏窗口依次淡出，很吵），`show()` 那一侧也有对应的淡入 —— 所以 `hide()` / `show()` /
+    `relocateToMonitor()` 里都套一层 `dwm::TransitionGuard(hwnd, false)`
+    （`DWMWA_TRANSITIONS_FORCEDISABLED`；与 `window()` 动作的 `animate = false` 是同一个 RAII 类，
+    它住在 `platform/win/dwm.*`）。属性读不回来，只能“设 TRUE → `ShowWindow` → 设回 FALSE”，
+    DWM 在过渡**开始**时读它，所以作用域只要盖住那一次调用。设不上只记一行 debug（无合成器的
+    会话动画多一点不算失败）。`show()` 是在窗口**还藏着**的时候设的 —— 这一点由
+    `tst_interactive::hidesAndShowsAWindowWithoutTouchingIt` 钉住（藏着也能往返设置）。
+  * **被藏起来的窗口不进任务栏 / `Alt+Tab`**，写定的默认、**不提供开关**：`SW_HIDE` 的语义
+    就是如此，而且“别的空间的窗口不该出现在任务栏上”正是这个功能的目的。要做到“留在任务栏里”
+    必须**换藏法**（例如移出屏幕而不是 `SW_HIDE`），会把 M0 那条“隐藏之后还抢得到前台”的结论、
+    Z 序还原与恢复日志的语义一起推翻，不划算。要看它们就用 `windows()` / `window("activate")`
+    （会先切到它那个空间）或直接切空间。
 * 两个 M0 实测约束已写进代码：`show()` 用 `SW_SHOWNOACTIVATE`（最小化的用 `SW_SHOWMINNOACTIVE`）；
   目标进程无响应（`IsHungAppWindow`）时**不隐藏**（`SW_HIDE` 是跨线程 `SendMessage`，卡死会挂住
   调用线程）。全部 hide/show/restack **只允许在工作线程上做**。

@@ -33,6 +33,32 @@ bool available();
 /// 只记一行 debug：动画多一点不是动作失败。
 bool forceDisableTransitions(HWND hwnd, bool disabled, QString *error);
 
+/// 一次会改变窗口可见性 / 状态的调用，顺带（默认）关掉 DWM 过渡动画的 RAII 守卫。
+///
+/// `DWMWA_TRANSITIONS_FORCEDISABLED` **读不回来**，所以只能“设 TRUE → 调用 →
+/// 设回 FALSE”，也就是假定这个窗口本来是带动画的。DWM 在过渡**开始**时读它，
+/// 因此作用域只要盖住那一次调用就够。
+///
+/// `animate = true` 什么都不做（保留系统动画）。设不上时只记一行 debug：没有
+/// 合成器（或无头会话）时动画多一点，不该让这次调用失败。
+///
+/// 两个用户：`window::applyTo()`（`window` 动作的 `animate` 参数）与
+/// `workspace::hide()` / `show()`（切工作空间的显隐一律不要动画，见
+/// `docs/notes/pitfalls.md`「`SW_HIDE` 本身会播 DWM 淡出」）。
+class TransitionGuard
+{
+public:
+    TransitionGuard(HWND hwnd, bool animate);
+    ~TransitionGuard();
+
+    TransitionGuard(const TransitionGuard &) = delete;
+    TransitionGuard &operator=(const TransitionGuard &) = delete;
+
+private:
+    HWND m_hwnd = nullptr;
+    bool m_active = false;
+};
+
 /// `DWMWA_CLOAKED`：这个窗口被 shell 或应用**藏起来了**吗。
 ///
 /// 这是「窗口现在到底有没有显示出来」唯一可靠的判据：被 cloaked 掉的窗口
