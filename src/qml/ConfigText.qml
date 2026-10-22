@@ -91,7 +91,9 @@ QtObject {
         },
         workspaceOp: {
             "switch": qsTr("切到某块屏的空间"),
-            "move": qsTr("把当前窗口发过去")
+            "move": qsTr("把当前窗口发过去"),
+            "prev": qsTr("上一个空间（不循环）"),
+            "next": qsTr("下一个空间（不循环）")
         },
         workspaceSwitchTarget: {
             "cursor": qsTr("光标所在的那块屏"),

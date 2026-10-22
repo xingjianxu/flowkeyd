@@ -1877,6 +1877,8 @@ try {
     Write-WsConfig $ws1Config '' @'
 hotkey { name = "accept-ws-switch-2", keys = "Ctrl+Alt+F15", action = workspace("switch", 2) }
 hotkey { name = "accept-ws-switch-1", keys = "Ctrl+Alt+F16", action = workspace("switch", 1) }
+hotkey { name = "accept-ws-prev", keys = "Ctrl+Alt+F17", action = workspace("prev") }
+hotkey { name = "accept-ws-next", keys = "Ctrl+Alt+F18", action = workspace("next") }
 hotkey { name = "accept-ws-move-2", keys = "Ctrl+Alt+F20", action = workspace("move", 2) }
 hotkey { name = "accept-ws-reveal", keys = "Ctrl+Alt+F21",
   action = window("activate", { process = "charmap", toggle = false }) }
@@ -1933,6 +1935,37 @@ hotkey { name = "accept-ws-quit", keys = "Ctrl+Alt+F10", action = quit() }
     FocusCatcher
     Check 'workspace("switch", 1) 把它又藏起来了' (
         ChordUntil $VK_F16 { -not [FlowInject]::IsVisible($wsHwnd) } 3)
+
+    # 相对切换 `workspace("next")` / `workspace("prev")`：按当前活动空间 ±1，**不循环**。
+    # 这一份配置是 `count = 4`，载体在空间 2、活动空间是 1，于是一路 next 到 4，
+    # 再 next 就应该“什么都不做”（只写一行 `already at space 4`），prev 再走回来。
+    [FlowInject]::Cursor(200, 200)
+    Check 'workspace("next")：1 → 2，空间 2 的窗口显示回来' (
+        ChordUntil $VK_F18 { [FlowInject]::IsVisible($wsHwnd) } 3)
+    Check 'next 的日志里写着切到空间 2' (
+        (WsText $ws1Log $ws1Out) -match 'accept-ws-next[^\r\n]*workspace next 2 on')
+    $null = ChordUntil $VK_F18 { -not [FlowInject]::IsVisible($wsHwnd) } 3          # 2 -> 3
+    $null = ChordUntil $VK_F18 { (WsText $ws1Log $ws1Out) -match 'accept-ws-next[^\r\n]*workspace next 4 on' } 3   # 3 -> 4
+    Check 'next 走到最后一个空间（3 → 4）' (
+        (WsText $ws1Log $ws1Out) -match 'accept-ws-next[^\r\n]*workspace next 4 on')
+    # 已经在最后一个空间：再按 next **不循环**回空间 1。
+    CtrlAlt $VK_F18
+    Check '到头的 next 只记一行 already at space 4（不循环）' (
+        WaitUntil { (WsText $ws1Log $ws1Out) -match 'accept-ws-next[^\r\n]*already at space 4' } 5000)
+    Check '到头的 next 没有把空间 2 的窗口翻出来' (-not [FlowInject]::IsVisible($wsHwnd))
+    Check 'workspace("prev")：4 → 3（日志里写着）' (
+        ChordUntil $VK_F17 { (WsText $ws1Log $ws1Out) -match 'accept-ws-prev[^\r\n]*workspace prev 3 on' } 3)
+    Check 'prev 走到空间 2：窗口又显示出来' (
+        ChordUntil $VK_F17 { [FlowInject]::IsVisible($wsHwnd) } 3)
+    Check 'prev 的日志里写着切到空间 2' (
+        (WsText $ws1Log $ws1Out) -match 'accept-ws-prev[^\r\n]*workspace prev 2 on')
+    Check 'prev 走到空间 1：窗口又藏起来了' (
+        ChordUntil $VK_F17 { -not [FlowInject]::IsVisible($wsHwnd) } 3)
+    # 已经在空间 1：再按 prev 也应该什么都不做（与 next 对称）。
+    CtrlAlt $VK_F17
+    Check '到头的 prev 只记一行 already at space 1（不循环）' (
+        WaitUntil { (WsText $ws1Log $ws1Out) -match 'accept-ws-prev[^\r\n]*already at space 1' } 5000)
+    Check '到头的 prev 没有把空间 2 的窗口翻出来' (-not [FlowInject]::IsVisible($wsHwnd))
 
     # `window("activate")`：藏在别的工作空间里的窗口要先切空间再激活。
     Check 'window("activate") 唤起了藏在别的工作空间里的窗口' (

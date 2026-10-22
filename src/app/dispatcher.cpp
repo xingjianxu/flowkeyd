@@ -2589,17 +2589,39 @@ void Dispatcher::executeWorkspaceAction(const core::Compiled &config,
 
     const QString monitor = workspaceSwitchMonitor(config);
     if (monitor.isEmpty()) {
-        win::logWarn(QStringLiteral("`%1` workspace switch %2: cannot tell which monitor to use")
-                         .arg(hotkey)
-                         .arg(action.workspaceIndex));
+        win::logWarn(QStringLiteral("`%1` workspace %2: cannot tell which monitor to use")
+                         .arg(hotkey, core::workspaceOpName(action.workspaceOp)));
         return;
     }
-    const core::WorkspaceEffects effects = m_workspace.switchTo(monitor, action.workspaceIndex);
+    // 相对切换（`workspace("prev")` / `workspace("next")`）：目标 = 这块屏的**当前
+    // 活动空间** ± 1；到头了就是什么都不做（**不循环**，与 window 的
+    // move_left/right_monitor 一致）。状态机只认绝对空间号，相对那一步在这里算 ——
+    // `core::stepIndex()` 是纯函数（tst_placement 有测试），所以"不循环"的语义
+    // 仍然只有一处实现。
+    std::uint32_t target = action.workspaceIndex;
+    if (action.workspaceOp == core::WorkspaceOp::Prev
+        || action.workspaceOp == core::WorkspaceOp::Next) {
+        const std::optional<core::MonitorSpaces> current = m_workspace.spaces(monitor);
+        const std::uint32_t active = current.has_value() ? current->active : 1;
+        const int delta = action.workspaceOp == core::WorkspaceOp::Prev ? -1 : 1;
+        const std::optional<std::size_t> stepped =
+            core::stepIndex(m_workspace.count(), active - 1, delta, /*wrap=*/false);
+        if (!stepped.has_value()) {
+            // 已经是最前 / 最后一个空间：不循环，也不去动任何窗口。
+            win::logInfo(QStringLiteral("`%1` -> workspace %2: already at space %3 on %4")
+                             .arg(hotkey, core::workspaceOpName(action.workspaceOp))
+                             .arg(active)
+                             .arg(monitor));
+            return;
+        }
+        target = static_cast<std::uint32_t>(*stepped) + 1;
+    }
+    const core::WorkspaceEffects effects = m_workspace.switchTo(monitor, target);
     const std::optional<core::MonitorSpaces> spaces = m_workspace.spaces(monitor);
-    const std::uint32_t space = spaces.has_value() ? spaces->active : action.workspaceIndex;
+    const std::uint32_t space = spaces.has_value() ? spaces->active : target;
     applyWorkspaceEffects(effects, QStringLiteral("switching %1 to space %2").arg(monitor).arg(space));
-    win::logInfo(QStringLiteral("`%1` -> workspace switch %2 on %3%4")
-                     .arg(hotkey)
+    win::logInfo(QStringLiteral("`%1` -> workspace %2 %3 on %4%5")
+                     .arg(hotkey, core::workspaceOpName(action.workspaceOp))
                      .arg(space)
                      .arg(monitor)
                      .arg(effects.isEmpty() ? QStringLiteral(" (already there)") : QString()));

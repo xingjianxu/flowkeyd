@@ -232,7 +232,7 @@ void TestLua::windowActionMonitorIsConverted()
     QVERIFY2(wrongType.contains(QStringLiteral("monitor")), qPrintable(wrongType));
 }
 
-/// `workspace("switch"|"move", N)`：构造器与裸表两种写法都要能转换。
+/// `workspace("switch"|"move", N)` / `workspace("prev"|"next")`：构造器与裸表两种写法都要能转换。
 void TestLua::workspaceActionIsConverted()
 {
     const auto c = parse(R"(
@@ -240,9 +240,11 @@ void TestLua::workspaceActionIsConverted()
         hotkey{ keys = "Alt+1", action = workspace("switch", 1) }
         hotkey{ keys = "Alt+2", action = workspace("move", 2) }
         hotkey{ keys = "Alt+3", action = { type = "workspace", op = "switch", index = 3 } }
+        hotkey{ keys = "Alt+6", action = workspace("prev") }
+        hotkey{ keys = "Alt+7", action = { type = "workspace", op = "next" } }
     )");
     QVERIFY(c.has_value());
-    QCOMPARE(c->bindings.size(), std::size_t(3));
+    QCOMPARE(c->bindings.size(), std::size_t(5));
     QCOMPARE(c->bindings[0].press.at(0).kind, core::Action::Kind::Workspace);
     QCOMPARE(c->bindings[0].press.at(0).workspaceOp, core::WorkspaceOp::Switch);
     QCOMPARE(c->bindings[0].press.at(0).workspaceIndex, std::uint32_t(1));
@@ -250,8 +252,13 @@ void TestLua::workspaceActionIsConverted()
     QCOMPARE(c->bindings[1].press.at(0).workspaceIndex, std::uint32_t(2));
     QCOMPARE(c->bindings[2].press.at(0).workspaceIndex, std::uint32_t(3));
     QCOMPARE(c->bindings[0].press.at(0).summary(), QStringLiteral("workspace switch 1"));
+    // `prev` / `next` 是**相对**切换：没有空间号，摘要也不带数字。
+    QCOMPARE(c->bindings[3].press.at(0).workspaceOp, core::WorkspaceOp::Prev);
+    QCOMPARE(c->bindings[3].press.at(0).summary(), QStringLiteral("workspace prev"));
+    QCOMPARE(c->bindings[4].press.at(0).workspaceOp, core::WorkspaceOp::Next);
+    QCOMPARE(c->bindings[4].press.at(0).summary(), QStringLiteral("workspace next"));
 
-    // `op` 只接 switch / move；`index` 必须写。
+    // `op` 只接 switch / move / prev / next；绝对切换（switch / move）必须写 `index`。
     const QString badOp = failure(R"(hotkey{ keys = "Alt+5", action = { type = "workspace", op = "swap", index = 1 } })");
     QVERIFY2(badOp.contains(QStringLiteral("unknown variant `swap`")), qPrintable(badOp));
     const QString noIndex = failure(R"(hotkey{ keys = "Alt+5", action = { type = "workspace", op = "switch" } })");

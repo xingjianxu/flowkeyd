@@ -86,6 +86,8 @@ constexpr EnumName<ToggleState> kToggleStates[] = {
 constexpr EnumName<WorkspaceOp> kWorkspaceOps[] = {
     {WorkspaceOp::Switch, "switch"},
     {WorkspaceOp::Move, "move"},
+    {WorkspaceOp::Prev, "prev"},
+    {WorkspaceOp::Next, "next"},
 };
 
 constexpr EnumName<WorkspaceSwitchTarget> kWorkspaceSwitchTargets[] = {
@@ -766,7 +768,10 @@ QVariantMap actionToMap(const Action &action)
     case Action::Kind::Workspace:
         out.insert(QStringLiteral("type"), QStringLiteral("workspace"));
         out.insert(QStringLiteral("op"), enumName(kWorkspaceOps, action.workspaceOp));
-        out.insert(QStringLiteral("index"), action.workspaceIndex);
+        // `prev` / `next` 是相对切换：没有空间号可写（写了也没用）。
+        if (action.workspaceOp == WorkspaceOp::Switch || action.workspaceOp == WorkspaceOp::Move) {
+            out.insert(QStringLiteral("index"), action.workspaceIndex);
+        }
         break;
     case Action::Kind::Power:
         out.insert(QStringLiteral("type"), QStringLiteral("power"));

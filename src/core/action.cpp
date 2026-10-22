@@ -153,6 +153,10 @@ QString workspaceOpName(WorkspaceOp op)
         return QStringLiteral("switch");
     case WorkspaceOp::Move:
         return QStringLiteral("move");
+    case WorkspaceOp::Prev:
+        return QStringLiteral("prev");
+    case WorkspaceOp::Next:
+        return QStringLiteral("next");
     }
     return QStringLiteral("switch");
 }
@@ -320,6 +324,13 @@ std::optional<WorkspaceOp> workspaceOpFromName(const QString &name)
     }
     if (key == QLatin1String("move") || key == QLatin1String("send")) {
         return WorkspaceOp::Move;
+    }
+    if (key == QLatin1String("prev") || key == QLatin1String("previous")
+        || key == QLatin1String("switch_prev")) {
+        return WorkspaceOp::Prev;
+    }
+    if (key == QLatin1String("next") || key == QLatin1String("switch_next")) {
+        return WorkspaceOp::Next;
     }
     return std::nullopt;
 }
@@ -510,6 +521,10 @@ QString Action::summary() const
         }
         return QStringLiteral("apps");
     case Kind::Workspace:
+        // `prev` / `next` 是相对切换，没有空间号可写。
+        if (workspaceOp == WorkspaceOp::Prev || workspaceOp == WorkspaceOp::Next) {
+            return QStringLiteral("workspace %1").arg(workspaceOpName(workspaceOp));
+        }
         return QStringLiteral("workspace %1 %2").arg(workspaceOpName(workspaceOp)).arg(workspaceIndex);
     case Kind::Power:
         return QStringLiteral("power %1").arg(powerOpName(powerOp));

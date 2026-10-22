@@ -60,16 +60,14 @@ enum class CapsLockState { Off };
 enum class PowerOp { Sleep, Hibernate, Shutdown, Restart, Logoff, Lock, ScreenOff };
 
 /// `workspace` 动作能做的事（每个显示器独立的工作空间，见 README「工作空间」）。
-///
-/// 本期只做两件需求原文里的事：
-///   * `Switch` —— 把**某块显示器**切到第 N 个工作空间；
-///   * `Move` —— 把当前窗口发到它自己那块显示器的第 N 个工作空间。
-/// 循环切换（`next`/`prev`）与「搬完跟过去」（`follow`）留在后续，
-/// 免得第一版就出现两套语义。
+///   * `Switch` —— 把**某块显示器**切到第 N 个工作空间（`index`）；
+///   * `Move` —— 把当前窗口发到它自己那块显示器的第 N 个工作空间（`index`）；
+///   * `Prev` / `Next` —— 在**当前活动空间**上往前 / 往后挪一格，**不循环**
+///     （到头了就是什么都不做），所以不需要 `index`。
 ///
 /// 运行时的显示器由 `settings.workspace.switch_target` 决定（光标所在 / 焦点
 /// 窗口所在），动作本身不带 `monitor` 字段。
-enum class WorkspaceOp { Switch, Move };
+enum class WorkspaceOp { Switch, Move, Prev, Next };
 
 /// Rust `Debug` 风格的名字（摘要里用的就是它）。
 QString showModeDebugName(ShowMode mode);
@@ -292,6 +290,8 @@ struct Action
     // workspace（每个显示器独立的工作空间）
     WorkspaceOp workspaceOp = WorkspaceOp::Switch;
     /// 目标工作空间号（1 起，`1..settings.workspace.count`）。
+    /// **只对 `Switch` / `Move` 有意义**：`Prev` / `Next` 按当前活动空间算，
+    /// 不用也不看这个字段。
     std::uint32_t workspaceIndex = 1;
 
     // power

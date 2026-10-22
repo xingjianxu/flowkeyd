@@ -333,13 +333,19 @@ end
 -- 工作空间（每个显示器独立的一组空间，Hyprland 风格）：
 --   workspace("switch", 2)   -- 把那块屏（见 settings.workspace.switch_target）切到空间 2
 --   workspace("move", 2)     -- 把当前窗口发到它自己那块屏的空间 2
--- 空间号从 1 开始，不能超过 settings.workspace.count（默认 9）。
+--   workspace("prev")        -- 往前一个空间（到头了什么都不做，**不循环**）
+--   workspace("next")        -- 往后一个空间（到头了什么都不做，**不循环**）
+-- 空间号从 1 开始，不能超过 settings.workspace.count（默认 9）。`prev` / `next`
+-- 按当前活动空间算，所以不需要空间号。
 -- `switch` 只影响一块屏：光标所在的那一块，或者 settings.workspace.switch_target
 -- 写 "focus" 时前台窗口所在的那一块；别的屏上的窗口不动。
 -- `move` 非活动空间时窗口立即隐藏，你留在原来的空间里。
 function workspace(op, index)
   if type(op) ~= "string" then
-    error("workspace() expects \"switch\" or \"move\", got " .. type(op), 2)
+    error("workspace() expects \"switch\", \"move\", \"prev\" or \"next\", got " .. type(op), 2)
+  end
+  if op == "prev" or op == "next" then
+    return { type = "workspace", op = op }
   end
   if type(index) ~= "number" then
     error("workspace() expects a workspace number (1 is the first), got " .. type(index), 2)

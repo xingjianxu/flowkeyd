@@ -1040,6 +1040,12 @@ void validateAction(const QString &label,
     case Action::Kind::Workspace: {
         // `index` 必须落在 `1..settings.workspace.count` 里：`WorkspaceState` 会把越界
         // 的值夹住（不丢窗口），但配置里写错的数字应当在这里被指出来（不变量 6）。
+        //
+        // `prev` / `next` 是**相对**切换（按当前活动空间算，不循环），根本不看
+        // `index`，所以不校验它（界面里这两个 op 也会把空间号那一行藏起来）。
+        if (action.workspaceOp == WorkspaceOp::Prev || action.workspaceOp == WorkspaceOp::Next) {
+            break;
+        }
         if (action.workspaceIndex < 1) {
             errors->append(QStringLiteral("%1: workspace index must be 1 or greater")
                                .arg(label));

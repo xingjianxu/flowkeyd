@@ -664,6 +664,8 @@ Column {
             width: root.width
             label: qsTr("第几个工作空间")
             hint: qsTr("从 1 开始，不能超过 settings.workspace.count（默认 9）")
+            // `prev` / `next` 是**相对**切换（按当前活动空间算，不循环），没有空间号可填。
+            visible: root.action.op !== "prev" && root.action.op !== "next"
             value: root.action.index !== undefined ? root.action.index : 1
             from: 1
             to: 10
@@ -671,7 +673,7 @@ Column {
         }
         Label {
             width: root.width
-            text: qsTr("切换只影响一块屏（默认 = 光标所在的那块）；发出的窗口进非活动空间时会立即隐藏，你留在原来的空间里。")
+            text: qsTr("切换只影响一块屏（默认 = 光标所在的那块）；发出的窗口进非活动空间时会立即隐藏，你留在原来的空间里。prev / next 到头了就什么都不做，不会循环。")
             color: root.palette.placeholderText
             font.family: "Microsoft YaHei"
             font.pointSize: 9

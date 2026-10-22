@@ -1356,6 +1356,25 @@ void TestConfig::workspaceActionIsCompiledAndValidated()
     // `workspace` 不是危险动作（不弹两次确认）。
     QVERIFY(!isDestructive(action));
 
+    // `prev` / `next`（相对切换，不循环）：没有空间号，所以 `index` 不被校验
+    // （界面里那两个 op 会把空间号那一行藏起来，值默认是 1）。
+    Config relative;
+    relative.settings.workspace.count = 4;
+    relative.hotkeys.push_back(hotkeyNamed(
+        QStringLiteral("ws-prev"), QStringLiteral("Ctrl+Win+Left"),
+        specOne(workspaceAction(WorkspaceOp::Prev, 0))));
+    relative.hotkeys.push_back(hotkeyNamed(
+        QStringLiteral("ws-next"), QStringLiteral("Ctrl+Win+Right"),
+        specOne(workspaceAction(WorkspaceOp::Next, 99))));
+    const auto relativeCompiled = compileOrDie(relative);
+    QCOMPARE(relativeCompiled->bindings.size(), std::size_t(2));
+    QVERIFY(relativeCompiled->bindings.at(0).press.at(0).workspaceOp == WorkspaceOp::Prev);
+    QCOMPARE(relativeCompiled->bindings.at(0).press.at(0).summary(),
+             QStringLiteral("workspace prev"));
+    QVERIFY(relativeCompiled->bindings.at(1).press.at(0).workspaceOp == WorkspaceOp::Next);
+    QCOMPARE(relativeCompiled->bindings.at(1).press.at(0).summary(),
+             QStringLiteral("workspace next"));
+
     // 超出 `settings.workspace.count` 的空间号要在加载时报错（不变量 6）。
     Config tooBig = config;
     tooBig.hotkeys.clear();

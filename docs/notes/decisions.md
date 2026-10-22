@@ -671,9 +671,14 @@ active 后所在的 monitor 上"。
 * 每块显示器固定 **N 个空间**（`count`，默认 9，范围 1–10）；`switch_target` 决定 `switch` 作用在哪块
   屏上（`"cursor"` 默认 / `"focus"`）；`new_window` 是 `"active"`（默认）或 `1..N`；`exclude` 里的程序
   永远不管（空串是错误，同决策 26：空 needle 会匹配所有窗口）。
-* 动作只有两个形状：`workspace("switch", N)` / `workspace("move", N)`（裸表 `{ type = "workspace",
-  op = ..., index = ... }`）。`index` ≥ 1 且 ≤ `count` 在 `--check` 阶段校验（不变量 6）；
-  `next`/`prev`/`follow` 留到后续。**不算危险动作**（不触发两次确认）。
+* 动作四个形状：`workspace("switch", N)` / `workspace("move", N)`（裸表 `{ type = "workspace",
+  op = ..., index = ... }`），以及**相对切换** `workspace("prev")` / `workspace("next")`
+  （2026-10 补：需求是 `Win+Ctrl+←/→` 切上一个 / 下一个工作空间，而且**不循环**）。
+  `index` ≥ 1 且 ≤ `count` 在 `--check` 阶段校验（不变量 6），**`prev`/`next` 不看 `index`**
+  （所以不校验、界面也把空间号那一行藏起来）。相对那一步在 `Dispatcher` 里用纯函数
+  `core::stepIndex(count, active - 1, ±1, /*wrap=*/false)` 算：返回空 = 已经在两头，
+  什么都不做、也不动任何窗口（与 `move_left/right_monitor` 的“不循环”一致）。
+  `move` 仍然只有绝对形状。**不算危险动作**（不触发两次确认）。
 * 规则落点：不新增条目类型，而是给 `window_rule` 加 `workspace`（决策 13 的做法），`app{}` 也能写
   `workspace = N`（= `window.workspace` 的简写，两处都写时 `window` 优先）；只写它而没有 `window`
   时也会展开出一条只带归属的规则。

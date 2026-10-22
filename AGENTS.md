@@ -245,7 +245,10 @@ UI 只有托盘图标 + 日志窗口、`menu`/`help`/`windows`/`apps`/`update` �
     M11（文档、验收、收尾）全部完成**。要点：默认**开启**但没绑定就不会隐藏任何窗口；`count` 1–10（默认 9）；
     `switch_target` = `"cursor"`（默认）/ `"focus"`；`new_window` = `"active"`（默认）或 1..count
     （**只对 flowkeyd 运行期间新出现的窗口生效**，启动时已在的窗口照旧收编进各自活动空间）；
-    `exclude` 空串报错；动作只有 `workspace("switch"|"move", N)`，`index` ≤ `count` 在 `--check` 校验；
+    `exclude` 空串报错；动作有四种形状：`workspace("switch"|"move", N)`（`index` ≤ `count`
+    在 `--check` 校验）与**相对切换** `workspace("prev"|"next")`（按那块屏的活动空间 ±1，
+    **不循环**：已经在两头就什么都不做；不看也不要求 `index`，相对那一步用纯函数
+    `core::stepIndex(..., wrap=false)` 在 `Dispatcher` 里算）；
     规则用 `window_rule.workspace` / `app.workspace`（后者是前者的简写），归属优先级 = 命中窗口的
     **第一条**规则的 `workspace` → `settings.workspace.new_window` → 那块屏的活动空间（纯函数
     `core::workspaceForNewWindow()`）；钩子线程**先发 `window_rule` 的摆放、再发工作空间的收编**

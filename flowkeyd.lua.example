@@ -500,15 +500,21 @@ end
 --
 --   workspace("switch", 2)  —— 把那块屏切到空间 2（旧空间的窗口藏起来，新空间的窗口显示出来）
 --   workspace("move", 2)    —— 把当前窗口发到它自己那块屏的空间 2（非活动空间则立即隐藏）
+--   workspace("prev")       —— 往前一个空间（已经在空间 1 时什么都不做，不循环）
+--   workspace("next")       —— 往后一个空间（已经在最后一个时什么都不做，不循环）
 --
 -- 下面这组是最常见的绑法，但**默认注释掉**：启动器的快速启动键用的就是
 -- `Alt` + 数字（`Alt+1`..`Alt+9`、`Alt+0`，见上面 apps 那一节），两者会抢。
 -- 要用就在这里换一组不冲突的和弦，或者接受“启动器开着时优先给启动器”。
+-- 最后两条是相对切换（不需要空间号）；注意 `Ctrl+Win+←/→` 正好是 Windows
+-- 自己的「切虚拟桌面」，绑了就会把它吞掉。
 --
 -- for i = 1, 9 do
 --   hotkey{ keys = "Alt+" .. i, action = workspace("switch", i) }
 --   hotkey{ keys = "Alt+Shift+" .. i, action = workspace("move", i) }
 -- end
+-- hotkey{ keys = "Ctrl+Win+Left",  action = workspace("prev") }
+-- hotkey{ keys = "Ctrl+Win+Right", action = workspace("next") }
 
 -- 剪贴板辅助。
 hotkey{

@@ -299,6 +299,21 @@ Config sampleConfig()
     }
 
     {
+        // 相对工作空间切换（`prev` / `next`）：没有 `index` 字段，写成
+        // `{ type = "workspace", op = "prev" }`，读回来必须还是同一条动作。
+        HotkeyDef def;
+        def.name = QStringLiteral("hk-workspace-prev");
+        def.keys = {QStringLiteral("Ctrl+Alt+6")};
+        Action action = base(Action::Kind::Workspace);
+        action.workspaceOp = WorkspaceOp::Prev;
+        ActionSpec spec;
+        spec.kind = ActionSpec::Kind::One;
+        spec.action = action;
+        def.action = spec;
+        config.hotkeys.push_back(def);
+    }
+
+    {
         RemapDef def;
         def.name = QStringLiteral("caps");
         def.from = QStringLiteral("CapsLock");
@@ -467,7 +482,7 @@ void TestConfigWriter::roundTripsThroughRealLua()
     }
 
     // 数目形状对上（真正的比较在下面）。
-    QCOMPARE(static_cast<int>(compiled.bindings.size()), 27);
+    QCOMPARE(static_cast<int>(compiled.bindings.size()), 28);
     // 禁用掉的那条 remap 不会进编译结果（`compile()` 只把有效的那条交给引擎）。
     QCOMPARE(static_cast<int>(compiled.remaps.size()), 1);
     QCOMPARE(static_cast<int>(compiled.windowRules.size()), 5);
