@@ -355,8 +355,14 @@
   `show()` / `relocateToMonitor()` 都这么写）。`show()` 要能对**还藏着**的窗口设这个属性
   （`tst_interactive::hidesAndShowsAWindowWithoutTouchingIt` 验了这一点）：设不上就只是多一段
   动画，不会失败。
+  * **2026-10-22 用 `tmp/wshide/` 的探针复测：这台机器上看不到淡出**。普通弹窗与最大化的
+    `WS_OVERLAPPEDWINDOW`、同进程与跨进程，裸 `SW_HIDE` 都是在**一档 20 ms 采样之内**直接
+    变成背景（没有中间灰度）、属性开关与否看不出差别。所以属性留着当保险（别的机器 / 别的
+    App 上可能真有），但**“一屏窗口依次消失”不是动画造成的** —— 真凶见下面那条跨线程
+    `SendMessage`。
 * **`DWMWA_TRANSITIONS_FORCEDISABLED` 读不回来**，只能“设 TRUE → `ShowWindow` → 设回 FALSE”
-  （RAII `dwm::TransitionGuard`）；DWM 在过渡**开始**时读它。
+  （RAII `dwm::TransitionGuard`）；DWM 在过渡**开始**时读它。一批窗口要用
+  `dwm::setTransitionsDisabled()`：整批之前设一次、整批之后才复原。
 * **终端窗口不能靠标题找**（`process = "wezterm"`，窗口属于 `wezterm-gui.exe`）。
 * **`run`/`window.launch` 走 `CreateProcess`、不查 `App Paths`、也不能用 `DETACHED_PROCESS`**（会静默
   杀死控制台子进程，用 `CREATE_NO_WINDOW`）。
@@ -449,9 +455,21 @@
 * **UWP 的 `ApplicationFrameWindow` / `CoreWindow` 会带着 `cloak=2` 却仍在当前桌面**（真机的「设置」就是
   这样，`GetWindowDesktopId` 还返回全零 GUID）：`cloak != 0` 不能单独当「不在本桌面」的判据，而且「被我们
   藏起来的窗口」将来也要跟「shell 藏的假窗口」分开（`isSwitchableWindow` 要加例外）。
-* **`SW_HIDE` 是跨线程 `SendMessage` 语义**（真机单次 0.6–2.2 ms；`SWP_HIDEWINDOW` 不发消息，0.6–1.1 ms），
+* **`SW_HIDE` 是跨线程 `SendMessage` 语义**（真机单次 0.6–2.2 ms，**目标空闲**时；`SWP_HIDEWINDOW` 不发消息，0.6–1.1 ms），
   也就是说**目标进程卡死时可能把调用线程挂住**（本次没故意挂起别人的线程，未实测）→ 只能在动作工作线程
   做，并且**先把恢复日志写盘再隐藏**。
+* **目标 App 的 UI 线程忙多久，`ShowWindow` 就等多久 —— 串行做就是“一屏窗口依次消失”**
+  （2026-10-22 实测，`tmp/wshide/fade2.exe`）：子进程的 `WM_SHOWWINDOW` 里 `Sleep(300)`，
+  `ShowWindow(SW_HIDE)` 单次就变成 **~303 ms**，三个窗口串行 **~900 ms** 才全部藏完，屏幕上就是
+  一个消失、下一个才消失。这与 DWM 动画无关（同一台机器上裸 `SW_HIDE` 一帧到位），**是切工作空间
+  “不瞬时、不同时”的真正原因**。所以批量显隐走 `workspace::hideMany()` / `showMany()`：每个窗口的
+  `ShowWindow` 在各自的临时线程上做、一起 `join`，总耗时从“求和”变成“取最大”。
+  * **但属于调用线程的窗口不能丢给临时线程**：那会 `SendMessage` 给窗口所在线程，而那条线程正在
+    等 `join` —— 自己等自己就是死锁（真踩到过，`tst_interactive::switchesWorkspacesWithRealWindows`
+    挂了 300 s）。`ownedByCallingThread()` 把这几条就地做掉。
+  * 验证手段：`tst_interactive::hidesAndShowsManyWindowsAtOnce`（三个“`WM_SHOWWINDOW` 睡 250 ms”
+    的窗口，并行 ~250 ms / 串行 ~750 ms，阈值取中间 500 ms）。把 `runConcurrently()` 临时改回
+    串行，它必红（实测 804 ms）。
 * **提权窗口一律动不了**（`ShowWindow` / `SetWindowPos` 都是 `ERROR_ACCESS_DENIED`=5）→ `--no-elevate` 的
   实例只能跳过 + 一条 warning（Q7 得证，不用再设计提权代理）。
 
@@ -463,6 +481,9 @@
   `window::isMainWindow()` 用在记录里那些窗口上会**把它们从枚举里漏掉**（后果是它们再也回不来）。
 * **`ShowWindow` 的返回值不能用来判断失败**：它返回的是**之前的**可见状态，隐藏一个已经隐藏的窗口
   也返回 0。判后置条件（`IsWindowVisible`），或者干脆不判。
+* **变量名不能叫 `slots`**：`rpcndr.h` / MIDL 把一个同名宏塞进了 `windows.h`，
+  `std::vector<std::size_t> slots;` 报的是 “declaration does not declare anything [-fpermissive]”
+  （看着完全不像宏冲突）。本仓库叫 `indexes`。
 * **`SW_SHOWMAXIMIZED` / `SW_MAXIMIZE` 会抢前台**：`tst_interactive` 里 “先最大化再隐藏” 那一段会让
   测试窗口闪一下前台，这不是产品行为（工作空间用的是 `SW_SHOWNOACTIVATE`）。
 * **UWP 要藏的是 `ApplicationFrameWindow`**：传进来一个 `Windows.UI.Core.CoreWindow` 时要往

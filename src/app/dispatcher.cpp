@@ -2091,19 +2091,32 @@ void Dispatcher::applyWorkspaceEffects(const core::WorkspaceEffects &effects, co
     // **不用 `show()` 的 `insertAfter`**：`SetWindowPos(hwnd, 前一个)` 把 `hwnd` 摆在
     // 前一个**下面**，而这里要的是上面（M0 的探针是「顶 → 底」记录的，方向正好反）；
     // 一条 `restack()` 比逐对摆位置更不容易错。
-    std::vector<HWND> shownWindows;
-    shownWindows.reserve(effects.show.size());
+    //
+    // 显隐都走**批量接口**（`showMany()` / `hideMany()`）：它们把每个窗口的
+    // `ShowWindow` 丢到临时线程上并行做。逐个做的话，总耗时是各 App 的
+    // `WM_SHOWWINDOW` 响应时间**之和**，看上去就是“一屏窗口依次消失”——见
+    // `platform/win/workspace.h` 与 `docs/notes/pitfalls.md`。
+    std::vector<HWND> showTargets;
+    showTargets.reserve(effects.show.size());
     for (const core::WindowId id : effects.show) {
         const HWND hwnd = win::workspace::manageTarget(win::workspace::handleOf(id));
         if (hwnd == nullptr) {
             ++failed;
             continue;
         }
-        QString error;
-        if (!win::workspace::show(hwnd, nullptr, &error)) {
+        showTargets.push_back(hwnd);
+    }
+    std::vector<HWND> shownWindows;
+    shownWindows.reserve(showTargets.size());
+    const std::vector<win::workspace::BatchResult> showResults =
+        win::workspace::showMany(showTargets);
+    for (std::size_t i = 0; i < showTargets.size(); ++i) {
+        const HWND hwnd = showTargets.at(i);
+        if (!showResults.at(i).ok) {
             ++failed;
             win::logWarn(QStringLiteral("workspace: cannot show %1: %2")
-                             .arg(core::rustDebug(win::window::windowTitle(hwnd)), error));
+                             .arg(core::rustDebug(win::window::windowTitle(hwnd)),
+                                  showResults.at(i).error));
             continue;
         }
         shownWindows.push_back(hwnd);
@@ -2120,37 +2133,50 @@ void Dispatcher::applyWorkspaceEffects(const core::WorkspaceEffects &effects, co
                              .arg(reason, error));
         }
     }
-    // 顶 → 底：先藏最上面那个，剩下的窗口不会先闪一下。
-    for (std::size_t i = 0; i < hide.size(); ++i) {
-        if (!mayHide) {
-            // 日志写不进去：整个 hide 都不会发生（上面已经 warning 过，不再逐窗口刷屏）。
-            ++failed;
-            continue;
+    // 同样**一次并行全部藏掉**（`hideMany()`）：切一次工作空间是一个视觉动作，
+    // 不能一个窗口一个窗口地等目标 App 的 UI 线程。
+    std::vector<HWND> hideTargets;
+    hideTargets.reserve(hide.size());
+    std::vector<std::size_t> hideSlots;
+    hideSlots.reserve(hide.size());
+    const auto dropLogEntry = [this, &hideKeys, &hide, &logChanged, &logKey](std::size_t index) {
+        const core::WindowId id = hide.at(index);
+        const core::WindowId key = index < hideKeys.size() ? hideKeys.at(index) : logKey(id);
+        if (core::removeHiddenWindow(m_workspaceLog, key)) {
+            logChanged = true;
         }
-        const core::WindowId id = hide.at(i);
-        const core::WindowId key = i < hideKeys.size() ? hideKeys.at(i) : logKey(id);
-        const HWND hwnd = win::workspace::manageTarget(win::workspace::handleOf(id));
-        const auto dropLogEntry = [this, key, &logChanged]() {
-            if (core::removeHiddenWindow(m_workspaceLog, key)) {
-                logChanged = true;
+    };
+    if (!mayHide) {
+        // 日志写不进去：整个 hide 都不会发生（上面已经 warning 过，不再逐窗口刷屏）。
+        failed += static_cast<int>(hide.size());
+    } else {
+        for (std::size_t i = 0; i < hide.size(); ++i) {
+            const HWND hwnd = win::workspace::manageTarget(win::workspace::handleOf(hide.at(i)));
+            if (hwnd == nullptr) {
+                // 预写的时候还在、现在没了：那条记下来就永远放不回去了。
+                ++failed;
+                dropLogEntry(i);
+                continue;
             }
-        };
-        if (hwnd == nullptr) {
-            // 预写的时候还在、现在没了：把那条记下来就永远放不回去了。
-            ++failed;
-            dropLogEntry();
-            continue;
+            hideTargets.push_back(hwnd);
+            hideSlots.push_back(i);
         }
-        QString error;
-        if (!win::workspace::hide(hwnd, &error)) {
-            // 目标进程卡死 / UIPI（Q7：不提权的实例管不了提权窗口）：跳过 + warning。
-            ++failed;
-            dropLogEntry();
-            win::logWarn(QStringLiteral("workspace: cannot hide %1: %2")
-                             .arg(core::rustDebug(win::window::windowTitle(hwnd)), error));
-            continue;
+        const std::vector<win::workspace::BatchResult> hideResults =
+            win::workspace::hideMany(hideTargets);
+        for (std::size_t item = 0; item < hideTargets.size(); ++item) {
+            const std::size_t index = hideSlots.at(item);
+            if (!hideResults.at(item).ok) {
+                // 目标进程卡死 / UIPI（Q7：不提权的实例管不了提权窗口）：跳过 + warning。
+                ++failed;
+                dropLogEntry(index);
+                win::logWarn(
+                    QStringLiteral("workspace: cannot hide %1: %2")
+                        .arg(core::rustDebug(win::window::windowTitle(hideTargets.at(item))),
+                             hideResults.at(item).error));
+                continue;
+            }
+            ++hidden;
         }
-        ++hidden;
     }
     if (logChanged) {
         persistWorkspaceLog(reason);

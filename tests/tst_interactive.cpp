@@ -25,6 +25,7 @@
 #include <cstring>
 #include <algorithm>
 #include <functional>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -238,37 +239,155 @@ int zIndexOf(HWND hwnd)
     return -1;
 }
 
+/// 一个“UI 线程很忙”的窗口：窗口建在**自己的线程**上，`WM_SHOWWINDOW` 里睡一下。
+///
+/// 为什么需要它：`ShowWindow`（`SW_HIDE` / `SW_SHOWNOACTIVATE`）对**别的线程**的窗口
+/// 是 `SendMessage` 语义 —— 目标线程慢多久，调用方就等多久。工作空间的显隐因此必须
+/// **并行**做（`workspace::hideMany()` / `showMany()`），否则一屏窗口会“依次”
+/// 消失 / 出现。真机上这条最痛：Chrome / Electron 的 UI 线程忙一下，切一次工作空间
+/// 就是“一个一个地消失”。
+class SlowWindow
+{
+public:
+    explicit SlowWindow(DWORD delayMs, const QString &title);
+    ~SlowWindow();
+    SlowWindow(const SlowWindow &) = delete;
+    SlowWindow &operator=(const SlowWindow &) = delete;
+
+    /// 窗口建好了才返回（超时返回 nullptr）。
+    HWND waitForWindow(int timeoutMs);
+
+private:
+    static DWORD WINAPI threadProc(LPVOID param);
+
+    HANDLE m_thread = nullptr;
+    HANDLE m_ready = nullptr;
+    HWND m_hwnd = nullptr;
+    DWORD m_delay = 0;
+    QString m_title;
+};
+
+LRESULT CALLBACK slowWindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
+{
+    if (message == WM_SHOWWINDOW) {
+        // 故意慢：调用方（`ShowWindow`）会在这里等（跨线程 `SendMessage`）。
+        const auto delay = static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+        if (delay > 0) {
+            Sleep(delay);
+        }
+        return 0;
+    }
+    if (message == WM_CLOSE) {
+        DestroyWindow(hwnd);
+        return 0;
+    }
+    if (message == WM_DESTROY) {
+        PostQuitMessage(0);
+        return 0;
+    }
+    return DefWindowProcW(hwnd, message, wparam, lparam);
+}
+
+SlowWindow::SlowWindow(DWORD delayMs, const QString &title)
+    : m_delay(delayMs), m_title(title)
+{
+    m_ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    m_thread = CreateThread(nullptr, 0, &SlowWindow::threadProc, this, 0, nullptr);
+}
+
+SlowWindow::~SlowWindow()
+{
+    if (m_hwnd != nullptr && IsWindow(m_hwnd) != 0) {
+        PostMessageW(m_hwnd, WM_CLOSE, 0, 0);
+    }
+    if (m_thread != nullptr) {
+        WaitForSingleObject(m_thread, 5000);
+        CloseHandle(m_thread);
+    }
+    if (m_ready != nullptr) {
+        CloseHandle(m_ready);
+    }
+}
+
+DWORD WINAPI SlowWindow::threadProc(LPVOID param)
+{
+    auto *self = static_cast<SlowWindow *>(param);
+    WNDCLASSEXW cls{};
+    cls.cbSize = sizeof(cls);
+    cls.lpfnWndProc = slowWindowProc;
+    cls.hInstance = GetModuleHandleW(nullptr);
+    cls.lpszClassName = L"FlowkeydInteractiveSlowWindow";
+    RegisterClassExW(&cls);
+    self->m_hwnd = CreateWindowExW(0, cls.lpszClassName,
+                                   reinterpret_cast<const wchar_t *>(self->m_title.utf16()),
+                                   WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 480,
+                                   320, nullptr, nullptr, cls.hInstance, nullptr);
+    if (self->m_hwnd != nullptr) {
+        SetWindowLongPtrW(self->m_hwnd, GWLP_USERDATA, static_cast<LONG_PTR>(self->m_delay));
+    }
+    SetEvent(self->m_ready);
+    MSG message{};
+    while (GetMessageW(&message, nullptr, 0, 0) > 0) {
+        TranslateMessage(&message);
+        DispatchMessageW(&message);
+    }
+    return 0;
+}
+
+HWND SlowWindow::waitForWindow(int timeoutMs)
+{
+    if (m_ready == nullptr) {
+        return nullptr;
+    }
+    if (WaitForSingleObject(m_ready, static_cast<DWORD>(timeoutMs)) != WAIT_OBJECT_0) {
+        return nullptr;
+    }
+    return m_hwnd;
+}
+
 /// 按 `Dispatcher::applyWorkspaceEffects()` 的同一顺序执行效果：
 /// `show`（底 → 顶）→ `restack` → `hide`（顶 → 底）。
 ///
 /// 不自己写第二套顺序：工作空间的 Z 序就是靠这两步保住的，测试走错路就等于
-/// 什么也没验。
+/// 什么也没验。显隐两步同样走**批量**接口（`showMany()` / `hideMany()`）——
+/// 生产代码就是这么做的，分批/逐个的差异由 `hidesAndShowsManyWindowsAtOnce` 钉住。
 bool applyWorkspaceEffectsForTest(const core::WorkspaceEffects &effects, QString *error)
 {
     namespace ws = platform::win::workspace;
-    std::vector<HWND> shown;
-    shown.reserve(effects.show.size());
+    std::vector<HWND> showTargets;
+    showTargets.reserve(effects.show.size());
     for (const core::WindowId id : effects.show) {
         const HWND hwnd = ws::manageTarget(ws::handleOf(id));
         if (hwnd == nullptr) {
             *error = QStringLiteral("a window that should be shown is gone");
             return false;
         }
-        if (!ws::show(hwnd, nullptr, error)) {
+        showTargets.push_back(hwnd);
+    }
+    const std::vector<ws::BatchResult> showResults = ws::showMany(showTargets);
+    for (std::size_t i = 0; i < showTargets.size(); ++i) {
+        if (!showResults.at(i).ok) {
+            *error = showResults.at(i).error;
             return false;
         }
-        shown.push_back(hwnd);
     }
-    if (!ws::restack(shown, error)) {
+    if (!ws::restack(showTargets, error)) {
         return false;
     }
+    std::vector<HWND> hideTargets;
+    hideTargets.reserve(effects.hide.size());
     for (const core::WindowId id : effects.hide) {
         const HWND hwnd = ws::manageTarget(ws::handleOf(id));
         if (hwnd == nullptr) {
             *error = QStringLiteral("a window that should be hidden is gone");
             return false;
         }
-        if (!ws::hide(hwnd, error)) {
+        hideTargets.push_back(hwnd);
+    }
+    const std::vector<ws::BatchResult> hideResults = ws::hideMany(hideTargets);
+    for (const ws::BatchResult &result : hideResults) {
+        if (!result.ok) {
+            *error = result.error;
             return false;
         }
     }
@@ -426,6 +545,7 @@ private slots:
     void cloakedWindowsOnOtherDesktopsStaySwitchable();
     void switchesTheInputMethodToEnglish();
     void hidesAndShowsAWindowWithoutTouchingIt();
+    void hidesAndShowsManyWindowsAtOnce();
     void enumeratesManageableWindowsByTheirRecord();
     void switchesWorkspacesWithRealWindows();
     void revealsAWindowHiddenInAnotherWorkspace();
@@ -1817,6 +1937,99 @@ void TestInteractive::hidesAndShowsAWindowWithoutTouchingIt()
     QVERIFY2(ws::hide(hwnd, &error), qPrintable(error));
     QVERIFY2(ws::show(hwnd, nullptr, &error), qPrintable(error));
     QVERIFY2(IsIconic(hwnd) != 0, "the minimized state was lost");
+}
+
+/// 一屏窗口的显隐必须是**一个**动作：不能按各 App 的 `WM_SHOWWINDOW` 响应速度排队。
+///
+/// 真机上的现象是“切一次工作空间，窗口一个一个地消失”，根因不在 DWM 过渡动画，而是
+/// `SW_HIDE` / `SW_SHOWNOACTIVATE` 是**跨线程 `SendMessage`**：目标 App 的 UI 线程
+/// 忙多久，我们就等多久，而旧代码是一个窗口一个窗口地做。
+///
+/// 这里用三个“`WM_SHOWWINDOW` 里睡 250 ms”的窗口（各自一条线程，与别的进程的窗口
+/// 等价）把这件事钉死：并行做 ~250 ms，串行做就是 750 ms。阈值留在中间（500 ms），
+/// 免得这台机器偶尔抖一下就红。
+void TestInteractive::hidesAndShowsManyWindowsAtOnce()
+{
+    if (!interactiveEnabled()) {
+        QSKIP("set FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1 to run the interactive tests");
+    }
+    namespace ws = platform::win::workspace;
+    constexpr DWORD kSlowMs = 250;
+    constexpr int kCount = 3;
+    constexpr qint64 kBudgetMs = 500; // 并行 ~250 ms / 串行 ~750 ms，取中间
+    const QString marker =
+        QStringLiteral("flowkeyd-workspace-many-%1").arg(QCoreApplication::applicationPid());
+
+    std::vector<std::unique_ptr<SlowWindow>> windows;
+    std::vector<HWND> handles;
+    for (int index = 0; index < kCount; ++index) {
+        windows.push_back(std::make_unique<SlowWindow>(
+            kSlowMs, QStringLiteral("%1-%2").arg(marker).arg(index)));
+        HWND hwnd = windows.back()->waitForWindow(5000);
+        QVERIFY2(hwnd != nullptr, "the slow test window was not created");
+        handles.push_back(hwnd);
+    }
+    // 让三个窗口真的先显示出来（这才回到“工作空间里有多个窗口”的起点）。
+    {
+        QElapsedTimer warmup;
+        warmup.start();
+        const std::vector<ws::BatchResult> shown = ws::showMany(handles);
+        QCOMPARE(static_cast<int>(shown.size()), kCount);
+        for (const ws::BatchResult &result : shown) {
+            QVERIFY2(result.ok, qPrintable(result.error));
+        }
+        for (HWND hwnd : handles) {
+            QVERIFY(IsWindowVisible(hwnd) != 0);
+        }
+        QVERIFY2(warmup.elapsed() < kBudgetMs,
+                 qPrintable(QStringLiteral("showing %1 slow windows took %2 ms (sequential?)")
+                                .arg(kCount)
+                                .arg(warmup.elapsed())));
+    }
+
+    QElapsedTimer timer;
+    timer.start();
+    const std::vector<ws::BatchResult> hidden = ws::hideMany(handles);
+    const qint64 hideMs = timer.elapsed();
+    QCOMPARE(static_cast<int>(hidden.size()), kCount);
+    for (const ws::BatchResult &result : hidden) {
+        QVERIFY2(result.ok, qPrintable(result.error));
+    }
+    for (HWND hwnd : handles) {
+        QVERIFY(IsWindowVisible(hwnd) == 0);
+    }
+    QVERIFY2(hideMs < kBudgetMs,
+             qPrintable(QStringLiteral("hiding %1 slow windows took %2 ms (sequential?)")
+                            .arg(kCount)
+                            .arg(hideMs)));
+
+    timer.restart();
+    const std::vector<ws::BatchResult> shownAgain = ws::showMany(handles);
+    const qint64 showMs = timer.elapsed();
+    QCOMPARE(static_cast<int>(shownAgain.size()), kCount);
+    for (const ws::BatchResult &result : shownAgain) {
+        QVERIFY2(result.ok, qPrintable(result.error));
+    }
+    for (HWND hwnd : handles) {
+        QVERIFY(IsWindowVisible(hwnd) != 0);
+    }
+    QVERIFY2(showMs < kBudgetMs,
+             qPrintable(QStringLiteral("showing %1 slow windows took %2 ms (sequential?)")
+                            .arg(kCount)
+                            .arg(showMs)));
+
+    // 结果与输入**一一对应**：句柄已经没了的那个只报它自己，别的照常干完。
+    HWND gone = nullptr;
+    {
+        SlowWindow doomed(kSlowMs, marker + QStringLiteral("-doomed"));
+        gone = doomed.waitForWindow(5000);
+        QVERIFY2(gone != nullptr, "the doomed test window was not created");
+    }
+    const std::vector<ws::BatchResult> mixed = ws::showMany({handles.at(0), gone, handles.at(1)});
+    QCOMPARE(static_cast<int>(mixed.size()), 3);
+    QVERIFY2(mixed.at(0).ok, qPrintable(mixed.at(0).error));
+    QVERIFY2(!mixed.at(1).ok, "a destroyed window must report a failure");
+    QVERIFY2(mixed.at(2).ok, qPrintable(mixed.at(2).error));
 }
 
 /// 「归工作空间管」的枚举：自己进程的窗口永远不进去，未记录的窗口必须真的可见。

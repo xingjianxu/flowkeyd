@@ -105,6 +105,31 @@ TransitionGuard::~TransitionGuard()
     }
 }
 
+std::size_t setTransitionsDisabled(const std::vector<HWND> &windows, bool disabled)
+{
+    std::size_t applied = 0;
+    QString firstError;
+    for (const HWND hwnd : windows) {
+        if (hwnd == nullptr) {
+            continue;
+        }
+        QString error;
+        if (forceDisableTransitions(hwnd, disabled, &error)) {
+            ++applied;
+        } else if (firstError.isEmpty()) {
+            firstError = error;
+        }
+    }
+    if (!firstError.isEmpty()) {
+        // 逐窗口一行 debug 会在一台没有合成器的机器上刷屏，所以一批只记一次。
+        logDebug(QStringLiteral("keeping the DWM transitions of %1 of %2 window(s): %3")
+                     .arg(windows.size() - applied)
+                     .arg(windows.size())
+                     .arg(firstError));
+    }
+    return applied;
+}
+
 bool isCloaked(HWND hwnd)
 {
     const DwmGetWindowAttributeFn get = getWindowAttribute();

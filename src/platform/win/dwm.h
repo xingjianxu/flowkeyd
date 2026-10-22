@@ -22,6 +22,8 @@
 
 #include <QString>
 
+#include <vector>
+
 namespace flowkeyd::platform::win::dwm {
 
 /// `dwmapi!DwmSetWindowAttribute` 在这个进程里可用吗。
@@ -33,6 +35,17 @@ bool available();
 /// 只记一行 debug：动画多一点不是动作失败。
 bool forceDisableTransitions(HWND hwnd, bool disabled, QString *error);
 
+/// 把**一批**窗口的过渡动画一起关掉（`disabled = true`）或一起恢复（`false`）。
+///
+/// 与 `TransitionGuard` 是同一个属性（`DWMWA_TRANSITIONS_FORCEDISABLED`），区别只在
+/// 作用域：切一次工作空间涉及一屏窗口，这一屏的消失 / 出现必须是**一个**视觉动作，
+/// 所以整批之前设 `TRUE`、整批之后才设回 `FALSE` —— 不许“设一个、`ShowWindow` 一个、
+/// 复原一个”（DWM 可能已经按复原后的状态开始画那一批的过渡了）。
+///
+/// 返回成功设上的窗口数；拿不到 `dwmapi` 时是 0，只记一行 debug（动画多一点不是
+/// 动作失败）。
+std::size_t setTransitionsDisabled(const std::vector<HWND> &windows, bool disabled);
+
 /// 一次会改变窗口可见性 / 状态的调用，顺带（默认）关掉 DWM 过渡动画的 RAII 守卫。
 ///
 /// `DWMWA_TRANSITIONS_FORCEDISABLED` **读不回来**，所以只能“设 TRUE → 调用 →
@@ -43,8 +56,9 @@ bool forceDisableTransitions(HWND hwnd, bool disabled, QString *error);
 /// 合成器（或无头会话）时动画多一点，不该让这次调用失败。
 ///
 /// 两个用户：`window::applyTo()`（`window` 动作的 `animate` 参数）与
-/// `workspace::hide()` / `show()`（切工作空间的显隐一律不要动画，见
-/// `docs/notes/pitfalls.md`「`SW_HIDE` 本身会播 DWM 淡出」）。
+/// `workspace::hide() / show()`（切工作空间的显隐一律不要动画，见
+/// `docs/notes/pitfalls.md`「`SW_HIDE` 本身会播 DWM 淡出」）。工作空间的**批量**
+/// 显隐走的是下面的 `setTransitionsDisabled()`：那一批窗口的作用域要一样长。
 class TransitionGuard
 {
 public:

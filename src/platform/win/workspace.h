@@ -9,9 +9,14 @@
 // 所以本文件是「隐藏方式」唯一的家：以后要换方案（或再加一条兼容路径）只改这里。
 //
 // 两条硬约束（M0 实测）：
-//   1. `SW_HIDE` 是**跨线程 `SendMessage` 语义**（实测 0.6–2.2 ms/窗口）：目标进程
-//      卡死时可能把调用线程挂住 → 这些函数**只允许在动作工作线程上调用**，绝不上
-//      钩子线程（不变量 1）。`IsHungAppWindow()` 是这里唯一的廉价护航。
+//   1. `SW_HIDE` 是**跨线程 `SendMessage` 语义**：目标进程卡死时可能把调用线程
+//      挂住，而且**耗时就是目标 App 的响应时间** → 这些函数**只允许在动作工作
+//      线程上调用**，绝不上钩子线程（不变量 1）。`IsHungAppWindow()` 是这里唯一的
+//      廉价护航。
+//      **切工作空间必须用批量接口**（`hideMany()` / `showMany()`）：逐个做的时候
+//      一屏窗口会“依次”消失 / 出现（目标 App 忙多久，后面的窗口就晚多久），
+//      批量版把每个窗口的 `ShowWindow` 并行做掉，总耗时从“求和”变成“取最大”。
+//      真机实测：UI 线程睡 300 ms 的窗口，串行 3 个要 900 ms。
 //   2. 每个 hide/show 都会产生一条 `EVENT_OBJECT_HIDE` / `EVENT_OBJECT_SHOW`，而且
 //      **分不出是谁干的** → 「自己引起的事件」只能靠调用方的期望事件表抑制（M5）。
 //
@@ -77,14 +82,42 @@ bool isAlive(HWND hwnd);
 /// 这里沿 `GA_ROOT` 往上找到那个宿主，其它情况原样返回。
 HWND manageTarget(HWND hwnd);
 
+/// 一个窗口在这次批量显隐里的结果（与传进去的 `windows` **一一对应**）。
+struct BatchResult
+{
+    bool ok = false;
+    /// 英文失败原因（与 `hide()` / `show()` 的 `error` 同一个口径）。
+    QString error;
+};
+
+/// 一次性藏 / 露**一批**窗口。
+///
+/// 切工作空间专用。与逐个 `hide()` / `show()` 的三个区别：
+///  1. **并行**：每个窗口的 `ShowWindow` 在各自的临时线程上做，然后一起 `join`。
+///     逐个做是“一屏窗口依次消失”的根源 —— `SW_HIDE` / `SW_SHOWNOACTIVATE` 是
+///     跨线程 `SendMessage` 语义，耗时取决于**目标 App 的 UI 线程**；
+///     `show()` 里收尾的 `SetWindowPlacement` / `SetWindowPos` 同理。
+///     并行之后总耗时从“求和”变成“取最大”，一个 App 卡住不再拖住后面的窗口。
+///  2. **整批关过渡动画**（`dwm::setTransitionsDisabled()`）：这一批窗口的显隐
+///     是一个视觉动作，属性要在整批前后各设一次，不逐窗口复原。
+///  3. 返回**一一对应**的结果，失败原因留在 `BatchResult` 里由调用方记日志
+///     （工作线程里既不写日志也不碰任何共享状态）。
+///
+/// `savedPlacements()`（`WINDOWPLACEMENT` 兜底记录）仍然只在**调用线程**上读写。
+///
+/// 只在动作工作线程上调用。
+std::vector<BatchResult> hideMany(const std::vector<HWND> &windows);
+std::vector<BatchResult> showMany(const std::vector<HWND> &windows);
+
 /// 隐藏一个窗口（`ShowWindow(SW_HIDE)`），并记下 `WINDOWPLACEMENT` 备用。
 ///
 /// 位置 / 大小 / 最大化 / 最小化都由 Windows 自己保持（M0 实测），记录只是给
 /// `show()` 一个“万一被改了就摆回去”的兜底。
 ///
-/// **不播动画**：`SW_HIDE` 本身会让 DWM 淡出，所以这里套 `dwm::TransitionGuard`
+/// **不播动画**：`SW_HIDE` 本身会让 DWM 淡出，所以这里关掉这个窗口的过渡
 /// （切工作空间要的是“直接不见”）。设不上这个属性时只是多一段动画，不影响结果。
 ///
+/// 单个窗口的一次性操作用它；**切工作空间请用 `hideMany()`**（理由见那里）。
 /// 只在动作工作线程上调用。目标进程无响应时直接失败（英文原因），不去冒把线程
 /// 挂住的风险。
 bool hide(HWND hwnd, QString *error);
@@ -96,6 +129,8 @@ bool hide(HWND hwnd, QString *error);
 ///
 /// `insertAfter` 是**记录栈里比它低一层**的那个窗口（`nullptr` = 不动 Z 序）；
 /// 真正的整栈还原交给 `restack()`。
+///
+/// 单个窗口的一次性操作用它；**切工作空间请用 `showMany()`**（理由见那里）。
 bool show(HWND hwnd, HWND insertAfter, QString *error);
 
 /// 按记录栈还原 Z 序（`bottomToTop`，底 → 顶），**不激活**。

@@ -722,6 +722,18 @@ active 后所在的 monitor 上"。
     DWM 在过渡**开始**时读它，所以作用域只要盖住那一次调用。设不上只记一行 debug（无合成器的
     会话动画多一点不算失败）。`show()` 是在窗口**还藏着**的时候设的 —— 这一点由
     `tst_interactive::hidesAndShowsAWindowWithoutTouchingIt` 钉住（藏着也能往返设置）。
+    批量显隐（下面那条）用 `dwm::setTransitionsDisabled()`：整批之前设一次、整批之后才复原。
+    * **2026-10-22 复测修正**：这台机器上看不到淡出 —— 普通弹窗与最大化的重叠窗口、同进程与
+      跨进程，裸 `SW_HIDE` 都是一档 20 ms 采样之内直接变成背景（探针 `tmp/wshide/`）。属性留着
+      当保险，但**“一屏窗口依次消失”的真凶是串行 `SendMessage`，不是动画**。
+  * **一次切换的显隐是批量并行的**（2026-10-22 补）：`SW_HIDE` / `SW_SHOWNOACTIVATE`（以及
+    `show()` 收尾的 `SetWindowPlacement` / `SetWindowPos`）都是跨线程 `SendMessage`，耗时就是
+    目标 App 的 UI 线程响应时间；逐个做就是“一屏窗口按各 App 的快慢依次消失 / 出现”（实测：
+    `WM_SHOWWINDOW` 里睡 300 ms 的窗口，串行 3 个要 900 ms）。`Dispatcher` 因此走
+    `workspace::hideMany()` / `showMany()`：每个窗口的 `ShowWindow` 在各自的临时线程上做、
+    一起 `join`，总耗时从“求和”变成“取最大”。属于**调用线程自己的窗口**要就地做（否则
+    自己等自己 = 死锁），`WINDOWPLACEMENT` 兜底记录与日志仍只在动作线程上读写。
+    `tst_interactive::hidesAndShowsManyWindowsAtOnce` 钉住它（并行 ~250 ms / 串行 ~750 ms）。
   * **被藏起来的窗口不进任务栏 / `Alt+Tab`**，写定的默认、**不提供开关**：`SW_HIDE` 的语义
     就是如此，而且“别的空间的窗口不该出现在任务栏上”正是这个功能的目的。要做到“留在任务栏里”
     必须**换藏法**（例如移出屏幕而不是 `SW_HIDE`），会把 M0 那条“隐藏之后还抢得到前台”的结论、
