@@ -811,7 +811,8 @@ core::Settings convertSettings(lua_State *L, int index)
         if (lua_type(L, v) == LUA_TBOOLEAN) {
             settings.workspace.enabled = lua_toboolean(L, v) != 0;
         } else if (lua_type(L, v) == LUA_TTABLE) {
-            checkFields(L, v, {"enabled", "count", "switch_target", "new_window", "exclude"});
+            checkFields(L, v, {"enabled", "count", "switch_target", "switch_effect", "new_window",
+                               "exclude"});
             if (auto value = optBool(L, v, "enabled")) {
                 settings.workspace.enabled = *value;
             }
@@ -822,6 +823,13 @@ core::Settings convertSettings(lua_State *L, int index)
                 const QString name =
                     enumName(L, v, "switch_target", {"cursor", "focus"}, QStringLiteral("cursor"));
                 settings.workspace.switchTarget = *core::workspaceSwitchTargetFromName(name);
+            }
+            // 切空间时要不要把屏幕冻住（`instant` = 不冻、最快；`freeze` = 遮住 Chromium
+            // 类程序的白闪，代价是 100–150 ms）。
+            if (hasField(L, v, "switch_effect")) {
+                const QString name = enumName(L, v, "switch_effect", {"instant", "freeze"},
+                                              QStringLiteral("instant"));
+                settings.workspace.switchEffect = *core::workspaceSwitchEffectFromName(name);
             }
             // `new_window = "active"`（默认）或者一个 1..count 的空间号。
             int newWindow = 0;
@@ -859,8 +867,8 @@ core::Settings convertSettings(lua_State *L, int index)
             const QString type = luaTypeName(lua_type(L, v));
             lua_pop(L, 1);
             fail(QStringLiteral("workspace: invalid type: %1, expected `true`, `false` or a "
-                                "table with `enabled` / `count` / `switch_target` / `new_window` / "
-                                "`exclude`")
+                                "table with `enabled` / `count` / `switch_target` / "
+                                "`switch_effect` / `new_window` / `exclude`")
                      .arg(type));
         }
         lua_pop(L, 1);

@@ -166,6 +166,10 @@ end
 --     switch_target = "cursor",                         -- workspace("switch") 作用于哪块屏：
 --                                                       --   "cursor" = 光标所在的那一块（默认）
 --                                                       --   "focus"  = 前台窗口所在的那一块
+--     switch_effect = "instant",                        -- 切空间时要不要遮住转场：
+--                                                       --   "instant" = 不遮、最快（默认，Chromium 系
+--                                                       --               程序会白闪 30–45 ms）
+--                                                       --   "freeze"  = 冻结屏幕画面，无白闪，慢 100–150 ms
 --     new_window = "active",                            -- 新窗口进哪儿："active"（默认）或 1..count
 --     exclude = { "game.exe" },                         -- 完全不归它管的程序（进程名子串）
 --   }

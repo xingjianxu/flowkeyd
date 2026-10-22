@@ -320,6 +320,11 @@ QStringList ConfigEditor::workspaceSwitchTargets() const
     return core::workspaceSwitchTargetNames();
 }
 
+QStringList ConfigEditor::workspaceSwitchEffects() const
+{
+    return core::workspaceSwitchEffectNames();
+}
+
 QStringList ConfigEditor::trayBadgeModes() const
 {
     return core::trayBadgeModeNames();

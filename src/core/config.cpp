@@ -138,6 +138,29 @@ std::optional<WorkspaceSwitchTarget> workspaceSwitchTargetFromName(const QString
     return std::nullopt;
 }
 
+QString workspaceSwitchEffectName(WorkspaceSwitchEffect effect)
+{
+    switch (effect) {
+    case WorkspaceSwitchEffect::Instant:
+        return QStringLiteral("instant");
+    case WorkspaceSwitchEffect::Freeze:
+        return QStringLiteral("freeze");
+    }
+    return QStringLiteral("instant");
+}
+
+std::optional<WorkspaceSwitchEffect> workspaceSwitchEffectFromName(const QString &name)
+{
+    const QString key = name.trimmed().toLower();
+    if (key == QLatin1String("instant")) {
+        return WorkspaceSwitchEffect::Instant;
+    }
+    if (key == QLatin1String("freeze")) {
+        return WorkspaceSwitchEffect::Freeze;
+    }
+    return std::nullopt;
+}
+
 RepeatSpec RepeatSpec::makeFlag(bool value)
 {
     RepeatSpec spec;

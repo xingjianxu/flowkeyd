@@ -202,6 +202,16 @@ ColumnLayout {
             onPicked: function (value) { page.editor.setWorkspaceSetting("switch_target", value) }
         }
 
+        ChoiceRow {
+            Layout.fillWidth: true
+            label: qsTr("切换效果")
+            hint: qsTr("「立即」最快，但 Chromium 系程序会闪一下白；「冻结画面」看不到白闪，代价是慢 100–150 ms")
+            options: page.editor ? page.editor.workspaceSwitchEffects : []
+            labels: ConfigText.labels("workspaceSwitchEffect", options)
+            value: page.workspace("switch_effect", "instant")
+            onPicked: function (value) { page.editor.setWorkspaceSetting("switch_effect", value) }
+        }
+
         BoolRow {
             Layout.fillWidth: true
             label: qsTr("新窗口进当前活动空间")

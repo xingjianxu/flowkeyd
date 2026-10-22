@@ -126,6 +126,12 @@ settings{
   --   switch_target `workspace("switch", N)` 作用在哪块屏上：
   --                   "cursor"（默认）光标所在的那一块
   --                   "focus"          前台窗口所在的那一块
+  --   switch_effect 切空间时要不要遮住转场：
+  --                   "instant"（默认）什么都不抓，切完就结束 —— 与快捷键显隐单个窗口
+  --                              一样快，代价是 Chrome / Edge / VS Code 这类程序被切回来时
+  --                              会白闪 30–45 ms
+  --                   "freeze"          先把屏幕画面冻住、等新窗口画完再放开 —— 看不到白闪，
+  --                              但每次多 100–150 ms（4K 上抓一张快照本身就要 ~40 ms）
   --   new_window    新窗口归入哪个空间："active"（默认 = 那块屏当前的活动空间）或 1..count。
   --                 只对运行期间新出现的窗口生效（启动时已经开着的窗口不会被藏起来）；
   --                 单个程序用 window_rule / app 的 `workspace` 指定更好。
@@ -135,6 +141,7 @@ settings{
     enabled = true,
     count = 9,
     switch_target = "cursor",
+    switch_effect = "instant",
     new_window = "active",
     -- exclude = { "game.exe", "obs64.exe" },
   },

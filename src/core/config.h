@@ -88,6 +88,20 @@ enum class WorkspaceSwitchTarget { Cursor, Focus };
 QString workspaceSwitchTargetName(WorkspaceSwitchTarget target);
 std::optional<WorkspaceSwitchTarget> workspaceSwitchTargetFromName(const QString &name);
 
+/// `settings.workspace.switch_effect`：切空间的那一下要不要把屏幕「冻住」。
+///
+/// 背景：被 `SW_HIDE` 过的窗口再显示出来时，Chromium 类程序（Chrome / Edge /
+/// Electron / VSCode）会白 30–45 ms。`Freeze` 抓一张屏幕快照盖上去、等 App 画完
+/// 再撤掉，看不到白屏，代价是每次切换多 100–150 ms（快照本身在 4K 上就要 ~40 ms，
+/// 加固定 100 ms 的等待）；`Instant` 什么都不做，切完就结束 —— 与快捷键显隐单个
+/// 窗口一样快，但上面那些程序会闪一下白。
+///
+/// **默认 `Instant`**：延迟比一个转场效果重要。
+enum class WorkspaceSwitchEffect { Instant, Freeze };
+
+QString workspaceSwitchEffectName(WorkspaceSwitchEffect effect);
+std::optional<WorkspaceSwitchEffect> workspaceSwitchEffectFromName(const QString &name);
+
 // ---------------------------------------------------------------------------
 // settings / hotkey / remap
 // ---------------------------------------------------------------------------
@@ -107,6 +121,8 @@ struct WorkspaceSettings
     std::uint32_t count = kDefaultWorkspaceCount;
     /// `workspace("switch", N)` 作用在哪块显示器上。
     WorkspaceSwitchTarget switchTarget = WorkspaceSwitchTarget::Cursor;
+    /// 切换时要不要用冻结快照遮住转场（默认 `Instant`：不遮，最快）。
+    WorkspaceSwitchEffect switchEffect = WorkspaceSwitchEffect::Instant;
     /// 新窗口默认归入哪个工作空间：`0` = 该显示器**当前的活动空间**
     /// （配置里写 `"active"`，默认），否则是 `1..count`。
     std::uint32_t newWindow = 0;

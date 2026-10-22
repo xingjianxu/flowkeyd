@@ -66,6 +66,7 @@ class ConfigEditor : public QObject
     Q_PROPERTY(QStringList toggleStates READ toggleStates CONSTANT)
     Q_PROPERTY(QStringList workspaceOps READ workspaceOps CONSTANT)
     Q_PROPERTY(QStringList workspaceSwitchTargets READ workspaceSwitchTargets CONSTANT)
+    Q_PROPERTY(QStringList workspaceSwitchEffects READ workspaceSwitchEffects CONSTANT)
     Q_PROPERTY(QStringList trayBadgeModes READ trayBadgeModes CONSTANT)
     Q_PROPERTY(QStringList monitorPresets READ monitorPresets CONSTANT)
     Q_PROPERTY(QStringList defaultRemoteDesktopProcesses READ defaultRemoteDesktopProcesses CONSTANT)
@@ -106,6 +107,8 @@ public:
     QStringList toggleStates() const;
     QStringList workspaceOps() const;
     QStringList workspaceSwitchTargets() const;
+    /// `settings.workspace.switch_effect` 的取值（`instant` / `freeze`）。
+    QStringList workspaceSwitchEffects() const;
     /// `settings.tray_badge` 的取值（`both` / `desktop` / `workspace`）。
     QStringList trayBadgeModes() const;
     QStringList monitorPresets() const;

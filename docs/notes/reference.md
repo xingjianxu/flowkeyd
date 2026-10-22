@@ -37,7 +37,8 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、`--ch
 * `app{}`：见 `decisions.md` 第 15 条；声明式写法叫 `apps`；再加一个 `workspace`（= `window.workspace` 的
   简写，只写它时会展开出一条只带归属的规则，见第 36 条）。
 * `settings.workspace`：`enabled`（默认 `true`）、`count`（1–10，默认 9）、`switch_target`（`"cursor"` 默认 /
-  `"focus"`）、`new_window`（`"active"` 默认 / 1..count；**只管运行期间新出现的窗口**，启动收编一律归入
+  `"focus"`）、`switch_effect`（`"instant"` 默认 / `"freeze"`：要不要用冻结快照遮住转场，见第 36 条）、
+  `new_window`（`"active"` 默认 / 1..count；**只管运行期间新出现的窗口**，启动收编一律归入
   活动空间）、`exclude`（进程名子串，**空串报错**）；写 `workspace = false` 也能整个关。**空串、超出
   `count` 的索引都在 `--check` 报错**。归属优先级：命中窗口的第一条规则的 `workspace` → `new_window`
   → 那块屏的活动空间（`core::workspaceForNewWindow()`）。
@@ -144,7 +145,17 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
   “先切空间再激活”）、预写恢复日志 → 强杀 → `--restore-windows` 按日志恢复、`new_window` 与规则的
   新窗口归属、`quit` 前恢复可见。脚本里**不断言“隐藏前台窗口之后前台没变”**（Windows 自己会把前台
   交给别的窗口），那条保证在 `tst_workspace` 里。
-* 最近一次实跑（2026-10-22，“切工作空间用冻结快照盖住过渡”那一轮）：`checks: 206, failures: 0`。
+* 最近一次实跑（2026-10-22，“切空间默认不再冻结屏幕”那一轮）：`checks: 206, failures: 0`。
+  这一轮只给冻结快照加了一个开关（`settings.workspace.switch_effect`，默认 `"instant"` = 不抓
+  快照、不等那 100 ms），工作空间那一段（含 `switch` / `prev` / `next` / `move_*` / `follow` /
+  `new_window` / 窗口规则 / 恢复日志 / `--restore-windows`）全过，切完的版本号是
+  `26-10-22-dde3600`。常驻是在跑验收前停掉的（它跑在 `build/dist-release`，正是要重建的那一份），
+  跑完用 `schtasks /Run /TN flowkeyd` 拉起新构建。
+  `instant` 的实际耗时这次直接在日志里量到了（这一轮新加的 `debug` 分段计时）：一次切换 **0–47 ms**
+  （`show` 15–47 ms 是等目标 App 响应 `SW_SHOWNOACTIVATE`，`restack` 15 ms，`freeze` 与 `hold`
+  恒为 0）；旧路径多出来的那两项是 4K 整屏 `BitBlt` ~38 ms 与固定 100 ms。`"freeze"` 的遮罩本身
+  没动，由 `tst_interactive::freezesTheScreenWithAnOverlay` 看着（这一轮也重跑过，绿）。
+* 上一次实跑（2026-10-22，“切工作空间用冻结快照盖住过渡”那一轮）：`checks: 206, failures: 0`。
   这一轮只改了**切空间那一段的执行顺序**（显隐前后多了一层 `platform/win/freeze.*` 遮罩 +
   `dwm::waitForFrames` 等 100 ms），工作空间那一段（含 `switch` / `prev` / `next` / `move_*` /
   `follow` / `new_window` / 窗口规则 / 恢复日志 / `--restore-windows`）全过，切完的版本号是
@@ -281,6 +292,11 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
     5. 远程桌面前台（`mstsc.exe` / Windows App）时按工作空间快捷键：**放行、什么都不切**。
     6. 切空间时窗口 **不应有淡出 / 淡入过渡**（该一下就到位）；被藏起来的窗口**不应该留在任务栏 / `Alt+Tab` 里**
        （这两条都是写定的默认行为、没有开关，见 `decisions.md` 第 36 条）。
+    7. `switch_effect` 两种取值各切几次：默认 `"instant"` 下手感与快捷键显隐单个窗口一致（没有一整拍
+       的停顿），Chrome / Edge / VSCode 会白闪 30–45 ms；`"freeze"` 下看得到“旧画面冻住 → 新空间整块
+       出现”，没有任何白屏，但明显多一拍（~150 ms）。`debug` 日志里那一行
+       `workspace: … took N ms (filter …, log …, freeze …, show …, hide …, restack …, hold …)`
+       能对得上：`"instant"` 下 `freeze` 与 `hold` 都是 `0`，`"freeze"` 下两者加起来就是那 100–150 ms。
 
 20. **托盘徽标（工作空间号 / 虚拟桌面号）**：脚本只能验 `--check` 通过，样式要人眼看。
     1. 默认（`tray_badge = "both"`）：徽标**左上角是工作空间号（绿）、右下角是虚拟桌面号（蓝）**，

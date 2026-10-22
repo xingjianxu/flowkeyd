@@ -296,6 +296,7 @@ void TestLua::workspaceSettingsAreConverted()
     QVERIFY(defaults->settings.workspace.enabled);
     QCOMPARE(defaults->settings.workspace.count, core::kDefaultWorkspaceCount);
     QVERIFY(defaults->settings.workspace.switchTarget == core::WorkspaceSwitchTarget::Cursor);
+    QVERIFY(defaults->settings.workspace.switchEffect == core::WorkspaceSwitchEffect::Instant);
     QCOMPARE(defaults->settings.workspace.newWindow, std::uint32_t(0));
     QVERIFY(defaults->settings.workspace.exclude.isEmpty());
 
@@ -305,6 +306,7 @@ void TestLua::workspaceSettingsAreConverted()
             enabled = true,
             count = 4,
             switch_target = "focus",
+            switch_effect = "freeze",
             new_window = 3,
             exclude = { "game.exe", "obs" },
           },
@@ -313,6 +315,7 @@ void TestLua::workspaceSettingsAreConverted()
     QVERIFY(table.has_value());
     QCOMPARE(table->settings.workspace.count, std::uint32_t(4));
     QVERIFY(table->settings.workspace.switchTarget == core::WorkspaceSwitchTarget::Focus);
+    QVERIFY(table->settings.workspace.switchEffect == core::WorkspaceSwitchEffect::Freeze);
     QCOMPARE(table->settings.workspace.newWindow, std::uint32_t(3));
     QCOMPARE(table->settings.workspace.exclude,
              QStringList({QStringLiteral("game.exe"), QStringLiteral("obs")}));
@@ -331,6 +334,10 @@ void TestLua::workspaceSettingsAreConverted()
     const QString badSwitch = failure(R"(settings{ workspace = { switch_target = "window" } })");
     QVERIFY2(badSwitch.contains(QStringLiteral("expected one of `cursor`, `focus`")),
              qPrintable(badSwitch));
+    const QString badEffect =
+        failure(R"(settings{ workspace = { switch_effect = "smooth" } })");
+    QVERIFY2(badEffect.contains(QStringLiteral("expected one of `instant`, `freeze`")),
+             qPrintable(badEffect));
     const QString badNewWindow = failure(R"(settings{ workspace = { new_window = "first" } })");
     QVERIFY2(badNewWindow.contains(QStringLiteral("new_window")), qPrintable(badNewWindow));
     const QString badType = failure(R"(settings{ workspace = 9 })");

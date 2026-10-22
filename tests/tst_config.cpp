@@ -1300,6 +1300,7 @@ void TestConfig::workspaceSettingsDefaultsAndValidation()
     QVERIFY(compiled->settings.workspace.enabled);
     QCOMPARE(compiled->settings.workspace.count, kDefaultWorkspaceCount);
     QVERIFY(compiled->settings.workspace.switchTarget == WorkspaceSwitchTarget::Cursor);
+    QVERIFY(compiled->settings.workspace.switchEffect == WorkspaceSwitchEffect::Instant);
     QCOMPARE(compiled->settings.workspace.newWindow, 0u);
     QVERIFY(compiled->settings.workspace.exclude.isEmpty());
 

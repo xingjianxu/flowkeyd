@@ -97,6 +97,11 @@ constexpr EnumName<WorkspaceSwitchTarget> kWorkspaceSwitchTargets[] = {
     {WorkspaceSwitchTarget::Focus, "focus"},
 };
 
+constexpr EnumName<WorkspaceSwitchEffect> kWorkspaceSwitchEffects[] = {
+    {WorkspaceSwitchEffect::Instant, "instant"},
+    {WorkspaceSwitchEffect::Freeze, "freeze"},
+};
+
 constexpr EnumName<TrayBadgeMode> kTrayBadgeModes[] = {
     {TrayBadgeMode::Both, "both"},
     {TrayBadgeMode::Desktop, "desktop"},
@@ -527,6 +532,8 @@ QVariantMap settingsToMap(const Settings &settings)
     workspace.insert(QStringLiteral("count"), settings.workspace.count);
     workspace.insert(QStringLiteral("switch_target"),
                      enumName(kWorkspaceSwitchTargets, settings.workspace.switchTarget));
+    workspace.insert(QStringLiteral("switch_effect"),
+                     enumName(kWorkspaceSwitchEffects, settings.workspace.switchEffect));
     workspace.insert(QStringLiteral("new_window"),
                      settings.workspace.newWindow == 0
                          ? QVariant(QStringLiteral("active"))
@@ -579,6 +586,11 @@ Settings settingsFromMap(const QVariantMap &map)
                 settings.workspace.switchTarget =
                     workspaceSwitchTargetFromName(stringOr(workspace, "switch_target"))
                         .value_or(settings.workspace.switchTarget);
+            }
+            if (has(workspace, "switch_effect")) {
+                settings.workspace.switchEffect =
+                    workspaceSwitchEffectFromName(stringOr(workspace, "switch_effect"))
+                        .value_or(settings.workspace.switchEffect);
             }
             if (has(workspace, "new_window")) {
                 // `"active"` 与数字都能读：`QVariant` 的 `toUInt` 对字符串 `"active"`
@@ -1406,6 +1418,15 @@ QStringList workspaceSwitchTargetNames()
 {
     QStringList out;
     for (const EnumName<WorkspaceSwitchTarget> &entry : kWorkspaceSwitchTargets) {
+        out.append(QString::fromLatin1(entry.text));
+    }
+    return out;
+}
+
+QStringList workspaceSwitchEffectNames()
+{
+    QStringList out;
+    for (const EnumName<WorkspaceSwitchEffect> &entry : kWorkspaceSwitchEffects) {
         out.append(QString::fromLatin1(entry.text));
     }
     return out;

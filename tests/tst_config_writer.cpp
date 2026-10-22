@@ -628,6 +628,7 @@ void TestConfigWriter::writesWorkspaceAsANestedTable()
     config.settings.workspace.enabled = true;
     config.settings.workspace.count = 4;
     config.settings.workspace.switchTarget = WorkspaceSwitchTarget::Focus;
+    config.settings.workspace.switchEffect = WorkspaceSwitchEffect::Freeze;
     config.settings.workspace.newWindow = 3;
     config.settings.workspace.exclude = {QStringLiteral("game.exe")};
 
@@ -635,6 +636,7 @@ void TestConfigWriter::writesWorkspaceAsANestedTable()
     QVERIFY(text.contains(QStringLiteral("workspace = {")));
     QVERIFY(text.contains(QStringLiteral("count = 4")));
     QVERIFY(text.contains(QStringLiteral("switch_target = \"focus\"")));
+    QVERIFY(text.contains(QStringLiteral("switch_effect = \"freeze\"")));
     QVERIFY(text.contains(QStringLiteral("new_window = 3")));
 
     EvalResult evaluated;
@@ -644,6 +646,8 @@ void TestConfigWriter::writesWorkspaceAsANestedTable()
     QCOMPARE(evaluated.config.settings.workspace.count, 4u);
     QVERIFY(evaluated.config.settings.workspace.switchTarget
             == WorkspaceSwitchTarget::Focus);
+    QVERIFY(evaluated.config.settings.workspace.switchEffect
+            == WorkspaceSwitchEffect::Freeze);
     QCOMPARE(evaluated.config.settings.workspace.newWindow, 3u);
     QCOMPARE(evaluated.config.settings.workspace.exclude, QStringList{QStringLiteral("game.exe")});
 

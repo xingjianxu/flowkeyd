@@ -367,10 +367,13 @@ void TestConfigEditor::saveRemembersNestedWorkspaceSettings()
     QCOMPARE(defaults.value(QStringLiteral("count")).toUInt(), 9u);
     QCOMPARE(defaults.value(QStringLiteral("switch_target")).toString(),
              QStringLiteral("cursor"));
+    QCOMPARE(defaults.value(QStringLiteral("switch_effect")).toString(),
+             QStringLiteral("instant"));
     QCOMPARE(defaults.value(QStringLiteral("new_window")).toString(), QStringLiteral("active"));
 
     editor->setWorkspaceSetting(QStringLiteral("count"), 4);
     editor->setWorkspaceSetting(QStringLiteral("switch_target"), QStringLiteral("focus"));
+    editor->setWorkspaceSetting(QStringLiteral("switch_effect"), QStringLiteral("freeze"));
     editor->setWorkspaceSetting(QStringLiteral("new_window"), 3);
     editor->setWorkspaceSetting(QStringLiteral("exclude"),
                                 QStringList{QStringLiteral("game.exe")});

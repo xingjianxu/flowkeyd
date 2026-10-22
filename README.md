@@ -330,7 +330,7 @@ settings{ log_level = "info", swallow = true, tick_ms = 15 }
 | `remote_desktop`     | `true`   | 前台窗口是远程桌面客户端时**放行**（不拦截、不触发）；`false` 关掉检测；写成表可以换进程名单（见[远程桌面](#远程桌面)） |
 | `window_monitor`     | `"cursor"` | 窗口**没写明 `monitor`** 时摆到哪块显示器上：`"cursor"`（光标所在的那一块）、`"last"`（这个程序上次被摆到过的那一块）、`"none"`（不碰位置），也可以写具体的一块（`2` / `"primary"` / `"DISPLAY2"`）见[窗口摆到哪块显示器上](#窗口摆到哪块显示器上) |
 | `tray_badge`         | `"both"` | 托盘图标上的数字徽标显示什么：`"both"`（默认，左上工作空间号 / 右下虚拟桌面号，左绿右蓝）、`"desktop"`（只显示虚拟桌面号，蓝底）、`"workspace"`（只显示工作空间号，绿底），见[托盘图标上的数字](#托盘图标上的数字) |
-| `workspace`          | 开 | 按显示器独立的工作空间（默认开启）。`false` 是整个关掉；写成表可以细调 `{ enabled, count, switch_target, new_window, exclude }`，见[工作空间](#工作空间) |
+| `workspace`          | 开 | 按显示器独立的工作空间（默认开启）。`false` 是整个关掉；写成表可以细调 `{ enabled, count, switch_target, switch_effect, new_window, exclude }`，见[工作空间](#工作空间) |
 
 ### 远程桌面
 
@@ -1024,7 +1024,10 @@ hotkey{ keys = "Win+i", action = workspace("move_next", { follow = true }) }
 ### 已知限制
 
 * 被隐藏的窗口在**任务栏与 Alt+Tab 里也看不到** —— 这是写定的默认行为，没有开关
-  （理由见[工作空间](#工作空间)的「两条显式默认」）。
+  （理由见[工作空间](#工作空间)的「三条显式默认」）。
+* `switch_effect = "instant"`（默认）下，Chrome / Edge / VS Code 这类程序被切回来时会
+  **白闪 30–45 ms**。想要完全无白闪就改成 `"freeze"`，代价是每次切换慢 100–150 ms
+  （原因与取舍见[工作空间](#工作空间)的「`switch_effect`：快一点还是要不要白闪」）。
 * `--no-elevate` 运行、而目标窗口属于**提权进程**时无法隐藏它（UIPI）：跳过那个窗口并写
   一条 warning。常驻实例是提权启动的，只有开发期的 `--no-elevate` 会碰到。
 * 目标进程无响应时不会去隐藏它的窗口（以免把动作线程挂住），只写一条 warning。

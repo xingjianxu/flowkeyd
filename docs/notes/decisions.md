@@ -756,6 +756,18 @@ active 后所在的 monitor 上"。
     分层 + `WS_EX_TRANSPARENT` 还顺带满足两个要求：鼠标点穿、不进 `Alt+Tab`、不抢前台；
     快照拿不到（无合成器 / 建窗口失败）时**静默退回**旧行为，切换本身不受影响。
     遮罩本身不播过渡动画（`dwm::TransitionGuard`），否则刚盖上去会淡入一下。
+  * **再补：这条遮罩改成可选的，默认关掉**（M12，2026-10-23）。项目的所有者反馈“切工作空间
+    比快捷键显隐单个窗口慢一拍”，量下来正是上面这两步：`BitBlt` 抓一张 4K 屏幕（3840×2160）
+    实测 **~38 ms**（降采样到 1/2、1/4 都没用，瓶颈是从屏幕 DC 读回 66 MB，不是写入），
+    再加上固定 `kFreezeHoldMs` = 100 ms 的等待 —— 合计 **~140 ms**，而一次切换的其他部分
+    （COM 桌面过滤 / 预写恢复日志 / `showMany` / `hideMany` / `restack` / 取焦点）都在 10 ms 量级。
+    所以加 `settings.workspace.switch_effect`：`"instant"`（**默认**）**一个字节都不抓、也不等**，
+    切完就返回（与快捷键显隐单个窗口同一条路径、同一种手感），代价是 Chromium 系程序会白闪
+    30–45 ms；`"freeze"` 就是上面 M11 那套行为原样保留（无白闪、慢 100–150 ms）。
+    取“默认 instant”的理由：一次按键的响应延迟比一个转场效果重要；白闪是可接受的视觉退化，
+    而且不喜欢的人一个字段就能换回来。`applyWorkspaceEffects()` 末尾的 `debug` 级分段计时
+    （`took N ms (filter …, log …, freeze …, show …, hide …, restack …, hold …)`）就是专门为
+    下次再有人问“慢在哪”留的：`instant` 下 `freeze` 与 `hold` 恒为 0。
 * 两个 M0 实测约束已写进代码：`show()` 用 `SW_SHOWNOACTIVATE`（最小化的用 `SW_SHOWMINNOACTIVE`）；
   目标进程无响应（`IsHungAppWindow`）时**不隐藏**（`SW_HIDE` 是跨线程 `SendMessage`，卡死会挂住
   调用线程）。全部 hide/show/restack **只允许在工作线程上做**。

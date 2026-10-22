@@ -2022,6 +2022,7 @@ void Dispatcher::refreshWorkspaceDesktop()
 
 void Dispatcher::applyWorkspaceEffects(const core::WorkspaceEffects &effects, const QString &reason)
 {
+    const std::uint64_t started = win::monotonicMs();
     // 只处理**当前虚拟桌面**上的窗口：记录可能已经过时（窗口被 `Win+Ctrl+Shift+←/→` 送到
     // 别的桌面去了），藏错窗口会让用户回到那张桌面时「窗口不见了」。要藏的窗口此刻都是
     // 可见的、问得出来；要显示的是我们自己藏起来的、问不出来（M0）—— 所以只过滤 `hide`。
@@ -2029,6 +2030,13 @@ void Dispatcher::applyWorkspaceEffects(const core::WorkspaceEffects &effects, co
     if (effects.show.empty() && hide.empty() && !effects.focus.has_value()) {
         return;
     }
+    const std::uint64_t afterFilter = win::monotonicMs();
+    std::uint64_t afterLogWrite = afterFilter;
+    std::uint64_t afterFreeze = afterFilter;
+    std::uint64_t afterShow = afterFilter;
+    std::uint64_t afterHide = afterFilter;
+    std::uint64_t afterRestack = afterFilter;
+    std::uint64_t afterFocus = afterFilter;
     ensureWorkspaceLogLoaded();
     // 日志里的键 = **真正要藏 / 显的那个句柄**（UWP 是宿主窗口 `ApplicationFrameWindow`），
     // 与 `manageTarget()` 处处保持同一个口径。
@@ -2084,6 +2092,7 @@ void Dispatcher::applyWorkspaceEffects(const core::WorkspaceEffects &effects, co
 
     const std::shared_ptr<core::ExpectedWorkspaceEvents> expected =
         m_runtime != nullptr ? m_runtime->workspaceEvents() : nullptr;
+    afterLogWrite = win::monotonicMs();
     const std::uint64_t now = win::monotonicMs();
     // 先登记期望事件再动手：`SW_HIDE` 会额外产生一条 `EVENT_OBJECT_SHOW`（M0 实测），
     // 不吞掉就等于让状态机把自己的操作当成用户操作（自触发循环）。
@@ -2124,18 +2133,29 @@ void Dispatcher::applyWorkspaceEffects(const core::WorkspaceEffects &effects, co
     // 然后新空间完整出现」。
     //
     // 盖不住（拿不到屏幕 DC / 建不了窗口）就照常切，只是会看到白屏（回到底层行为）。
+    //
+    // **只有在 `settings.workspace.switch_effect = "freeze"` 时才盖**（M12）：快照本身在
+    // 4K 上要 ~40 ms（`BitBlt` 整屏从屏幕 DC 读回来），盖着的时候还要固定等
+    // `kFreezeHoldMs` —— 两项加起来就是用户按完快捷键到画面变的那 100–150 ms。
+    // 默认的 `"instant"` 一个字节都不抓，切完就返回（与快捷键显隐单个窗口一样快），
+    // 代价是上面那些程序会闪一下白。
+    const bool freezeScreen =
+        m_config != nullptr
+        && m_config->settings.workspace.switchEffect == core::WorkspaceSwitchEffect::Freeze;
     win::freeze::FreezeFrame freeze;
-    if (!showTargets.empty()) {
+    if (freezeScreen && !showTargets.empty()) {
         QString error;
         if (!freeze.coverWindows(showTargets, &error)) {
             win::logDebug(QStringLiteral("workspace: no freeze frame for %1: %2")
                               .arg(reason, error));
         }
     }
+    afterFreeze = win::monotonicMs();
     std::vector<HWND> shownWindows;
     shownWindows.reserve(showTargets.size());
     const std::vector<win::workspace::BatchResult> showResults =
         win::workspace::showMany(showTargets);
+    afterShow = win::monotonicMs();
     for (std::size_t i = 0; i < showTargets.size(); ++i) {
         const HWND hwnd = showTargets.at(i);
         if (!showResults.at(i).ok) {
@@ -2197,6 +2217,7 @@ void Dispatcher::applyWorkspaceEffects(const core::WorkspaceEffects &effects, co
             ++hidden;
         }
     }
+    afterHide = win::monotonicMs();
     if (logChanged) {
         persistWorkspaceLog(reason);
     }
@@ -2213,6 +2234,7 @@ void Dispatcher::applyWorkspaceEffects(const core::WorkspaceEffects &effects, co
                              .arg(reason, error));
         }
     }
+    afterRestack = win::monotonicMs();
     // 焦点不可省：M0 实测隐藏前台窗口之后 `GetForegroundWindow()` 仍然指着那个隐藏
     // 窗口，系统不会自己把前台交给别人。
     if (effects.focus.has_value()) {
@@ -2222,13 +2244,18 @@ void Dispatcher::applyWorkspaceEffects(const core::WorkspaceEffects &effects, co
                              .arg(core::rustDebug(win::window::windowTitle(hwnd)), reason));
         }
     }
+    afterFocus = win::monotonicMs();
     // 一切都摆好了，但 App 可能还没把这批窗口的内容画出来（Chromium 类程序要 50～120 ms）。
     // 遮罩还盖着，趁这段时间等它画，然后一把撤掉 —— 屏幕上看到的是“旧画面 → 新空间”，
     // 中间没有任何一帧白屏。
+    //
+    // 没有遮罩（`switch_effect = "instant"`）就没有可等的东西：App 画得早晚都直接落在
+    // 屏幕上，再等只是白等。
     if (freeze.active()) {
-        const std::uint64_t started = win::monotonicMs();
+        const std::uint64_t holdStarted = win::monotonicMs();
         std::uint32_t frames = 0;
-        while (frames < kFreezeHoldMaxFrames && win::monotonicMs() - started < kFreezeHoldMs) {
+        while (frames < kFreezeHoldMaxFrames
+               && win::monotonicMs() - holdStarted < kFreezeHoldMs) {
             if (win::dwm::waitForFrames(1) == 0) {
                 break; // 没有合成器：干等没意义
             }
@@ -2236,7 +2263,7 @@ void Dispatcher::applyWorkspaceEffects(const core::WorkspaceEffects &effects, co
         }
         win::logDebug(QStringLiteral("workspace: held the freeze frame for %1 frame(s), %2 ms")
                           .arg(frames)
-                          .arg(win::monotonicMs() - started));
+                          .arg(win::monotonicMs() - holdStarted));
         freeze.release();
     }
     win::logInfo(QStringLiteral("workspace: %1 -> %2 shown, %3 hidden%4")
@@ -2244,6 +2271,21 @@ void Dispatcher::applyWorkspaceEffects(const core::WorkspaceEffects &effects, co
                      .arg(shown)
                      .arg(hidden)
                      .arg(failed > 0 ? QStringLiteral(", %1 failed").arg(failed) : QString()));
+    // 分段时间（`debug` 级）：用户抱怨“切工作空间比快捷键显隐窗口慢”时，看这一行就知道
+    // 慢在哪一段。`switch_effect = "freeze"` 时的 `freeze`（捏快照）与 `hold`（等 App 画完）
+    // 就是那 100–150 ms 的来源，`instant` 下两者都是 0。
+    win::logDebug(QStringLiteral("workspace: %1 took %2 ms (filter %3, log %4, freeze %5, show "
+                                 "%6, hide %7, restack %8, focus %9, hold %10)")
+                      .arg(reason)
+                      .arg(win::monotonicMs() - started)
+                      .arg(afterFilter - started)
+                      .arg(afterLogWrite - afterFilter)
+                      .arg(afterFreeze - afterLogWrite)
+                      .arg(afterShow - afterFreeze)
+                      .arg(afterHide - afterShow)
+                      .arg(afterRestack - afterHide)
+                      .arg(afterFocus - afterRestack)
+                      .arg(win::monotonicMs() - afterFocus));
 }
 
 void Dispatcher::submitWorkspaceRestore()

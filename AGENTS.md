@@ -244,7 +244,10 @@ UI 只有托盘图标 + 日志窗口、`menu`/`help`/`windows`/`apps`/`update` �
     （已知限制，见第 12 节）。
 36. **工作空间：按显示器独立的一套空间（`settings.workspace` + `workspace` 动作）**。**M0（真机验证）到
     M11（文档、验收、收尾）全部完成**。要点：默认**开启**但没绑定就不会隐藏任何窗口；`count` 1–10（默认 9）；
-    `switch_target` = `"cursor"`（默认）/ `"focus"`；`new_window` = `"active"`（默认）或 1..count
+    `switch_target` = `"cursor"`（默认）/ `"focus"`；`switch_effect` = `"instant"`（**默认**：不抓快照、
+    不等帧，与快捷键显隐单个窗口同一种手感，代价是 Chromium 系程序白闪 30–45 ms）/ `"freeze"`
+    （抓快照 + 固定 100 ms，无白闪但慢 100–150 ms —— 实测 4K 整屏 `BitBlt` 抓回就要 ~38 ms）；
+    `new_window` = `"active"`（默认）或 1..count
     （**只对 flowkeyd 运行期间新出现的窗口生效**，启动时已在的窗口照旧收编进各自活动空间）；
     `exclude` 空串报错；动作有六种形状：`workspace("switch"|"move", N)`（`index` ≤ `count`
     在 `--check` 校验）与**相对切换** `workspace("prev"|"next")`（按那块屏的活动空间 ±1，
@@ -264,9 +267,10 @@ UI 只有托盘图标 + 日志窗口、`menu`/`help`/`windows`/`apps`/`update` �
     逐个做就是“一屏窗口依次消失”（实测 300 ms/窗口 的 App，3 个窗口串行 900 ms）；
     **显隐一律不播 DWM 过渡**
     （批量用 `dwm::setTransitionsDisabled()`、单个用 `dwm::TransitionGuard(hwnd, false)`，别让它退化成
-    “淡出 / 淡入”）；**切空间时还有一张「冻结快照」罩着**（`platform/win/freeze.*`：先抓「要露出来的那几块」
-    的并集的屏幕快照、铺一个置顶的无边框窗口盖上去，显隐 + `restack` + 取焦点全在遮罩下做完，
-    `DwmFlush` 等 `kFreezeHoldMs` = 100 ms 再撤掉）—— 因为现代浏览器类程序被 `SW_HIDE` 过之后会在
+    “淡出 / 淡入”）；**`switch_effect = "freeze"` 时还多一张「冻结快照」罩着**（`platform/win/freeze.*`：
+    先抓「要露出来的那几块」的并集的屏幕快照、铺一个置顶的无边框窗口盖上去，显隐 + `restack` +
+    取焦点全在遮罩下做完，`DwmFlush` 等 `kFreezeHoldMs` = 100 ms 再撤掉；默认的 `"instant"`
+    不建这个窗口、也不等）—— 因为现代浏览器类程序被 `SW_HIDE` 过之后会在
     揭示那一瞬白 30–45 ms，而 Chromium 的遮挡计算又让它在被盖着时不画（“先插到旧窗口底下画好”
     实测无效，已撤），跨进程 cloak 是 `E_ACCESSDENIED`。遮罩必须 `WS_EX_TRANSPARENT | WS_EX_LAYERED`
     （点穿）+ `WS_EX_TOOLWINDOW`（不进 `Alt+Tab`）+ `WS_EX_NOACTIVATE`（不抢前台），自己也不许播过渡；
@@ -549,8 +553,8 @@ debug 看不到的警告）+ `FLOWKEYD_BUILD_TESTS=OFF`。
   键名小写、托盘数字徽标、窗口切换器（+数字选择 + IME）、弹窗不进任务栏 + 预热、发布包精简、精简升级包、
   `scripts/release.ps1`、在线更新、`install.ps1`、FreeType、程序启动器（+异步图标 / `shell:AppsFolder` /
   拼音 / 固定·最近·全部 / 控制面板与设置页）、弹窗缩放过期自愈、跨桌面唤起、`settings.window_monitor`、
-  图形化配置界面、启动权限、**工作空间（M0–M11，含拔插 / 拖屏 / 恢复日志 / 规则与 `new_window` /
-  切空间时的冻结快照遮罩）**。
+  图形化配置界面、启动权限、**工作空间（M0–M12，含拔插 / 拖屏 / 恢复日志 / 规则与 `new_window` /
+  切空间时的冻结快照遮罩及其开关 `switch_effect`）**。
 
 ---
 
@@ -566,8 +570,8 @@ debug 看不到的警告）+ `FLOWKEYD_BUILD_TESTS=OFF`。
 * **QML 布局/模型**（`Q_PROPERTY` 自定义结构体静默失效、`Row`+锚点崩溃、`contentHeight` 抖动、
   `ItemDelegate` 内边距、角色名撞名）
 * **注入与测量**（锁屏时注入是假的、像素指纹、进程内预览）
-* **工作空间（显隐 / 显示器拔插 / 拖屏）**（`SW_HIDE` 的显隐语义、`SetWindowPlacement` 会改显隐、
-  最大化的窗口要先还原再重新最大化、`LOCATIONCHANGE` 比 `MonitorsChanged` 先到）
+* **工作空间（显隐 / 显示器拔插 / 拖屏 / 切换延迟）**（`SW_HIDE` 的显隐语义、`SetWindowPlacement` 会改显隐、
+  最大化的窗口要先还原再重新最大化、`LOCATIONCHANGE` 比 `MonitorsChanged` 先到、4K 整屏拍快照 ~38 ms）
 * **提权 / 代理进程 / 启动权限**（`CreateProcessAsUser` 不可用、环境块丢失）
 
 ---
