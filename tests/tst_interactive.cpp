@@ -43,6 +43,7 @@
 #include "platform/win/dwm.h"
 #include "platform/win/elevate.h"
 #include "platform/win/ffi.h"
+#include "platform/win/freeze.h"
 #include "platform/win/hook.h"
 #include "platform/win/ime.h"
 #include "platform/win/input.h"
@@ -351,6 +352,8 @@ HWND SlowWindow::waitForWindow(int timeoutMs)
 /// 不自己写第二套顺序：工作空间的 Z 序就是靠这两步保住的，测试走错路就等于
 /// 什么也没验。显隐两步同样走**批量**接口（`showMany()` / `hideMany()`）——
 /// 生产代码就是这么做的，分批/逐个的差异由 `hidesAndShowsManyWindowsAtOnce` 钉住。
+/// （生产代码里那边外面还套了一层「冻结快照」遮罩，那是纯观感用的，不改变这里的
+/// 逻辑；遮罩本身由 `freezesTheScreenWithAnOverlay` 验。）
 bool applyWorkspaceEffectsForTest(const core::WorkspaceEffects &effects, QString *error)
 {
     namespace ws = platform::win::workspace;
@@ -546,7 +549,7 @@ private slots:
     void switchesTheInputMethodToEnglish();
     void hidesAndShowsAWindowWithoutTouchingIt();
     void hidesAndShowsManyWindowsAtOnce();
-    void enumeratesManageableWindowsByTheirRecord();
+    void freezesTheScreenWithAnOverlay();    void enumeratesManageableWindowsByTheirRecord();
     void switchesWorkspacesWithRealWindows();
     void revealsAWindowHiddenInAnotherWorkspace();
     void relocatesDisplacedWindowsWithoutChangingState();
@@ -2032,7 +2035,57 @@ void TestInteractive::hidesAndShowsManyWindowsAtOnce()
     QVERIFY2(mixed.at(2).ok, qPrintable(mixed.at(2).error));
 }
 
-/// 「归工作空间管」的枚举：自己进程的窗口永远不进去，未记录的窗口必须真的可见。
+/// 「冻结快照」遮罩：盖住要露出来的那块、不抢前台、点穿、撤得干净。
+///
+/// 它是 M11 修「切工作空间时 Chromium 类程序白屏 30–45 ms」的唯一手段（那类程序
+/// 被盖着时根本不画，所以只能把过渡盖住）。这里钉住三件容易写错的事：
+/// 矩形必须是窗口的并集、样式必须是“点穿 + 不进 Alt+Tab + 不激活”、`release()` 真的销毁。
+void TestInteractive::freezesTheScreenWithAnOverlay()
+{
+    if (!interactiveEnabled()) {
+        QSKIP("set FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1 to run the interactive tests");
+    }
+    namespace freeze = platform::win::freeze;
+    const QString marker =
+        QStringLiteral("flowkeyd-freeze-%1").arg(QCoreApplication::applicationPid());
+    TestWindow first(marker + QStringLiteral("-a"));
+    TestWindow second(marker + QStringLiteral("-b"));
+    HWND a = first.hwnd();
+    HWND b = second.hwnd();
+    QVERIFY2(a != nullptr && b != nullptr, "the test windows were not created");
+    SetWindowPos(a, nullptr, 120, 120, 300, 200, SWP_NOACTIVATE | SWP_NOZORDER);
+    SetWindowPos(b, nullptr, 200, 180, 260, 160, SWP_NOACTIVATE | SWP_NOZORDER);
+
+    const HWND foreground = GetForegroundWindow();
+    freeze::FreezeFrame frame;
+    QString error;
+    QVERIFY2(frame.coverWindows({a, b}, &error), qPrintable(error));
+    QVERIFY(frame.active());
+
+    const HWND overlay = FindWindowW(L"FlowkeydFreezeWindow", nullptr);
+    QVERIFY2(overlay != nullptr, "the freeze window was not created");
+    QVERIFY2(IsWindowVisible(overlay) != 0, "the freeze window must be visible");
+    RECT overlayRect{};
+    QVERIFY(GetWindowRect(overlay, &overlayRect) != 0);
+    QCOMPARE(overlayRect.left, 120L);
+    QCOMPARE(overlayRect.top, 120L);
+    QCOMPARE(overlayRect.right, 460L); // a: 120..420，b: 200..460 → 并集 120..460
+    QCOMPARE(overlayRect.bottom, 340L); // a: 120..320，b: 180..340
+
+    const LONG_PTR style = GetWindowLongPtrW(overlay, GWL_EXSTYLE);
+    QVERIFY2((style & WS_EX_TRANSPARENT) != 0, "the freeze window must not swallow clicks");
+    QVERIFY2((style & WS_EX_TOOLWINDOW) != 0, "the freeze window must stay out of Alt+Tab");
+    QVERIFY2((style & WS_EX_NOACTIVATE) != 0, "the freeze window must not activate");
+    QVERIFY2((style & WS_EX_TOPMOST) != 0, "the freeze window must be on top");
+    QVERIFY2(GetForegroundWindow() == foreground, "covering the screen must not move the focus");
+
+    frame.release();
+    QVERIFY(!frame.active());
+    QVERIFY2(FindWindowW(L"FlowkeydFreezeWindow", nullptr) == nullptr,
+             "the freeze window was not destroyed");
+}
+
+///「归工作空间管」的枚举：自己进程的窗口永远不进去，未记录的窗口必须真的可见。
 ///
 /// 真正的跟踪列表在状态机里（M5 接线），所以这里只验后端这一侧能验的部分：
 /// 自进程排除与“未记录 = 看可见性”。“已记录的藏起来窗口也要算进来”那条

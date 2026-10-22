@@ -264,7 +264,13 @@ UI 只有托盘图标 + 日志窗口、`menu`/`help`/`windows`/`apps`/`update` �
     逐个做就是“一屏窗口依次消失”（实测 300 ms/窗口 的 App，3 个窗口串行 900 ms）；
     **显隐一律不播 DWM 过渡**
     （批量用 `dwm::setTransitionsDisabled()`、单个用 `dwm::TransitionGuard(hwnd, false)`，别让它退化成
-    “淡出 / 淡入”）；被藏起来的窗口**同时从任务栏与 `Alt+Tab` 消失是写定的默认、没有开关**
+    “淡出 / 淡入”）；**切空间时还有一张「冻结快照」罩着**（`platform/win/freeze.*`：先抓「要露出来的那几块」
+    的并集的屏幕快照、铺一个置顶的无边框窗口盖上去，显隐 + `restack` + 取焦点全在遮罩下做完，
+    `DwmFlush` 等 `kFreezeHoldMs` = 100 ms 再撤掉）—— 因为现代浏览器类程序被 `SW_HIDE` 过之后会在
+    揭示那一瞬白 30–45 ms，而 Chromium 的遮挡计算又让它在被盖着时不画（“先插到旧窗口底下画好”
+    实测无效，已撤），跨进程 cloak 是 `E_ACCESSDENIED`。遮罩必须 `WS_EX_TRANSPARENT | WS_EX_LAYERED`
+    （点穿）+ `WS_EX_TOOLWINDOW`（不进 `Alt+Tab`）+ `WS_EX_NOACTIVATE`（不抢前台），自己也不许播过渡；
+    被藏起来的窗口**同时从任务栏与 `Alt+Tab` 消失是写定的默认、没有开关**
     （理由见 `decisions.md` 第 36 条，不要为了“留个任务栏按钮”去换藏法）；“窗口在不在”只看状态机记录、
     `IsWindowVisible` 不可信。事件管线：钩子线程（只有 `settings.workspace.enabled` 时才装
     `LOCATIONCHANGE` 与 `MINIMIZESTART..END` 两个窄范围监听）只把 `core::WorkspaceEvent` 入队，
@@ -352,7 +358,7 @@ Qt 侧齐备：`Qt6::Quick`、`QuickControls2`、`Qt6QuickControls2FluentWinUI3S
 | `core/log_tail.*` / `core/update_check.*` / `core/version.*` / `core/desktop_badge.*` | 日志增量尾随 /
     更新纯逻辑 / 版本号 / 徽标文字与字号（含 `settings.tray_badge` 的三种写法）|
 | `src/lua/lua_config.*` + `lua_prelude.lua` | **Lua 与 C++ 的唯一边界**（转成 `core::Config`，逐条目带上下文报错）；DSL 编进 qrc |
-| `src/platform/win/` | 一个文件一件事：`ffi`（全部声明 + `currentExecutablePath()`）、`nt`、`process`（run 三条路 / open / `--shell-*` 代理）、`dwm`、`monitor`、`input`（`SendInput`、验收后门、`copySelection`）、`ime`、`hook`（回调 + 消息循环 + 定时器 + `window_rule` / 工作空间事件监听 + 显示器轮询 + 前台事件）、`apps`（扫描 + 启动 + 图标 + `StaThread`）、`shell_menu`、`audio`（MTA，高风险）、`clipboard`、`window`、`workspace`（工作空间的 hide/show/restack/身份/枚举/恢复日志读写，`SW_HIDE` 只在这里）、`session`（`WM_QUERYENDSESSION` 的隐藏窗口）、`desktop`（版本表）、`power`、`tray`、`logging`/`single_instance`（退出与「恢复全部窗口」两条事件通道）、`elevate`/`autostart`/`update` |
+| `src/platform/win/` | 一个文件一件事：`ffi`（全部声明 + `currentExecutablePath()`）、`nt`、`process`（run 三条路 / open / `--shell-*` 代理）、`dwm`、`monitor`、`input`（`SendInput`、验收后门、`copySelection`）、`ime`、`hook`（回调 + 消息循环 + 定时器 + `window_rule` / 工作空间事件监听 + 显示器轮询 + 前台事件）、`apps`（扫描 + 启动 + 图标 + `StaThread`）、`shell_menu`、`audio`（MTA，高风险）、`clipboard`、`window`、`workspace`（工作空间的 hide/show/restack/身份/枚举/恢复日志读写，`SW_HIDE` 只在这里）、`freeze`（切空间时遮住过渡的冻结快照，唯一一处可写 `DwmFlush` 的地方）、`session`（`WM_QUERYENDSESSION` 的隐藏窗口）、`desktop`（版本表）、`power`、`tray`、`logging`/`single_instance`（退出与「恢复全部窗口」两条事件通道）、`elevate`/`autostart`/`update` |
 | `src/app/dispatcher.*` | **动作工作线程**：执行动作、`window` 的先启动再激活与默认 `toggle`、摆显示器、四张卡片的请求、`window_rule` 三遍、桌面轮询、启动器状态文件路径 |
 | `src/app/runtime.*` | 引擎 + 钩子 + 分发 + 托盘 + 弹窗总装；`ControlCmd` 通道；`--quit` 事件句柄 |
 | `src/app/{menu,help,window_list,app_list}_model.*` / `log_model.*` | 卡片与日志窗口的**纯逻辑**（`QAbstractListModel`，只用 QtCore）；行几何与鼠标命中不归它们管 |
@@ -543,7 +549,8 @@ debug 看不到的警告）+ `FLOWKEYD_BUILD_TESTS=OFF`。
   键名小写、托盘数字徽标、窗口切换器（+数字选择 + IME）、弹窗不进任务栏 + 预热、发布包精简、精简升级包、
   `scripts/release.ps1`、在线更新、`install.ps1`、FreeType、程序启动器（+异步图标 / `shell:AppsFolder` /
   拼音 / 固定·最近·全部 / 控制面板与设置页）、弹窗缩放过期自愈、跨桌面唤起、`settings.window_monitor`、
-  图形化配置界面、启动权限、**工作空间（M0–M11，含拔插 / 拖屏 / 恢复日志 / 规则与 `new_window`）**。
+  图形化配置界面、启动权限、**工作空间（M0–M11，含拔插 / 拖屏 / 恢复日志 / 规则与 `new_window` /
+  切空间时的冻结快照遮罩）**。
 
 ---
 

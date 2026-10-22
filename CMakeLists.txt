@@ -274,6 +274,8 @@ add_library(flowkeyd_platform STATIC
     src/platform/win/elevate.h
     src/platform/win/ffi.cpp
     src/platform/win/ffi.h
+    src/platform/win/freeze.cpp
+    src/platform/win/freeze.h
     src/platform/win/hook.cpp
     src/platform/win/hook.h
     src/platform/win/ime.cpp

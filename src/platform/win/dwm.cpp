@@ -18,6 +18,7 @@ constexpr DWORD kCloaked = 14;
 
 using DwmSetWindowAttributeFn = HRESULT(WINAPI *)(HWND, DWORD, LPCVOID, DWORD);
 using DwmGetWindowAttributeFn = HRESULT(WINAPI *)(HWND, DWORD, PVOID, DWORD);
+using DwmFlushFn = HRESULT(WINAPI *)();
 
 /// 把 `GetProcAddress` 的结果转成具体签名（`-Wcast-function-type` 讨厌直接转换）。
 template <typename Fn>
@@ -49,6 +50,13 @@ DwmSetWindowAttributeFn setWindowAttribute()
 DwmGetWindowAttributeFn getWindowAttribute()
 {
     static DwmGetWindowAttributeFn resolved = resolve<DwmGetWindowAttributeFn>("DwmGetWindowAttribute");
+    return resolved;
+}
+
+/// 解析（并缓存）`dwmapi!DwmFlush`；拿不到时返回 nullptr。
+DwmFlushFn flushFrame()
+{
+    static DwmFlushFn resolved = resolve<DwmFlushFn>("DwmFlush");
     return resolved;
 }
 
@@ -142,6 +150,22 @@ bool isCloaked(HWND hwnd)
         return false;
     }
     return cloaked != 0;
+}
+
+std::uint32_t waitForFrames(std::uint32_t count)
+{
+    const DwmFlushFn flush = flushFrame();
+    if (flush == nullptr || count == 0) {
+        return 0;
+    }
+    std::uint32_t waited = 0;
+    for (std::uint32_t frame = 0; frame < count; ++frame) {
+        if (FAILED(flush())) {
+            break;
+        }
+        ++waited;
+    }
+    return waited;
 }
 
 } // namespace flowkeyd::platform::win::dwm

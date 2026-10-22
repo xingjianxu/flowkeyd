@@ -22,6 +22,7 @@
 
 #include <QString>
 
+#include <cstdint>
 #include <vector>
 
 namespace flowkeyd::platform::win::dwm {
@@ -89,6 +90,16 @@ private:
 ///
 /// 读不到时（拿不到 `dwmapi`、窗口正在销毁）返回 `false`，也就是按“它在显示”
 /// 处理 —— 宁可在列表里多一条，也不要把用户的好窗口藏起来。
+/// 等到**下一个合成帧**再来（`dwmapi!DwmFlush`），最多等 `count` 帧，返回真正等到的帧数。
+///
+/// 切工作空间专用：冻结快照盖着的时候，要等目标 App 把内容画出来（Chromium 类程序
+/// 被 `SW_HIDE` 过之后要 50–120 ms），然后才能把遮罩撤掉。固定睡 `Sleep()` 不行：
+/// 那既不知道屏幕到底翻了几帧，也会在无合成器的会话里干等。
+///
+/// 不可用（无合成器的会话 / 远程桌面头部）时返回 0，调用方接着往下做 —— 只当少等了
+/// 一下，不要把整个切换弄失败。
+std::uint32_t waitForFrames(std::uint32_t count);
+
 bool isCloaked(HWND hwnd);
 
 } // namespace flowkeyd::platform::win::dwm

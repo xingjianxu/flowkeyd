@@ -14,6 +14,8 @@
 #include "platform/win/audio.h"
 #include "platform/win/clipboard.h"
 #include "platform/win/desktop.h"
+#include "platform/win/dwm.h"
+#include "platform/win/freeze.h"
 #include "platform/win/hook.h"
 #include "platform/win/input.h"
 #include "platform/win/logging.h"
@@ -57,6 +59,17 @@ struct MonitorMemory
 };
 
 namespace {
+
+/// 切工作空间时，**冻结快照**要盖多久（毫秒）。
+///
+/// 遮罩这段时间里屏幕上是“旧画面冻住”。等的是那批新窗口把内容画出来：M11 量到
+/// Chromium 类程序被 `SW_HIDE` 过之后（哪怕之前画过）要 ~45 ms，从没画过的要 ~120 ms。
+/// 取 100 当折中：遮住的是“冻住的旧画面”，多等一点只是冻得久一点，看不到抖动；
+/// 调小到二三十毫秒会让白屏从遮罩下面漏出来。
+constexpr std::uint64_t kFreezeHoldMs = 100;
+
+/// 上限：一帧最多等 1/60 s，超过这个帧数绝不再等（防止刷新率很低时卡住）。
+constexpr std::uint32_t kFreezeHoldMaxFrames = 24;
 
 /// 模板里 `{date}` / `{time}` 用的是本地墙上时钟。
 core::LocalTime localTimeNow()
@@ -2086,12 +2099,6 @@ void Dispatcher::applyWorkspaceEffects(const core::WorkspaceEffects &effects, co
     int shown = 0;
     int hidden = 0;
     int failed = 0;
-    // 底 → 顶显示，然后按同一份记录栈还原 Z 序。
-    //
-    // **不用 `show()` 的 `insertAfter`**：`SetWindowPos(hwnd, 前一个)` 把 `hwnd` 摆在
-    // 前一个**下面**，而这里要的是上面（M0 的探针是「顶 → 底」记录的，方向正好反）；
-    // 一条 `restack()` 比逐对摆位置更不容易错。
-    //
     // 显隐都走**批量接口**（`showMany()` / `hideMany()`）：它们把每个窗口的
     // `ShowWindow` 丢到临时线程上并行做。逐个做的话，总耗时是各 App 的
     // `WM_SHOWWINDOW` 响应时间**之和**，看上去就是“一屏窗口依次消失”——见
@@ -2105,6 +2112,25 @@ void Dispatcher::applyWorkspaceEffects(const core::WorkspaceEffects &effects, co
             continue;
         }
         showTargets.push_back(hwnd);
+    }
+    // **冻结快照**（M11）：抓一张「要露出来的那几块」的当前画面盖在上面，才动手显隐。
+    //
+    // 为什么必须盖：被 `SW_HIDE` 过的窗口再显示出来时，Chromium 类程序（Chrome / Edge /
+    // Electron / VSCode）会在**揭示的那一瞬**白 30–45 ms。它的遮挡计算让它在被别的
+    // 窗口盖着时**根本不画**，所以「先插到旧窗口底下画好再露出来」这条路是死的
+    // （M11 逐帧实测：等 31 / 94 / 180 ms，白屏都恰好出现在藏掉旧窗口那一刻）；
+    // 跨进程 `DwmSetWindowAttribute(DWMWA_CLOAK)` 又是 `E_ACCESSDENIED`（当场复测），
+    // 学不了 shell 那套。剩下的办法只有把过渡盖住 —— 用户看到的是「旧画面冻住一下，
+    // 然后新空间完整出现」。
+    //
+    // 盖不住（拿不到屏幕 DC / 建不了窗口）就照常切，只是会看到白屏（回到底层行为）。
+    win::freeze::FreezeFrame freeze;
+    if (!showTargets.empty()) {
+        QString error;
+        if (!freeze.coverWindows(showTargets, &error)) {
+            win::logDebug(QStringLiteral("workspace: no freeze frame for %1: %2")
+                              .arg(reason, error));
+        }
     }
     std::vector<HWND> shownWindows;
     shownWindows.reserve(showTargets.size());
@@ -2124,13 +2150,6 @@ void Dispatcher::applyWorkspaceEffects(const core::WorkspaceEffects &effects, co
         // 真的露出来了才从日志里去掉（显示失败的那条留着，下次 / 手动恢复再试）。
         if (core::removeHiddenWindow(m_workspaceLog, win::workspace::idOf(hwnd))) {
             logChanged = true;
-        }
-    }
-    if (shownWindows.size() > 1) {
-        QString error;
-        if (!win::workspace::restack(shownWindows, &error)) {
-            win::logWarn(QStringLiteral("workspace: could not restore the Z order after %1: %2")
-                             .arg(reason, error));
         }
     }
     // 同样**一次并行全部藏掉**（`hideMany()`）：切一次工作空间是一个视觉动作，
@@ -2181,6 +2200,19 @@ void Dispatcher::applyWorkspaceEffects(const core::WorkspaceEffects &effects, co
     if (logChanged) {
         persistWorkspaceLog(reason);
     }
+    // Z 序在旧窗口藏完之后（而不是刚露出来的时候）还原：`SWP_SHOWWINDOW` 是把每个
+    // 窗口都插在同一个 `showBelow` 底下，它们之间的相对顺序还是乱的。
+    //
+    // **不用 `show()` 的 `insertAfter`**：`SetWindowPos(hwnd, 前一个)` 把 `hwnd` 摆在
+    // 前一个**下面**，而这里要的是上面（M0 的探针是「顶 → 底」记录的，方向正好反）；
+    // 一条 `restack()` 比逐对摆位置更不容易错。
+    if (shownWindows.size() > 1) {
+        QString error;
+        if (!win::workspace::restack(shownWindows, &error)) {
+            win::logWarn(QStringLiteral("workspace: could not restore the Z order after %1: %2")
+                             .arg(reason, error));
+        }
+    }
     // 焦点不可省：M0 实测隐藏前台窗口之后 `GetForegroundWindow()` 仍然指着那个隐藏
     // 窗口，系统不会自己把前台交给别人。
     if (effects.focus.has_value()) {
@@ -2189,6 +2221,23 @@ void Dispatcher::applyWorkspaceEffects(const core::WorkspaceEffects &effects, co
             win::logWarn(QStringLiteral("workspace: could not focus %1 after %2")
                              .arg(core::rustDebug(win::window::windowTitle(hwnd)), reason));
         }
+    }
+    // 一切都摆好了，但 App 可能还没把这批窗口的内容画出来（Chromium 类程序要 50～120 ms）。
+    // 遮罩还盖着，趁这段时间等它画，然后一把撤掉 —— 屏幕上看到的是“旧画面 → 新空间”，
+    // 中间没有任何一帧白屏。
+    if (freeze.active()) {
+        const std::uint64_t started = win::monotonicMs();
+        std::uint32_t frames = 0;
+        while (frames < kFreezeHoldMaxFrames && win::monotonicMs() - started < kFreezeHoldMs) {
+            if (win::dwm::waitForFrames(1) == 0) {
+                break; // 没有合成器：干等没意义
+            }
+            ++frames;
+        }
+        win::logDebug(QStringLiteral("workspace: held the freeze frame for %1 frame(s), %2 ms")
+                          .arg(frames)
+                          .arg(win::monotonicMs() - started));
+        freeze.release();
     }
     win::logInfo(QStringLiteral("workspace: %1 -> %2 shown, %3 hidden%4")
                      .arg(reason)

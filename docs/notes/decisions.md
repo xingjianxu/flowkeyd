@@ -739,6 +739,23 @@ active 后所在的 monitor 上"。
     必须**换藏法**（例如移出屏幕而不是 `SW_HIDE`），会把 M0 那条“隐藏之后还抢得到前台”的结论、
     Z 序还原与恢复日志的语义一起推翻，不划算。要看它们就用 `windows()` / `window("activate")`
     （会先切到它那个空间）或直接切空间。
+  * **切空间时用一张「冻结快照」盖住过渡**（M11 补，2026-10-22）：现代浏览器类程序被
+    `SW_HIDE` 再显示时，会在**揭示的那一瞬**白 30–45 ms（页面区整块变白，然后内容才回来；
+    记事本这类纯 GDI 程序不会）。逐帧探针与三次对照实验（`tmp/wsflicker/`）给出了三条硬结论：
+    1. 这不是我们的顺序问题 —— 不经 flowkeyd、手工 `SW_HIDE` → `SW_SHOWNOACTIVATE` 一模一样；
+    2. “先把新窗口插到旧空间顶层窗口底下画好，再藏旧的”**走不通**：Chromium 的遮挡计算
+       （`CalculateNativeWinOcclusion`）让它在被盖着时**根本不画** —— 等 31 / 94 / 180 ms，
+       白屏都恰好出现在藏掉旧窗口那一刻。这条路实现过、量过、已撤掉；
+    3. 跨进程 `DwmSetWindowAttribute(DWMWA_CLOAK)` 仍然是 `E_ACCESSDENIED`（当场复测），
+       学不了 shell 那套。
+    于是改成**把过渡盖住**：切之前抓一张「要露出来的那几块」的并集的屏幕快照，用一个
+    `WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT | WS_EX_LAYERED`
+    的无边框窗口铺上去（`platform/win/freeze.*`），照常显隐 + `restack` + 取焦点，
+    `DwmFlush` 等 `kFreezeHoldMs` = 100 ms 后一把撤掉。屏幕上看到的是「旧画面冻住一下，
+    然后新空间完整出现」：实测白屏帧从**两个方向各 5 帧变成 0 帧**（`tmp/wsflicker/run-freeze.txt`）。
+    分层 + `WS_EX_TRANSPARENT` 还顺带满足两个要求：鼠标点穿、不进 `Alt+Tab`、不抢前台；
+    快照拿不到（无合成器 / 建窗口失败）时**静默退回**旧行为，切换本身不受影响。
+    遮罩本身不播过渡动画（`dwm::TransitionGuard`），否则刚盖上去会淡入一下。
 * 两个 M0 实测约束已写进代码：`show()` 用 `SW_SHOWNOACTIVATE`（最小化的用 `SW_SHOWMINNOACTIVE`）；
   目标进程无响应（`IsHungAppWindow`）时**不隐藏**（`SW_HIDE` 是跨线程 `SendMessage`，卡死会挂住
   调用线程）。全部 hide/show/restack **只允许在工作线程上做**。

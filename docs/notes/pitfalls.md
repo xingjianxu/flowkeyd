@@ -608,6 +608,27 @@
 * **`show(hwnd, insertAfter)` 的方向是反的**：`SetWindowPos` 的 `hWndInsertAfter` 是“把窗口摆在它**下面**”
   （探针记录的是顶 → 底），而状态机的 `effects.show` 是**底 → 顶**。按“逐个摆到前一个后面”写，Z 序会
   整个反过来。现在先 `show(hwnd, nullptr)` 逐个露出来，再用一条 `restack(shown)`（底 → 顶逐对）重排。
+* **现代浏览器类程序被 `SW_HIDE` 再显示时，揭示那一瞬会白 30–45 ms**（M11，2026-10-22）：Chrome / Edge /
+  Electron / VSCode / WezTerm 的页面区会先整块变白再画回来，而记事本这类纯 GDI 程序不会。
+  三条排错结论（探针在 `tmp/wsflicker/`，144 Hz 逐帧抓屏）：
+  * 不是我们的顺序问题：不经 flowkeyd、手工 `SW_HIDE` → `SW_SHOWNOACTIVATE` 一模一样；
+    `SWP_HIDEWINDOW` / `SWP_SHOWWINDOW` 也一样（命中 1–2 帧）。
+  * **“先插到旧窗口底下画好再露出来”根本无效**：Chromium 的 `CalculateNativeWinOcclusion` 让它
+    在被盖住时**不画**。等 31 / 94 / 180 ms，白屏都**恰好出现在藏掉旧窗口那一刻** —— 等多久都一样。
+  * 跨进程 `DwmSetWindowAttribute(DWMWA_CLOAK)` = `E_ACCESSDENIED`（当场复测，与 M0 一致），
+    所以学不了 shell 的虚拟桌面切换。
+  结论：只能**把过渡盖住** —— `platform/win/freeze.*` 的冻结快照，先抓「要露出来的那几块」的并集、
+  铺一个置顶的无边框窗口盖上去，显隐完等 ~100 ms 再撤。遮罩必须是
+  `WS_EX_TRANSPARENT | WS_EX_LAYERED`（鼠标点穿）、`WS_EX_TOOLWINDOW`（不进 Alt+Tab）、
+  `WS_EX_NOACTIVATE`（不抢前台），而且它**自己也不能播过渡动画**（否则刚盖上去会淡入）。
+  实测白屏从两个方向各 5 帧变成 0 帧。
+* **同一个任务里量出来的两个陷阱（与功能无关但常踩）**：
+  * `settings` / `hotkey` / `window_rule` 在 DSL 里是**函数**，配置必须写 `settings{...}`；写成
+    `settings = {...}` 会把全局函数覆盖掉，整段设置被**静默忽略**（`--check` 照旧说 OK）。
+    探针配置就踩过这个：`exclude` 不生效，`workspace` 的窗口把用户一屏窗口全藏了。
+  * 判“探针自己能跑起来”不要只看 `Get-Process flowkeyd` 有输出：`Path` 为空说明那是个**提权**
+    实例（读不到路径），这时 `build\windows-debug\flowkeyd.exe` 会被别人锁住，链接直接
+    `Permission denied`。先 `--quit` 再构建。
 * **预写日志要三面都有出口**：hide 之前写盘（写不进去就**不隐藏**）、show **成功之后**才删条目、
   hide 失败 / 窗口已经消失时把刚写的那条**撤掉**。少最后一个退出时，下次启动会去 show 一个本来就
   可见的窗口（白忙一场）；少第一/第二个就是“窗口永远消失”。
