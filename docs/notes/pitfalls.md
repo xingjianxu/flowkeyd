@@ -570,6 +570,15 @@
 
 ### 工作空间：动作执行与安全恢复（M6 / M8）
 
+* **Chrome 的 `Chrome_RenderWidgetHostHWND` 子窗口会被当成“主窗口”**（2026-10 观察到，**尚未修**）：
+  `SetWinEventHook(EVENT_OBJECT_SHOW)` 连**子窗口**一起报，而 `windowFacts()` 只看“无属主 /
+  `WS_EX_TOOLWINDOW` / 有标题 / 尺寸非零”，没看过 `WS_CHILD` —— 于是 Chrome 的渲染子窗口
+  （标题就是 `Chrome Legacy Window`）被测得像个主窗口，被收编进空间 1，切走时跟着 `SW_HIDE`。
+  更糟的是之后**恢复不回来**：对它们调 `ShowWindow(SW_SHOWNOACTIVATE)` 返回
+  `ERROR_INVALID_HANDLE`（`IsWindow` 却是真的），于是 `workspace.json` 里留下几条永远清不掉的
+  条目，**每次启动 / `--restore-windows` 都报一遍 WARN**。现在只能手工删 `workspace.json`
+  收场（里面若只剩这一种条目就安全）。真要修就是“子窗口一律不是主窗口”（平台层看 `WS_CHILD`），
+  但那会改到 `window()` 匹配 / 切换器的判据，所以留待拍板（见 AGENTS.md 第 12 节）。
 * **`show(hwnd, insertAfter)` 的方向是反的**：`SetWindowPos` 的 `hWndInsertAfter` 是“把窗口摆在它**下面**”
   （探针记录的是顶 → 底），而状态机的 `effects.show` 是**底 → 顶**。按“逐个摆到前一个后面”写，Z 序会
   整个反过来。现在先 `show(hwnd, nullptr)` 逐个露出来，再用一条 `restack(shown)`（底 → 顶逐对）重排。

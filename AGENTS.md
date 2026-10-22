@@ -603,6 +603,11 @@ debug 看不到的警告）+ `FLOWKEYD_BUILD_TESTS=OFF`。
     分组、图标缓存到磁盘。
 15. **启动器右键菜单里的命令仍然提权**（由 shell 在 flowkeyd 自己的进程里执行）：改成普通权限要把整个
     菜单宿主（消息转发 + `#32768` 菜单窗口 + `beforeInvoke`）搬到代理进程，代价与风险都不划算。
+16. **子窗口仍然可能被当成“主窗口”**：`SetWinEventHook` 连子窗口一起报，而“主窗口”判据没看
+    `WS_CHILD`，于是 Chrome 的 `Chrome_RenderWidgetHostHWND` 会被工作空间收编 / 隐藏，之后对它们
+    `ShowWindow` 报 `ERROR_INVALID_HANDLE`，`workspace.json` 里就留下清不掉的条目（每次启动报一条
+    WARN）。修法很清楚（子窗口一律不是主窗口），但它会改到 `window()` 匹配与窗口切换器的判据，
+    属于公开行为，待拍板。详情见 `docs/notes/pitfalls.md` 的「工作空间：动作执行与安全恢复」。
 
 ---
 
