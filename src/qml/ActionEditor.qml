@@ -665,7 +665,7 @@ Column {
             label: qsTr("第几个工作空间")
             hint: qsTr("从 1 开始，不能超过 settings.workspace.count（默认 9）")
             // `prev` / `next` 是**相对**切换（按当前活动空间算，不循环），没有空间号可填。
-            visible: root.action.op !== "prev" && root.action.op !== "next"
+            visible: !root.action || (root.action.op !== "prev" && root.action.op !== "next")
             value: root.action.index !== undefined ? root.action.index : 1
             from: 1
             to: 10
