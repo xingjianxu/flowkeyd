@@ -113,7 +113,7 @@ UI 只有托盘图标 + 日志窗口、`menu`/`help`/`windows`/`apps`/`update` �
 | 配置/日志 | `%USERPROFILE%\.config\flowkeyd\config.lua` / `…\flowkeyd.log` |
 | 注入标记 / 互斥体 | `dwExtraInfo` 里的 `"FLOW"` / `Local\flowkeyd-<配置路径散列>` |
 | 开机自启 / 在线更新 | 计划任务 `flowkeyd` → **当前运行 exe** / 托盘菜单手动查 GitHub `releases/latest` |
-| 自动化测试 | Qt Test + `scripts/acceptance.ps1`（192 项，实跑 189；需交互式桌面） |
+| 自动化测试 | Qt Test + `scripts/acceptance.ps1`（200 项，实跑 200；需交互式桌面） |
 
 ---
 
@@ -350,7 +350,7 @@ Qt 侧齐备：`Qt6::Quick`、`QuickControls2`、`Qt6QuickControls2FluentWinUI3S
 | `src/app/{update_model,update_archive,updater}.*` | 更新卡片状态机 / 取新 exe / 联网编排（sha256、mtime 对齐） |
 | `src/qml/` | 六个窗口 + 配置界面共用控件（`SettingCard`/各 `*Row`/`ChordsEditor`/`ActionEditor`/`ActionListEditor`/`LaunchFieldsEditor`/`WindowRuleFields`/`HotkeyFields`/`OverlayCard`/`ConfigText` 单例与四个弹层）。全部 `pragma ComponentBehavior: Bound`；五个弹窗 `flags` 带 `Qt.Tool`；配色用 `palette`；中文 `Microsoft YaHei` |
 | `tests/` | 每个模块一个 `tst_*`（清单见 `CMakeLists.txt`），含需 `FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1` 的 `tst_interactive`（联网用例还要 `FLOWKEYD_ALLOW_NETWORK_TESTS=1`） |
-| `scripts/acceptance.ps1` | 桌面行为验收（192 项 / 实跑 189）。需交互式桌面，**不属于 `ctest`**；覆盖见 `reference.md` |
+| `scripts/acceptance.ps1` | 桌面行为验收（200 项 / 实跑 200）。需交互式桌面，**不属于 `ctest`**；覆盖见 `reference.md` |
 | `scripts/release.ps1` | 构建 + 打包（完整包 + 精简升级包 + `.sha256`）+ `gh` 上传；**发布说明脚本自己写**（按提交前缀分类）；工作区脏或 HEAD 没推会拒绝（`-AllowDirty`/`-Push`） |
 
 > `scripts/install.ps1` / `uninstall.ps1` **已删除**：自启的注册、刷新与删除全在
@@ -418,7 +418,7 @@ debug 看不到的警告）+ `FLOWKEYD_BUILD_TESTS=OFF`。
 **离线命令（绝不允许提权）**：`--check`/`--list`/`--list-keys`，提权判断必须在它们 `return` 之后；`--quit`
 也不提权，`--remove-autostart` 要管理员。开发实例与常驻的单实例锁按**配置文件路径**分开。
 
-**桌面行为验证**：`scripts/acceptance.ps1`（192 项 / 实跑 189，约四分半，会持续注入按键/抢焦点 —— 先按
+**桌面行为验证**：`scripts/acceptance.ps1`（200 项 / 实跑 200，约四分半，会持续注入按键/抢焦点 —— 先按
 工作约定第 6 条提醒用户）。覆盖范围、跳过项、已知 flake 与**手工冒烟清单（20 项）**在
 `docs/notes/reference.md`。
 
