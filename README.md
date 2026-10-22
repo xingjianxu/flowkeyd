@@ -922,7 +922,7 @@ hotkey{ keys = "Ctrl+Win+Right", action = workspace("next") }
 想用 `Win+Ctrl+←/→` 切换的写法：
 
 ```lua
-hotkey{ keys = "Ctrl+Win+Left",  action = workspace("prev") }   -- 不小心写错方向时不会绕回去
+hotkey{ keys = "Ctrl+Win+Left",  action = workspace("prev") }   -- 会吞掉 Windows 自己的「上一张虚拟桌面」
 hotkey{ keys = "Ctrl+Win+Right", action = workspace("next") }
 ```
 
