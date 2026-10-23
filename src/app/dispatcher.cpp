@@ -867,17 +867,25 @@ void restoreCarryGeometry(const CarryGeometry &before, const QString &hotkey)
 /// `core::shouldCarryWindowToDesktop()` 一起决定：只在**前台窗口不在光标所在的那块
 /// 显示器上**时才把它搬到目标桌面。窗口的位置与显示器都不动。
 ///
+/// `reason`（可空）回答“为什么没搬”：只把前台窗口已经和光标同屏这种最常见的情形
+/// 写成 INFO（默认日志级别就能看到，无需 --log-level debug）。
+///
 /// 返回给日志用的一行说明；失败时已经写好了 error 日志，返回空串。
 QString switchDesktopAction(const core::Compiled &config,
                             const core::Action &action,
-                            const QString &hotkey)
+                            const QString &hotkey,
+                            QString *reason)
 {
     // “哪个窗口跟着走”必须在**切之前**问：切完之后前台窗口已经是目标桌面上的
     // 某一个，不再是用户切之前看着的那个。
     HWND carried = nullptr;
     if (config.settings.desktopFollowForeground) {
         const HWND foreground = win::window::foregroundMainWindow();
-        if (foreground != nullptr) {
+        if (foreground == nullptr) {
+            if (reason != nullptr) {
+                *reason = QStringLiteral("there is no foreground window to carry");
+            }
+        } else {
             const std::vector<core::MonitorDescription> monitors =
                 core::sortedMonitors(win::monitor::list());
             const std::optional<std::size_t> windowMonitor =
@@ -887,7 +895,12 @@ QString switchDesktopAction(const core::Compiled &config,
             if (core::shouldCarryWindowToDesktop(
                     config.settings, windowMonitor, cursorMonitor)) {
                 carried = foreground;
-            } else {
+            } else if (reason != nullptr) {
+                *reason = QStringLiteral("the foreground window %1 is already on the cursor's "
+                                         "monitor (%2)")
+                              .arg(core::rustDebug(win::window::windowTitle(foreground)),
+                                   windowMonitor.has_value() ? QString::number(*windowMonitor + 1)
+                                                             : QStringLiteral("?"));
                 win::logDebug(
                     QStringLiteral("`%1` desktop: not carrying %2 (window on monitor %3, cursor "
                                    "on %4)")
@@ -899,6 +912,8 @@ QString switchDesktopAction(const core::Compiled &config,
                                                        : QStringLiteral("?")));
             }
         }
+    } else if (reason != nullptr) {
+        *reason = QStringLiteral("settings.desktop_follow_foreground is off");
     }
 
     // 几何快照也得在切之前拍：搬完之后再问就只能拿到“被改过”的那一份。
@@ -1422,11 +1437,17 @@ void executeAction(Runtime *runtime,
         runtime->requestShutdownFromAnyThread();
         break;
     case core::Action::Kind::Desktop: {
-        const QString detail = switchDesktopAction(*config, action, hotkey);
+        QString reason;
+        const QString detail = switchDesktopAction(*config, action, hotkey, &reason);
         if (detail.isEmpty()) {
             return;
         }
-        win::logInfo(QStringLiteral("`%1` -> %2").arg(hotkey, detail));
+        if (reason.isEmpty()) {
+            win::logInfo(QStringLiteral("`%1` -> %2").arg(hotkey, detail));
+        } else {
+            win::logInfo(QStringLiteral("`%1` -> %2 (no window carried: %3)")
+                             .arg(hotkey, detail, reason));
+        }
         break;
     }
     case core::Action::Kind::Power: {

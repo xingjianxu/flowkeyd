@@ -433,6 +433,9 @@ settings{ desktop_follow_foreground = false }
   窗口大小、边距全都不变（搬完会校对一次几何：一模一样就什么都不做）。
 * **不记“它原本属于哪张桌面”**：以后每次切桌面都重新判断，同一条件就继续跟着走；
   想让某个窗口永久钉在自己那张桌面上，用 `window_rule{ desktop = n }`。
+* 没搬时日志里会写明白原因：`desktop 2/2 (no window carried: the foreground window … is
+  already on the cursor's monitor (1))`。看不到这句就是真的搬了（`…, window carried
+  along`）；**看不到任何一句**说明这个动作不是 `desktop()`（或者实例跑的是旧版）。
 * 只对 `desktop()` 动作生效。用 Windows 自己的 `Win+Ctrl+←/→`、任务视图点选等方式
   切桌面时 flowkeyd 不动任何窗口（它没有监听系统切桌面）。
 * `--list` 会把它当前的状态打出来（`desktop follow foreground: true …`）。
