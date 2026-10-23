@@ -2,6 +2,15 @@
 
 namespace flowkeyd::core {
 
+std::optional<std::size_t> chooseCycleMonitor(const std::optional<std::size_t> &foregroundMonitor,
+                                              const std::optional<std::size_t> &topmostMonitor)
+{
+    if (foregroundMonitor.has_value()) {
+        return foregroundMonitor;
+    }
+    return topmostMonitor;
+}
+
 std::optional<WindowCyclePlan> planWindowCycle(const WindowCycleState &state,
                                                const QStringList &candidates,
                                                const QString &foreground,

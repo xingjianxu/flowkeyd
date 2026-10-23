@@ -53,4 +53,15 @@ std::optional<WindowCyclePlan> planWindowCycle(const WindowCycleState &state,
                                                const QString &foreground,
                                                int step);
 
+/// 轮转只在哪一块显示器上进行（`std::nullopt` = 不按显示器筛，转整张桌面）。
+///
+/// 顺序只有两步：**前台窗口**所在的那一块 → 当前桌面上**压在最上面**的那个窗口
+/// 所在的那一块（`GetForegroundWindow()` 偶尔会空空如也，比如远程桌面窗口关掉的
+/// 那一瞬，host 与切视图之后等）。
+///
+/// **从来没有“光标所在的那一块”**：光标停在哪跟用户在看哪个窗口无关。这条规则
+/// 集中在这一个函数里，是为了以后不会再被顺手加回去。
+std::optional<std::size_t> chooseCycleMonitor(const std::optional<std::size_t> &foregroundMonitor,
+                                              const std::optional<std::size_t> &topmostMonitor);
+
 } // namespace flowkeyd::core

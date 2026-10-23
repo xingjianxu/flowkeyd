@@ -1,4 +1,4 @@
-# 参考资料（AGENTS.md 第 5 节后半 + 第 14 节）
+﻿# 参考资料（AGENTS.md 第 5 节后半 + 第 14 节）
 
 > **schema 的权威定义在 `README.md`「配置」那一章与 `flowkeyd.lua.example`。** 这里只是速查、容易做漏的
 > 语义、验收脚本的覆盖范围与手工冒烟清单。
@@ -124,6 +124,12 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
   BOM）**跳过**它们：是跳过，不是失败。
 * 上一次实跑（工作空间还在的时候）：`checks: 206, failures: 0`。工作空间那一整块已经移除，实现
   在分支 `backup/workspace`，所以脚本也回到了 166/163 那一版。
+* **本次（2026-10-23，窗口轮转的显示器兜底）没跑验收脚本**：项目所有者要求本轮不做冒烟。改动
+  只碰 `Dispatcher::cycleWindows()` 选哪一块屏 + 日志（`core::chooseCycleMonitor()`，
+  `tst_window_cycle` 覆盖），不碰钩子/引擎/窗口后端的任何路径；真机手工验过三条：
+  `Ctrl+Alt+F9`（临时绑定）与 `Ctrl+Win+→`（真实和弦）两种键、光标停 DISPLAY2 / 前台窗口在
+  DISPLAY1，都转的是 DISPLAY1 的窗口（`--log-level debug` 里能看到 `cycling on monitor 1/2`）。
+  下次动到钩子/引擎时**必须**把这一轮补上。
 
 ## 手工冒烟清单（脚本覆盖不到的部分）
 

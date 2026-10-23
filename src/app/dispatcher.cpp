@@ -13,6 +13,7 @@
 #include "platform/win/audio.h"
 #include "platform/win/clipboard.h"
 #include "platform/win/desktop.h"
+#include "platform/win/dwm.h"
 #include "platform/win/hook.h"
 #include "platform/win/input.h"
 #include "platform/win/logging.h"
@@ -809,6 +810,18 @@ QString cycleId(HWND hwnd)
                                       16);
 }
 
+/// 日志用的显示器文字：`monitor 2/2`（下标从 1 开始，与配置里的 `monitor = 2` 一致）。
+QString monitorText(const std::vector<core::MonitorDescription> &monitors,
+                    const std::optional<std::size_t> &index)
+{
+    if (!index.has_value() || monitors.empty()) {
+        return QStringLiteral("unknown monitor");
+    }
+    return QStringLiteral("monitor %1/%2")
+        .arg(static_cast<int>(*index) + 1)
+        .arg(static_cast<int>(monitors.size()));
+}
+
 void executeWindowAction(ExpandContext &ctx,
                          MonitorMemory *memory,
                          const core::Compiled &config,
@@ -1503,19 +1516,65 @@ void Dispatcher::cycleWindows(core::WindowOp op, const QString &hotkey)
     // 和不带 `target`/`process` 的 window 动作是同一套判断）。
     const HWND current = win::window::find(core::WindowQuery::make(std::nullopt, std::nullopt));
     const std::vector<core::MonitorDescription> monitors = core::sortedMonitors(win::monitor::list());
-    // “当前显示器” = **当前窗口**所在的那一块（问不出来时退回光标所在的那一块）。
-    // 轮转只在这一块屏上发生，所以两声快捷键就能在左右两块屏上各转各的。
-    std::optional<std::size_t> monitorIndex;
-    if (current != nullptr) {
-        monitorIndex = win::monitor::indexForWindow(monitors, current);
+    // 候选窗口只枚举一次：**第一项也是“前台窗口问不出来”时的兜底** —— 它是当前
+    // 桌面上压在 Z 序最前面的那个程序窗口，也就是用户此刻真正看得见的那一个。
+    const std::vector<win::window::OpenWindow> openWindows =
+        win::window::listOpenWindowsOnCurrentDesktop();
+
+    // 前台窗口到底能不能用来判“用户在哪块屏上工作”。
+    //
+    // 两种情况下它不算数：
+    //   * shell 把前台还成了空（`GetForegroundWindow()` 返回 `nullptr`）—— 远程桌面
+    //     窗口关掉 / 切换视图时本机实测会这样，日志里那行 “left the remote desktop
+    //     (no foreground window)” 就是它；
+    //   * 它是被 `MoveViewToDesktop` 搬走的窗口，shell 却还把它当前台窗口（决策 19
+    //     记过的怪癖）—— 用户根本看不到它，它所在的屏跟用户在看哪块屏无关。
+    //     只在它被 DWM cloak 掉时才多问一次虚拟桌面（COM），平常不多花这一下。
+    bool foregroundUsable = current != nullptr;
+    if (foregroundUsable && win::dwm::isCloaked(current)) {
+        QString desktopError;
+        const std::optional<bool> onCurrent =
+            win::desktop::isWindowOnCurrentDesktop(current, &desktopError);
+        if (onCurrent.has_value() && !*onCurrent) {
+            foregroundUsable = false;
+        }
     }
-    if (!monitorIndex.has_value()) {
-        monitorIndex = win::monitor::indexForCursor(monitors);
+
+    std::optional<std::size_t> foregroundMonitor;
+    if (foregroundUsable) {
+        foregroundMonitor = win::monitor::indexForWindow(monitors, current);
+    }
+    std::optional<std::size_t> topmostMonitor;
+    if (!openWindows.empty()) {
+        topmostMonitor = win::monitor::indexForWindow(monitors, openWindows.front().hwnd);
+    }
+    // **绝不看光标**：光标停在哪跟用户在看哪个窗口无关（决策 38）。问不出来时退回
+    // 压在最上面的那个窗口所在的那一块，再问不出来就不按显示器筛（转整张桌面）。
+    const std::optional<std::size_t> monitorIndex =
+        core::chooseCycleMonitor(foregroundMonitor, topmostMonitor);
+    const QString where = monitorText(monitors, monitorIndex);
+    if (foregroundMonitor.has_value()) {
+        win::logDebug(QStringLiteral("`%1` window: cycling on %2 (the monitor of the foreground "
+                                    "window %3)")
+                          .arg(hotkey, where, win::window::windowTitle(current)));
+    } else if (monitorIndex.has_value()) {
+        win::logInfo(QStringLiteral("`%1` window: no usable foreground window (%2); cycling on %3 "
+                                    "(the monitor of the topmost window)")
+                         .arg(hotkey,
+                              current != nullptr ? win::window::windowTitle(current)
+                                                 : QStringLiteral("none"),
+                              where));
+    } else {
+        win::logInfo(QStringLiteral("`%1` window: no usable foreground window (%2); cycling every "
+                                    "window on this desktop")
+                         .arg(hotkey,
+                              current != nullptr ? win::window::windowTitle(current)
+                                                 : QStringLiteral("none")));
     }
 
     QStringList candidates;
     QHash<QString, HWND> handles;
-    for (const win::window::OpenWindow &open : win::window::listOpenWindowsOnCurrentDesktop()) {
+    for (const win::window::OpenWindow &open : openWindows) {
         if (monitorIndex.has_value()) {
             const std::optional<std::size_t> index =
                 win::monitor::indexForWindow(monitors, open.hwnd);
@@ -1561,17 +1620,11 @@ void Dispatcher::cycleWindows(core::WindowOp op, const QString &hotkey)
 
     const int position = static_cast<int>(plan->state.ring.indexOf(plan->target)) + 1;
     const int count = static_cast<int>(plan->state.ring.size());
-    const QString where = monitorIndex.has_value()
-                              ? QStringLiteral("monitor %1/%2")
-                                    .arg(static_cast<int>(*monitorIndex) + 1)
-                                    .arg(static_cast<int>(monitors.size()))
-                              : QStringLiteral("unknown monitor");
     win::logInfo(QStringLiteral("`%1` -> %2 (%3 of %4 on %5%6)")
                      .arg(hotkey, detail)
                      .arg(position)
                      .arg(count)
-                     .arg(where, plan->restarted ? QStringLiteral(", restarted")
-                                                 : QString()));
+                     .arg(where, plan->restarted ? QStringLiteral(", restarted") : QString()));
 }
 
 void Dispatcher::submit(std::shared_ptr<const core::Compiled> config, core::Trigger trigger)

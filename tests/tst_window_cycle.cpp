@@ -38,6 +38,7 @@ private slots:
     void loneWindowOnAnotherMonitorIsActivated();
     void foregroundThatIsNotACandidateStartsFromTheTop();
     void duplicatesAreCollapsed();
+    void theMonitorComesFromTheForegroundWindow();
     void shorthandParsesBothOps();
 };
 
@@ -187,6 +188,23 @@ void TestWindowCycle::duplicatesAreCollapsed()
     QVERIFY(plan.has_value());
     QCOMPARE(plan->target, QStringLiteral("b"));
     QCOMPARE(plan->state.ring, ids({"fg", "b", "c"}));
+}
+
+void TestWindowCycle::theMonitorComesFromTheForegroundWindow()
+{
+    // 前台窗口问得出来就用它那一块屏。
+    QCOMPARE(core::chooseCycleMonitor(std::optional<std::size_t>(1),
+                                      std::optional<std::size_t>(0)),
+             std::optional<std::size_t>(1));
+    QCOMPARE(core::chooseCycleMonitor(std::optional<std::size_t>(0),
+                                      std::optional<std::size_t>(1)),
+             std::optional<std::size_t>(0));
+    // 前台窗口问不出来（`GetForegroundWindow()` 返回空、或它不在当前虚拟桌面上）时，
+    // 退回当前桌面上压在最上面的那个窗口所在的那一块。
+    QCOMPARE(core::chooseCycleMonitor(std::nullopt, std::optional<std::size_t>(1)),
+             std::optional<std::size_t>(1));
+    // 两个都问不出来：不按显示器筛（转整张桌面），**也绝不去看光标**。
+    QVERIFY(!core::chooseCycleMonitor(std::nullopt, std::nullopt).has_value());
 }
 
 void TestWindowCycle::shorthandParsesBothOps()

@@ -353,6 +353,14 @@
   于是会落到一块与它无关的屏上（本机实测：窗口停在第二块屏上最小化，却被算成第一块）。要判"它在
   哪块屏"就先用 `GetWindowPlacement().rcNormalPosition` 的中心点问 `MonitorFromPoint()`（现在
   `win::monitor::indexForWindow()` 就是这么做的，窗口轮转与 `move_left/right_monitor` 都靠它）。
+* **`GetForegroundWindow()` 会间歇性返回空**（远程桌面窗口关掉 / 切换视图时，日志里
+  `left the remote desktop (no foreground window)` 那一行就是它）。任何“按前台窗口决定什么”的逻辑都
+  必须处理空值，而**兜底不能拿光标**：光标停在哪跟用户在看哪个窗口无关。窗口轮转当初的兜底就是
+  `indexForCursor()`，用户报的“轮转的是鼠标那块屏的窗口”正是它（已改成“压在最上面的窗口所在
+  的那一块”，见决策 38 与 `core::chooseCycleMonitor()`）。
+* **“前台窗口”也会骗人**：被 `MoveViewToDesktop` 搬到别的虚拟桌面的窗口，shell 仍会把它当
+  `GetForegroundWindow()`（用户根本看不到它）。这种窗口要先 `win::dwm::isCloaked()` 为真、再问一次
+  `desktop::isWindowOnCurrentDesktop()` 才能识别；COM 那一笔不便宜，所以只在 cloak 时才去问。
 * **终端窗口不能靠标题找**（`process = "wezterm"`，窗口属于 `wezterm-gui.exe`）。
 * **`run`/`window.launch` 走 `CreateProcess`、不查 `App Paths`、也不能用 `DETACHED_PROCESS`**（会静默
   杀死控制台子进程，用 `CREATE_NO_WINDOW`）。
