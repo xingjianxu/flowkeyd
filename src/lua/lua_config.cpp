@@ -732,8 +732,7 @@ core::Settings convertSettings(lua_State *L, int index)
     checkFields(L, index,
                 {"log_level", "swallow", "exact_modifiers", "release_modifiers",
                  "repeat_interval_ms", "repeat_delay_ms", "tick_ms", "input_backend",
-                 "single_instance", "elevate", "remote_desktop", "window_monitor",
-                 "desktop_follow_foreground"});
+                 "single_instance", "elevate", "remote_desktop", "window_monitor"});
     core::Settings settings;
     if (auto value = optString(L, index, "log_level")) {
         settings.logLevel = *value;
@@ -764,10 +763,6 @@ core::Settings convertSettings(lua_State *L, int index)
     }
     if (auto value = optBool(L, index, "elevate")) {
         settings.elevate = *value;
-    }
-    // 切虚拟桌面时把前台窗口一起带到新桌面（只在它不在鼠标那块屏上时）。
-    if (auto value = optBool(L, index, "desktop_follow_foreground")) {
-        settings.desktopFollowForeground = *value;
     }
     // 窗口**没写明 `monitor`** 时摆到哪一块显示器上（默认 = 光标所在的那一块）。
     // 取值与 `window_rule` 的 `monitor` 完全一样，另外还多一个 `"none"`

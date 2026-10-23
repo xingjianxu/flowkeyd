@@ -237,13 +237,13 @@ UI 只有托盘图标 + 日志窗口、`menu`/`help`/`windows`/`apps`/`update` �
     有 35–48 ms 白帧，靠遮罩压住又变成每次多 ~100 ms 延迟）。**实现保留在分支 `backup/workspace`，
     master 上已全部删除**（动作种类回到 20 种，托盘图标回到只显示虚拟桌面号）。**不要再悄悄把它加
     回来**，要做新方案先问项目所有者。完整理由见 `docs/notes/decisions.md` 第 36 条。
-37. **切虚拟桌面时把前台窗口带过去（`settings.desktop_follow_foreground`，默认开）**：
-    `desktop()` 动作切桌面时，如果**前台窗口不在光标所在的那块显示器上**，就把它一起搬到目标桌面；
-    **位置与显示器不变**，只有虚拟桌面这一维跟着走。**只接 `desktop()` 动作**（不监听系统切桌面），
-    **不记状态**（每次切都重新判断）。判据是纯逻辑 `core::shouldCarryWindowToDesktop()`；平台层是
-    `win::desktop::switchToCarrying()`；切完要比一次几何快照（`MoveViewToDesktop` 会把最大化踢出来）。
-    **没搬时 INFO 日志会写原因**（开关关了 / 没前台窗口 / 窗口已经在鼠标那块屏上）：默认日志级别
-    就能分辨“没生效”与“条件不满足”。完整理由见 `docs/notes/decisions.md` 第 37 条。
+37. **「切虚拟桌面时把前台窗口一起带过去」已整体移除，配置回到“切桌面只切桌面”。** 曾经实现过一版
+    （`settings.desktop_follow_foreground`，默认**开**：`desktop()` 动作切桌面时，若前台窗口不在光标
+    所在的那块显示器上，就把它一起搬到目标桌面，**位置与显示器都不变**、只有虚拟桌面这一维跟着走），
+    **项目所有者要求撤回**。**实现完整保留在分支 `backup/desktop-follow`（末提交 `6f20a22`），master
+    上已全部删除**（`settings.desktop_follow_foreground`、`core::shouldCarryWindowToDesktop()`、
+    `win::desktop::switchToCarrying()`、`win::window::foregroundMainWindow()`，以及“没搬时的 INFO 原因
+    行”）。**不要再悄悄把它加回来**，要加先问项目所有者。完整记录见 `docs/notes/decisions.md` 第 37 条。
 
 ---
 
@@ -384,7 +384,7 @@ debug 看不到的警告）+ `FLOWKEYD_BUILD_TESTS=OFF`。
 也不提权，`--remove-autostart` 要管理员。开发实例与常驻的单实例锁按**配置文件路径**分开。
 
 **桌面行为验证**：`scripts/acceptance.ps1`（166 项 / 实跑 163，约三分钟，会持续注入按键/抢焦点 —— 先按
-工作约定第 6 条提醒用户）。覆盖范围、跳过项、已知 flake 与**手工冒烟清单（16 项）**在
+工作约定第 6 条提醒用户）。覆盖范围、跳过项、已知 flake 与**手工冒烟清单（15 项）**在
 `docs/notes/reference.md`。
 
 ---
@@ -497,8 +497,10 @@ debug 看不到的警告）+ `FLOWKEYD_BUILD_TESTS=OFF`。
   `scripts/release.ps1`、在线更新、`install.ps1`、FreeType、程序启动器（+异步图标 / `shell:AppsFolder` /
   拼音 / 固定·最近·全部 / 控制面板与设置页）、弹窗缩放过期自愈、跨桌面唤起、`settings.window_monitor`、
   图形化配置界面、启动权限。
-* **已撤掉的一条**：工作空间（按显示器独立的一套虚拟空间，2026-10 实现过 M0–M12）**整体移除**，
-  实现在分支 `backup/workspace`；配置与默认行为回到 Windows 虚拟桌面（决策 36）。
+* **已撤掉的两条**：工作空间（按显示器独立的一套虚拟空间，2026-10 实现过 M0–M12）**整体移除**，
+  实现在分支 `backup/workspace`；配置与默认行为回到 Windows 虚拟桌面（决策 36）。「切虚拟桌面时把
+  前台窗口一起带过去」（`settings.desktop_follow_foreground`，默认开）也**整体移除**，实现在分支
+  `backup/desktop-follow`（决策 37）。
 
 ---
 
@@ -592,7 +594,6 @@ debug 看不到的警告）+ `FLOWKEYD_BUILD_TESTS=OFF`。
 | 动作 | `run`/`send`/`type`/`open`/`volume`/`media`/`clipboard`/`window`/`notify`/`menu`/`help`/`windows`/`apps`/`power`/`desktop`/`caps_lock`/`suspend`/`reload`/`quit`/`none` |
 | 和弦 | `~` 放行原始按键、`*` 忽略额外修饰键；结构是 **修饰键 + 一个按键**；单个字母键名必须小写 |
 | 启动权限 | `run`/`launch` 有 `elevated`（默认 `false` = 普通用户）；`open` 与启动器总是普通权限 |
-| 切桌面 | `desktop_follow_foreground`（默认 `true`）：前台窗口不在鼠标那块屏上就跟着虚拟桌面走（决策 37） |
 
 CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、`--check`、`--list`、`--list-keys`、
 `--quit`、`--no-autostart`、`--remove-autostart`、`--log-window`、`--log-level`、`--log-file`、

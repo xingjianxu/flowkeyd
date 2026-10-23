@@ -124,21 +124,4 @@ MonitorRef windowActionMonitor(const std::optional<MonitorRef> &actionMonitor,
                                const WindowRule *rule,
                                const Settings &settings);
 
-/// 切虚拟桌面时要不要把前台窗口**一起带到新桌面上**（`settings.desktop_follow_foreground`）。
-///
-/// 判据是两条同时成立：
-///   1. 开关开着（默认开）；
-///   2. 前台窗口**不在光标所在的那块显示器上**（`windowMonitor` 与 `cursorMonitor` 都有
-///      值且不相等）。
-///
-/// 为什么是“不在鼠标那块屏上”：用户切桌面时眼睛看着的是鼠标所在的那块屏，
-/// 那块屏上的窗口本来就会跟着视图走；而另一块屏上的窗口会留在旧桌面上消失掉。
-/// 于是只在后者的情况下把它带过去，而且**只改虚拟桌面**，位置与显示器都不动。
-///
-/// 任一信息缺失（拿不到窗口所在屏 / 询不到光标 / 没有窗口）都返回 false：未知
-/// 的情况下宁可什么都不做，也不要把窗口搬到用户没预期的地方。
-bool shouldCarryWindowToDesktop(const Settings &settings,
-                                std::optional<std::size_t> windowMonitor,
-                                std::optional<std::size_t> cursorMonitor);
-
 } // namespace flowkeyd::core

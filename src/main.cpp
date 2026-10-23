@@ -114,11 +114,6 @@ QString renderBindings(const core::Compiled &compiled)
     out += QStringLiteral("  window monitor: %1 (for rules and window actions that do not "
                           "name one)\n")
                .arg(compiled.settings.windowMonitor.describe());
-    // 切虚拟桌面时“前台窗口跟着走”也是一项全局行为，而且它的判据（前台窗口不在
-    // 鼠标那块屏上）不写在配置里就看不出来，所以一并列出来。
-    out += QStringLiteral("  desktop follow foreground: %1 (desktop actions carry the "
-                          "foreground window when it is on another monitor)\n")
-               .arg(boolText(compiled.settings.desktopFollowForeground));
     for (const core::Binding &binding : compiled.bindings) {
         QStringList chords;
         for (const core::Chord &chord : binding.chords) {

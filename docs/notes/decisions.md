@@ -670,35 +670,23 @@ switch/move/prev/next/move_prev/move_next、`window_rule.workspace`、切空间�
   （标题 `Chrome Legacy Window`）会被当成程序窗口收进 `window()` 匹配与切换器里。
   修法与工作空间无关，继续有效；细节见 `pitfalls.md`。
 
-## 37. 切虚拟桌面时把前台窗口带过去：`settings.desktop_follow_foreground`，默认开
+## 37. 「切虚拟桌面时把前台窗口一起带过去」（`settings.desktop_follow_foreground`）已整体移除
 
-双屏 + 虚拟桌面时的一个具体痛点：你看着左边那块屏（鼠标也停在那儿）上的编辑器，用快捷键切到
-桌面 2；编辑器跟着视图走了，而**右边那块屏**上的浏览器被留在了桌面 1，凭空消失。
+**结论：不做。** 曾经实现过一版（`settings.desktop_follow_foreground`，默认**开**）：`desktop()`
+动作切虚拟桌面时，如果**前台窗口不在光标所在的那块显示器上**，就把它一起搬到目标虚拟桌面；
+**窗口的位置与所在显示器都不变**，只有虚拟桌面这一维跟着走（判据是纯逻辑
+`core::shouldCarryWindowToDesktop()`，平台层是 `win::desktop::switchToCarrying()`，切完还要比一次
+几何快照，因为 `MoveViewToDesktop` 会把最大化踢出来）。
 
-所以 `desktop()` 动作切桌面时多一步：如果**前台窗口不在光标所在的那块显示器上**，就把它一起搬到
-目标桌面上。**位置与显示器都不变**，只有虚拟桌面这一维跟着走。
+**项目所有者要求撤回**（本轮未记录具体理由）。实现完整保留在分支 `backup/desktop-follow`
+（末提交 `6f20a22`）；master 上全部删除，配置与默认行为回到“切桌面只切桌面”。
 
-* 开关是 `settings.desktop_follow_foreground`，**默认 true**（用户 2026-10 拍板：默认就要这个行为，
-  不配也生效）。写成 `false` 就回到以前的行为。
-* 判据是纯逻辑 `core::shouldCarryWindowToDesktop(settings, windowMonitor, cursorMonitor)`
-  （`tst_placement` 盯着）：开关打开 **且** 两个序号都有值 **且** 不相等。任一边是 `nullopt`
-  （没有前台窗口 / 询不到光标）都**不搬** —— 未知就别动手。
-* **只接 `desktop()` 动作**，不做切桌面的全局监听：用户明确选了「只有 flowkeyd 的 desktop 动作」
-  （不接那 500 ms 的桌面轮询），所以系统自己的 `Win+Ctrl+←/→`、任务视图点选都不触发。
-  这样既没有延迟，也不会在用户手动切桌面时擅自搬窗口。
-* 平台层是 `win::desktop::switchToCarrying(index, hwnd, …)`：一个 STA 会话里先 `MoveViewToDesktop`、
-  等 GUID 真的变了、再 `SwitchDesktop`；`Session::goToCarryingIndex()` 是共用的实现体。
-  `hwnd` 为空 / 已失效 / 本来就在目标桌面时行为退化成普通的 `switchTo()`。
-* **几何校对**：`MoveViewToDesktop` 在真机上会顺带把最大化的窗口从最大化里踢出来。所以切之前拍一份
-  `CarryGeometry`（还原矩形 + 最大化 + 最小化），切完**比一比**，一模一样就什么都不做，不一致才
-  `applyPlacement()` 摆回原样。不能无脑摆一遍 —— 那会把用户自己摆好的位置重新居中。
-* 前台窗口用新增的 `win::window::foregroundMainWindow()` 取（与 `window()` 的空查询同一条逻辑：
-  PowerToys 的「快捷键指南」那种 `WS_EX_TOOLWINDOW` 覆盖层会沿 Z 序跳过）。
-* **不记状态**：不记“它原本属于哪张桌面”，以后每次切桌面都重新判断同一个条件。想让某个窗口永久钉在
-  自己那张桌面上，仍然用 `window_rule{ desktop = n }`。
-* `--list` 多打一行 `desktop follow foreground: true (…)`；图形界面的「高级」页有一张「切换虚拟
-  桌面」卡片。
-* **没搬时日志写原因**（INFO 级：`desktop 2/2 (no window carried: the foreground window … is
-  already on the cursor's monitor (2))`）。起初只有 `--log-level debug` 才看得到 `not carrying`，
-  用户对着默认日志分不清“没生效”与“条件不满足”：**真机验证时两次按键都因为前台窗口本来就与
-  鼠标同屏而没搬，看起来就像新功能没装**。
+* **不要再悄悄把它加回来**：要加先问项目所有者。
+* 删除范围：`settings.desktop_follow_foreground`（结构体字段 `desktopFollowForeground` 与
+  `config_map` / `lua_config` / `lua_prelude` / 配置界面的「切换虚拟桌面」卡片一起）、
+  `core::shouldCarryWindowToDesktop()`、`win::desktop::switchToCarrying()`、
+  `win::window::foregroundMainWindow()`、`desktop()` 动作里那条搬窗口分支与它对应的日志
+  （包括“没搬时写进 INFO 的原因行”以及 `--list` 里的 `desktop follow foreground:` 行），
+  以及 `tst_placement` / `tst_lua` / `tst_config_writer` / `tst_interactive` 里针对它的用例。
+* 撤回方式：直接 `git revert` 掉新增、日志原因、文档三个提交，回退后的树与功能加进来之前的
+  `083a77a` 逐字节一致（除这条记录本身）。

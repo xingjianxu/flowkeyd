@@ -134,12 +134,6 @@ Win32/COM 后端就放在 `platform/win/*`，并在 `tst_interactive` 里加一�
   `launchThenActivate`）+ `platform/win/desktop::moveWindowToCurrentDesktop()`。要加第三种语义就照这三层
   拆，别把配置查询塞进平台层；纯逻辑改完在 `tst_placement` 加断言，真机行为在 `tst_interactive` 里加一条
   （参照 `bringsAWindowOnAnotherDesktopToTheCurrentOne` 的窗口登记等待）。
-* **切虚拟桌面时谁跟着走**：开关是 `settings.desktop_follow_foreground`，判据是纯逻辑
-  `core::shouldCarryWindowToDesktop()`（`tst_placement`），执行点是 `dispatcher.cpp` 的
-  `switchDesktopAction()`（拍几何快照 → `switchToCarrying()` → 校对几何），平台层是
-  `platform/win/desktop` 的 `switchToCarrying()` / `Session::goToCarryingIndex()`。要改触发时机（例如也接
-  系统切桌面）就在 `Dispatcher::pollDesktop()` 里加，但先问项目所有者 —— 现在有意**只接 `desktop()`**。
-  真机验证在 `tst_interactive` 的 `switchesDesktopCarryingTheWindowAlong`（盯住“切完位置不变”）。
 
 ## 启动器右键菜单的新行为
 

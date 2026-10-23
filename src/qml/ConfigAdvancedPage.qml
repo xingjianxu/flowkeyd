@@ -106,22 +106,6 @@ ColumnLayout {
 
     SettingCard {
         Layout.fillWidth: true
-        title: qsTr("切换虚拟桌面")
-        subtitle: qsTr("用 `desktop` 动作切虚拟桌面时，如果前台窗口不在光标所在的那块显示器上，就把它一起带到新桌面上（窗口的位置与显示器都不变）。")
-
-        BoolRow {
-            Layout.fillWidth: true
-            label: qsTr("带着前台窗口一起切")
-            hint: qsTr("只在窗口不在鼠标那块屏上时生效；在鼠标那块屏上的窗口不搬。默认开。")
-            onText: qsTr("跟着走")
-            offText: qsTr("不搬窗口")
-            value: page.editor ? page.editor.settings.desktop_follow_foreground !== false : true
-            onPicked: function (value) { page.editor.setSetting("desktop_follow_foreground", value) }
-        }
-    }
-
-    SettingCard {
-        Layout.fillWidth: true
         title: qsTr("远程桌面放行")
         subtitle: qsTr("前台窗口属于远程桌面客户端（mstsc / Windows App 等）时，所有快捷键与重映射一律放行 —— 键原样送到对面那台机器。")
 

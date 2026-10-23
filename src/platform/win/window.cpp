@@ -306,11 +306,6 @@ HWND find(const core::WindowQuery &query)
     return finder.minimized;
 }
 
-HWND foregroundMainWindow()
-{
-    return find(core::WindowQuery::make(std::nullopt, std::nullopt));
-}
-
 std::optional<QString> processName(HWND hwnd)
 {
     DWORD pid = 0;

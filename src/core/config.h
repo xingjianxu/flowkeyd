@@ -118,13 +118,6 @@ struct Settings
     /// —— flowkeyd 完全不碰窗口的位置。`window_rule` 与 `window` 动作上写了
     /// `monitor` 的条目不受它影响（显式写的优先）。
     MonitorRef windowMonitor{MonitorRef::Kind::Cursor, 1, QString()};
-    /// 切换虚拟桌面时，把**前台窗口**一起带到新桌面上（默认**开**）。
-    ///
-    /// 只在「前台窗口不在光标所在的那块显示器上」时动手：那种情况下它通常是你在
-    /// 另一块屏上看着的窗口，切桌面却不把它带走，看起来就像是它被留在了旧桌面上。
-    /// 窗口的**位置与显示器都不变**，只有虚拟桌面这一维跟着走；每次切换都重新
-    /// 判断，不记“它原本属于哪张桌面”（见 `core::shouldCarryWindowToDesktop()`）。
-    bool desktopFollowForeground = true;
 };
 
 /// 一个或多个动作。

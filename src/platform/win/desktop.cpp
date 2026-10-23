@@ -301,15 +301,6 @@ public:
     /// 切到第 `index` 个桌面（从 1 开始）。
     bool goTo(std::uint32_t index, QString *detail, QString *error) const;
 
-    /// 切到第 `index` 个桌面，并先（或在视图未动时）把 `hwnd` 一起搬过去。
-    ///
-    /// `hwnd` 为空 / 窗口无效时就是普通的 `goTo()`。搬窗口**不改变它在屏幕上的
-    /// 位置与显示器**：`MoveViewToDesktop` 只动虚拟桌面这一维。
-    bool goToCarrying(std::uint32_t index,
-                      HWND hwnd,
-                      QString *detail,
-                      QString *error) const;
-
     /// 切到 `hwnd` 所在的那张桌面。
     bool goToWindowDesktop(HWND hwnd, QString *detail, QString *error) const;
 
@@ -356,14 +347,6 @@ private:
                                 std::size_t index,
                                 QString *detail,
                                 QString *error) const;
-
-    /// `goToCarrying` 的实现体（已经枚举好桌面、已经知道当前是第几张）。
-    bool goToCarryingIndex(std::uint32_t index,
-                           HWND hwnd,
-                           const std::vector<ComPtr> &desktops,
-                           std::optional<std::size_t> here,
-                           QString *detail,
-                           QString *error) const;
 
     const ApiEntry *m_api = nullptr;
     ComPtr m_manager;
@@ -648,75 +631,6 @@ bool Session::goTo(std::uint32_t index, QString *detail, QString *error) const
     }
     if (detail != nullptr) {
         *detail = QStringLiteral("desktop %1/%2").arg(index).arg(count);
-    }
-    return true;
-}
-
-bool Session::goToCarrying(std::uint32_t index,
-                           HWND hwnd,
-                           QString *detail,
-                           QString *error) const
-{
-    if (hwnd != nullptr && IsWindow(hwnd) == 0) {
-        hwnd = nullptr;
-    }
-    if (hwnd == nullptr) {
-        return goTo(index, detail, error);
-    }
-    std::vector<ComPtr> desktops;
-    if (!enumerateDesktops(&desktops, error)) {
-        return false;
-    }
-    if (index == 0 || index > desktops.size()) {
-        if (error != nullptr) {
-            *error = QStringLiteral("desktop %1 does not exist (%2 desktop(s) on this machine)")
-                         .arg(index)
-                         .arg(desktops.size());
-        }
-        return false;
-    }
-    ComPtr current;
-    if (!currentDesktop(&current, error)) {
-        return false;
-    }
-    return goToCarryingIndex(index, hwnd, desktops, position(desktops, current), detail, error);
-}
-
-bool Session::goToCarryingIndex(std::uint32_t index,
-                                HWND hwnd,
-                                const std::vector<ComPtr> &desktops,
-                                std::optional<std::size_t> here,
-                                QString *detail,
-                                QString *error) const
-{
-    const std::size_t target = static_cast<std::size_t>(index) - 1;
-    const bool moving = here.has_value() && *here != target;
-    QString carried;
-    if (moving) {
-        // 先把窗口送到目标桌面，再切视图：如果反过来，窗口会被落在旧桌面上。
-        // `MoveViewToDesktop` 是异步的，所以等一下 GUID 真的变了再往下走。
-        const std::optional<QString> before = windowDesktopId(hwnd, 5);
-        QString note;
-        if (!moveViewToDesktopIndex(hwnd, desktops, target, &note, error)) {
-            return false;
-        }
-        if (before.has_value()) {
-            waitForDesktopChange(hwnd, before);
-        }
-        carried = note;
-    }
-    if (moving && !switchDesktop(desktops[target], error)) {
-        return false;
-    }
-    if (detail != nullptr) {
-        QString text = QStringLiteral("desktop %1/%2").arg(index).arg(desktops.size());
-        if (!moving) {
-            text = QStringLiteral("already on desktop %1/%2").arg(index).arg(desktops.size());
-        }
-        if (!carried.isEmpty()) {
-            text += QStringLiteral(", window carried along");
-        }
-        *detail = text;
     }
     return true;
 }
@@ -1385,45 +1299,6 @@ bool switchTo(std::uint32_t index, QString *detail, QString *error)
             return;
         }
         ok = session.goTo(index, &localDetail, &localError);
-    });
-    if (!ok) {
-        if (error != nullptr) {
-            *error = localError;
-        }
-        return false;
-    }
-    if (detail != nullptr) {
-        *detail = localDetail;
-    }
-    return true;
-}
-
-bool switchToCarrying(std::uint32_t index,
-                      HWND hwnd,
-                      QString *detail,
-                      QString *error)
-{
-    if (index == 0) {
-        if (error != nullptr) {
-            *error = QStringLiteral("desktop numbers start at 1");
-        }
-        return false;
-    }
-    QString localDetail;
-    QString localError;
-    bool ok = false;
-    inSta([&]() {
-        Apartment apartment;
-        if (!apartment.enter(&localError)) {
-            return;
-        }
-        const WindowsVersion version = windowsVersion();
-        const ApiEntry &api = apiFor(version.build, version.revision);
-        Session session;
-        if (!session.open(api, version, &localError)) {
-            return;
-        }
-        ok = session.goToCarrying(index, hwnd, &localDetail, &localError);
     });
     if (!ok) {
         if (error != nullptr) {
