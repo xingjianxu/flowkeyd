@@ -698,3 +698,7 @@ switch/move/prev/next/move_prev/move_next、`window_rule.workspace`、切空间�
   自己那张桌面上，仍然用 `window_rule{ desktop = n }`。
 * `--list` 多打一行 `desktop follow foreground: true (…)`；图形界面的「高级」页有一张「切换虚拟
   桌面」卡片。
+* **没搬时日志写原因**（INFO 级：`desktop 2/2 (no window carried: the foreground window … is
+  already on the cursor's monitor (2))`）。起初只有 `--log-level debug` 才看得到 `not carrying`，
+  用户对着默认日志分不清“没生效”与“条件不满足”：**真机验证时两次按键都因为前台窗口本来就与
+  鼠标同屏而没搬，看起来就像新功能没装**。

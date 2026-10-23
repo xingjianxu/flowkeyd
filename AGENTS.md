@@ -242,7 +242,8 @@ UI 只有托盘图标 + 日志窗口、`menu`/`help`/`windows`/`apps`/`update` �
     **位置与显示器不变**，只有虚拟桌面这一维跟着走。**只接 `desktop()` 动作**（不监听系统切桌面），
     **不记状态**（每次切都重新判断）。判据是纯逻辑 `core::shouldCarryWindowToDesktop()`；平台层是
     `win::desktop::switchToCarrying()`；切完要比一次几何快照（`MoveViewToDesktop` 会把最大化踢出来）。
-    完整理由见 `docs/notes/decisions.md` 第 37 条。
+    **没搬时 INFO 日志会写原因**（开关关了 / 没前台窗口 / 窗口已经在鼠标那块屏上）：默认日志级别
+    就能分辨“没生效”与“条件不满足”。完整理由见 `docs/notes/decisions.md` 第 37 条。
 
 ---
 
