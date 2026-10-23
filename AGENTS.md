@@ -246,11 +246,12 @@ UI 只有托盘图标 + 日志窗口、`menu`/`help`/`windows`/`apps`/`update` �
     行”）。**不要再悄悄把它加回来**，要加先问项目所有者。完整记录见 `docs/notes/decisions.md` 第 37 条。
 38. **窗口轮转 `window("cycle_next")` / `window("cycle_prev")`：在当前虚拟桌面 + 当前显示器的窗口之间
     转一个并直接唤起（不弹卡片）。** 候选 = 当前桌面上的程序窗口（与窗口切换器同一套判据）里
-    **和当前前台窗口同一块显示器**的那些，顺序是**最近用过的在前、首尾相接**；连续按沿用第一次排好的
+    **和鼠标在同一块显示器上**的那些，顺序是**最近用过的在前、首尾相接**；连续按沿用第一次排好的
     那一圈（`core::WindowCycleState`，否则会在两张窗口之间翻来覆去），自己切到别的窗口之后下一次重排。
-    “当前显示器”指**前台窗口所在的那一块**，与 `settings.window_monitor` 无关；**绝不用光标**（光标停在哪跟
-    用户在看哪个窗口无关）：前台窗口问不出来（`GetForegroundWindow()` 返回空，或者那个“前台窗口”被
-    `MoveViewToDesktop` 搬到了别的虚拟桌面）时退回**当前桌面上压在最上面的那个窗口**所在的那一块，
+    “当前显示器”指**光标悬停的那一块**（2026-10-23 项目所有者改的：“鼠标在哪边就转哪边”，与前
+    台窗口在哪块屏无关），与 `settings.window_monitor` 无关；光标问不出来（`GetCursorPos()` 失败，
+    极罕见）才退回**前台窗口所在的那一块**，再退回**当前桌面上压在最上面的那个窗口**所在的那一块
+    （`GetForegroundWindow()` 返回空、或者那个“前台窗口”被 `MoveViewToDesktop` 搬到了别的虚拟桌面），
     再不行就不按屏筛（转整张桌面）。判定在 `core::chooseCycleMonitor()`。这两个 op **不收**
     `target`/`process`，也不收 `toggle`/`launch`/`monitor`/`follow`/`animate`
     （`--check` 拒绝）。纯逻辑在 `core/window_cycle.*`（`tst_window_cycle`），枚举/激活在

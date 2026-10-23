@@ -38,7 +38,7 @@ private slots:
     void loneWindowOnAnotherMonitorIsActivated();
     void foregroundThatIsNotACandidateStartsFromTheTop();
     void duplicatesAreCollapsed();
-    void theMonitorComesFromTheForegroundWindow();
+    void theMonitorComesFromTheCursor();
     void shorthandParsesBothOps();
 };
 
@@ -190,21 +190,28 @@ void TestWindowCycle::duplicatesAreCollapsed()
     QCOMPARE(plan->state.ring, ids({"fg", "b", "c"}));
 }
 
-void TestWindowCycle::theMonitorComesFromTheForegroundWindow()
+void TestWindowCycle::theMonitorComesFromTheCursor()
 {
-    // 前台窗口问得出来就用它那一块屏。
+    // 首选**光标悬停的那一块**（项目所有者 2026-10 改的）：哪怕前台窗口在别的屏上也转
+    // 光标这一边的。
     QCOMPARE(core::chooseCycleMonitor(std::optional<std::size_t>(1),
+                                      std::optional<std::size_t>(0),
                                       std::optional<std::size_t>(0)),
              std::optional<std::size_t>(1));
     QCOMPARE(core::chooseCycleMonitor(std::optional<std::size_t>(0),
+                                      std::optional<std::size_t>(1),
                                       std::optional<std::size_t>(1)),
              std::optional<std::size_t>(0));
-    // 前台窗口问不出来（`GetForegroundWindow()` 返回空、或它不在当前虚拟桌面上）时，
-    // 退回当前桌面上压在最上面的那个窗口所在的那一块。
-    QCOMPARE(core::chooseCycleMonitor(std::nullopt, std::optional<std::size_t>(1)),
+    // 光标问不出来（`GetCursorPos()` 失败）才退回前台窗口所在的那一块。
+    QCOMPARE(core::chooseCycleMonitor(std::nullopt, std::optional<std::size_t>(1),
+                                      std::optional<std::size_t>(0)),
              std::optional<std::size_t>(1));
-    // 两个都问不出来：不按显示器筛（转整张桌面），**也绝不去看光标**。
-    QVERIFY(!core::chooseCycleMonitor(std::nullopt, std::nullopt).has_value());
+    // 前台窗口也问不出来（`GetForegroundWindow()` 返回空、或它不在当前虚拟桌面上）
+    // 时，退回当前桌面上压在最上面的那个窗口所在的那一块。
+    QCOMPARE(core::chooseCycleMonitor(std::nullopt, std::nullopt, std::optional<std::size_t>(1)),
+             std::optional<std::size_t>(1));
+    // 三个都问不出来：不按显示器筛（转整张桌面）。
+    QVERIFY(!core::chooseCycleMonitor(std::nullopt, std::nullopt, std::nullopt).has_value());
 }
 
 void TestWindowCycle::shorthandParsesBothOps()

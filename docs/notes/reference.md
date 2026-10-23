@@ -112,7 +112,7 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
 * 往脚本里插诊断时：把脚本复制到 `tmp/`，用 `[System.IO.File]::ReadAllText/WriteAllText(...,
   UTF8Encoding($true))` 做替换（**必须保 BOM**），再加一条只含 ASCII 的探针把失败的检查名写进 diag。
   **把临时脚本的中文检查名打到控制台会被代码页弄成乱码，很容易误判成另一条检查挂了。**
-* 最近一次实跑：`checks: 163, failures: 2`（release 产物，2026-10-22，**移除工作空间**那一轮）。
+* 上一次实跑（2026-10-22）：`checks: 163, failures: 2`（release 产物，**移除工作空间**那一轮）。
   两次失败都是同一条：关掉卡片之后前台回不到捕捉窗口 ——
   `关掉之后前台回到捕捉窗口`（窗口切换器）与 `关掉之后启动器前台回到捕捉窗口`（程序启动器）。
   **可重现**（连跑三次、有没有常驻在跑都一样）；加了诊断（`Wait-FgAfterClose`，把失败时的
@@ -124,12 +124,16 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
   BOM）**跳过**它们：是跳过，不是失败。
 * 上一次实跑（工作空间还在的时候）：`checks: 206, failures: 0`。工作空间那一整块已经移除，实现
   在分支 `backup/workspace`，所以脚本也回到了 166/163 那一版。
-* **本次（2026-10-23，窗口轮转的显示器兜底）没跑验收脚本**：项目所有者要求本轮不做冒烟。改动
-  只碰 `Dispatcher::cycleWindows()` 选哪一块屏 + 日志（`core::chooseCycleMonitor()`，
-  `tst_window_cycle` 覆盖），不碰钩子/引擎/窗口后端的任何路径；真机手工验过三条：
-  `Ctrl+Alt+F9`（临时绑定）与 `Ctrl+Win+→`（真实和弦）两种键、光标停 DISPLAY2 / 前台窗口在
-  DISPLAY1，都转的是 DISPLAY1 的窗口（`--log-level debug` 里能看到 `cycling on monitor 1/2`）。
-  下次动到钩子/引擎时**必须**把这一轮补上。
+* **本次实跑（2026-10-23，窗口轮转改成“按光标所在屏”）：`checks: 163, failures: 0`**（release
+  产物）。上一轮那两条「关掉卡片之后前台回到捕捉窗口」这次没再出现（环境抖动，`popup_host` 与
+  前台恢复路径本轮一行未改）。
+* **窗口轮转的显示器判据（2026-10-23）**另外手工验过一次：临时配置 + 调试实例（`FLOWKEYD_ACCEPT_INJECTED=1`、
+  `--no-elevate --allow-multi --no-prompt --no-autostart --log-level debug`），脚本注入 `Ctrl+Alt+F8`
+  → `window("cycle_next")`，光标先摆到第二块屏、再摆回第一块：日志分别是
+  `cycling on monitor 2/2 (the monitor under the cursor)` → 激活 2 号屏的 Chrome，
+  `cycling on monitor 1/2 (…)` → 激活 1 号屏的终端，前台窗口随后确实落在光标那块屏上。
+  验收脚本不覆盖轮转（需要桌面上有好几个窗口且会抢焦点），所以这条手工验证就是它的证据；
+  脚本是 `tmp/cycle-smoke.ps1`（纯 ASCII、纯临时，不进仓库）。
 
 ## 手工冒烟清单（脚本覆盖不到的部分）
 
@@ -185,3 +189,8 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
        **不弹**。
     3. `open([[...\x.docx]])` 与从启动器点一个程序：开出来的程序同样应当是普通权限；但启动器**右键
        菜单**里的「打开」开出来的是提权的（已知限制）。
+16. **窗口轮转按光标所在屏**（`cycle_next`/`cycle_prev`，脚本不覆盖）：两块屏各开一两个窗口，把鼠标
+    放到**右边**那块屏、焦点留在左边某个窗口，按 `Ctrl+Win+→` —— 应当去的是**右边**屏的窗口（日志 DEBUG
+    一行 `cycling on monitor 2/2 (the monitor under the cursor)`）；再把鼠标挪到左边按一次 —— 转的是左边
+    那组的窗口（`cycling on monitor 1/2`）。连按两次不该在两张窗口之间反复横跳（环已排定）；自己（或
+    鼠标）换到另一边之后，下一次重新从那一侧排环（日志里带 `restarted`）。

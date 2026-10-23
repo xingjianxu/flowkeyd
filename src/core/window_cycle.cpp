@@ -2,9 +2,13 @@
 
 namespace flowkeyd::core {
 
-std::optional<std::size_t> chooseCycleMonitor(const std::optional<std::size_t> &foregroundMonitor,
+std::optional<std::size_t> chooseCycleMonitor(const std::optional<std::size_t> &cursorMonitor,
+                                              const std::optional<std::size_t> &foregroundMonitor,
                                               const std::optional<std::size_t> &topmostMonitor)
 {
+    if (cursorMonitor.has_value()) {
+        return cursorMonitor;
+    }
     if (foregroundMonitor.has_value()) {
         return foregroundMonitor;
     }

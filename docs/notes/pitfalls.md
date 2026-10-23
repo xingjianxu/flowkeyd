@@ -355,9 +355,12 @@
   `win::monitor::indexForWindow()` 就是这么做的，窗口轮转与 `move_left/right_monitor` 都靠它）。
 * **`GetForegroundWindow()` 会间歇性返回空**（远程桌面窗口关掉 / 切换视图时，日志里
   `left the remote desktop (no foreground window)` 那一行就是它）。任何“按前台窗口决定什么”的逻辑都
-  必须处理空值，而**兜底不能拿光标**：光标停在哪跟用户在看哪个窗口无关。窗口轮转当初的兜底就是
-  `indexForCursor()`，用户报的“轮转的是鼠标那块屏的窗口”正是它（已改成“压在最上面的窗口所在
-  的那一块”，见决策 38 与 `core::chooseCycleMonitor()`）。
+  必须处理空值，并且想清楚空值时该退到哪里（决策 38 的窗口轮转现在是：光标 → 前台窗口 → 压在最
+  上面的窗口 → 不按屏筛）。
+* **“用户报的不对”不一定是 bug，可能只是语义定错了**：窗口轮转最初用光标所在屏当兜底，看到
+  “轮转跟着鼠标屏跑”的记录后把光标整个拿掉了；项目所有者随后确认他要的**就是**鼠标那块屏的窗口
+  （“切换鼠标所在显示器上的窗口”）。教训：这类“按哪块屏筛”的判据先问一句再改，别把产品语义当 bug 修。
+  现在判定集中在 `core::chooseCycleMonitor()`（`tst_window_cycle` 钉住），换次序只改这一个函数。
 * **“前台窗口”也会骗人**：被 `MoveViewToDesktop` 搬到别的虚拟桌面的窗口，shell 仍会把它当
   `GetForegroundWindow()`（用户根本看不到它）。这种窗口要先 `win::dwm::isCloaked()` 为真、再问一次
   `desktop::isWindowOnCurrentDesktop()` 才能识别；COM 那一笔不便宜，所以只在 cloak 时才去问。

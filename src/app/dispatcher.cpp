@@ -1521,51 +1521,57 @@ void Dispatcher::cycleWindows(core::WindowOp op, const QString &hotkey)
     const std::vector<win::window::OpenWindow> openWindows =
         win::window::listOpenWindowsOnCurrentDesktop();
 
-    // 前台窗口到底能不能用来判“用户在哪块屏上工作”。
-    //
-    // 两种情况下它不算数：
+    // 「当前显示器」= **光标悬停的那一块**（决策 38，2026-10 项目所有者改的：按哪边的
+    // 鼠标就转哪一边的窗口，而不是跟着前台窗口跑）。
+    const std::optional<std::size_t> cursorMonitor = win::monitor::indexForCursor(monitors);
+
+    // 后两步只是光标问不出来时（`GetCursorPos()` 失败，几乎不会）的兜底，判据同以前：
     //   * shell 把前台还成了空（`GetForegroundWindow()` 返回 `nullptr`）—— 远程桌面
     //     窗口关掉 / 切换视图时本机实测会这样，日志里那行 “left the remote desktop
     //     (no foreground window)” 就是它；
     //   * 它是被 `MoveViewToDesktop` 搬走的窗口，shell 却还把它当前台窗口（决策 19
-    //     记过的怪癖）—— 用户根本看不到它，它所在的屏跟用户在看哪块屏无关。
-    //     只在它被 DWM cloak 掉时才多问一次虚拟桌面（COM），平常不多花这一下。
-    bool foregroundUsable = current != nullptr;
-    if (foregroundUsable && win::dwm::isCloaked(current)) {
-        QString desktopError;
-        const std::optional<bool> onCurrent =
-            win::desktop::isWindowOnCurrentDesktop(current, &desktopError);
-        if (onCurrent.has_value() && !*onCurrent) {
-            foregroundUsable = false;
+    //     记过的怪癖）—— 用户根本看不到它。只在它被 DWM cloak 掉时才多问一次虚拟
+    //     桌面（COM），平常不多花这一下。
+    std::optional<std::size_t> foregroundMonitor;
+    std::optional<std::size_t> topmostMonitor;
+    if (!cursorMonitor.has_value()) {
+        bool foregroundUsable = current != nullptr;
+        if (foregroundUsable && win::dwm::isCloaked(current)) {
+            QString desktopError;
+            const std::optional<bool> onCurrent =
+                win::desktop::isWindowOnCurrentDesktop(current, &desktopError);
+            if (onCurrent.has_value() && !*onCurrent) {
+                foregroundUsable = false;
+            }
+        }
+        if (foregroundUsable) {
+            foregroundMonitor = win::monitor::indexForWindow(monitors, current);
+        }
+        if (!openWindows.empty()) {
+            topmostMonitor = win::monitor::indexForWindow(monitors, openWindows.front().hwnd);
         }
     }
-
-    std::optional<std::size_t> foregroundMonitor;
-    if (foregroundUsable) {
-        foregroundMonitor = win::monitor::indexForWindow(monitors, current);
-    }
-    std::optional<std::size_t> topmostMonitor;
-    if (!openWindows.empty()) {
-        topmostMonitor = win::monitor::indexForWindow(monitors, openWindows.front().hwnd);
-    }
-    // **绝不看光标**：光标停在哪跟用户在看哪个窗口无关（决策 38）。问不出来时退回
-    // 压在最上面的那个窗口所在的那一块，再问不出来就不按显示器筛（转整张桌面）。
     const std::optional<std::size_t> monitorIndex =
-        core::chooseCycleMonitor(foregroundMonitor, topmostMonitor);
+        core::chooseCycleMonitor(cursorMonitor, foregroundMonitor, topmostMonitor);
     const QString where = monitorText(monitors, monitorIndex);
-    if (foregroundMonitor.has_value()) {
-        win::logDebug(QStringLiteral("`%1` window: cycling on %2 (the monitor of the foreground "
-                                    "window %3)")
-                          .arg(hotkey, where, win::window::windowTitle(current)));
+    if (cursorMonitor.has_value()) {
+        win::logDebug(QStringLiteral("`%1` window: cycling on %2 (the monitor under the cursor)")
+                          .arg(hotkey, where));
+    } else if (foregroundMonitor.has_value()) {
+        win::logInfo(QStringLiteral("`%1` window: could not tell which monitor the cursor is on; "
+                                    "cycling on %2 (the monitor of the foreground window %3)")
+                         .arg(hotkey, where, win::window::windowTitle(current)));
     } else if (monitorIndex.has_value()) {
-        win::logInfo(QStringLiteral("`%1` window: no usable foreground window (%2); cycling on %3 "
+        win::logInfo(QStringLiteral("`%1` window: could not tell which monitor the cursor is on and "
+                                    "there is no usable foreground window (%2); cycling on %3 "
                                     "(the monitor of the topmost window)")
                          .arg(hotkey,
                               current != nullptr ? win::window::windowTitle(current)
                                                  : QStringLiteral("none"),
                               where));
     } else {
-        win::logInfo(QStringLiteral("`%1` window: no usable foreground window (%2); cycling every "
+        win::logInfo(QStringLiteral("`%1` window: could not tell which monitor the cursor is on "
+                                    "and there is no usable foreground window (%2); cycling every "
                                     "window on this desktop")
                          .arg(hotkey,
                               current != nullptr ? win::window::windowTitle(current)

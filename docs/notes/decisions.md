@@ -697,22 +697,24 @@ switch/move/prev/next/move_prev/move_next、`window_rule.workspace`、切空间�
 改成「在当前虚拟桌面、当前显示器的窗口之间转一个并**直接唤起**」。实现方式是给 `window` 动作
 加了两个 op（不新增动作种类，因为要的只是“换个目标窗口”）：
 
-* **候选窗口** = `win::window::listOpenWindowsOnCurrentDesktop()` 里、**和当前前台窗口在同一块
+* **候选窗口** = `win::window::listOpenWindowsOnCurrentDesktop()` 里、**和鼠标在同一块
   显示器上**的那些。前者复用了窗口切换器的判据（`isSwitchableWindow()` 已经在里面：可见、
   无属主、非工具窗口、有标题、不是 flowkeyd 自己的窗口），并且只多做一步“把 cloak 掉的排掉”
   —— 别的虚拟桌面上的顶层窗口就是被 DWM cloak 起来的，不必为每个窗口开一条一次性 COM 线程。
-* **“当前显示器” = 当前前台窗口所在的那一块**。不用光标是因为这两条键是“在看我手上这个窗口时
-  换一个”，跟鼠标停在哪无关；不用 `settings.window_monitor` 是因为那是“唤起时窗口该摆到哪块屏”，
-  跟轮转无关。两块屏因此可以各转各的。
-  * **问不出来时也绝不用光标**（2026-10-23 修）：原先这里是 `if (!monitorIndex) monitorIndex =
-    win::monitor::indexForCursor(monitors);`，而本机的 `GetForegroundWindow()` **会间歇性返回空**
-    （日志里 “left the remote desktop (no foreground window)” 那一行就是它：远程桌面窗口关掉 /
-    切换视图时；用户报的“轮转的是鼠标那块屏的窗口”就是这个兼底在作崇）。现在的次序是：
-    前台窗口 → **当前桌面上压在最上面的那个窗口**（`listOpenWindowsOnCurrentDesktop()` 的第一项，
-    也就是用户此刻真正看得见的那一个）→ 不按屏筛（转整张桌面），全部集中在
-    `core::chooseCycleMonitor()`（`tst_window_cycle` 钉住）。
-  * 另外，“shell 仍把它当前台窗口、它其实在别的虚拟桌面上”的那种窗口（决策 19 的怪癖）也不算数：
-    只在 `win::dwm::isCloaked()` 为真时多问一次 `isWindowOnCurrentDesktop()`，为假就按“问不出来”处理。
+* **“当前显示器” = 光标悬停的那一块**（2026-10-23 项目所有者拍板：“要的是切换鼠标所在
+  显示器上的窗口，而不是目前前台窗口所在显示器上的窗口”）。不用 `settings.window_monitor`
+  是因为那是“唤起时窗口该摆到哪块屏”，跟轮转无关。两块屏因此可以各转各的：鼠标在哪边就转
+  哪边。
+  * 兜底次序是 **光标 → 前台窗口 → 当前桌面上压在最上面的那个窗口 → 不按屏筛**，全部集中在
+    `core::chooseCycleMonitor()`（`tst_window_cycle` 钉住）。后三级只在 `GetCursorPos()` 失败
+    （几乎不会）时才轮得到，但保留它们：原来的兜底正是为了那些 `GetForegroundWindow()` 会
+    间歇性返回空的时刻（日志里 “left the remote desktop (no foreground window)” 那一行就是它：
+    远程桌面窗口关掉 / 切换视图时）。
+  * 本轮之前的那版是“前台窗口所在的那块屏、任何情况下都不看光标”（因为当时把“跟着鼠标屏跑”
+    当成了 bug）。实机用下来那不是项目所有者要的语义，现在改回来：光标优先。
+  * 另外，“shell 仍把它当前台窗口、它其实在别的虚拟桌面上”的那种窗口（决策 19 的怪癖）不能
+    当兜底：只在 `win::dwm::isCloaked()` 为真时多问一次 `isWindowOnCurrentDesktop()`，为假就按
+    “问不出来”处理。
 * **顺序 = 最近用过的在前，首尾相接**（与 Alt+Tab 的 MRU 一致）。
 * **为什么需要环形顺序的缓存**（`core::WindowCycleState`）：激活一个窗口就会把它推到 Z 序最前
   面，如果每次都由实时的 Z 序算“下一个”，第一下跳到 A、第二下就跳回刚才那个窗口，在两张之间
@@ -735,11 +737,13 @@ switch/move/prev/next/move_prev/move_next、`window_rule.workspace`、切空间�
   `tst_window_cycle`。
 * 桌面行为（真的转起来）靠 `tst_interactive` / 手工验证；`scripts/acceptance.ps1` 没有覆盖它
   —— 轮转需要桌面上有好几个窗口且会抢焦点，写进验收脚本会很不稳定。
-* **2026-10-23 修一轮“跟着鼠标屏跑”的报障**：真机上用 `Ctrl+Alt+F9` 与 `Ctrl+Win+→`
+* **2026-10-23 前一轮（现已推翻）的“跟着鼠标屏跑”报障**：真机上用 `Ctrl+Alt+F9` 与 `Ctrl+Win+→`
   两种和弦各跑了一遍（观察实例只记日志 + `--log-level debug`，光标停在 DISPLAY2、前台窗口在
   DISPLAY1）：`indexForWindow(前台窗口)` 与 `listOpenWindowsOnCurrentDesktop()` 的分类全部正确，
-  只有“前台窗口 = 空”时才会落到光标上（本机日志里真有 “left the remote desktop (no foreground
-  window)”），所以按“**任何情况下都不看光标**”来修（`core::chooseCycleMonitor()` + 那两条
-  `isCloaked` / `isWindowOnCurrentDesktop` 的排除）。现在日志也把用了哪块屏、为什么写清楚：
-  DEBUG 一行 `cycling on monitor i/n (the monitor of the foreground window …)`，走兼底时 INFO 一行
-  `no usable foreground window (…); cycling on monitor i/n (the monitor of the topmost window)`。
+  只有“前台窗口 = 空”时才会落到光标上，于是当时按“任何情况下都不看光标”来修。**项目所有者
+  随后确认那正是他要的行为**（鼠标停在哪块屏就转哪块屏），所以那个修正只保留了它的副产物：
+  `core::chooseCycleMonitor()` 集中判定 + 两条 `isCloaked` / `isWindowOnCurrentDesktop` 的排除
+  （防止被搬到别的虚拟桌面的窗口当前台时污染兜底），光标重新回到第一顺位。
+* 现在的日志：DEBUG 一行 `cycling on monitor i/n (the monitor under the cursor)`；光标问不出来时
+  走兜底，INFO 一行 `could not tell which monitor the cursor is on; cycling on monitor i/n (the
+  monitor of the foreground window …)` / `… (the monitor of the topmost window)`。
