@@ -669,3 +669,32 @@ switch/move/prev/next/move_prev/move_next、`window_rule.workspace`、切空间�
   那轮排查发现 `SetWinEventHook` 连子窗口一起报、Chrome 的 `Chrome_RenderWidgetHostHWND`
   （标题 `Chrome Legacy Window`）会被当成程序窗口收进 `window()` 匹配与切换器里。
   修法与工作空间无关，继续有效；细节见 `pitfalls.md`。
+
+## 37. 切虚拟桌面时把前台窗口带过去：`settings.desktop_follow_foreground`，默认开
+
+双屏 + 虚拟桌面时的一个具体痛点：你看着左边那块屏（鼠标也停在那儿）上的编辑器，用快捷键切到
+桌面 2；编辑器跟着视图走了，而**右边那块屏**上的浏览器被留在了桌面 1，凭空消失。
+
+所以 `desktop()` 动作切桌面时多一步：如果**前台窗口不在光标所在的那块显示器上**，就把它一起搬到
+目标桌面上。**位置与显示器都不变**，只有虚拟桌面这一维跟着走。
+
+* 开关是 `settings.desktop_follow_foreground`，**默认 true**（用户 2026-10 拍板：默认就要这个行为，
+  不配也生效）。写成 `false` 就回到以前的行为。
+* 判据是纯逻辑 `core::shouldCarryWindowToDesktop(settings, windowMonitor, cursorMonitor)`
+  （`tst_placement` 盯着）：开关打开 **且** 两个序号都有值 **且** 不相等。任一边是 `nullopt`
+  （没有前台窗口 / 询不到光标）都**不搬** —— 未知就别动手。
+* **只接 `desktop()` 动作**，不做切桌面的全局监听：用户明确选了「只有 flowkeyd 的 desktop 动作」
+  （不接那 500 ms 的桌面轮询），所以系统自己的 `Win+Ctrl+←/→`、任务视图点选都不触发。
+  这样既没有延迟，也不会在用户手动切桌面时擅自搬窗口。
+* 平台层是 `win::desktop::switchToCarrying(index, hwnd, …)`：一个 STA 会话里先 `MoveViewToDesktop`、
+  等 GUID 真的变了、再 `SwitchDesktop`；`Session::goToCarryingIndex()` 是共用的实现体。
+  `hwnd` 为空 / 已失效 / 本来就在目标桌面时行为退化成普通的 `switchTo()`。
+* **几何校对**：`MoveViewToDesktop` 在真机上会顺带把最大化的窗口从最大化里踢出来。所以切之前拍一份
+  `CarryGeometry`（还原矩形 + 最大化 + 最小化），切完**比一比**，一模一样就什么都不做，不一致才
+  `applyPlacement()` 摆回原样。不能无脑摆一遍 —— 那会把用户自己摆好的位置重新居中。
+* 前台窗口用新增的 `win::window::foregroundMainWindow()` 取（与 `window()` 的空查询同一条逻辑：
+  PowerToys 的「快捷键指南」那种 `WS_EX_TOOLWINDOW` 覆盖层会沿 Z 序跳过）。
+* **不记状态**：不记“它原本属于哪张桌面”，以后每次切桌面都重新判断同一个条件。想让某个窗口永久钉在
+  自己那张桌面上，仍然用 `window_rule{ desktop = n }`。
+* `--list` 多打一行 `desktop follow foreground: true (…)`；图形界面的「高级」页有一张「切换虚拟
+  桌面」卡片。

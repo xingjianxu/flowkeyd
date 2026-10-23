@@ -64,6 +64,7 @@ private slots:
     void monitorRefDescriptionsAreReadable();
     void selectMonitorIgnoresRuntimeTargets();
     void windowActionMonitorPrefersTheMostSpecificTarget();
+    void shouldCarryWindowOnlyWhenItIsOnAnotherMonitor();
 };
 
 void TestPlacement::sortedMonitorsOrdersLeftThenTop()
@@ -488,6 +489,31 @@ void TestPlacement::windowActionMonitorPrefersTheMostSpecificTarget()
              core::MonitorRef::Kind::None);
     QCOMPARE(core::windowActionMonitor(std::nullopt, nullptr, off).kind,
              core::MonitorRef::Kind::None);
+}
+
+void TestPlacement::shouldCarryWindowOnlyWhenItIsOnAnotherMonitor()
+{
+    core::Settings settings;
+    // 默认开。
+    QVERIFY(settings.desktopFollowForeground);
+
+    // 前台窗口在另一块屏上：跟着切过去。
+    QVERIFY(core::shouldCarryWindowToDesktop(settings, 0, 1));
+    QVERIFY(core::shouldCarryWindowToDesktop(settings, 1, 0));
+
+    // 就在鼠标那块屏上（或者只有一块屏）：不搬。
+    QVERIFY(!core::shouldCarryWindowToDesktop(settings, 0, 0));
+
+    // 关掉开关：永远不搬。
+    core::Settings off = settings;
+    off.desktopFollowForeground = false;
+    QVERIFY(!core::shouldCarryWindowToDesktop(off, 0, 1));
+    QVERIFY(!core::shouldCarryWindowToDesktop(off, 0, 0));
+
+    // 任一边“不知道”（没有前台窗口 / 询不到光标）：也不搬，未知就不动手。
+    QVERIFY(!core::shouldCarryWindowToDesktop(settings, std::nullopt, 1));
+    QVERIFY(!core::shouldCarryWindowToDesktop(settings, 0, std::nullopt));
+    QVERIFY(!core::shouldCarryWindowToDesktop(settings, std::nullopt, std::nullopt));
 }
 
 QTEST_MAIN(TestPlacement)

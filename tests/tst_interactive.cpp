@@ -354,6 +354,7 @@ private slots:
     void movesAWindowToTheAdjacentDesktopAndFollows();
     void activatesAWindowThatIsOnAnotherDesktop();
     void bringsAWindowOnAnotherDesktopToTheCurrentOne();
+    void switchesDesktopCarryingTheWindowAlong();
     void placementMovesAWindowToAnotherMonitor();
     void movesAWindowToTheAdjacentMonitor();
     void movesAWindowToTheMonitorUnderTheCursor();
@@ -1064,9 +1065,76 @@ void TestInteractive::bringsAWindowOnAnotherDesktopToTheCurrentOne()
     QVERIFY2(detail.startsWith(QStringLiteral("already on desktop ")), qPrintable(detail));
 }
 
-/// `window_rule` 的显示器部分：把窗口摆到另一块显示器并最大化，再还原。
-void TestInteractive::placementMovesAWindowToAnotherMonitor()
+/// `desktop` 动作把前台窗口一起带过去的平台层载体：`switchToCarrying`。
+///
+/// 与 `switchTo` 的区别只有一项：切之前先把窗口搬到目标桌面，**视图也跟着切**，
+/// 而窗口在屏幕上的位置与显示器完全不变。
+void TestInteractive::switchesDesktopCarryingTheWindowAlong()
 {
+    if (!interactiveEnabled()) {
+        QSKIP("set FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1 to run the interactive tests");
+    }
+    QString error;
+    platform::win::desktop::Snapshot snapshot;
+    QVERIFY2(platform::win::desktop::probe(&snapshot, &error), qPrintable(error));
+    if (snapshot.count < 2) {
+        QSKIP("only one virtual desktop exists; nothing to carry a window to");
+    }
+
+    const QString marker =
+        QStringLiteral("flowkeyd-carry-%1").arg(QCoreApplication::applicationPid());
+    TestWindow window(marker);
+    HWND hwnd = window.hwnd();
+    QVERIFY2(hwnd != nullptr, "the test window was not created");
+    QVERIFY2(platform::win::window::raiseWindow(hwnd), "could not activate the test window");
+
+    // 刚创建的窗口 shell 还没登记，`GetWindowDesktopId` 会给全零 GUID；先等它归属某一张。
+    const QString zeroGuid = QStringLiteral("{00000000-0000-0000-0000-000000000000}");
+    std::optional<QString> beforeId;
+    for (int i = 0; i < 60; ++i) {
+        beforeId = platform::win::desktop::windowDesktopId(hwnd, &error);
+        if (beforeId.has_value() && *beforeId != zeroGuid) {
+            break;
+        }
+        QThread::msleep(50);
+    }
+    QVERIFY2(beforeId.has_value() && *beforeId != zeroGuid, qPrintable(error));
+
+    const std::optional<core::Rect> rectBefore = platform::win::monitor::windowRect(hwnd);
+    QVERIFY(rectBefore.has_value());
+
+    const std::uint32_t target = snapshot.current == 1 ? 2 : 1;
+    QString detail;
+    QVERIFY2(platform::win::desktop::switchToCarrying(target, hwnd, &detail, &error),
+             qPrintable(error));
+    QVERIFY2(detail.contains(QStringLiteral("window carried along")), qPrintable(detail));
+
+    // 视图切过去了，窗口也在新桌面上。
+    platform::win::desktop::Snapshot after;
+    QVERIFY2(platform::win::desktop::probe(&after, &error), qPrintable(error));
+    QCOMPARE(after.current, target);
+    const auto onCurrent = platform::win::desktop::isWindowOnCurrentDesktop(hwnd, &error);
+    QVERIFY2(onCurrent.has_value() && *onCurrent, "the window was not carried to the new desktop");
+
+    // 位置与大小一点都没变（只有虚拟桌面这一维跟着走）。
+    const std::optional<core::Rect> rectAfter = platform::win::monitor::windowRect(hwnd);
+    QVERIFY(rectAfter.has_value());
+    QCOMPARE(rectAfter->x, rectBefore->x);
+    QCOMPARE(rectAfter->y, rectBefore->y);
+    QCOMPARE(rectAfter->width, rectBefore->width);
+    QCOMPARE(rectAfter->height, rectBefore->height);
+
+    // 不传窗口时行为就是普通的 `switchTo`（
+    // “already on” 那一行里也不该出现 carried）。
+    QVERIFY2(platform::win::desktop::switchToCarrying(snapshot.current, nullptr, &detail, &error),
+             qPrintable(error));
+    QVERIFY2(!detail.contains(QStringLiteral("carried")), qPrintable(detail));
+    QVERIFY2(platform::win::desktop::moveWindowToDesktop(hwnd, snapshot.current, &detail, &error),
+             qPrintable(error));
+}
+
+/// `window_rule` 的显示器部分：把窗口摆到另一块显示器并最大化，再还原。
+void TestInteractive::placementMovesAWindowToAnotherMonitor(){
     if (!interactiveEnabled()) {
         QSKIP("set FLOWKEYD_ALLOW_INTERACTIVE_TESTS=1 to run the interactive tests");
     }

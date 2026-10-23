@@ -121,6 +121,19 @@ bool currentDesktopIndex(std::uint32_t *index, std::uint32_t *count, QString *er
 /// 切换本身由 shell 完成；这个函数只保证请求已经送达，不等动画结束。
 bool switchTo(std::uint32_t index, QString *detail, QString *error);
 
+/// 切到第 `index` 个虚拟桌面，并把 `hwnd` 一起带过去（`settings.desktop_follow_foreground`）。
+///
+/// 与 `switchTo()` 的区别只有一项：切换之前先把 `hwnd` 搬到目标桌面（同一个 STA
+/// 会话里做完，并用 `GetWindowDesktopId` 等它真的生效）。**窗口在屏幕上的位置与
+/// 显示器完全不变**——`MoveViewToDesktop` 只动虚拟桌面这一维。
+///
+/// `hwnd` 为空 / 窗口已不存在 / 它本来就在目标桌面上时，行为退化成普通的
+/// `switchTo()`（`detail` 里也不会出现 `window carried along`）。
+bool switchToCarrying(std::uint32_t index,
+                      HWND hwnd,
+                      QString *detail,
+                      QString *error);
+
 /// 把窗口移到第 `index` 个虚拟桌面（从 1 开始，Task View 顺序）。
 ///
 /// 走未公开的 `IVirtualDesktopManagerInternal::MoveViewToDesktop`：公开的

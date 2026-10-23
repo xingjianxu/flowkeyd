@@ -132,7 +132,8 @@ end
 -- 注册一组全局设置。可以多次调用，后写的键覆盖先写的。
 -- 字段：log_level / swallow / exact_modifiers / release_modifiers /
 --       repeat_interval_ms / repeat_delay_ms / tick_ms / input_backend /
---       single_instance / elevate / remote_desktop / window_monitor。
+--       single_instance / elevate / remote_desktop / window_monitor /
+--       desktop_follow_foreground。
 --
 -- window_monitor（默认 "cursor"）：窗口**没写明 monitor** 时摆到哪一块显示器上。
 --   "cursor" 光标所在的那一块（默认：唤起一个程序时它出现在你正在看的那块屏上）；
@@ -140,6 +141,11 @@ end
 --   "none"   不碰窗口的位置（本特性存在之前的行为）；
 --   也可以写具体的一块（`2` / "primary" / "DISPLAY2"）。
 --   单个 window_rule / window() 动作上写了 monitor 的条目不受它影响（显式写的优先）。
+--
+-- desktop_follow_foreground（默认 true）：用 desktop() 动作切虚拟桌面时，如果
+--   **前台窗口不在光标所在的那块显示器上**，就把它一起搬到新桌面上（窗口的位置与
+--   显示器都不变，只有虚拟桌面这一维跟着走）。在鼠标那块屏上的窗口不搬。
+--   写成 false 就回到以前的行为：切桌面只换视图，窗口都留在各自桌面上。
 --
 -- remote_desktop（默认 true）：前台窗口的属主进程命中远程桌面客户端名单时，
 --   **不拦截、不触发**任何快捷键与重映射（键要原样送给对面那台机器）。

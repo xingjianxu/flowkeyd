@@ -796,6 +796,131 @@ bool launchThenActivate(ExpandContext &ctx,
     }
 }
 
+/// `desktop` 动作搬完窗口后要把几何拉回原样时用的快照。
+struct CarryGeometry
+{
+    HWND hwnd = nullptr;
+    /// 还原矩形（`win::monitor::windowRect()` 拿到的就是它）。
+    core::Rect rect;
+    bool maximized = false;
+    bool minimized = false;
+};
+
+/// 搬桌面**之前**把窗口的几何记下来。拿不到时返回 `std::nullopt`。
+std::optional<CarryGeometry> captureCarryGeometry(HWND hwnd)
+{
+    if (hwnd == nullptr || IsWindow(hwnd) == 0) {
+        return std::nullopt;
+    }
+    const std::optional<core::Rect> rect = win::monitor::windowRect(hwnd);
+    if (!rect.has_value()) {
+        return std::nullopt;
+    }
+    CarryGeometry out;
+    out.hwnd = hwnd;
+    out.rect = *rect;
+    out.maximized = IsZoomed(hwnd) != 0;
+    out.minimized = IsIconic(hwnd) != 0;
+    return out;
+}
+
+/// 搬桌面**之后**校对几何：与快照一致就什么都不做。
+///
+/// 为什么要校对：`MoveViewToDesktop` 在真机上会顺带把最大化的窗口从最大化里踢出来。
+/// 而“每次都要摆一遍”又不对——那会把用户自己摆好的位置重新居中；所以在目标屏上
+/// 本来就不能用 `moveToMonitor`，只能用“跟快照比”的这条。
+void restoreCarryGeometry(const CarryGeometry &before, const QString &hotkey)
+{
+    if (before.hwnd == nullptr || IsWindow(before.hwnd) == 0) {
+        return;
+    }
+    const bool maximizedNow = IsZoomed(before.hwnd) != 0;
+    const bool minimizedNow = IsIconic(before.hwnd) != 0;
+    const std::optional<core::Rect> rectNow = win::monitor::windowRect(before.hwnd);
+    const bool rectChanged = !before.minimized && !before.maximized && rectNow.has_value()
+                             && (rectNow->x != before.rect.x || rectNow->y != before.rect.y
+                                 || rectNow->width != before.rect.width
+                                 || rectNow->height != before.rect.height);
+    if (maximizedNow == before.maximized && minimizedNow == before.minimized && !rectChanged) {
+        return;
+    }
+    QString error;
+    if (!win::monitor::applyPlacement(before.hwnd, before.rect, before.maximized, &error)) {
+        win::logWarn(QStringLiteral("`%1` desktop: could not restore the geometry of %2: %3")
+                         .arg(hotkey,
+                              core::rustDebug(win::window::windowTitle(before.hwnd)),
+                              error));
+        return;
+    }
+    win::logDebug(QStringLiteral("`%1` desktop: restored %2 on %3x%4+%5+%6")
+                      .arg(hotkey,
+                           core::rustDebug(win::window::windowTitle(before.hwnd)),
+                           QString::number(before.rect.width),
+                           QString::number(before.rect.height),
+                           QString::number(before.rect.x),
+                           QString::number(before.rect.y)));
+}
+
+/// `desktop` 动作的实现体：切到第 `n` 张虚拟桌面，必要时把前台窗口一起带过去。
+///
+/// 带不带由 `settings.desktop_follow_foreground`（默认开）与
+/// `core::shouldCarryWindowToDesktop()` 一起决定：只在**前台窗口不在光标所在的那块
+/// 显示器上**时才把它搬到目标桌面。窗口的位置与显示器都不动。
+///
+/// 返回给日志用的一行说明；失败时已经写好了 error 日志，返回空串。
+QString switchDesktopAction(const core::Compiled &config,
+                            const core::Action &action,
+                            const QString &hotkey)
+{
+    // “哪个窗口跟着走”必须在**切之前**问：切完之后前台窗口已经是目标桌面上的
+    // 某一个，不再是用户切之前看着的那个。
+    HWND carried = nullptr;
+    if (config.settings.desktopFollowForeground) {
+        const HWND foreground = win::window::foregroundMainWindow();
+        if (foreground != nullptr) {
+            const std::vector<core::MonitorDescription> monitors =
+                core::sortedMonitors(win::monitor::list());
+            const std::optional<std::size_t> windowMonitor =
+                win::monitor::indexForWindow(monitors, foreground);
+            const std::optional<std::size_t> cursorMonitor =
+                win::monitor::indexForCursor(monitors);
+            if (core::shouldCarryWindowToDesktop(
+                    config.settings, windowMonitor, cursorMonitor)) {
+                carried = foreground;
+            } else {
+                win::logDebug(
+                    QStringLiteral("`%1` desktop: not carrying %2 (window on monitor %3, cursor "
+                                   "on %4)")
+                        .arg(hotkey,
+                             core::rustDebug(win::window::windowTitle(foreground)),
+                             windowMonitor.has_value() ? QString::number(*windowMonitor + 1)
+                                                       : QStringLiteral("?"),
+                             cursorMonitor.has_value() ? QString::number(*cursorMonitor + 1)
+                                                       : QStringLiteral("?")));
+            }
+        }
+    }
+
+    // 几何快照也得在切之前拍：搬完之后再问就只能拿到“被改过”的那一份。
+    const std::optional<CarryGeometry> geometry =
+        carried != nullptr ? captureCarryGeometry(carried) : std::nullopt;
+
+    QString detail;
+    QString error;
+    const bool ok = carried != nullptr
+                        ? win::desktop::switchToCarrying(action.desktopSwitch, carried, &detail,
+                                                         &error)
+                        : win::desktop::switchTo(action.desktopSwitch, &detail, &error);
+    if (!ok) {
+        win::logError(QStringLiteral("`%1` desktop: %2").arg(hotkey, error));
+        return QString();
+    }
+    if (geometry.has_value()) {
+        restoreCarryGeometry(*geometry, hotkey);
+    }
+    return detail;
+}
+
 void executeWindowAction(ExpandContext &ctx,
                          MonitorMemory *memory,
                          const core::Compiled &config,
@@ -1297,13 +1422,11 @@ void executeAction(Runtime *runtime,
         runtime->requestShutdownFromAnyThread();
         break;
     case core::Action::Kind::Desktop: {
-        QString detail;
-        QString error;
-        if (!win::desktop::switchTo(action.desktopSwitch, &detail, &error)) {
-            win::logError(QStringLiteral("`%1` desktop: %2").arg(hotkey, error));
-        } else {
-            win::logInfo(QStringLiteral("`%1` -> %2").arg(hotkey, detail));
+        const QString detail = switchDesktopAction(*config, action, hotkey);
+        if (detail.isEmpty()) {
+            return;
         }
+        win::logInfo(QStringLiteral("`%1` -> %2").arg(hotkey, detail));
         break;
     }
     case core::Action::Kind::Power: {

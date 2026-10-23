@@ -322,6 +322,7 @@ settings{ log_level = "info", swallow = true, tick_ms = 15 }
 | `elevate`            | `true`   | 以守护进程模式启动时，没有管理员权限就自动提权重启（`--no-elevate` 覆盖）                     |
 | `remote_desktop`     | `true`   | 前台窗口是远程桌面客户端时**放行**（不拦截、不触发）；`false` 关掉检测；写成表可以换进程名单（见[远程桌面](#远程桌面)） |
 | `window_monitor`     | `"cursor"` | 窗口**没写明 `monitor`** 时摆到哪块显示器上：`"cursor"`（光标所在的那一块）、`"last"`（这个程序上次被摆到过的那一块）、`"none"`（不碰位置），也可以写具体的一块（`2` / `"primary"` / `"DISPLAY2"`）见[窗口摆到哪块显示器上](#窗口摆到哪块显示器上) |
+| `desktop_follow_foreground` | `true` | 用 `desktop()` 动作切虚拟桌面时，前台窗口**不在光标所在那块屏上**就把它一起带到新桌面上（位置与显示器都不变）。见[切虚拟桌面时带上窗口](#切虚拟桌面时带上窗口) |
 
 ### 远程桌面
 
@@ -407,6 +408,34 @@ settings{ window_monitor = 2 }          -- 所有没写 monitor 的窗口都去�
 
 > `window_monitor = "none"` 之外的取值都意味着“没写 `monitor` 的规则也会动窗口”。
 > 想让某条规则完全不碰位置，在它自己身上写 `monitor = "none"`。
+
+### 切虚拟桌面时带上窗口
+
+用 `desktop()` 动作切虚拟桌面时，如果**前台窗口不在光标所在的那块显示器上**，
+它会跟着你一起到新桌面上（`settings.desktop_follow_foreground`，默认**开**）。
+
+```lua
+hotkey{ keys = "Win+Ctrl+h", action = desktop(1) }
+hotkey{ keys = "Win+Ctrl+l", action = desktop(2) }
+
+-- 回到以前的行为：切桌面只换视图，窗口都留在各自桌面上
+settings{ desktop_follow_foreground = false }
+```
+
+理由：双屏时你看着左边那块屏（鼠标也在那儿）的编辑器，用快捷键切到桌面 2，
+而你正在看的那块屏上什么都没有；另一边那块屏上的浏览器却留在了桌面 1。开启这一项之后，
+那个**浏览器**会被搬到桌面 2 上。
+
+* **只在“前台窗口不在鼠标那块屏上”时动手**。在鼠标那块屏上的窗口本来就会跟着视图
+  走，不需要搬；两块屏的序号拿不到任何一个（没有前台窗口、询不到光标）也不搬 ——
+  未知的情况下宁可不动。
+* **窗口的位置与显示器都不变**，只有虚拟桌面这一维跟着走。最大化状态、
+  窗口大小、边距全都不变（搬完会校对一次几何：一模一样就什么都不做）。
+* **不记“它原本属于哪张桌面”**：以后每次切桌面都重新判断，同一条件就继续跟着走；
+  想让某个窗口永久钉在自己那张桌面上，用 `window_rule{ desktop = n }`。
+* 只对 `desktop()` 动作生效。用 Windows 自己的 `Win+Ctrl+←/→`、任务视图点选等方式
+  切桌面时 flowkeyd 不动任何窗口（它没有监听系统切桌面）。
+* `--list` 会把它当前的状态打出来（`desktop follow foreground: true …`）。
 
 ### `hotkey{ ... }`
 

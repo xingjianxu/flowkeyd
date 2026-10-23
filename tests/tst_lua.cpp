@@ -718,6 +718,18 @@ void TestLua::windowRulesAreConverted()
     const QString unknownSetting = failure(R"(settings{ window_monitors = 1 })");
     QVERIFY2(unknownSetting.contains(QStringLiteral("unknown field")), qPrintable(unknownSetting));
 
+    // `settings.desktop_follow_foreground`：切虚拟桌面时前台窗口要不要跟着走
+    // （默认开）。
+    QVERIFY(core::Settings().desktopFollowForeground);
+    const auto followOff = parse(R"(settings{ desktop_follow_foreground = false })");
+    QVERIFY(followOff.has_value());
+    QVERIFY(!followOff->settings.desktopFollowForeground);
+    const auto followOn = parse(R"(settings{ desktop_follow_foreground = true })");
+    QVERIFY(followOn.has_value());
+    QVERIFY(followOn->settings.desktopFollowForeground);
+    const QString badFollow = failure(R"(settings{ desktop_follow_foreground = "yes" })");
+    QVERIFY2(badFollow.contains(QStringLiteral("expected a boolean")), qPrintable(badFollow));
+
     // 写了 monitor 但没写位置/大小：默认最大化（在 compile() 里定）。
     const auto maximizeDefault = parse(R"(window_rule{ process = "a", monitor = "primary" })");
     QVERIFY(maximizeDefault.has_value());

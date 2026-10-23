@@ -220,6 +220,7 @@ Config sampleConfig()
     config.settings.remoteDesktopProcesses = {QStringLiteral("mstsc.exe"),
                                               QStringLiteral("my rdp.exe")};
     config.settings.windowMonitor = MonitorRef{MonitorRef::Kind::Last, 1, QString()};
+    config.settings.desktopFollowForeground = false;
 
     // 每种动作一条快捷键：和弦必须互不相同（否则 compile() 会报重复）。
     const std::vector<Action> actions = allActions();

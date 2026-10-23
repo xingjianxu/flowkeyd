@@ -19,7 +19,9 @@ CLI 开关：`-c/--config`、`--no-elevate`、`--console`、`--elevated`、`--ch
 
 * `settings{}`：`log_level`、`swallow`、`exact_modifiers`、`release_modifiers`、`repeat_interval_ms`、
   `repeat_delay_ms`、`tick_ms`、`input_backend`、`single_instance`、`elevate`、`remote_desktop`、
-  `window_monitor`。**未知键报错。** `window_monitor`（默认 `"cursor"`）= 没写明 `monitor` 时摆到哪块屏。
+  `window_monitor`、`desktop_follow_foreground`。**未知键报错。** `window_monitor`（默认 `"cursor"`）=
+  没写明 `monitor` 时摆到哪块屏；`desktop_follow_foreground`（默认 `true`）= 用 `desktop()` 切桌面时
+  前台窗口不在鼠标那块屏上就一起搬过去（`decisions.md` 第 37 条）。
 * `hotkey{}`：`keys`（单个和弦或一组）、`name`、`trigger`（`press`/`release`/`repeat`）、`action`
   （别名 `press`、`on_press`）、`on_release`、`swallow`、`repeatable`（`true` 或
   `{ interval_ms, delay_ms }`；也认 `["repeat"]`）、`enabled`、`comment`、`remote_desktop`。
@@ -112,16 +114,11 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
 * 往脚本里插诊断时：把脚本复制到 `tmp/`，用 `[System.IO.File]::ReadAllText/WriteAllText(...,
   UTF8Encoding($true))` 做替换（**必须保 BOM**），再加一条只含 ASCII 的探针把失败的检查名写进 diag。
   **把临时脚本的中文检查名打到控制台会被代码页弄成乱码，很容易误判成另一条检查挂了。**
-* 最近一次实跑：`checks: 163, failures: 2`（release 产物，2026-10-22，**移除工作空间**那一轮）。
-  两次失败都是同一条：关掉卡片之后前台回不到捕捉窗口 ——
-  `关掉之后前台回到捕捉窗口`（窗口切换器）与 `关掉之后启动器前台回到捕捉窗口`（程序启动器）。
-  **可重现**（连跑三次、有没有常驻在跑都一样）；加了诊断（`Wait-FgAfterClose`，把失败时的
-  前台窗口类名与标题码点写进 `diag.txt`）之后看到：卡片关掉后前台落在 **WezTerm 的窗口**上，
-  而不是 `flowkeyd-accept-catcher`。这一个提交只删代码（工作空间）与改注释，**没动**
-  `popup_host` / 前台恢复的任何路径，所以先当作环境/前台恢复的既有毛病记录下来，没有继续挖
-  （项目所有者要求本轮不再跑冒烟）。比 163 少的 3 条是上面那组数字键检查：真机目录约 200 条时，
-  26 个单字母里可能没有一个命中 1..8 个程序，脚本打一条诊断（写进 `$WorkDir\diag.txt`，UTF-8 无
-  BOM）**跳过**它们：是跳过，不是失败。
+* 最近一次实跑：`checks: 163, failures: 0`（release 产物，**切桌面带上窗口**那一轮）。上一轮
+  （移除工作空间）的两次失败 —— `关掉之后前台回到捕捉窗口` 与 `关掉之后启动器前台回到捕捉窗口`
+  —— 这次没有出现（当时观测到卡片关掉后前台落在 WezTerm 窗口上）。比 163 少的 3 条是数字键检查的
+  跳过：真机目录约 200 条时，26 个单字母里可能没有一个命中 1..8 个程序，脚本打一条诊断（写进
+  `$WorkDir\diag.txt`，UTF-8 无 BOM）**跳过**它们：是跳过，不是失败。
 * 上一次实跑（工作空间还在的时候）：`checks: 206, failures: 0`。工作空间那一整块已经移除，实现
   在分支 `backup/workspace`，所以脚本也回到了 166/163 那一版。
 
@@ -179,3 +176,9 @@ powershell.exe ... -Phase config      # 只看配置，不注入按键
        **不弹**。
     3. `open([[...\x.docx]])` 与从启动器点一个程序：开出来的程序同样应当是普通权限；但启动器**右键
        菜单**里的「打开」开出来的是提权的（已知限制）。
+16. **切虚拟桌面带上窗口**（`desktop_follow_foreground`，脚本覆盖不到“跨屏”这条判据）：双屏时把鼠标
+    移到一个**没有窗口**的屏幕区域，让前台窗口留在外面那块屏上，按一个 `desktop(n)` 键切桌面 —— 那个
+    窗口应当跟着出现在新桌面上，且**位置、大小、最大化状态一点没变**；把鼠标移到那个窗口所在的那块屏上
+    再切一次，它应当**不**被搬走（日志里是 `not carrying …`）。`--list` 里应当是
+    `desktop follow foreground: true (…)`，写 `settings{ desktop_follow_foreground = false }` 之后它变成
+    `false` 且窗口不再跟着走。

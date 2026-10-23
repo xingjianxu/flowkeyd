@@ -191,4 +191,19 @@ MonitorRef windowActionMonitor(const std::optional<MonitorRef> &actionMonitor,
     return settings.windowMonitor;
 }
 
+bool shouldCarryWindowToDesktop(const Settings &settings,
+                               std::optional<std::size_t> windowMonitor,
+                               std::optional<std::size_t> cursorMonitor)
+{
+    if (!settings.desktopFollowForeground) {
+        return false;
+    }
+    // 两块屏的序号都拿到且相同？那就什么都不用搬（窗口本来就在你看着的那块屏上）。
+    // 缺任何一个都当“不知道”，一律不搬。
+    if (!windowMonitor.has_value() || !cursorMonitor.has_value()) {
+        return false;
+    }
+    return *windowMonitor != *cursorMonitor;
+}
+
 } // namespace flowkeyd::core

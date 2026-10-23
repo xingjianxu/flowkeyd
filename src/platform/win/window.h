@@ -25,6 +25,14 @@ namespace flowkeyd::platform::win::window {
 /// 查询意为“前台窗口”而没有前台窗口时同样返回 nullptr。
 HWND find(const core::WindowQuery &query);
 
+/// “用户现在真正在用的那个窗口”：前台窗口，但**跳过覆盖层**。
+///
+/// 与 `find()` 的空查询同一条逻辑（
+/// PowerToys 的「快捷键指南」之类 `WS_EX_TOOLWINDOW` 的覆盖层会沿 Z 序往下跳过），
+/// 单独包一个函数是为了让调用点自己就能读懂：“跟一个确实存在的窗口走”。
+/// 没有前台窗口时返回 `nullptr`。
+HWND foregroundMainWindow();
+
 /// 拥有这个窗口的可执行文件的**小写文件名**（`wezterm-gui.exe`）。
 /// 拿不到（进程已退出、访问被拒）时返回 `std::nullopt`。
 /// `window_rule` 的匹配用它。

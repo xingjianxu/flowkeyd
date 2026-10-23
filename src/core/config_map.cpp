@@ -497,6 +497,7 @@ QVariantMap settingsToMap(const Settings &settings)
                    stringListVariant(settings.remoteDesktopProcesses));
     }
     out.insert(QStringLiteral("window_monitor"), monitorRefValue(settings.windowMonitor));
+    out.insert(QStringLiteral("desktop_follow_foreground"), settings.desktopFollowForeground);
     return out;
 }
 
@@ -524,6 +525,8 @@ Settings settingsFromMap(const QVariantMap &map)
     if (auto ref = monitorRefFromText(stringOr(map, "window_monitor"))) {
         settings.windowMonitor = *ref;
     }
+    settings.desktopFollowForeground =
+        boolOr(map, "desktop_follow_foreground", settings.desktopFollowForeground);
     return settings;
 }
 
