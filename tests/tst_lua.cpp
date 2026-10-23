@@ -64,6 +64,7 @@ private slots:
     void loopsCanGenerateBindings();
     void helpersBuildTheSameTablesAsTheRawForm();
     void movingWindowOpsAreConverted();
+    void cycleWindowOpsAreConverted();
     void windowActionMonitorIsConverted();
     void runWithoutArgsAndWithEmptyArgs();
     void elevatedIsConverted();
@@ -200,6 +201,27 @@ void TestLua::movingWindowOpsAreConverted()
     QCOMPARE(c->bindings[1].press.at(0).follow, std::optional<bool>(true));
     QVERIFY(!c->bindings[0].press.at(0).follow.has_value());
     QVERIFY(!c->bindings[2].press.at(0).follow.has_value());
+}
+
+void TestLua::cycleWindowOpsAreConverted()
+{
+    const auto c = parse(R"(
+        hotkey{ keys = "Ctrl+Win+Right", action = window("cycle_next") }
+        hotkey{ keys = "Ctrl+Win+Left", action = window("cycle_prev") }
+        hotkey{ keys = "F9", action = "window:cycle_next" }
+    )");
+    QVERIFY(c.has_value());
+    QCOMPARE(c->bindings.size(), std::size_t(3));
+    QCOMPARE(c->bindings[0].press.at(0).windowOp, core::WindowOp::CycleNext);
+    QCOMPARE(c->bindings[1].press.at(0).windowOp, core::WindowOp::CyclePrev);
+    // 简写也行（与 `window("cycle_next")` 完全等价）。
+    QCOMPARE(c->bindings[2].press.at(0).kind, core::Action::Kind::Window);
+    QCOMPARE(c->bindings[2].press.at(0).windowOp, core::WindowOp::CycleNext);
+    // 轮转不收目标：写了 `target` 就是配置错误（信息里要能看出是哪一条）。
+    const QString rejected = failure(R"(
+        hotkey{ keys = "F10", action = window("cycle_next", { target = "code" }) }
+    )");
+    QVERIFY2(rejected.contains(QStringLiteral("target")), qPrintable(rejected));
 }
 
 void TestLua::windowActionMonitorIsConverted()

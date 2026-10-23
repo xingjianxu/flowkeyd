@@ -8,6 +8,7 @@
 #include "core/template.h"
 #include "core/window_match.h"
 #include "core/window_monitor_state.h"
+#include "core/window_cycle.h"
 #include "platform/win/apps.h"
 #include "platform/win/audio.h"
 #include "platform/win/clipboard.h"
@@ -24,6 +25,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QHash>
 #include <QThread>
 #include <QTimer>
 
@@ -796,6 +798,17 @@ bool launchThenActivate(ExpandContext &ctx,
     }
 }
 
+/// 窗口身份（`core/window_cycle` 用）：句柄的十六进制文本。
+///
+/// `core` 层不认识 `HWND`，所以窗口在轮转环里就是一串不透明的 id（与日志里
+/// 那个 `hwnd 0x20602` 同一个写法）。
+QString cycleId(HWND hwnd)
+{
+    return QStringLiteral("0x%1").arg(static_cast<qulonglong>(reinterpret_cast<quintptr>(hwnd)),
+                                      0,
+                                      16);
+}
+
 void executeWindowAction(ExpandContext &ctx,
                          MonitorMemory *memory,
                          const core::Compiled &config,
@@ -1258,7 +1271,14 @@ void executeAction(Runtime *runtime,
         executeClipboardAction(ctx, action, hotkey);
         break;
     case core::Action::Kind::Window:
-        executeWindowAction(ctx, memory, *config, action, hotkey);
+        // 轮转（`cycle_next` / `cycle_prev`）自己算目标并直接激活，不是“查一个
+        // 窗口再对它做点什么”，所以走 `Dispatcher` 上那条（它还持有环形顺序）。
+        if (action.windowOp == core::WindowOp::CycleNext
+            || action.windowOp == core::WindowOp::CyclePrev) {
+            dispatcher->cycleWindows(action.windowOp, hotkey);
+        } else {
+            executeWindowAction(ctx, memory, *config, action, hotkey);
+        }
         break;
     case core::Action::Kind::Notify: {
         const QString title = ctx.expand(action.title);
@@ -1474,6 +1494,84 @@ void Dispatcher::pollDesktop()
     if (m_runtime != nullptr) {
         m_runtime->reportDesktop(number, total);
     }
+}
+
+void Dispatcher::cycleWindows(core::WindowOp op, const QString &hotkey)
+{
+    const int step = op == core::WindowOp::CycleNext ? 1 : -1;
+    // 起点 = 用户此刻正在用的那个窗口（前台是覆盖层时沿 Z 序往下找第一个主窗口，
+    // 和不带 `target`/`process` 的 window 动作是同一套判断）。
+    const HWND current = win::window::find(core::WindowQuery::make(std::nullopt, std::nullopt));
+    const std::vector<core::MonitorDescription> monitors = core::sortedMonitors(win::monitor::list());
+    // “当前显示器” = **当前窗口**所在的那一块（问不出来时退回光标所在的那一块）。
+    // 轮转只在这一块屏上发生，所以两声快捷键就能在左右两块屏上各转各的。
+    std::optional<std::size_t> monitorIndex;
+    if (current != nullptr) {
+        monitorIndex = win::monitor::indexForWindow(monitors, current);
+    }
+    if (!monitorIndex.has_value()) {
+        monitorIndex = win::monitor::indexForCursor(monitors);
+    }
+
+    QStringList candidates;
+    QHash<QString, HWND> handles;
+    for (const win::window::OpenWindow &open : win::window::listOpenWindowsOnCurrentDesktop()) {
+        if (monitorIndex.has_value()) {
+            const std::optional<std::size_t> index =
+                win::monitor::indexForWindow(monitors, open.hwnd);
+            if (!index.has_value() || *index != *monitorIndex) {
+                continue;
+            }
+        }
+        const QString id = cycleId(open.hwnd);
+        if (handles.contains(id)) {
+            continue;
+        }
+        handles.insert(id, open.hwnd);
+        candidates.append(id);
+    }
+
+    const std::optional<core::WindowCyclePlan> plan =
+        core::planWindowCycle(m_cycleState,
+                              candidates,
+                              current != nullptr ? cycleId(current) : QString(),
+                              step);
+    if (!plan.has_value()) {
+        win::logInfo(QStringLiteral("`%1` window: no other window to cycle to on this desktop + "
+                                    "monitor")
+                         .arg(hotkey));
+        return;
+    }
+
+    const HWND target = handles.value(plan->target, nullptr);
+    if (target == nullptr) {
+        // 枚举与激活之间窗口被关掉了：不更新状态，下一次重新排。
+        win::logWarn(QStringLiteral("`%1` window: the window to cycle to is already gone")
+                         .arg(hotkey));
+        return;
+    }
+
+    QString detail;
+    QString error;
+    if (!win::window::applyTo(target, core::WindowOp::Activate, false, &detail, &error)) {
+        win::logError(QStringLiteral("`%1` window: %2").arg(hotkey, error));
+        return;
+    }
+    m_cycleState = plan->state;
+
+    const int position = static_cast<int>(plan->state.ring.indexOf(plan->target)) + 1;
+    const int count = static_cast<int>(plan->state.ring.size());
+    const QString where = monitorIndex.has_value()
+                              ? QStringLiteral("monitor %1/%2")
+                                    .arg(static_cast<int>(*monitorIndex) + 1)
+                                    .arg(static_cast<int>(monitors.size()))
+                              : QStringLiteral("unknown monitor");
+    win::logInfo(QStringLiteral("`%1` -> %2 (%3 of %4 on %5%6)")
+                     .arg(hotkey, detail)
+                     .arg(position)
+                     .arg(count)
+                     .arg(where, plan->restarted ? QStringLiteral(", restarted")
+                                                 : QString()));
 }
 
 void Dispatcher::submit(std::shared_ptr<const core::Compiled> config, core::Trigger trigger)

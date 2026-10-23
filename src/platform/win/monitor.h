@@ -20,6 +20,9 @@ std::vector<core::MonitorDescription> list();
 
 /// 窗口当前所在的显示器在**已排序**列表里的下标。
 /// 窗口无效或枚举不到时返回 `std::nullopt`。
+///
+/// 最小化的窗口按它的**还原位置**判断（`MonitorFromWindow()` 对它们不可靠，
+/// 见实现）。
 std::optional<std::size_t> indexForWindow(const std::vector<core::MonitorDescription> &sorted,
                                           HWND hwnd);
 

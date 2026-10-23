@@ -503,7 +503,7 @@ Enter 与主键盘的 Enter 共用 `VK_RETURN`，区分靠的是 Windows 的扩�
 | `volume`    | `op` = `up`/`down`/`set`/`mute`/`unmute`/`toggle`、`level`（0-100）、`step`                               | 对默认输出设备使用 Core Audio                                                                                                                                                                                                                                                            |
 | `media`     | `op` = `play_pause`/`next`/`prev`/`stop`                                                                  |                                                                                                                                                                                                                                                                                           |
 | `clipboard` | `op` = `get`/`set`/`append`/`clear`、`text`                                                               |                                                                                                                                                                                                                                                                                           |
-| `window`    | `op` = `activate`/`minimize`/`maximize`/`restore`/`close`/`toggle_topmost`/`move_prev_desktop`/`move_next_desktop`/`move_left_monitor`/`move_right_monitor`、`target`、`process`、`launch`、`wait_ms`、`toggle`、`animate`、`follow`、`monitor` | `target` 匹配窗口标题的子串，`process` 匹配可执行文件名（`wezterm` 也能匹配 `wezterm-gui.exe`）；既没有 `target` 也没有 `process` 就表示前台窗口。`launch = { program, args[], cwd, show, shell, env{}, wait_ms, elevated }` 会在没有任何匹配时启动该程序，然后等待它的窗口（默认 3000 ms）并激活它。`toggle`（默认开，只对 `op = "activate"` 有意义）会在目标窗口已经在前台时改为最小化它。`animate`（默认**关**）控制这次状态变化要不要播放 DWM 的过渡动画。`wait_ms` 写在动作顶层时是 `launch.wait_ms` 的简写；在 `app{}` 里 `launch` 还会继承 app 的 `launch`（逐字段合并）。四个 `move_*` op 把**当前窗口**（不写 `target`/`process` 时）挪到相邻的虚拟桌面 / 显示器：`move_prev_desktop`/`move_next_desktop` 只动虚拟桌面且**首尾相接**（显示器上的几何不变，视图**不**跟着走），`move_left_monitor`/`move_right_monitor` 只动显示器（保留最大化状态，否则保持原有大小并居中到目标工作区；没有更左/更右那一块时失败，**不循环**）。这四个 op 都不套用 `toggle`、也不接受 `launch`。`follow = true` 只能写给 `move_prev_desktop`/`move_next_desktop`：搬完之后把视图也切到目标桌面并重新激活那个窗口（用户跟着窗口一起过去；不写时视图不动，与 Windows 自己的 `Win+Ctrl+Shift+←/→` 一致），写在其它的 op 上会被 `--check` 拒绝。`monitor` 只对 `op = "activate"` 有意义：指定这次把窗口摆到哪块显示器上（`2` / `"primary"` / `"DISPLAY2"` / `"cursor"` / `"last"` / `"none"`），不写就按命中的 `window_rule` → `settings.window_monitor`（默认 = 光标所在的那一块），见[窗口摆到哪块显示器上](#窗口摆到哪块显示器上)；写在其它的 op 上会被 `--check` 拒绝 |
+| `window`    | `op` = `activate`/`minimize`/`maximize`/`restore`/`close`/`toggle_topmost`/`move_prev_desktop`/`move_next_desktop`/`move_left_monitor`/`move_right_monitor`/`cycle_next`/`cycle_prev`、`target`、`process`、`launch`、`wait_ms`、`toggle`、`animate`、`follow`、`monitor` | `target` 匹配窗口标题的子串，`process` 匹配可执行文件名（`wezterm` 也能匹配 `wezterm-gui.exe`）；既没有 `target` 也没有 `process` 就表示前台窗口。`launch = { program, args[], cwd, show, shell, env{}, wait_ms, elevated }` 会在没有任何匹配时启动该程序，然后等待它的窗口（默认 3000 ms）并激活它。`toggle`（默认开，只对 `op = "activate"` 有意义）会在目标窗口已经在前台时改为最小化它。`animate`（默认**关**）控制这次状态变化要不要播放 DWM 的过渡动画。`wait_ms` 写在动作顶层时是 `launch.wait_ms` 的简写；在 `app{}` 里 `launch` 还会继承 app 的 `launch`（逐字段合并）。四个 `move_*` op 把**当前窗口**（不写 `target`/`process` 时）挪到相邻的虚拟桌面 / 显示器：`move_prev_desktop`/`move_next_desktop` 只动虚拟桌面且**首尾相接**（显示器上的几何不变，视图**不**跟着走），`move_left_monitor`/`move_right_monitor` 只动显示器（保留最大化状态，否则保持原有大小并居中到目标工作区；没有更左/更右那一块时失败，**不循环**）。这四个 op 都不套用 `toggle`、也不接受 `launch`。`follow = true` 只能写给 `move_prev_desktop`/`move_next_desktop`：搬完之后把视图也切到目标桌面并重新激活那个窗口（用户跟着窗口一起过去；不写时视图不动，与 Windows 自己的 `Win+Ctrl+Shift+←/→` 一致），写在其它的 op 上会被 `--check` 拒绝。`monitor` 只对 `op = "activate"` 有意义：指定这次把窗口摆到哪块显示器上（`2` / `"primary"` / `"DISPLAY2"` / `"cursor"` / `"last"` / `"none"`），不写就按命中的 `window_rule` → `settings.window_monitor`（默认 = 光标所在的那一块），见[窗口摆到哪块显示器上](#窗口摆到哪块显示器上)；写在其它的 op 上会被 `--check` 拒绝。`cycle_next`/`cycle_prev` 在**当前虚拟桌面 + 当前显示器**的窗口之间轮转并直接激活目标（见[在当前桌面 + 当前显示器的窗口之间轮转](#在当前桌面--当前显示器的窗口之间轮转)）：目标是运行时算出来的，不接受 `target`/`process`/`launch`/`toggle`/`monitor`/`follow`/`animate` |
 | `notify`    | `title`、`body`                                                                                           | 托盘气泡提示                                                                                                                                                                                                                                                                              |
 | `menu`      | `title`、`items[]`（每项 `{ key, label, hint, action }`）                                                  | 弹出一个选单让用户挑一项（见[选单与电源](#选单与电源)）；条目上的单字符 `key` 直接选中它，`↑`/`↓` + `Enter` 与鼠标也能选，`Esc`（或点到别的地方）只关窗口。没有 `action`（或 `none()`）的条目只是把选单关掉                                                                         |
 | `help`      | `title`（可选，默认「快捷键」）                                                                            | 弹出一个**快捷键帮助**（见[快捷键帮助](#快捷键帮助)）：列出当前配置里全部生效的快捷键与重映射；筛选框里直接输入（鼠标点一下就进去）就筛选；`↑`/`↓`、`PgUp`/`PgDn` 或滚轮/拖动滚动条滚动（滚动不改选中项）；**`Enter` 或双击一行 = 关掉窗口并执行那一行的动作**；左键点一行 = 选中它并把它的按键复制到剪贴板；`quit`/`suspend`/`power` 这类危险动作要按两次；`Esc` 依次是「取消确认 → 清筛选 → 关窗」。列表由配置本身生成，所以没有别的参数 |
@@ -635,6 +635,28 @@ hotkey{ keys = "Win+o", action = window("move_right_monitor") }
   `launch`；跨显示器移动会产生窗口过渡，所以 `animate` 对它有意义，而跨虚拟桌面移动
   不产生过渡、写 `animate` 会被 `--check` 拒绝。
 
+### 在当前桌面 + 当前显示器的窗口之间轮转
+
+`cycle_next` / `cycle_prev` 把**当前虚拟桌面**上、和**当前窗口同一块显示器**的窗口
+当成一圈，往前走 / 往后走一步并**直接激活**那个窗口（不弹卡片，也不移动窗口）：
+
+```lua
+-- 这两条会吞掉 Windows 自己的「切换虚拟桌面」快捷键
+hotkey{ keys = "Ctrl+Win+Right", action = window("cycle_next") }
+hotkey{ keys = "Ctrl+Win+Left",  action = window("cycle_prev") }
+```
+
+* 候选 = 当前虚拟桌面上「shell 真的会显示」的程序窗口（与窗口切换器同一条判据），
+  并且**和当前前台窗口在同一块显示器上**；虚拟桌面上别的屏幕的窗口不参与，所以两块
+  屏可以各转各的（按哪一边的窗口就是转哪一边）。
+* 顺序是**最近用过的在前**：刚按过的快捷键所在的窗口 → 上一个用过的 → ……；**首尾
+  相接**。连续按会一直沿第一次排好的那一圈转下去（不会在两张窗口之间翻来覆去），
+  你自己切到别的窗口之后，下一次从新的前台窗口重新开始。
+* 目标是运行时算出来的：这两个 `op` **不接受** `target`/`process`（想按程序名筛选
+  用 `activate`），也不套用 `toggle`、不接受 `launch`/`monitor`/`follow`/`animate`。
+* 最小化的窗口也在候选里（激活它等于还原它）。只有它自己一个窗口时按下去什么事都
+  不会发生（日志里写一行 “no other window to cycle to”）。
+
 ### 前台窗口与覆盖层
 
 不写 `target`/`process` 的 `window` 动作作用于**前台窗口**（`GetForegroundWindow()`），
@@ -657,8 +679,9 @@ hotkey{ keys = "Ctrl+Alt+f", action = window("maximize", { animate = true }) }
 实现用的是**按窗口**的 `DwmSetWindowAttribute(hwnd, DWMWA_TRANSITIONS_FORCEDISABLED,
 TRUE)`：调 `ShowWindow` 前设上、调完立刻设回，所以**不改系统设置**——系统里“辅助功能 /
 视觉效果 → 最小化/最大化时播放动画”不会被碰，其它程序、以及你手动点标题栏按钮时的
-动画都不受影响。只有会改变窗口状态的 `op` 有这个效果；`close`、`toggle_topmost` 与跨
-虚拟桌面移动（`move_prev_desktop`/`move_next_desktop`）不产生过渡，写 `animate` 会被
+动画都不受影响。只有会改变窗口状态的 `op` 有这个效果；`close`、`toggle_topmost`、跨
+虚拟桌面移动（`move_prev_desktop`/`move_next_desktop`）与窗口轮转
+（`cycle_next`/`cycle_prev`）不产生过渡，写 `animate` 会被
 `--check` 拒绝；跨显示器移动（`move_left_monitor`/`move_right_monitor`）会改变几何，
 `animate` 对它有意义。
 

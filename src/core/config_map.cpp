@@ -75,6 +75,8 @@ constexpr EnumName<WindowOp> kWindowOps[] = {
     {WindowOp::MoveNextDesktop, "move_next_desktop"},
     {WindowOp::MoveLeftMonitor, "move_left_monitor"},
     {WindowOp::MoveRightMonitor, "move_right_monitor"},
+    {WindowOp::CycleNext, "cycle_next"},
+    {WindowOp::CyclePrev, "cycle_prev"},
 };
 
 constexpr EnumName<ToggleState> kToggleStates[] = {

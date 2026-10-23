@@ -43,6 +43,16 @@ enum class ClipboardOp { Get, Set, Append, Clear };
 ///     显示器时失败（不循环）。
 /// 这四个都不套用 `toggle`，也不接受 `launch`；视图不会跟着窗口走（移动的是
 /// 窗口，不是当前桌面）。
+///
+/// 最后两个（`CycleNext` / `CyclePrev`）是 2026-10 新增的「在当前虚拟桌面 +
+/// 当前显示器的窗口之间轮转」，直接激活目标窗口（不弹卡片）：
+///   * 候选窗口 = 当前虚拟桌面上、和**当前前台窗口**同一块显示器的程序窗口，
+///     按 Z 序（最近用过的在前）；
+///   * `CycleNext` 走向下一个、`CyclePrev` 走回上一个，首尾相接；
+///   * 连续按会一直按第一次排好的顺序轮转（见 `core/window_cycle.*`），
+///     中间自己切到别的窗口之后，下一次会从新的前台窗口重新开始。
+/// 它们不接受 `target` / `process`（目标是算出来的，不是查出来的），也不套用
+/// `toggle`，不接受 `launch` / `monitor` / `follow` / `animate`。
 enum class WindowOp {
     Activate,
     Minimize,
@@ -54,6 +64,8 @@ enum class WindowOp {
     MoveNextDesktop,
     MoveLeftMonitor,
     MoveRightMonitor,
+    CycleNext,
+    CyclePrev,
 };
 enum class ToggleState { On, Off, Toggle };
 enum class CapsLockState { Off };

@@ -78,6 +78,16 @@ struct OpenWindow
 /// 而被 shell 藏起来的假窗口（输入法宿主、隐藏的 UWP 窗口）不会。
 std::vector<OpenWindow> listOpenWindows();
 
+/// `listOpenWindows()` 里**只留在当前虚拟桌面**上的那些（`window` 动作的
+/// `cycle_next` / `cycle_prev` 用）。
+///
+/// 别的虚拟桌面上的顶层窗口是被 DWM `cloak` 起来的（shell 靠它把窗口藏住），
+/// 而 `listOpenWindows()` 里剩下的 cloaked 窗口正好全是“在别的桌面上”的那些
+/// （cloaked 又留在当前桌面上的那些是输入法宿主之类的假窗口，已经被
+/// `isSwitchableWindow()` 滤掉了），所以这里只是把 cloaked 的排掉 —— 不必为每个
+/// 窗口都去问一次虚拟桌面后端（那是一条一次性 COM 线程）。
+std::vector<OpenWindow> listOpenWindowsOnCurrentDesktop();
+
 /// 窗口的可见标题（取不到时返回 `"<untitled>"` / `"<invalid window>"`）。
 QString windowTitle(HWND hwnd);
 

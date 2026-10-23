@@ -39,6 +39,7 @@ private slots:
     void windowsTitleMustNotBeEmpty();
     void windowToggleAndAnimateValidation();
     void movingWindowOpsAreValidated();
+    void cycleWindowOpsAreValidated();
     void windowRulesCompile();
     void windowRuleGeometryDefaults();
     void windowRuleDefaultMonitor();
@@ -636,6 +637,75 @@ void TestConfig::movingWindowOpsAreValidated()
         QVERIFY2(badError->toString().contains(QStringLiteral("follow")),
                  qPrintable(badError->toString()));
     }
+}
+
+void TestConfig::cycleWindowOpsAreValidated()
+{
+    // 两个轮转 op：简写、解析与摘要。目标是运行时算出来的，所以摘要里只写范围。
+    const std::vector<std::pair<QString, WindowOp>> cases{
+        {QStringLiteral("window:cycle_next"), WindowOp::CycleNext},
+        {QStringLiteral("window:cycle_prev"), WindowOp::CyclePrev},
+    };
+    for (const auto &entry : cases) {
+        Action action;
+        QVERIFY2(!parseActionShorthand(entry.first, &action).has_value(), qPrintable(entry.first));
+        QCOMPARE(action.kind, Action::Kind::Window);
+        QCOMPARE(action.windowOp, entry.second);
+        QCOMPARE(action.summary(),
+                 QStringLiteral("window %1 (current desktop + monitor)")
+                     .arg(windowOpDebugName(entry.second)));
+        // 什么字段都不写的写法本身是合法的。
+        Config config;
+        config.hotkeys.push_back(hotkey(QStringLiteral("F1"), specOne(action)));
+        QVERIFY(!compileConfig(config).has_value());
+    }
+
+    // 目标是自己算的：写 `target` / `process` 会让人以为能筛，所以拒绝。
+    for (const WindowOp op : {WindowOp::CycleNext, WindowOp::CyclePrev}) {
+        Action byTitle = windowAction(op);
+        byTitle.target = QStringLiteral("code");
+        Config titleConfig;
+        titleConfig.hotkeys.push_back(hotkey(QStringLiteral("F1"), specOne(byTitle)));
+        const auto titleError = compileConfig(titleConfig);
+        QVERIFY2(titleError.has_value(), "target must be rejected on the cycle ops");
+        QVERIFY2(titleError->toString().contains(QStringLiteral("target")),
+                 qPrintable(titleError->toString()));
+
+        Action byProcess = windowAction(op);
+        byProcess.process = QStringLiteral("code");
+        Config processConfig;
+        processConfig.hotkeys.push_back(hotkey(QStringLiteral("F1"), specOne(byProcess)));
+        QVERIFY2(compileConfig(processConfig).has_value(),
+                 "process must be rejected on the cycle ops");
+    }
+
+    // 其它“只对 activate / 搬窗口有意义”的字段照旧全拒。
+    MonitorRef onSecond;
+    onSecond.kind = MonitorRef::Kind::Index;
+    onSecond.index = 2;
+    Action animated = windowAction(WindowOp::CycleNext);
+    animated.animate = true;
+    Config animatedConfig;
+    animatedConfig.hotkeys.push_back(hotkey(QStringLiteral("F1"), specOne(animated)));
+    QVERIFY2(compileConfig(animatedConfig).has_value(), "animate has no meaning on cycle ops");
+
+    Action toggled = windowAction(WindowOp::CyclePrev);
+    toggled.toggle = true;
+    Config toggledConfig;
+    toggledConfig.hotkeys.push_back(hotkey(QStringLiteral("F1"), specOne(toggled)));
+    QVERIFY2(compileConfig(toggledConfig).has_value(), "toggle is rejected on the cycle ops");
+
+    Action followed = windowAction(WindowOp::CycleNext);
+    followed.follow = true;
+    Config followedConfig;
+    followedConfig.hotkeys.push_back(hotkey(QStringLiteral("F1"), specOne(followed)));
+    QVERIFY2(compileConfig(followedConfig).has_value(), "follow is rejected on the cycle ops");
+
+    Action placed = windowAction(WindowOp::CyclePrev);
+    placed.monitor = onSecond;
+    Config placedConfig;
+    placedConfig.hotkeys.push_back(hotkey(QStringLiteral("F1"), specOne(placed)));
+    QVERIFY2(compileConfig(placedConfig).has_value(), "monitor is rejected on the cycle ops");
 }
 
 void TestConfig::windowRulesCompile()

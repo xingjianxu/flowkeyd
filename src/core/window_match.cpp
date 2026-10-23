@@ -100,6 +100,10 @@ bool windowOpHasTransition(WindowOp op)
     case WindowOp::ToggleTopmost:
     case WindowOp::MovePrevDesktop:
     case WindowOp::MoveNextDesktop:
+    // 轮转本身不改变窗口状态：最终是 dispatcher 拿解析出来的目标窗口按
+    // `activate` 应用，所以 `animate` 写在轮转 op 上没有意义（`--check` 拒绝）。
+    case WindowOp::CycleNext:
+    case WindowOp::CyclePrev:
         return false;
     }
     return false;

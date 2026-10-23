@@ -928,6 +928,15 @@ void validateAction(const QString &label, const Action &action, QStringList *err
                 QStringLiteral("%1: `monitor` only works with op = \"activate\", not %2")
                     .arg(label, windowOpDebugName(action.windowOp)));
         }
+        // `cycle_next` / `cycle_prev` 的目标是运行时算出来的（当前虚拟桌面 +
+        // 当前显示器上的那一批窗口），写 `target` / `process` 会让人以为能筛，
+        // 所以直接拒绝。
+        if ((action.windowOp == WindowOp::CycleNext || action.windowOp == WindowOp::CyclePrev)
+            && !WindowQuery::make(action.target, action.process).isForeground()) {
+            errors->append(
+                QStringLiteral("%1: %2 picks the window by itself; drop `target`/`process`")
+                    .arg(label, windowOpDebugName(action.windowOp)));
+        }
         break;
     }
     case Action::Kind::Menu:

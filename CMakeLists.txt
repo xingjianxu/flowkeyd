@@ -193,6 +193,8 @@ add_library(flowkeyd_core STATIC
     src/core/version.h
     src/core/window_match.cpp
     src/core/window_match.h
+    src/core/window_cycle.cpp
+    src/core/window_cycle.h
     src/core/window_monitor_state.cpp
     src/core/window_monitor_state.h
 )
@@ -679,6 +681,7 @@ flowkeyd_add_test(tst_log_tail)
 flowkeyd_add_test(tst_launcher_state)
 flowkeyd_add_test(tst_window_monitor_state)
 flowkeyd_add_test(tst_window_match)
+flowkeyd_add_test(tst_window_cycle)
 flowkeyd_add_test(tst_remote_desktop)
 flowkeyd_add_test(tst_placement)
 flowkeyd_add_test(tst_audio LIBS flowkeyd_platform)

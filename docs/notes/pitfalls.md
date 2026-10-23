@@ -349,6 +349,10 @@
   `SetWindowPos`（`SWP_NOACTIVATE`）。最小化的窗口只更新"还原位置"。它不会抢焦点。
 * **`DWMWA_TRANSITIONS_FORCEDISABLED` 读不回来**，只能"设 TRUE → `ShowWindow` → 设回 FALSE"
   （RAII `TransitionGuard`）；DWM 在过渡**开始**时读它。
+* **`MonitorFromWindow()` 对最小化的窗口不可靠**：它的 "几何" 是 `-32000`，`MONITOR_DEFAULTTONEAREST`
+  于是会落到一块与它无关的屏上（本机实测：窗口停在第二块屏上最小化，却被算成第一块）。要判"它在
+  哪块屏"就先用 `GetWindowPlacement().rcNormalPosition` 的中心点问 `MonitorFromPoint()`（现在
+  `win::monitor::indexForWindow()` 就是这么做的，窗口轮转与 `move_left/right_monitor` 都靠它）。
 * **终端窗口不能靠标题找**（`process = "wezterm"`，窗口属于 `wezterm-gui.exe`）。
 * **`run`/`window.launch` 走 `CreateProcess`、不查 `App Paths`、也不能用 `DETACHED_PROCESS`**（会静默
   杀死控制台子进程，用 `CREATE_NO_WINDOW`）。

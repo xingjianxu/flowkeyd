@@ -244,6 +244,14 @@ UI 只有托盘图标 + 日志窗口、`menu`/`help`/`windows`/`apps`/`update` �
     上已全部删除**（`settings.desktop_follow_foreground`、`core::shouldCarryWindowToDesktop()`、
     `win::desktop::switchToCarrying()`、`win::window::foregroundMainWindow()`，以及“没搬时的 INFO 原因
     行”）。**不要再悄悄把它加回来**，要加先问项目所有者。完整记录见 `docs/notes/decisions.md` 第 37 条。
+38. **窗口轮转 `window("cycle_next")` / `window("cycle_prev")`：在当前虚拟桌面 + 当前显示器的窗口之间
+    转一个并直接唤起（不弹卡片）。** 候选 = 当前桌面上的程序窗口（与窗口切换器同一套判据）里
+    **和当前前台窗口同一块显示器**的那些，顺序是**最近用过的在前、首尾相接**；连续按沿用第一次排好的
+    那一圈（`core::WindowCycleState`，否则会在两张窗口之间翻来覆去），自己切到别的窗口之后下一次重排。
+    “当前显示器”指**前台窗口所在的那一块**（问不出来时退回光标那一块），与 `settings.window_monitor`
+    无关。这两个 op **不收** `target`/`process`，也不收 `toggle`/`launch`/`monitor`/`follow`/`animate`
+    （`--check` 拒绝）。纯逻辑在 `core/window_cycle.*`（`tst_window_cycle`），枚举/激活在
+    `platform/win/window` 与 `Dispatcher::cycleWindows()`。完整记录见 `docs/notes/decisions.md` 第 38 条。
 
 ---
 
@@ -298,6 +306,7 @@ Qt 侧齐备：`Qt6::Quick`、`QuickControls2`、`Qt6QuickControls2FluentWinUI3S
 | `core/keys.*` / `core/engine.*` | 键名 ↔ `VK` 表、和弦、发送脚本解析、大写字母检查 / 快捷键状态机（匹配、吞键、重复、挂起、重映射 hold-tap、菜单遮断、轻碰） |
 | `core/config.*` / `core/action.*` | 结构体 + 严格校验 + `Compiled`/`expandApps` / 动作表示 + 摘要（`--list` 与 `help()` 共用）+ `isDestructive()` |
 | `core/template.*` / `core/window_match.*` | `{clipboard}`/`{selection}`/`{date}` / 窗口匹配纯函数 + “什么算一个程序窗口” |
+| `core/window_cycle.*` | 窗口轮转的环形顺序与“该去哪一个”（`cycle_next`/`cycle_prev`） |
 | `core/remote_desktop.*` / `core/placement.*` | 远程桌面名单匹配 / `window_rule` 几何与匹配、`stepIndex()`、`windowActionMonitor()` |
 | `core/app_list.*` / `core/launcher_state.*` | 启动器纯逻辑（判据、图标键、合并、匹配、分组、内置设置页）/ 固定+最近的持久状态 |
 | `core/pinyin.*` / `core/pinyin_data.*` | 汉字读音查询 / 生成的读音表 |
@@ -306,7 +315,7 @@ Qt 侧齐备：`Qt6::Quick`、`QuickControls2`、`Qt6QuickControls2FluentWinUI3S
 | `core/log_tail.*` / `core/update_check.*` / `core/version.*` / `core/desktop_badge.*` | 日志增量尾随 / 更新纯逻辑 / 版本号 / 徽标文字与字号 |
 | `src/lua/lua_config.*` + `lua_prelude.lua` | **Lua 与 C++ 的唯一边界**（转成 `core::Config`，逐条目带上下文报错）；DSL 编进 qrc |
 | `src/platform/win/` | 一个文件一件事：`ffi`（全部声明 + `currentExecutablePath()`）、`nt`、`process`（run 三条路 / open / `--shell-*` 代理）、`dwm`、`monitor`、`input`（`SendInput`、验收后门、`copySelection`）、`ime`、`hook`（回调 + 消息循环 + 定时器 + `window_rule` 监听 + 显示器轮询 + 前台事件）、`apps`（扫描 + 启动 + 图标 + `StaThread`）、`shell_menu`、`audio`（MTA，高风险）、`clipboard`、`window`、`desktop`（版本表）、`power`、`tray`、`logging`/`single_instance`、`elevate`/`autostart`/`update` |
-| `src/app/dispatcher.*` | **动作工作线程**：执行动作、`window` 的先启动再激活与默认 `toggle`、摆显示器、四张卡片的请求、`window_rule` 三遍、桌面轮询、启动器状态文件路径 |
+| `src/app/dispatcher.*` | **动作工作线程**：执行动作、`window` 的先启动再激活与默认 `toggle`、窗口轮转（`Dispatcher::cycleWindows()`）、摆显示器、四张卡片的请求、`window_rule` 三遍、桌面轮询、启动器状态文件路径 |
 | `src/app/runtime.*` | 引擎 + 钩子 + 分发 + 托盘 + 弹窗总装；`ControlCmd` 通道；`--quit` 事件句柄 |
 | `src/app/{menu,help,window_list,app_list}_model.*` / `log_model.*` | 卡片与日志窗口的**纯逻辑**（`QAbstractListModel`，只用 QtCore）；行几何与鼠标命中不归它们管 |
 | `src/app/popup_layout.*` / `popup_host.*` | 弹窗几何与 `centrePopup()`/`popupPixelSizeIsStale()`；挂模型、抢前台、建/复用窗口、`helpRun()`（**先藏窗口再执行**）、`preload()`、缩放变化丢窗口 |
@@ -496,7 +505,7 @@ debug 看不到的警告）+ `FLOWKEYD_BUILD_TESTS=OFF`。
   键名小写、托盘数字徽标、窗口切换器（+数字选择 + IME）、弹窗不进任务栏 + 预热、发布包精简、精简升级包、
   `scripts/release.ps1`、在线更新、`install.ps1`、FreeType、程序启动器（+异步图标 / `shell:AppsFolder` /
   拼音 / 固定·最近·全部 / 控制面板与设置页）、弹窗缩放过期自愈、跨桌面唤起、`settings.window_monitor`、
-  图形化配置界面、启动权限。
+  图形化配置界面、启动权限、窗口轮转（`cycle_next`/`cycle_prev`）。
 * **已撤掉的两条**：工作空间（按显示器独立的一套虚拟空间，2026-10 实现过 M0–M12）**整体移除**，
   实现在分支 `backup/workspace`；配置与默认行为回到 Windows 虚拟桌面（决策 36）。「切虚拟桌面时把
   前台窗口一起带过去」（`settings.desktop_follow_foreground`，默认开）也**整体移除**，实现在分支

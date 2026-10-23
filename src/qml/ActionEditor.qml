@@ -71,6 +71,12 @@ Column {
         return supported.indexOf(root.windowOp) >= 0
     }
 
+    /// 轮转（`cycle_next` / `cycle_prev`）的目标是运行时算出来的：当前虚拟桌面 +
+    /// 当前显示器上的那一批窗口，没有 `target` / `process` / `launch` 这回事。
+    function isCycleOp() {
+        return root.windowOp === "cycle_next" || root.windowOp === "cycle_prev"
+    }
+
     /// 多行输入框 <-> 字符串列表（一行一项；空行会被丢掉）。
     ///
     /// `Array.isArray` 的检查是必需的：`run.args` 是列表，而 `open.args` 是**一个
@@ -301,6 +307,7 @@ Column {
             width: root.width
             label: qsTr("窗口标题包含")
             placeholder: qsTr("留空表示不限制")
+            visible: !root.isCycleOp()
             value: root.action.target !== undefined ? root.action.target : ""
             onEdited: function (value) { root.setOptionalString("target", value) }
         }
@@ -308,6 +315,7 @@ Column {
             width: root.width
             label: qsTr("进程名包含")
             placeholder: qsTr("例如 notepad")
+            visible: !root.isCycleOp()
             value: root.action.process !== undefined ? root.action.process : ""
             onEdited: function (value) { root.setOptionalString("process", value) }
         }

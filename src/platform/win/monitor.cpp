@@ -69,6 +69,16 @@ std::vector<core::MonitorDescription> list()
 std::optional<std::size_t> indexForWindow(const std::vector<core::MonitorDescription> &sorted,
                                           HWND hwnd)
 {
+    // 最小化的窗口不能用 `MonitorFromWindow()`：它的“几何”是 -32000，那个点
+    // 离哪儿都很远（`MONITOR_DEFAULTTONEAREST` 于是会落到某一块与它无关的屏上）。
+    // 改用还原位置的中心点问一次。
+    if (IsIconic(hwnd) != 0) {
+        if (const std::optional<core::Rect> rect = windowRect(hwnd); rect.has_value()) {
+            const POINT centre{rect->x + rect->width / 2, rect->y + rect->height / 2};
+            return indexForHandle(sorted, MonitorFromPoint(centre, MONITOR_DEFAULTTONEAREST));
+        }
+        return std::nullopt;
+    }
     return indexForHandle(sorted, MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST));
 }
 

@@ -690,3 +690,39 @@ switch/move/prev/next/move_prev/move_next、`window_rule.workspace`、切空间�
   以及 `tst_placement` / `tst_lua` / `tst_config_writer` / `tst_interactive` 里针对它的用例。
 * 撤回方式：直接 `git revert` 掉新增、日志原因、文档三个提交，回退后的树与功能加进来之前的
   `083a77a` 逐字节一致（除这条记录本身）。
+
+## 38. 窗口轮转：`window("cycle_next")` / `window("cycle_prev")`（当前虚拟桌面 + 当前显示器的上一个 / 下一个窗口，直接唤起）
+
+**结论：做**（2026-10）。项目所有者要把本机的 `Ctrl+Win+←/→` 从 Windows 自带的「切换虚拟桌面」
+改成「在当前虚拟桌面、当前显示器的窗口之间转一个并**直接唤起**」。实现方式是给 `window` 动作
+加了两个 op（不新增动作种类，因为要的只是“换个目标窗口”）：
+
+* **候选窗口** = `win::window::listOpenWindowsOnCurrentDesktop()` 里、**和当前前台窗口在同一块
+  显示器上**的那些。前者复用了窗口切换器的判据（`isSwitchableWindow()` 已经在里面：可见、
+  无属主、非工具窗口、有标题、不是 flowkeyd 自己的窗口），并且只多做一步“把 cloak 掉的排掉”
+  —— 别的虚拟桌面上的顶层窗口就是被 DWM cloak 起来的，不必为每个窗口开一条一次性 COM 线程。
+* **“当前显示器” = 当前前台窗口所在的那一块**（问不出来时退回光标所在的那一块）。不用光标是
+  因为这两条键是“在看我手上这个窗口时换一个”，跟鼠标停在哪无关；不用 `settings.window_monitor`
+  是因为那是“唤起时窗口该摆到哪块屏”，跟轮转无关。两块屏因此可以各转各的。
+* **顺序 = 最近用过的在前，首尾相接**（与 Alt+Tab 的 MRU 一致）。
+* **为什么需要环形顺序的缓存**（`core::WindowCycleState`）：激活一个窗口就会把它推到 Z 序最前
+  面，如果每次都由实时的 Z 序算“下一个”，第一下跳到 A、第二下就跳回刚才那个窗口，在两张之间
+  翻来覆去。所以第一次按下时把顺序排定、之后一直沿用它，只有「前台窗口已经不是上次激活的那个」
+  或者「它已经从这一批窗口里消失」时才按新的 Z 序重排。环形顺序与“该去哪一个”全在
+  `core/window_cycle.*`（纯逻辑、无 Win32，`tst_window_cycle` 直接测）。
+* **不收 `target` / `process`**：目标是算出来的，不是查出来的；写了会让人以为能筛，所以
+  `--check` 直接拒绝。`toggle` / `launch` / `monitor` / `follow` / `animate` 也一并拒绝（都是空
+  操作）。
+* **最小化的窗口也在候选里**（激活就等于还原它）。为了让它们落到正确的显示器上，
+  `win::monitor::indexForWindow()` 改成对最小化的窗口用**还原位置**的中心点
+  （`MonitorFromWindow()` 对 -32000 那个假几何会问出莫名其妙的一块屏）——顺带修了
+  `move_left_monitor` / `move_right_monitor` 对最小化窗口算错当前下标的老问题。
+* 收口：`core/action.{h,cpp}`（枚举 / 名字 / 摘要）、`core/config.cpp`（校验）、
+  `core/window_match.cpp`（`windowOpHasTransition` 两个新分支）、`core/config_map.cpp` 的
+  `kWindowOps`（界面下拉框）、`src/lua/lua_config.cpp` 的白名单、`lua_prelude.lua` 的注释与报错
+  文案、`ActionEditor.qml`（轮转时藏掉 `target`/`process`）、`ConfigText.qml`（中文名）、
+  `app/dispatcher.cpp` 的 `Dispatcher::cycleWindows()`（枚举 / 筛显示器 / 激活 / 日志）、
+  `platform/win/window.{h,cpp}` 的 `listOpenWindowsOnCurrentDesktop()`、`tst_config` / `tst_lua` /
+  `tst_window_cycle`。
+* 桌面行为（真的转起来）靠 `tst_interactive` / 手工验证；`scripts/acceptance.ps1` 没有覆盖它
+  —— 轮转需要桌面上有好几个窗口且会抢焦点，写进验收脚本会很不稳定。

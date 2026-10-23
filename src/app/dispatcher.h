@@ -10,6 +10,7 @@
 #include "core/app_list.h"
 #include "core/config.h"
 #include "core/engine.h"
+#include "core/window_cycle.h"
 #include "core/window_monitor_state.h"
 #include "platform/win/hook.h"
 
@@ -82,6 +83,16 @@ public:
     /// 变而已）。
     void startDesktopWatch();
 
+    /// `window` 动作的 `cycle_next` / `cycle_prev`：在**当前虚拟桌面 + 当前显示器**
+    /// 的程序窗口之间轮转，并直接激活目标（不弹卡片）。
+    ///
+    /// **只能在动作线程上调用**：它枚举窗口、问虚拟桌面后端（一次性 COM 线程），
+    /// 并且读写这份对象上那份轮转状态（不需要锁，因为只有这条线程碰它）。
+    ///
+    /// “当前显示器”指**当前前台窗口**所在的那一块（问不出来时退回光标所在的那一块）；
+    /// 顺序与“该去哪一个”全在 `core::planWindowCycle()`（纯逻辑，有单测）。
+    void cycleWindows(core::WindowOp op, const QString &hotkey);
+
 private:
     void execute(const std::shared_ptr<const core::Compiled> &config, const core::Trigger &trigger);
     void runActions(const std::shared_ptr<const core::Compiled> &config,
@@ -117,6 +128,10 @@ private:
     /// `monitor = "last"` 那份记忆（`<配置目录>/windows.json`）：**第一次真的
     /// 用到 `"last"` 时才建**（`"cursor"` / `"none"` 完全不碰这个文件）。
     std::unique_ptr<MonitorMemory> m_monitorMemory;
+
+    /// `cycle_next` / `cycle_prev` 的环形顺序（见 `core/window_cycle.h`）。
+    /// 只有动作线程读写它；用户自己切到别的窗口之后下一次会重排。
+    core::WindowCycleState m_cycleState;
 
     /// 上一条记忆的访问器（第一次调用时建出来，并记住配置目录旁边的落盘位置）。
     MonitorMemory *monitorMemory();

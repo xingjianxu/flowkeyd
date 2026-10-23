@@ -397,6 +397,13 @@ hotkey{
 --       左 / 右边的显示器（按“先左后右、再上后下”的排列顺序）。虚拟桌面不变；
 --       最大化窗口在新显示器上仍然最大化，普通窗口保持原有大小并居中；
 --       已经在最左/最右那一块时只会写一条日志，**不循环**。
+--   cycle_next / cycle_prev
+--       在当前虚拟桌面 + 当前显示器的窗口之间轮转，并**直接激活**目标窗口
+--       （不弹卡片）：候选 = 当前桌面上、和当前前台窗口同一块显示器的程序
+--       窗口，顺序是最近用过的在前、首尾相接。连续按会一直沿第一次排好的
+--       那一圈转下去；自己切到别的窗口之后下一次重新排。
+--       目标是运行时算出来的，所以不收 `target` / `process`，也不套用
+--       `toggle`、不接受 `launch` / `monitor` / `follow` / `animate`。
 --
 -- 这四个 op 都不写 `target` / `process`，所以目标是当前前台窗口；它们也不
 -- 套用 `toggle`，不接受 `launch`。下面的键位只是例子（不吞系统快捷键）。
@@ -443,6 +450,23 @@ hotkey{
   comment = "把当前窗口移到下一张虚拟桌面，并跟着切过去（首尾相接）",
   keys = "Ctrl+Alt+6",
   action = window("move_next_desktop", { follow = true }),
+}
+
+-- 在当前虚拟桌面 + 当前显示器的窗口之间轮转（直接激活目标，不弹卡片）。
+-- 顺序是最近用过的在前、首尾相接；两块屏各转各的（按哪边的窗口就转哪边）。
+-- 这两条键会吞掉 Windows 自己的「切换虚拟桌面」（Ctrl+Win+←/→）。
+hotkey{
+  name = "window-cycle-prev",
+  comment = "Ctrl+Win+Left：切到本桌面本屏上一个窗口",
+  keys = "Ctrl+Win+Left",
+  action = window("cycle_prev"),
+}
+
+hotkey{
+  name = "window-cycle-next",
+  comment = "Ctrl+Win+Right：切到本桌面本屏下一个窗口",
+  keys = "Ctrl+Win+Right",
+  action = window("cycle_next"),
 }
 
 -- 虚拟桌面：按序号直达。

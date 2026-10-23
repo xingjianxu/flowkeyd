@@ -142,6 +142,10 @@ QString windowOpDebugName(WindowOp op)
         return QStringLiteral("MoveLeftMonitor");
     case WindowOp::MoveRightMonitor:
         return QStringLiteral("MoveRightMonitor");
+    case WindowOp::CycleNext:
+        return QStringLiteral("CycleNext");
+    case WindowOp::CyclePrev:
+        return QStringLiteral("CyclePrev");
     }
     return QStringLiteral("Activate");
 }
@@ -298,6 +302,12 @@ std::optional<WindowOp> windowOpFromName(const QString &name)
     if (key == QLatin1String("move_right_monitor") || key == QLatin1String("right_monitor")) {
         return WindowOp::MoveRightMonitor;
     }
+    if (key == QLatin1String("cycle_next")) {
+        return WindowOp::CycleNext;
+    }
+    if (key == QLatin1String("cycle_prev")) {
+        return WindowOp::CyclePrev;
+    }
     return std::nullopt;
 }
 
@@ -440,6 +450,11 @@ QString Action::summary() const
     case Kind::Clipboard:
         return QStringLiteral("clipboard %1").arg(clipboardOpDebugName(clipboardOp));
     case Kind::Window: {
+        // 轮转没有“查询”这回事：目标是运行时算出来的，摘要里写清楚范围就够了。
+        if (windowOp == WindowOp::CycleNext || windowOp == WindowOp::CyclePrev) {
+            return QStringLiteral("window %1 (current desktop + monitor)")
+                .arg(windowOpDebugName(windowOp));
+        }
         const WindowQuery query = WindowQuery::make(target, process);
         QString text = QStringLiteral("window %1 %2").arg(windowOpDebugName(windowOp), query.describe());
         if (launch.has_value()) {
@@ -630,7 +645,8 @@ std::optional<QString> parseActionShorthand(const QString &input, Action *out)
         if (!op.has_value()) {
             return bad(QStringLiteral("`window:` expects activate|minimize|maximize|restore|close|"
                                       "toggle_topmost|move_prev_desktop|move_next_desktop|"
-                                      "move_left_monitor|move_right_monitor, got `%1`")
+                                      "move_left_monitor|move_right_monitor|cycle_next|"
+                                      "cycle_prev, got `%1`")
                            .arg(rest));
         }
         out->kind = Action::Kind::Window;

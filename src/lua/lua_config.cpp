@@ -512,7 +512,8 @@ core::Action convertAction(lua_State *L, int index)
         action.windowOp = *core::windowOpFromName(enumName(
             L, index, "op",
             {"activate", "minimize", "maximize", "restore", "close", "toggle_topmost",
-             "move_prev_desktop", "move_next_desktop", "move_left_monitor", "move_right_monitor"},
+             "move_prev_desktop", "move_next_desktop", "move_left_monitor", "move_right_monitor",
+             "cycle_next", "cycle_prev"},
             QStringLiteral("activate")));
         action.target = optString(L, index, "target");
         action.process = optString(L, index, "process");

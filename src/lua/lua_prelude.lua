@@ -253,6 +253,15 @@ end
 --   window("move_left_monitor")   -- 左边的显示器（保留最大化，否则保持大小并居中）
 --   window("move_right_monitor")  -- 右边的显示器（没有更左/更右的显示器时会失败）
 --
+-- 在当前虚拟桌面 + 当前显示器的窗口之间轮转（直接激活目标，不弹卡片）：
+--   window("cycle_next")         -- 下一个窗口
+--   window("cycle_prev")         -- 上一个窗口
+-- 候选窗口 = 当前虚拟桌面上、和**当前前台窗口**同一块显示器的程序窗口，按 Z 序
+-- 排；连续按会一直沿用第一次排好的顺序（否则会在两张窗口之间翻来覆去），
+-- 自己切到别的窗口之后下一次重新排。这两个 op 的目标是算出来的，不收
+-- `target` / `process`，也不套用 `toggle`、不接受 `launch` / `monitor` /
+-- `follow` / `animate`。
+--
 -- 这两个虚拟桌面 op 还可以带 `follow = true`：搬完窗口之后把**视图也切到目标
 -- 桌面**并重新激活那个窗口（Windows 自己的 Win+Ctrl+Shift+←/→ 不跟随视图）：
 --   window("move_next_desktop", { follow = true })
@@ -278,7 +287,8 @@ function window(op, opts)
   if type(op) ~= "string" then
     error(
       "window() expects one of activate|minimize|maximize|restore|close|toggle_topmost|"
-        .. "move_prev_desktop|move_next_desktop|move_left_monitor|move_right_monitor",
+        .. "move_prev_desktop|move_next_desktop|move_left_monitor|move_right_monitor|"
+        .. "cycle_next|cycle_prev",
       2
     )
   end

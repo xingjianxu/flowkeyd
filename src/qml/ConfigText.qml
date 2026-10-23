@@ -72,7 +72,9 @@ QtObject {
             "move_prev_desktop": qsTr("移到上一张桌面"),
             "move_next_desktop": qsTr("移到下一张桌面"),
             "move_left_monitor": qsTr("移到左边显示器"),
-            "move_right_monitor": qsTr("移到右边显示器")
+            "move_right_monitor": qsTr("移到右边显示器"),
+            "cycle_next": qsTr("下一个窗口（本桌面本屏）"),
+            "cycle_prev": qsTr("上一个窗口（本桌面本屏）")
         },
         power: {
             "sleep": qsTr("睡眠"),

@@ -388,12 +388,18 @@ struct WindowCollector
 {
     std::vector<OpenWindow> *out = nullptr;
     DWORD self = 0;
+    /// 只要当前虚拟桌面上的窗口（`listOpenWindowsOnCurrentDesktop()`）。
+    bool currentDesktopOnly = false;
 };
 
 BOOL CALLBACK collectOpenWindowProc(HWND hwnd, LPARAM param)
 {
     auto *collector = reinterpret_cast<WindowCollector *>(param);
     if (!isSwitchableWindow(hwnd)) {
+        return TRUE;
+    }
+    // 被 DWM cloak 起来的窗口在别的虚拟桌面上（见头文件里的说明）。
+    if (collector->currentDesktopOnly && dwm::isCloaked(hwnd)) {
         return TRUE;
     }
     DWORD pid = 0;
@@ -415,7 +421,15 @@ BOOL CALLBACK collectOpenWindowProc(HWND hwnd, LPARAM param)
 std::vector<OpenWindow> listOpenWindows()
 {
     std::vector<OpenWindow> out;
-    WindowCollector collector{&out, GetCurrentProcessId()};
+    WindowCollector collector{&out, GetCurrentProcessId(), false};
+    EnumWindows(collectOpenWindowProc, reinterpret_cast<LPARAM>(&collector));
+    return out;
+}
+
+std::vector<OpenWindow> listOpenWindowsOnCurrentDesktop()
+{
+    std::vector<OpenWindow> out;
+    WindowCollector collector{&out, GetCurrentProcessId(), true};
     EnumWindows(collectOpenWindowProc, reinterpret_cast<LPARAM>(&collector));
     return out;
 }
@@ -573,6 +587,15 @@ bool applyTo(HWND hwnd, core::WindowOp op, bool animate, QString *detail, QStrin
         extra = note;
         break;
     }
+    case core::WindowOp::CycleNext:
+    case core::WindowOp::CyclePrev:
+        // 轮转要先选出“哪一个窗口”，不是对一个给定的窗口动手。调用方
+        // （`Dispatcher::cycleWindows`）应该先算出目标，再拿 `Activate` 找回来。
+        if (error != nullptr) {
+            *error = QStringLiteral("%1 needs a target window; the caller must resolve it first")
+                         .arg(core::windowOpDebugName(op));
+        }
+        return false;
     }
 
     if (detail != nullptr) {
